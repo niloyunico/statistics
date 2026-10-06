@@ -784,7 +784,9 @@ async function scopeStaffOverlay(access, raw) {
 // PUT /api/data — build the doc to store from the SERVER's current copy, letting the
 // session overwrite only what it is allowed to write. Everything else survives
 // untouched, including keys the session never received.
-async function mergeAppData(access, incoming, current) {
+// opts.changed: the keys this browser actually SENT as changed (a partial save); opts.staffBase:
+// the staff register it started from. Both are what tell a deliberate change from a stale copy.
+async function mergeAppData(access, incoming, current, opts) {
   // The user record could not be read, so this session holds NO permissions right now.
   // Merging would keep the stored copy and the handler would answer ok:true for an edit
   // it had thrown away — the browser would then clear it as saved. Refuse instead; the
@@ -804,11 +806,23 @@ async function mergeAppData(access, incoming, current) {
   // they are never written from such a session — real data goes through /api/submissions.
   const SUBMITTER_READ_ONLY = ['unico_store_v3', 'unico_quality_v2', 'unico_capa_v1'];
   const held = dataScoped(access);
+  const changed = opts && Array.isArray(opts.changed) ? opts.changed : null;
   for (const key of Object.keys(inc)) {
-    if (!mayWriteKey(access, key)) continue;
+    if (!mayWriteKey(access, key)) {
+      // A staff change from an account that may only VIEW staff used to be dropped right here
+      // while the save still answered ok: the form said 'saved' for a record that never changed.
+      // Refused like every other staff change (409): the browser parks the staff key, says why,
+      // and keeps saving everything else.
+      if (key === 'unico_staff_v3' && changed && changed.indexOf(key) >= 0 && inc[key] !== cur[key]) {
+        const e = new Error('Your account can view staff records but not change them. The change was not saved.');
+        e.status = 409;
+        throw e;
+      }
+      continue;
+    }
     if (held && SUBMITTER_READ_ONLY.indexOf(key) >= 0) continue;
     if (key === 'unico_staff_v3') {
-      out[key] = await mergeStaffOverlay(access, inc[key], cur[key]);
+      out[key] = await mergeStaffOverlay(access, inc[key], cur[key], opts && opts.staffBase);
       continue;
     }
     out[key] = inc[key];
@@ -826,8 +840,11 @@ async function mergeAppData(access, incoming, current) {
 // inside its own scope; every record outside it is carried over from the server copy
 // exactly as it was. This is what stops a department-scoped save from wiping the
 // other 180 people the browser never held.
-async function mergeStaffOverlay(access, rawIncoming, rawCurrent) {
+async function mergeStaffOverlay(access, rawIncoming, rawCurrent, rawBase) {
   let incoming, currentArr;
+  // The rows this browser HELD when it started (its save baseline), when it sent one.
+  let baseIds = null;
+  try { const b = typeof rawBase === 'string' ? JSON.parse(rawBase) : null; if (Array.isArray(b)) baseIds = new Set(b.map((r) => String(r && r.id))); } catch (e) { baseIds = null; }
   try { incoming = typeof rawIncoming === 'string' ? JSON.parse(rawIncoming) : rawIncoming; } catch (e) { incoming = null; }
   try { currentArr = typeof rawCurrent === 'string' ? JSON.parse(rawCurrent) : rawCurrent; } catch (e) { currentArr = null; }
   if (!Array.isArray(incoming)) return rawCurrent; // malformed -> keep the server copy
@@ -869,7 +886,12 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent) {
       return;
     }
     // In scope + absent from the payload -> a delete, which needs the delete permission.
-    if (!canDelete) out.push(rec);
+    // A record this browser held and then dropped is a deliberate delete: say it was refused
+    // (it used to be put back silently while the save answered ok). One it never held is kept.
+    if (!canDelete) {
+      if (baseIds && baseIds.has(id)) refuse('Your account cannot delete staff records. The record was not removed.');
+      out.push(rec);
+    }
   });
   // New records this session created. A scoped session may only create records that
   // land inside its own scope, so it cannot mint a person into another department.

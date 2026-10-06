@@ -467,7 +467,14 @@
     var now = parseDate(at) || new Date();
     var empId = emp ? (emp.emp_id || String(emp.id)) : '';
     var doj = emp && emp.doj;
-    var mine = (appraisals || []).filter(function (x) { return x && String(x.empId) === String(empId); });
+    // The staff RECORD id decides when a form carries one: two people can share an employee
+    // number, and a number gets entered or corrected later. (A form filed before record ids
+    // were kept still matches on the key.)
+    var mine = (appraisals || []).filter(function (x) {
+      if (!x) return false;
+      if (x.staffId != null && String(x.staffId) !== '' && emp && emp.id != null) return String(x.staffId) === String(emp.id);
+      return String(x.empId) === String(empId);
+    });
     var cyc = cycleOf(doj, now);
     var current = mine.filter(function (x) { return cyc && x.cycleId === cyc.id; })[0] || null;
     // A form still open from an EARLIER window stays this person's appraisal until it

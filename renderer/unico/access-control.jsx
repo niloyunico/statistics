@@ -138,7 +138,16 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
         <div style={{display:'flex',flexDirection:'column',gap:14}}>
           <div className="card"><div className="card-b" style={{display:'flex',flexDirection:'column',gap:14}}>
             <div style={{display:'flex',gap:14,alignItems:'center'}}>
-              <AcAvatar u={u} size={60}/>
+              {/* An administrator sets the account photo here (click to upload, crop or remove). It was
+                  only ever changeable by the person themselves, from My Profile. The server holds the
+                  same line: Edit on Access Control, and a full administrator for an administrator. */}
+              {(()=>{ const me2=window.__UNICO_USER__; const full=!me2||me2.role==='Administrator';
+                const may=(!window.unicoCan||window.unicoCan('users','edit'))&&(u.role!=='Administrator'||full);
+                return (may&&window.PhotoPicker)
+                  ? <window.PhotoPicker value={u.photo||null} size={60} kind="profile" username={u.username} zoomable zoomSub={'@'+u.username}
+                      initials={K.inits(u.name||u.username)} name={u.name||u.username}
+                      onChange={(next)=>{ if(isMe&&window.unicoSetAccountPhoto) window.unicoSetAccountPhoto(next); reload(); }}/>
+                  : <AcAvatar u={u} size={60}/>; })()}
               <div style={{minWidth:0}}>
                 <div style={{fontSize:18,fontWeight:800,color:'var(--ink)'}}>{u.name||u.username}{isMe&&<span className="tag" style={{marginLeft:8,background:'var(--pos-bg)',color:'var(--pos)'}}>You</span>}</div>
                 <div style={{fontSize:12,color:'var(--muted)',fontFamily:'var(--mono, monospace)'}}>@{u.username}</div>

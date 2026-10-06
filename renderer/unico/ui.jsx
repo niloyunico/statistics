@@ -606,6 +606,9 @@ function Sidebar({route, setRoute, collapsed, depts}){
   // Data Submission: this person's missing count, published by the top-bar bell.
   const [dsBadge,setDsBadge]=React.useState(()=>window.__UNICO_DS_MISSING__||0);
   React.useEffect(()=>{ const h=(e)=>setDsBadge((e&&e.detail)||0); window.addEventListener('unico:ds-missing',h); return ()=>window.removeEventListener('unico:ds-missing',h); },[]);
+  // Data Collection: submissions waiting for approval, published by the top bar (unicoUsePending).
+  const [dcBadge,setDcBadge]=React.useState(()=>window.__UNICO_DC_PENDING__||0);
+  React.useEffect(()=>{ const h=(e)=>setDcBadge((e&&e.detail)||0); window.addEventListener('unico:dc-pending',h); return ()=>window.removeEventListener('unico:dc-pending',h); },[]);
   // A sub-item can need a permission of its own — Staff Management lists the roster
   // ('staff') and the appraisal screens ('perf') together, and an account may hold
   // only one of them.
@@ -645,7 +648,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
             {g.sec && <div className="sb-sec">{g.sec}</div>}
             {items.map(it=>{
               const active = it.on(view);
-              const badgeN = it.badge==='sup' ? supBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
+              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
               const badge = badgeN>0 ? badgeN : null;
               const auto = !!AUTO_OPEN[it.id];
               const itSub = auto && folded[it.id] ? [] : subFor(it, active);
@@ -668,6 +671,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
                           style={s.divider&&si>0?{marginTop:7,paddingTop:9,borderTop:'1px solid rgba(255,255,255,.10)'}:null}>
                           <span className="dot"/><span className="lbl">{s.label}</span>
                           {s.view==='dsMissing'&&dsBadge>0&&<span className="badge alert num" style={{marginLeft:'auto'}}>{dsBadge}</span>}
+                          {s.view==='dcReview'&&dcBadge>0&&<span className="badge alert num" style={{marginLeft:'auto'}} title={dcBadge+' waiting for approval'}>{dcBadge}</span>}
                         </div>
                       ))}
                     </div>
@@ -678,6 +682,16 @@ function Sidebar({route, setRoute, collapsed, depts}){
           </React.Fragment>
           );
         })}
+      </div>
+      {/* Decorative only. The hospital picture is a faint backdrop painted BEHIND the menu,
+          so it takes no room and never moves an item. The slogan appears above the footer
+          only when the menu leaves ~110px spare (a container query on the wrapper). */}
+      <div className="sb-bg" aria-hidden="true"/>
+      <div className="sb-promo-wrap" aria-hidden="true">
+        <div className="sb-promo">
+          <svg width="28" height="25" viewBox="0 0 24 22" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20.5C5 15.6 2.2 11.9 2.2 8.1 2.2 5.2 4.4 3 7.2 3c1.9 0 3.6 1 4.8 2.7C13.2 4 14.9 3 16.8 3c2.8 0 5 2.2 5 5.1 0 3.8-2.8 7.5-9.8 12.4z"/><path d="M8.5 11.5l2.4 2.4 4.6-4.8"/></svg>
+          <div className="sb-promo-t">Your Health,<br/>Our Priority.</div>
+        </div>
       </div>
       <div className="sb-foot">
         {(()=>{
@@ -763,6 +777,58 @@ function PeriodPill({period, setPeriod, depts=[]}){
   );
 }
 
+/* SUBMISSIONS WAITING FOR APPROVAL — for every account with the Data Collection module (and
+   nobody else: the list is that module's data). Polled every 60 s while the tab is visible,
+   on returning to it, and after any data refresh (an approval fires one). Publishes the count
+   for the menu badges (unico:dc-pending), and a submission that arrives while the app is open
+   raises a toast, so a new one is noticed without opening Review & History. */
+function unicoUsePending(enabled){
+  const [pend,setPend]=React.useState(null);           // { count, items } once known
+  React.useEffect(()=>{
+    if(!enabled) return;
+    let live=true, seen=null;
+    const run=()=>{
+      if(document.visibilityState==='hidden' && seen) return;
+      fetch('/api/submissions?status=pending&limit=1000',{credentials:'same-origin',cache:'no-store'})
+        .then(r=>r.ok?r.json():null).then(j=>{
+          if(!live||!j||!j.ok||!Array.isArray(j.submissions)) return;
+          const items=j.submissions;
+          if(seen){
+            const fresh=items.filter(x=>x&&x.id!=null&&!seen.has(String(x.id)));
+            if(fresh.length&&window.UI&&window.UI.toast){
+              const x=fresh[0], who=x.submittedBy||(x.responsible&&x.responsible.name)||'Someone';
+              window.UI.toast(fresh.length===1
+                ? 'New submission waiting for approval — '+who+' · '+unicoSubTitle(x)
+                : fresh.length+' new submissions waiting for approval','info');
+            }
+          }
+          seen=new Set(items.map(x=>String(x&&x.id)));
+          setPend({count:items.length, items});
+          try{ window.__UNICO_DC_PENDING__=items.length; window.dispatchEvent(new CustomEvent('unico:dc-pending',{detail:items.length})); }catch(e){}
+        }).catch(()=>{});
+    };
+    run();
+    const t=setInterval(run,60000);
+    const vis=()=>{ if(document.visibilityState==='visible') run(); };
+    window.addEventListener('unico:data-refreshed',run);
+    document.addEventListener('visibilitychange',vis);
+    return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:data-refreshed',run); document.removeEventListener('visibilitychange',vis); };
+  },[enabled]);
+  return pend;
+}
+// "Medical ICU · Sep 2026" / "Hand hygiene compliance (MICU) · Sep 2026"
+function unicoSubTitle(x){
+  const what=x.type==='quality' ? (x.indicatorName||'Quality indicator')+(x.areaName?' ('+x.areaName+')':'') : (x.departmentName||x.department||'Patient statistics');
+  return what+(x.month?' · '+String(x.month).replace('-',' 20'):'');
+}
+function unicoAgo(t){
+  const n=Number(t)||Date.parse(t); if(!n) return '';
+  const m=Math.round((Date.now()-n)/60000);
+  if(m<1) return 'just now'; if(m<60) return m+' min ago';
+  const h=Math.round(m/60); if(h<24) return h+' h ago';
+  const d=Math.round(h/24); return d+' day'+(d===1?'':'s')+' ago';
+}
+
 function TopBar({route, setRoute, onBurger, menuExpanded, crumbs, actions, depts=[], onFill, period, setPeriod}){
   const [notifOpen,setNotifOpen]=React.useState(false);
   const reporting=depts.filter(d=>d.months&&d.months.length&&d.latest&&d.latest.month);
@@ -787,7 +853,11 @@ function TopBar({route, setRoute, onBurger, menuExpanded, crumbs, actions, depts
     return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:data-refreshed',run); };
   },[submitter]);
   const dsTotal=(dsMiss&&dsMiss.total)||0;
-  const bellCount=missing.length+dsTotal;
+  const reviewer=(()=>{ try{ return unicoCanAccessModule('datacol'); }catch(e){ return false; } })();
+  const pend=unicoUsePending(reviewer);
+  const pendN=(pend&&pend.count)||0;
+  const bellCount=missing.length+dsTotal+pendN;
+  const bellNum=dsTotal+pendN;   // counted items; the running-month reminder alone shows a dot
   return (
     <div className="topbar">
       <button className="tb-burger" onClick={onBurger} title="Toggle menu" aria-label="Toggle menu" aria-expanded={menuExpanded} aria-controls="workspace-sidebar"><Ic d={I.grid} s={16}/></button>
@@ -828,16 +898,50 @@ function TopBar({route, setRoute, onBurger, menuExpanded, crumbs, actions, depts
             <span className="tb-dsmiss-t" style={{color:'#d23a52',textDecoration:'underline'}}>Submit now</span>
           </button>
         )}
+        {/* Submissions waiting for approval — always in sight, one click to the review queue. */}
+        {reviewer&&pendN>0&&route.view!=='dcReview'&&(
+          <button type="button" className="tb-dcpend" onClick={()=>setRoute({view:'dcReview'})} title={pendN+' submission'+(pendN===1?'':'s')+' waiting for approval — open Review & History'}
+            style={{display:'inline-flex',alignItems:'center',gap:8,height:34,padding:'0 12px 0 10px',borderRadius:10,cursor:'pointer',fontFamily:'inherit',
+              border:'1px solid rgba(224,138,30,.4)',background:'linear-gradient(135deg,#fff8ec,#ffedd2)',color:'#9a5a07',fontSize:12.5,fontWeight:700,whiteSpace:'nowrap',
+              boxShadow:'0 4px 14px rgba(224,138,30,.2)',animation:'tbPendPulse 2.4s ease-in-out infinite'}}>
+            <style>{'@keyframes tbPendPulse{0%,100%{box-shadow:0 4px 14px rgba(224,138,30,.2)}50%{box-shadow:0 4px 20px rgba(224,138,30,.42)}}@media (max-width:720px){.tb-dcpend .tb-dcpend-t{display:none}}@media (prefers-reduced-motion:reduce){.tb-dcpend{animation:none!important}}'}</style>
+            <Ic d={I.bell} s={15} c="#e08a1e"/>
+            <span className="num" style={{background:'#e08a1e',color:'#fff',borderRadius:8,padding:'1px 7px',fontSize:11.5,fontWeight:800}}>{pendN}</span>
+            <span className="tb-dcpend-t">pending approval</span>
+            <span className="tb-dcpend-t" style={{color:'#c26f05',textDecoration:'underline'}}>Review now</span>
+          </button>
+        )}
         <div style={{position:'relative'}}>
-          <button className="tb-icon" onClick={()=>setNotifOpen(o=>!o)} title="Reminders"><Ic d={I.bell} s={17}/>{bellCount>0&&(dsTotal>0
-            ? <span className="num" style={{position:'absolute',top:-4,right:-4,minWidth:18,height:18,padding:'0 5px',borderRadius:9,background:'#d23a52',color:'#fff',fontSize:10,fontWeight:800,display:'grid',placeItems:'center',boxSizing:'border-box',border:'2px solid #fff'}}>{dsTotal>99?'99+':dsTotal}</span>
+          <button className="tb-icon" onClick={()=>setNotifOpen(o=>!o)} title="Notifications"><Ic d={I.bell} s={17}/>{bellCount>0&&(bellNum>0
+            ? <span className="num" style={{position:'absolute',top:-4,right:-4,minWidth:18,height:18,padding:'0 5px',borderRadius:9,background:dsTotal>0?'#d23a52':'#e08a1e',color:'#fff',fontSize:10,fontWeight:800,display:'grid',placeItems:'center',boxSizing:'border-box',border:'2px solid #fff'}}>{bellNum>99?'99+':bellNum}</span>
             : <span className="tb-dot"/>)}</button>
           {notifOpen&&(
             <div onMouseLeave={()=>setNotifOpen(false)} style={{position:'absolute',right:0,top:'118%',zIndex:200,width:320,background:'rgba(255,255,255,.88)',backdropFilter:'blur(24px) saturate(1.6)',WebkitBackdropFilter:'blur(24px) saturate(1.6)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 22px 56px rgba(31,59,90,.26)',borderRadius:12,overflow:'hidden'}}>
               <div style={{padding:'13px 15px',borderBottom:'1px solid var(--line-2)',display:'flex',alignItems:'center',gap:8}}>
-                <Ic d={I.bell} s={16} c="var(--blue)"/><div style={{fontSize:13.5,fontWeight:700}}>Reminders</div>
+                <Ic d={I.bell} s={16} c="var(--blue)"/><div style={{fontSize:13.5,fontWeight:700}}>Notifications</div>
                 <span className="spacer"/>{bellCount>0&&<span className="chip neg">{bellCount}</span>}
               </div>
+              {reviewer&&(
+                <div style={{borderBottom:'1px solid var(--line-2)'}}>
+                  <div style={{padding:'10px 15px 6px',fontSize:11,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:pendN?'#9a5a07':'var(--muted)'}}>Waiting for approval{pendN?' · '+pendN:''}</div>
+                  {pend===null ? <div style={{padding:'4px 15px 12px',fontSize:12,color:'var(--muted)'}}>Checking…</div>
+                    : !pendN ? <div style={{padding:'4px 15px 12px',fontSize:12,color:'var(--pos)',fontWeight:600}}>Nothing pending — every submission has been reviewed.</div>
+                    : <div style={{maxHeight:220,overflowY:'auto'}}>
+                        {pend.items.slice(0,6).map(x=>(
+                          <div key={x.id} onClick={()=>{ setRoute({view:'dcReview'}); setNotifOpen(false); }} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 15px',cursor:'pointer'}}
+                            onMouseEnter={e=>e.currentTarget.style.background='var(--panel-2)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                            <div style={{width:28,height:28,borderRadius:8,background:'#fff3e0',color:'#e08a1e',display:'grid',placeItems:'center',flexShrink:0}}><Ic d={x.type==='quality'?I.heart:I.doc} s={14}/></div>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{fontSize:12.5,fontWeight:600,color:'var(--ink)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{unicoSubTitle(x)}</div>
+                              <div style={{fontSize:11,color:'var(--muted)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{(x.submittedBy||(x.responsible&&x.responsible.name)||'—')+(x.submittedAt?' · '+unicoAgo(x.submittedAt):'')}</div>
+                            </div>
+                          </div>
+                        ))}
+                        {pendN>6&&<div style={{padding:'4px 15px 8px',fontSize:11,color:'var(--muted)'}}>and {pendN-6} more</div>}
+                      </div>}
+                  {pendN>0&&<div style={{padding:'6px 12px 12px'}}><button className="btn pri sm" style={{width:'100%',justifyContent:'center'}} onClick={()=>{ setRoute({view:'dcReview'}); setNotifOpen(false); }}><Ic d={I.check} s={14}/>Open Review &amp; History</button></div>}
+                </div>
+              )}
               {submitter&&(
                 <div style={{borderBottom:'1px solid var(--line-2)'}}>
                   <div style={{padding:'10px 15px 6px',fontSize:11,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:dsTotal?'#a92c42':'var(--muted)'}}>Data you still owe{dsTotal?' · '+dsTotal:''}</div>

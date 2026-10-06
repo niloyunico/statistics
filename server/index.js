@@ -283,7 +283,8 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
       removed.forEach((k) => { if (typeof k === 'string') delete incoming[k]; });
     }
 
-    const merged = await access.mergeAppData(req.access, incoming, current && current.data);
+    const merged = await access.mergeAppData(req.access, incoming, current && current.data,
+      { changed: req.body && req.body.partial ? Object.keys(data) : null, staffBase: req.body && req.body.staffBase });
     const staffMerge = require('./staff-merge');
     const staffKey = staffMerge.KEY;
     if (merged[staffKey] !== ((current && current.data) || {})[staffKey]) {

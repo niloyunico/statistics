@@ -2373,9 +2373,9 @@ function StaffFormRail({ f, editing, set, store, empId }){
   const readyDone = readyPct === 100;
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:14, position:'sticky', top:12 }}>
+    <div style={{ display:'flex', flexWrap:'wrap', alignItems:'flex-start', gap:12 }}>
       {/* ID preview */}
-      <div className="card" style={{ background:'linear-gradient(160deg,#16243a,#0d1b2e)', border:'1px solid rgba(255,255,255,.12)', color:'#fff', padding:'22px 18px', textAlign:'center' }}>
+      <div className="card" style={{ background:'linear-gradient(160deg,#16243a,#0d1b2e)', border:'1px solid rgba(255,255,255,.12)', color:'#fff', padding:'16px 16px 12px', textAlign:'center', flex:'1 1 260px', minWidth:0, order:0 }}>
         {/* The photo is set HERE, while the record is being created — waiting until
             the profile exists meant every new nurse started life with a placeholder.
             The upload returns a CDN url which rides along in the form state and is
@@ -2397,42 +2397,42 @@ function StaffFormRail({ f, editing, set, store, empId }){
               }
             }}
             initials={name ? initials : '?'} name={name || 'New staff member'}
-            kind="staff" size={112} radius="50%"
+            kind="staff" size={76} radius="50%"
             /* So the server can put the url on the staff document, not only in the
                browser-mirrored overlay (which is what lost 23 portraits). */
             staffId={f.id != null ? f.id : null} empId={f.emp_id || null}
             readOnly={!(window.unicoCan ? window.unicoCan('staff','edit') : true)}
             style={{ background: name ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'linear-gradient(135deg,#2b8f83,#0072a3)',
-              fontSize:38, fontWeight:700, color:'#fff', boxShadow:'0 10px 30px rgba(0,144,202,.35)',
+              fontSize:27, fontWeight:700, color:'#fff', boxShadow:'0 10px 30px rgba(0,144,202,.35)',
               display:'grid', placeItems:'center' }}/>
         </div>
         {/* Pick from what has already been uploaded — the way an orphaned portrait
             gets back to its owner without a second photograph. */}
         {(window.unicoCan ? window.unicoCan('staff','edit') : true) && (
           <button type="button" onClick={()=>setLibOpen(true)}
-            style={{ marginTop:10, border:'1px solid rgba(255,255,255,.28)', background:'rgba(255,255,255,.08)', color:'#dbe9f7', padding:'5px 12px', borderRadius:20, fontSize:11.5, fontWeight:700, cursor:'pointer' }}>
+            style={{ marginTop:8, border:'1px solid rgba(255,255,255,.28)', background:'rgba(255,255,255,.08)', color:'#dbe9f7', padding:'5px 12px', borderRadius:20, fontSize:11.5, fontWeight:700, cursor:'pointer' }}>
             Choose from uploaded photos
           </button>
         )}
         {libOpen && <StaffPhotoLibrary f={f} set={set} store={store} empId={empId} editing={editing} onClose={()=>setLibOpen(false)}/>}
-        <div style={{ fontSize:16, fontWeight:700, marginTop:12 }}>{name || ('New ' + (isPca ? 'PCA' : 'nurse'))}</div>
+        <div style={{ fontSize:15, fontWeight:700, marginTop:9, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name || ('New ' + (isPca ? 'PCA' : 'nurse'))}</div>
         <div style={{ fontSize:11.6, color:'#a8bdd6', marginTop:2 }}>
           {(f.designation || (isPca ? 'Patient Care Assistant' : 'Staff Nurse'))} · {f.current_department || 'unassigned'}
         </div>
-        <div style={{ display:'flex', gap:6, justifyContent:'center', flexWrap:'wrap', marginTop:10 }}>
+        <div style={{ display:'flex', gap:6, justifyContent:'center', flexWrap:'wrap', marginTop:8 }}>
           <span style={{ fontSize:10.4, fontWeight:600, padding:'3px 10px', borderRadius:12, background:'rgba(58,181,167,.22)', color:'#8fe3d6' }}>{label(total)} exp</span>
           {f.emp_id ? <span className="num" style={{ fontSize:10.4, fontWeight:600, padding:'3px 10px', borderRadius:12, background:'rgba(0,144,202,.22)', color:'#9ad8f4' }}>{f.emp_id}</span> : null}
           {trainings.slice(0,2).map((t) => (
             <span key={t} style={{ fontSize:10.4, fontWeight:600, padding:'3px 10px', borderRadius:12, background:'rgba(255,255,255,.14)', color:'#dfe9f5' }}>{t}</span>
           ))}
         </div>
-        <div style={{ borderTop:'1px solid rgba(255,255,255,.14)', marginTop:14, paddingTop:10, fontSize:10.4, color:'#8fa3ba' }}>
+        <div style={{ borderTop:'1px solid rgba(255,255,255,.14)', marginTop:10, paddingTop:8, fontSize:10.4, color:'#8fa3ba' }}>
           {f.photo && f.photo.url ? 'Photo saved with this record.' : 'Tap the camera to add a photo — or leave it and the initials are used.'}
         </div>
       </div>
 
       {/* experience */}
-      <div className="card">
+      <div className="card" style={{ flex:'1 1 260px', minWidth:0, order:2 }}>
         <div className="card-h"><h3>Experience total</h3></div>
         <div className="card-b">
           <div style={{ display:'flex', alignItems:'baseline', gap:8 }}>
@@ -2462,7 +2462,7 @@ function StaffFormRail({ f, editing, set, store, empId }){
       </div>
 
       {/* deployment */}
-      <div className="card">
+      <div className="card" style={{ flex:'1 1 260px', minWidth:0, order:3 }}>
         <div className="card-h">
           <h3>Deployment profile</h3><div style={{ flex:1 }} />
           <span style={{ fontSize:10.4, fontWeight:600, padding:'2px 9px', borderRadius:12,
@@ -2492,13 +2492,13 @@ function StaffFormRail({ f, editing, set, store, empId }){
             </div>
           ))}
           <div style={{ fontSize:10.6, color:'var(--muted)', lineHeight:1.55, background:'rgba(255,255,255,.55)', borderRadius:9, padding:'9px 11px', marginTop:2 }}>
-            Independent in and Shifts available stay blank — the staff record has no competency or shift-availability field to read them from. Privileges granted comes from the checklist below.
+            Independent in and Shifts available stay blank — the staff record has no competency or shift-availability field to read them from. Privileges granted comes from the checklist on the Privileges tab.
           </div>
         </div>
       </div>
 
       {/* ready to save — the mockup's pre-flight checklist */}
-      <div className="card" style={{ padding:16, display:'flex', flexDirection:'column', gap:11 }}>
+      <div className="card" style={{ padding:14, display:'flex', flexDirection:'column', gap:9, flex:'1 1 260px', minWidth:0, order:1 }}>
         <div style={{ display:'flex', alignItems:'center', gap:8 }}>
           <div style={{ fontSize:13, fontWeight:700, color:'var(--ink)' }}>Ready to save</div>
           <span style={{ flex:1 }} />
@@ -2946,6 +2946,9 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
   const [saving,setSaving]=React.useState(false);
   const [printForm,setPrintForm]=React.useState(false);   // blank official registration form (A4, hand fill-up)
   const [customL,setCustomL]=React.useState('');   // custom language
+  const [tab,setTab]=React.useState('personal');   // which section of the form is open
+  const rootRef=React.useRef(null);
+  const narrow=useStfNarrow(rootRef,640);          // phone-width layout, from the form's own width
   // Direct "previous experience (excl. UNICO)" entry — a simple Years+Months input
   // used when the experience is NOT itemised by organisation below.
   const priorInit0=existing&&existing.prior_experience_years!=null&&existing.prior_experience_years!==''&&!isNaN(existing.prior_experience_years)?+existing.prior_experience_years:0;
@@ -2958,12 +2961,15 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
   const customFieldDefs=(S.customFields&&S.customFields())||[];
   const setCustom=(id,v)=>setF(s=>({...s,custom:{...(s.custom||{}),[id]:v}}));
 
-  const inp=(k,ph,type='text')=>(
+  // `hlStyle` tints a field that is still needed; on a phone every control is a 44px target
+  // with 16px text (smaller text makes iOS zoom the page on focus).
+  const touch=narrow?{minHeight:44,fontSize:16}:null;
+  const inp=(k,ph,type='text',hlStyle)=>(
     <input value={f[k]||''} onChange={e=>set(k,e.target.value)} placeholder={ph} type={type}
-      style={{padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:k==='phone'||k==='doj'||k==='emp_id'?'IBM Plex Mono':'inherit',outline:'none',width:'100%'}}/>
+      style={{padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:k==='phone'||k==='doj'||k==='emp_id'?'IBM Plex Mono':'inherit',outline:'none',width:'100%',...(touch||{}),...(hlStyle||{})}}/>
   );
   const cmb=(k,opts)=>(
-    <select value={f[k]||''} onChange={e=>set(k,e.target.value)} style={{padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',background:'#fff',width:'100%'}}>
+    <select value={f[k]||''} onChange={e=>set(k,e.target.value)} style={{padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',background:'#fff',width:'100%',...(touch||{})}}>
       <option value="">—</option>{opts.map(o=><option key={o}>{o}</option>)}
     </select>
   );
@@ -3014,28 +3020,38 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
     if(days<0) return {t:'Expired '+(-days)+'d ago',c:'#d23a52'};
     if(days<=60) return {t:'Expires in '+days+'d',c:'#b5670a'};
     return {t:'Valid',c:'#157a43'}; })();
-  const multiChk=(k,opts,customText,setCustomText,ph)=>{
+  // `groups` ([[caption, options], …]) splits a long list under small headings; without it
+  // the options are one run. The "Add another" box sits at the end of the last run, on the
+  // same line as the chips, so a picker costs no extra row.
+  const multiChk=(k,opts,customText,setCustomText,ph,groups)=>{
     const sel=chipsOf(k);
     const extras=sel.filter(x=>!opts.includes(x));
-    const all=[...opts,...extras];
     const setSel=(arr)=>set(k,arr.join(', '));
     const toggle=(o)=>setSel(sel.includes(o)?sel.filter(x=>x!==o):[...sel,o]);
     const addCustom=()=>{ const v=(customText||'').trim(); if(v&&!sel.includes(v)) setSel([...sel,v]); setCustomText(''); };
+    const chip=(o)=>{ const on=sel.includes(o); return (
+      <button type="button" key={o} aria-pressed={on} onClick={()=>toggle(o)} style={{cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,minHeight:narrow?38:28,padding:'0 10px',borderRadius:20,fontSize:narrow?13:12,fontWeight:600,fontFamily:'inherit',border:'1px solid '+(on?'var(--blue-700)':'var(--line)'),background:on?'var(--blue-700)':'#fff',color:on?'#fff':'var(--ink-2)'}}>
+        {on&&<Ic d={I.check} s={11} c="#fff" sw={3}/>}
+        {o}
+      </button>
+    );};
+    const parts=(groups&&groups.length>1)?groups:[['',opts]];
     return (
-      <div>
-        <div style={{display:'flex',flexWrap:'wrap',gap:7}}>
-          {all.map(o=>{ const on=sel.includes(o); return (
-            <span key={o} onClick={()=>toggle(o)} style={{cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6,padding:'6px 11px',borderRadius:20,fontSize:12,fontWeight:600,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--ink-2)'}}>
-              <span style={{width:14,height:14,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff'}}>{on&&<Ic d={I.check} s={10} c="#fff"/>}</span>
-              {o}
-            </span>
-          );})}
-        </div>
-        <div style={{display:'flex',gap:7,marginTop:9}}>
-          <input value={customText||''} onChange={e=>setCustomText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addCustom();}}} placeholder={ph||'Add another…'}
-            style={{flex:1,padding:'8px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:12.5,fontFamily:'inherit',outline:'none'}}/>
-          <button type="button" className="btn sm" onClick={addCustom} disabled={!(customText||'').trim()}><Ic d={I.plus} s={13}/>Add</button>
-        </div>
+      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+        {parts.map(([cap,list],gi)=>(
+          <div key={gi} style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:6}}>
+            {cap&&<span style={{flex:'0 0 100%',fontSize:10.5,fontWeight:700,letterSpacing:.5,textTransform:'uppercase',color:'var(--muted)'}}>{cap}</span>}
+            {list.map(chip)}
+            {gi===parts.length-1&&extras.map(chip)}
+            {gi===parts.length-1&&(
+              <span style={{flex:'1 1 220px',minWidth:0,maxWidth:360,display:'inline-flex',gap:6}}>
+                <input value={customText||''} onChange={e=>setCustomText(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();addCustom();}}} placeholder={ph||'Add another…'}
+                  style={{flex:1,minWidth:0,minHeight:narrow?38:28,padding:'0 12px',border:'1px dashed var(--faint)',borderRadius:20,fontSize:narrow?16:12.5,fontFamily:'inherit',outline:'none'}}/>
+                <button type="button" className="btn sm" style={{borderRadius:20}} onClick={addCustom} disabled={!(customText||'').trim()}><Ic d={I.plus} s={13}/>Add</button>
+              </span>
+            )}
+          </div>
+        ))}
       </div>
     );
   };
@@ -3064,11 +3080,20 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
     if(saveLock.current) return;
     // Validation failures must be VISIBLE from the sticky header's Save too — the
     // inline error line lives at the bottom of a long form, so toast it as well.
-    const fail=(m)=>{ setErr(m); try{ window.UI&&window.UI.toast&&window.UI.toast(m,'error'); }catch(e){} };
-    if(!f.name||!f.name.trim()){ fail('Name is required'); return; }
-    if(f.doj && isNaN(new Date(f.doj))){ fail('Date of Joining must be YYYY-MM-DD'); return; }
+    // ...and they open the tab that holds the field, since only one section is on screen.
+    const fail=(m,t)=>{ setErr(m); if(t) setTab(t); try{ window.UI&&window.UI.toast&&window.UI.toast(m,'error'); }catch(e){} };
+    if(!f.name||!f.name.trim()){ fail('Name is required','personal'); return; }
+    if(f.doj && isNaN(new Date(f.doj))){ fail('Date of Joining must be YYYY-MM-DD','job'); return; }
+    // One employee number, one person. Appraisals, incidents and exit records are filed under
+    // it, so two active records sharing a number end up sharing a personal file. Only checked
+    // when the number is new or was changed here, so an old duplicate can still be edited.
+    { const no=String(f.emp_id||'').trim(), was=String((initialForm.current&&initialForm.current.emp_id)||'').trim();
+      if(no && (pendingId.current==null || no.toLowerCase()!==was.toLowerCase())){
+        const other=allStaff.find(x=>x&&x.id!==pendingId.current&&x.is_active!==false&&!x.former&&String(x.emp_id||'').trim().toLowerCase()===no.toLowerCase());
+        if(other){ fail('Employee ID '+no+' already belongs to '+(other.name||'another staff member')+'. Give this record its own number.','personal'); return; }
+      } }
     const cleanEntries=entries.filter(x=>entYears(x)>0||x.fromDate||x.toDate||(x.org&&x.org.trim())||(x.dept&&x.dept.trim()));
-    for(const entry of cleanEntries){ const dateError=S.experienceDateError(entry,f.doj); if(dateError){fail(dateError);return;} }
+    for(const entry of cleanEntries){ const dateError=S.experienceDateError(entry,f.doj); if(dateError){fail(dateError,'experience');return;} }
     const rowsHave=cleanEntries.some(x=>entYears(x)>0||(S.experienceUsesDates(x)&&x.fromDate&&x.toDate));
     const pSum=rowsHave?cleanEntries.reduce((s,x)=>s+entYears(x),0):directPrior;
     const total=Math.round((pSum+S.unicoYearsOf(f))*10)/10;
@@ -3095,6 +3120,10 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
       if(!window.unicoFlushNow) throw new Error('Database saving is unavailable. Keep this form open and reconnect.');
       const result=await window.unicoFlushNow();
       if(!result || result.ok!==true) throw new Error((result&&result.error)||'Database did not confirm the save. Keep this form open and retry.');
+      // What was just confirmed is the new baseline. Compared against the values the form OPENED
+      // with, changing a field back to its original after a save looked like 'no change' and the
+      // old value was never written.
+      initialForm.current=data;
     }catch(ex){
       const msg=(ex&&ex.message)||'the record could not be written';
       setErr('Not saved to database — '+msg+' Your edits remain in this tab.');
@@ -3114,27 +3143,53 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
     setRoute(editing?{view:'staffProfile',emp:empId}:{view:S.staffGroupOf(f)==='Trainee'?'trainees':(f.role||'Nurse')==='PCA'?'pca':'nurses'});
   };
 
-  const sec=(title,kids)=>(
-    <div style={{display:'flex',flexDirection:'column',gap:12}}>
-      <div style={{fontSize:13,fontWeight:700,color:'var(--ink)',borderBottom:'1px solid var(--line-2)',paddingBottom:7}}>{title}</div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>{kids}</div>
-    </div>
-  );
+  /* ---- compact, tabbed layout (2026-10) ----
+     The form used to be one long scroll. It is now one section per tab with the summary
+     rail always beside it. Nothing was dropped: every field below is the same field, bound
+     the same way. Only Extracurricular Activities moved (Personal → Additional), so the
+     first tab stays about who the person is. */
+  const TABS=[['personal','Personal'],['job','Job'],['experience','Experience'],['compliance','Compliance'],['privileges','Privileges'],['additional','Additional']]
+    .concat(customFieldDefs.length?[['custom','Custom Fields']]:[]);
+  const tabIdx=Math.max(0,TABS.findIndex(t=>t[0]===tab));
+  const cur=TABS[tabIdx][0];
+  const leave=()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:S.staffGroupOf(f)==='Trainee'?'trainees':(f.role||'Nurse')==='PCA'?'pca':'nurses'});
+  // The four things the rail's "Ready to save" list checks. They are tinted blue until filled,
+  // and the first one on the open tab pulses, so the eye is led to one place at a time.
+  const nameOk=!!(f.name&&f.name.trim()), qualOk=chipsOf('qualification').length>0, dojOk=!!f.doj, deptOk=chipsOf('current_department').length>0;
+  const needs={personal:(nameOk?0:1)+(qualOk?0:1),job:(deptOk?0:1)+(dojOk?0:1)};
+  const missing=[!nameOk&&'name',!qualOk&&'qualification',!deptOk&&'department',!dojOk&&'date of joining'].filter(Boolean);
+  let pulseFree=true;
+  const hl=(empty)=>{ if(!empty) return null; const p=pulseFree; pulseFree=false;
+    // The whole `border`, never just borderColor: React clears a dropped longhand to '', which
+    // wipes the colour the shorthand set and leaves the field with a black border.
+    return {border:'1px solid #0090ca',background:'#eef8fc',animation:p?'stf-pulse 1.8s ease-out infinite':undefined}; };
+  // The dropdown components draw their own box, so they get a ring around them instead.
+  const ring=(empty,node)=>{ const h=hl(empty); return h?<div style={{borderRadius:8,outline:'1.5px solid #0090ca',outlineOffset:1,animation:h.animation}}>{node}</div>:node; };
+  const row=(kids)=><div style={{display:'flex',flexWrap:'wrap',gap:12}}>{kids}</div>;
+  const cell=(flex,node,nflex)=><div style={{flex:narrow?(nflex||'1 1 100%'):flex,minWidth:0}}>{node}</div>;
+  const rowInpN={...rowInp,...(narrow?{minHeight:44,fontSize:16}:{})};
+  const expLbl=(flex,nflex)=>({flex:narrow?(nflex||'1 1 100%'):flex,minWidth:0,display:'flex',flexDirection:'column',gap:4,fontSize:11.5,fontWeight:600,color:'var(--ink-2)'});
+  const tabTitle=(t)=><div style={{fontSize:13,fontWeight:700,color:'var(--ink)'}}>{t}</div>;
+  const qualOpts=S.qualificationsFor(f.role);
+  const qSplit=qualOpts.indexOf('Community Health Nursing');
+  const qualGroups=((f.role||'Nurse')!=='PCA'&&qSplit>0)?[['Degrees and licences',qualOpts.slice(0,qSplit)],['Specialised diplomas',qualOpts.slice(qSplit)]]:null;
 
   const MK=window.MK;
   return (
-    <div className="mk-scope grid" style={{gap:14}}>
-      {/* header — matches the Add Staff mockup: icon badge, title, role toggle.
-          STICKY, with its own Save/Cancel: the form is long, and scrolling all the
-          way down just to save one edited field was a real complaint. */}
-      <div className="card" style={{padding:'12px 18px',display:'flex',gap:13,alignItems:'center',flexWrap:'wrap',
+    <div ref={rootRef} className="mk-scope grid stf-form" style={{gap:14}}>
+      <style>{'@keyframes stf-pulse{0%{box-shadow:0 0 0 0 rgba(0,144,202,.55)}70%{box-shadow:0 0 0 7px rgba(0,144,202,0)}100%{box-shadow:0 0 0 0 rgba(0,144,202,0)}}'
+        +'.stf-form input:focus,.stf-form select:focus{animation:none!important;border-color:#0072a3!important;background:#fff!important}'
+        +'@media (prefers-reduced-motion:reduce){.stf-form *{animation:none!important}}'}</style>
+      {/* header — icon badge, title, role toggle, Save/Cancel, then the section tabs.
+          STICKY: the tabs and Save stay in reach wherever the page is scrolled. */}
+      <div className="card" style={{padding:'12px 18px',display:'flex',gap:'10px 13px',alignItems:'center',flexWrap:'wrap',
         position:'sticky',top:0,zIndex:60,boxShadow:'0 8px 22px rgba(13,27,46,.12)'}}>
         <div style={MK?MK.iconBadge('blue',38):{}}><Ic d={editing?I.edit:I.plus} s={18}/></div>
         <div style={{flex:1,minWidth:200}}>
           <div style={{fontSize:16,fontWeight:700,color:'var(--ink)'}}>{editing?'Edit staff record':`Add new ${f.role==='PCA'?'PCA':'Nurse'}`}</div>
           <div style={{fontSize:11.6,color:'var(--muted)'}}>Role sets the designation and qualification options · total experience is calculated for you</div>
         </div>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           {/* Official A4 registration form, printed blank for handwritten fill-up
               (window.UnicoStaffRegForm, data-collection.jsx). It portals into #pdf-root
               and prints itself on mount, so where it is rendered here does not matter. */}
@@ -3143,7 +3198,7 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
               means the open local mode, where the whole app is unrestricted anyway. */}
           {!editing && window.UnicoStaffRegForm && (!window.unicoCan || window.unicoCan('staff','add')) && <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={()=>setPrintForm(true)}><Ic d={I.doc} s={14}/>Print blank form</button>}
           {printForm && window.UnicoStaffRegForm && React.createElement(window.StaffPrintOptions,{role:f.role||'Nurse',onDone:()=>setPrintForm(false)})}
-          <button className="btn sm" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:S.staffGroupOf(f)==='Trainee'?'trainees':(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
+          <button className="btn sm" onClick={leave}>Cancel</button>
           <button className="btn pri sm" disabled={saving} onClick={save}><Ic d={I.check} s={15} sw={2.4}/>{saving?'Saving?':editing?'Save changes':'Create staff'}</button>
         </div>
         {!editing && (
@@ -3158,94 +3213,119 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
             </div>
           </div>
         )}
+        <div role="tablist" aria-label="Form sections" style={{flex:'1 1 100%',display:'flex',gap:3,padding:3,overflowX:'auto',borderRadius:10,background:'rgba(125,145,180,.14)'}}>
+          {TABS.map(([id,label],i)=>{ const on=id===cur; const tracked=id in needs; const n=tracked?needs[id]:0; return (
+            <button key={id} type="button" role="tab" aria-selected={on} onClick={()=>setTab(id)}
+              style={{flex:'1 0 auto',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:7,minHeight:narrow?44:34,padding:'0 12px',border:0,borderRadius:8,
+                background:on?'var(--blue-700)':'transparent',color:on?'#fff':'var(--ink-2)',fontFamily:'inherit',fontSize:12.5,fontWeight:700,whiteSpace:'nowrap',cursor:'pointer'}}>
+              <span className="num" style={{display:'inline-grid',placeItems:'center',width:19,height:19,borderRadius:'50%',fontSize:11,fontWeight:700,
+                background:on?'rgba(255,255,255,.24)':'rgba(255,255,255,.8)',color:on?'#fff':'var(--ink-2)'}}>{i+1}</span>
+              {label}
+              {tracked&&<span style={{fontSize:10.5,fontWeight:700,padding:'1px 7px',borderRadius:9,
+                background:on?'rgba(255,255,255,.22)':n?'var(--blue-100)':'var(--pos-bg)',color:on?'#fff':n?'var(--blue-700)':'var(--pos)'}}>{n?n+' needed':'Ready'}</span>}
+            </button>
+          );})}
+        </div>
       </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'minmax(0,1fr) 320px',gap:14,alignItems:'start'}}>
-      <div className="grid" style={{gap:16,minWidth:0}}>
-      <div className="grid" style={{alignItems:'start'}}>
+      <div style={{display:'flex',flexWrap:'wrap',gap:14,alignItems:'flex-start'}}>
+      <div style={{flex:'999 1 520px',minWidth:0}}>
         {/* No "Mark inactive" here. Leaving the roster is the Discontinue flow on the staff
             profile (DiscontinueDialog): it takes the separation type, last working day and
             reason, and files the exit in Attrition & Exits before archiving. This banner
             archived people with none of that, so the attrition register lost them. */}
-        <div className="card"><div className="card-b" style={{display:'flex',flexDirection:'column',gap:20}}>
-          {sec('Personal',<>
-            {field('Emp ID',inp('emp_id','e.g. 11234'))}
-            {field('Name *',inp('name','Full name'))}
-            {field('Phone',inp('phone','01XXXXXXXXX'))}
-            {field('Gender',cmb('gender',['Female','Male','Other']))}
-            {field('Date of Birth',inp('dob','YYYY-MM-DD','date'),
-              f.dob&&ageOf(f.dob)!=null?<span style={{fontSize:11,color:'var(--muted)'}}>{ageOf(f.dob)} yrs</span>:null)}
-            <div style={{gridColumn:'1 / -1'}}>{field('Qualification'+(chipsOf('qualification').length?' · '+chipsOf('qualification').length+' selected':''),multiChk('qualification',S.qualificationsFor(f.role),customQ,setCustomQ))}</div>
-            <div style={{gridColumn:'1 / -1'}}>{field('Extracurricular Activities'+(chipsOf('extracurricular').length?' · '+chipsOf('extracurricular').length+' selected':''),multiChk('extracurricular',S.EXTRACURRICULARS||[],customX,setCustomX,'Add another activity — e.g. Chess…'))}</div>
-          </>)}
-          {sec('Job',<>
-            {field('Designation',<SelectDropdown value={f.designation} onChange={v=>set('designation',v)} options={desigOpts} labelFn={canonDesig} placeholder="Select or type — e.g. Nurse Manager, Supervisor"/>)}
-            {field('Current Department'+(chipsOf('current_department').length>1?' · '+chipsOf('current_department').length+' selected':''),
-              <MultiSelectDropdown value={f.current_department} onChange={v=>set('current_department',v)} options={deptOpts} labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel} placeholder="Select department(s)…"/>)}
-            {field('Date of Joining',inp('doj','YYYY-MM-DD','date'))}
-            {/* Which unit owns this person when they hold several. Only worth asking
-                once more than one department is selected. */}
-            {chipsOf('current_department').length>1
-              ? field('Primary Department',
-                  <SelectDropdown value={f.primary_department||''} onChange={v=>set('primary_department',v)}
-                    options={chipsOf('current_department')}
-                    labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel}
-                    placeholder="Which unit is home?"/>)
-              : null}
-            {field('Total Experience',
-              <div style={{padding:'9px 11px',border:'1px dashed var(--line)',borderRadius:7,fontSize:13,background:'var(--panel-2)',color:'var(--ink)',fontWeight:600}}>{S.fmtYM(totalY)}</div>,
-              <span style={{fontSize:11,color:'var(--muted)'}}>auto = previous + UNICO</span>)}
+        <div className="card"><div className="card-b" style={{display:'flex',flexDirection:'column',gap:14}}>
+          {cur==='personal'&&(()=>{ const nameHl=hl(!nameOk); const qh=hl(!qualOk); return (<>
+            {tabTitle('Personal')}
+            {row(<>
+              {cell('3 1 200px',field('Name *',inp('name','Full name','text',nameHl)))}
+              {cell('1 1 100px',field('Emp ID',inp('emp_id','e.g. 11234')),'1 1 130px')}
+              {cell('1 1 130px',field('Phone',inp('phone','01XXXXXXXXX')),'1 1 130px')}
+              {cell('1 1 100px',field('Gender',cmb('gender',['Female','Male','Other'])),'1 1 130px')}
+              {cell('1 1 140px',field('Date of Birth',inp('dob','YYYY-MM-DD','date'),
+                f.dob&&ageOf(f.dob)!=null?<span style={{fontSize:11,color:'var(--muted)'}}>{ageOf(f.dob)} yrs</span>:null),'1 1 130px')}
+            </>)}
+            <div style={{border:'1px solid '+(qh?'#0090ca':'var(--line-2)'),background:qh?'#eef8fc':'transparent',borderRadius:10,padding:'10px 12px',animation:qh?qh.animation:undefined}}>
+              {field('Qualification'+(chipsOf('qualification').length?' · '+chipsOf('qualification').length+' selected':''),multiChk('qualification',qualOpts,customQ,setCustomQ,undefined,qualGroups),
+                <span style={{fontSize:11,color:'var(--muted)'}}>Tap every one that applies</span>)}
+            </div>
+          </>); })()}
+
+          {cur==='job'&&(<>
+            {tabTitle('Job')}
+            {row(<>
+              {cell('2 1 190px',field('Designation',<SelectDropdown value={f.designation} onChange={v=>set('designation',v)} options={desigOpts} labelFn={canonDesig} placeholder="Select or type — e.g. Nurse Manager, Supervisor"/>))}
+              {cell('2 1 200px',field('Current Department'+(chipsOf('current_department').length>1?' · '+chipsOf('current_department').length+' selected':''),
+                ring(!deptOk,<MultiSelectDropdown value={f.current_department} onChange={v=>set('current_department',v)} options={deptOpts} labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel} placeholder="Select department(s)…"/>)))}
+              {cell('1 1 140px',field('Date of Joining',inp('doj','YYYY-MM-DD','date',hl(!dojOk))),'1 1 150px')}
+              {cell('1 1 150px',field('Total Experience',
+                <div style={{padding:'9px 11px',border:'1px dashed var(--line)',borderRadius:7,fontSize:13,background:'var(--panel-2)',color:'var(--ink)',fontWeight:600}}>{S.fmtYM(totalY)}</div>,
+                <span style={{fontSize:11,color:'var(--muted)',whiteSpace:'nowrap'}}>auto = previous + UNICO</span>),'1 1 150px')}
+              {/* Which unit owns this person when they hold several. Only worth asking
+                  once more than one department is selected. */}
+              {chipsOf('current_department').length>1
+                ? cell('1 1 240px',field('Primary Department',
+                    <SelectDropdown value={f.primary_department||''} onChange={v=>set('primary_department',v)}
+                      options={chipsOf('current_department')}
+                      labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel}
+                      placeholder="Which unit is home?"/>))
+                : null}
+            </>)}
             {/* No shift picker here on purpose: which shifts someone actually works is
                 decided in the Duty Roster, and holding a second copy on the staff record
                 would only let the two disagree. `can_float` below is different — it is a
                 standing capability the roster READS, not a schedule. */}
-            <div style={{gridColumn:'1 / -1'}}>
-              <label style={{display:'flex',alignItems:'center',gap:9,fontSize:12.5,color:'var(--ink-2)',cursor:'pointer'}}>
-                <input type="checkbox" checked={!!f.can_float} onChange={e=>set('can_float',e.target.checked)}/>
-                Can be floated to other units when they are short
-              </label>
-            </div>
+            <label style={{display:'flex',alignItems:'center',gap:9,minHeight:narrow?44:undefined,fontSize:12.5,color:'var(--ink-2)',cursor:'pointer'}}>
+              <input type="checkbox" checked={!!f.can_float} onChange={e=>set('can_float',e.target.checked)}/>
+              Can be floated to other units when they are short
+            </label>
           </>)}
-          {sec('Previous Experience',<>
-            <div style={{gridColumn:'1 / -1',display:'flex',flexDirection:'column',gap:9}}>
-              <span style={{fontSize:11.5,color:'var(--muted)'}}>Record your career journey <b>before joining UNICO</b> using From and To dates for each organisation. Duration is calculated automatically. If dates are unavailable, choose Years / months. UNICO tenure is added from Date of Joining.</span>
-              {/* Direct pre-UNICO experience — used unless itemised rows are added below. */}
-              <div style={{display:'flex',alignItems:'flex-end',gap:10,flexWrap:'wrap',background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:9,padding:'11px 14px'}}>
-                <div style={{display:'flex',flexDirection:'column',gap:4}}>
-                  <label style={{fontSize:11,color:'var(--ink-2)',fontWeight:600}}>Alternative: total previous experience (excl. UNICO)</label>
-                  <div style={{display:'flex',alignItems:'center',gap:6}}>
-                    <input value={hasRows?String(Math.floor(rowsPriorSum)||''):dpY} disabled={hasRows} onChange={ev=>setDpY(ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={{...rowInp,width:64,textAlign:'center',fontFamily:'IBM Plex Mono',opacity:hasRows?.6:1}}/>
-                    <span style={{fontSize:11.5,color:'var(--muted)'}}>yrs</span>
-                    <input value={hasRows?String(Math.round((rowsPriorSum%1)*12)||''):dpM} disabled={hasRows} onChange={ev=>setDpM(ev.target.value.replace(/[^\d]/g,''))} placeholder="0" inputMode="numeric" style={{...rowInp,width:64,textAlign:'center',fontFamily:'IBM Plex Mono',opacity:hasRows?.6:1}}/>
-                    <span style={{fontSize:11.5,color:'var(--muted)'}}>mo</span>
-                  </div>
-                </div>
-                {hasRows&&<span style={{fontSize:11,color:'var(--muted)',paddingBottom:6}}>Auto-summed from the organisation breakdown below.</span>}
+
+          {cur==='experience'&&(<>
+            {tabTitle('Previous Experience')}
+            <span style={{fontSize:11.5,color:'var(--muted)'}}>Record your career journey <b>before joining UNICO</b> using From and To dates for each organisation. Duration is calculated automatically. If dates are unavailable, choose Years / months. UNICO tenure is added from Date of Joining.</span>
+            {/* Direct pre-UNICO experience — used unless itemised rows are added below. */}
+            <div style={{display:'flex',alignItems:'center',gap:'8px 12px',flexWrap:'wrap',background:'var(--panel-2)',border:'1px solid var(--line)',borderRadius:9,padding:'9px 13px'}}>
+              <label style={{flex:'1 1 240px',fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>Alternative: total previous experience (excl. UNICO)</label>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <input aria-label="Previous experience years" value={hasRows?String(Math.floor(rowsPriorSum)||''):dpY} disabled={hasRows} onChange={ev=>setDpY(ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={{...rowInpN,width:64,textAlign:'center',fontFamily:'IBM Plex Mono',opacity:hasRows?.6:1}}/>
+                <span style={{fontSize:11.5,color:'var(--muted)'}}>yrs</span>
+                <input aria-label="Previous experience months" value={hasRows?String(Math.round((rowsPriorSum%1)*12)||''):dpM} disabled={hasRows} onChange={ev=>setDpM(ev.target.value.replace(/[^\d]/g,''))} placeholder="0" inputMode="numeric" style={{...rowInpN,width:64,textAlign:'center',fontFamily:'IBM Plex Mono',opacity:hasRows?.6:1}}/>
+                <span style={{fontSize:11.5,color:'var(--muted)'}}>mo</span>
               </div>
-              <span style={{fontSize:11.5,color:'var(--muted)',marginTop:2}}>Career journey by organisation / role:</span>
-              {entries.length===0&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'2px 0'}}>No itemised roles added.</div>}
-              {entries.map((x,i)=>(
-                <div key={i} className="card" style={{padding:12,display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,alignItems:'center'}}>
-                  <label>Organisation<input aria-label={`Experience ${i+1} organisation`} value={x.org||''} onChange={ev=>setEntry(i,'org',ev.target.value)} placeholder="e.g. City Hospital" style={rowInp}/></label>
-                  {/* Free-text allowed: a previous employer's unit is often not a UNICO one.
-                      Rows saved before this column existed simply have no `dept`. */}
+              {hasRows&&<span style={{flex:'1 1 200px',fontSize:11,color:'var(--muted)'}}>Auto-summed from the organisation breakdown below.</span>}
+            </div>
+            <span style={{fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>Career journey by organisation / role:</span>
+            {entries.length===0&&<div style={{fontSize:12.5,color:'var(--faint)',padding:'2px 0'}}>No itemised roles added.</div>}
+            {entries.map((x,i)=>{ const dates=S.experienceUsesDates(x); return (
+              <div key={i} style={{display:'flex',flexWrap:'wrap',alignItems:'flex-end',gap:6,padding:10,border:'1px solid var(--line-2)',borderRadius:9,background:'var(--panel-2)'}}>
+                <label style={expLbl('2 1 118px')}>Organisation<input aria-label={`Experience ${i+1} organisation`} value={x.org||''} onChange={ev=>setEntry(i,'org',ev.target.value)} placeholder="e.g. City Hospital" style={rowInpN}/></label>
+                {/* Free-text allowed: a previous employer's unit is often not a UNICO one.
+                    Rows saved before this column existed simply have no `dept`. */}
+                <div style={expLbl('2 1 118px')}>Department / role
                   <ComboInput value={x.dept||''} onChange={v=>setEntry(i,'dept',v)} options={deptOpts}
                     labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel}
-                    placeholder="Department / role — type anything" style={rowInp}/>
-                  <label>Experience entry<select aria-label={`Experience ${i+1} entry method`} value={S.experienceUsesDates(x)?'dates':'duration'} onChange={ev=>set('prior_experience_entries',entries.map((row,j)=>j===i?{...row,mode:ev.target.value,fromDate:ev.target.value==='duration'?'':row.fromDate,toDate:ev.target.value==='duration'?'':row.toDate,years:ev.target.value==='duration'?String(Math.floor(entYears(row))):row.years,months:ev.target.value==='duration'?String(Math.round((entYears(row)%1)*12)):row.months}:row))} style={rowInp}><option value="dates">From date / To date (default)</option><option value="duration">Years / months</option></select></label>
-                  <span style={{fontSize:12,color:'var(--muted)'}}>Duration: {S.fmtYM(entYears(x))}</span>
-                  <label>From date<input aria-label={`Experience ${i+1} from date`} type="date" value={x.fromDate||''} onChange={ev=>setEntryDate(i,'fromDate',ev.target.value)} style={rowInp}/></label>
-                  <label>To date<input aria-label={`Experience ${i+1} to date`} type="date" min={x.fromDate||undefined} max={f.doj||undefined} value={x.toDate||''} onChange={ev=>setEntryDate(i,'toDate',ev.target.value)} style={rowInp}/></label>
-                  {!S.experienceUsesDates(x)&&<>
-                    <span style={{gridColumn:'1 / -1',fontSize:11.5,color:'var(--muted)'}}>Saved duration is preserved. Enter both dates above to calculate it automatically, or keep Years / months below.</span>
-                    <label>Years<input aria-label={`Experience ${i+1} years`} value={x.years||''} onChange={ev=>setEntry(i,'years',ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={rowInp}/></label>
-                    <label>Months<input aria-label={`Experience ${i+1} months`} value={x.months||''} onChange={ev=>setEntry(i,'months',ev.target.value.replace(/[^\d]/g,''))} placeholder="0" inputMode="numeric" style={rowInp}/></label>
-                  </>}
-                  <button className="icon-btn danger" title="Remove" onClick={()=>delEntry(i)} style={{justifySelf:'center'}}><Ic d={I.x} s={14}/></button>
+                    placeholder="Department / role — type anything" style={rowInpN}/>
                 </div>
-              ))}
-              <div><button className="btn sm" onClick={addEntry}><Ic d={I.plus} s={14}/>Add previous experience</button></div>
-              <div style={{display:'flex',gap:20,flexWrap:'wrap',background:'var(--panel-2)',borderRadius:9,padding:'11px 14px',marginTop:2}}>
+                <label style={expLbl('1 1 124px')}>Experience entry<select aria-label={`Experience ${i+1} entry method`} value={dates?'dates':'duration'} onChange={ev=>set('prior_experience_entries',entries.map((row,j)=>j===i?{...row,mode:ev.target.value,fromDate:ev.target.value==='duration'?'':row.fromDate,toDate:ev.target.value==='duration'?'':row.toDate,years:ev.target.value==='duration'?String(Math.floor(entYears(row))):row.years,months:ev.target.value==='duration'?String(Math.round((entYears(row)%1)*12)):row.months}:row))} style={rowInpN}><option value="dates">From date / To date (default)</option><option value="duration">Years / months</option></select></label>
+                {/* The date fields are always offered — an entry saved as years / months can be converted by
+                    entering both dates — and such an entry keeps its saved duration editable beside them. */}
+                  <label style={expLbl('1 1 124px','1 1 140px')}>From date<input aria-label={`Experience ${i+1} from date`} type="date" value={x.fromDate||''} onChange={ev=>setEntryDate(i,'fromDate',ev.target.value)} style={rowInpN}/></label>
+                  <label style={expLbl('1 1 124px','1 1 140px')}>To date<input aria-label={`Experience ${i+1} to date`} type="date" min={x.fromDate||undefined} max={f.doj||undefined} value={x.toDate||''} onChange={ev=>setEntryDate(i,'toDate',ev.target.value)} style={rowInpN}/></label>
+                {!dates && <>
+                  <label style={expLbl('1 1 76px','1 1 90px')}>Years<input aria-label={`Experience ${i+1} years`} value={x.years||''} onChange={ev=>setEntry(i,'years',ev.target.value.replace(/[^\d.]/g,''))} placeholder="0" inputMode="decimal" style={rowInpN}/></label>
+                  <label style={expLbl('1 1 76px','1 1 90px')}>Months<input aria-label={`Experience ${i+1} months`} value={x.months||''} onChange={ev=>setEntry(i,'months',ev.target.value.replace(/[^\d]/g,''))} placeholder="0" inputMode="numeric" style={rowInpN}/></label>
+                </>}
+                <div style={{flex:'0 0 62px',display:'flex',flexDirection:'column',gap:4,fontSize:11.5,fontWeight:600,color:'var(--ink-2)'}}>Duration
+                  <span className="num" style={{display:'flex',alignItems:'center',minHeight:narrow?44:35,fontSize:13,fontWeight:700,color:'#6a52d4'}}>{S.fmtYM(entYears(x))}</span>
+                </div>
+                <button className="icon-btn danger" title="Remove" aria-label={`Remove experience ${i+1}`} onClick={()=>delEntry(i)} style={narrow?{width:44,height:44}:{marginBottom:3}}><Ic d={I.x} s={14}/></button>
+                {!dates&&<span style={{flex:'1 1 100%',fontSize:11.5,color:'var(--muted)'}}>Saved duration is preserved. Switch the entry to “From date / To date” to calculate it automatically, or keep Years / months.</span>}
+              </div>
+            );})}
+            <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:'10px 22px'}}>
+              <button className="btn sm" onClick={addEntry}><Ic d={I.plus} s={14}/>Add previous experience</button>
+              <div style={{flex:'1 1 300px',display:'flex',gap:20,flexWrap:'wrap',justifyContent:narrow?'flex-start':'flex-end'}}>
                 {[['Previous',S.fmtYM(priorSum),'#6a52d4'],['UNICO (from DOJ)',f.doj?S.fmtYM(unicoY):'—','#1f9d57'],['Total experience',S.fmtYM(totalY),'var(--blue)']].map(([l,v,c],i)=>(
                   <div key={l} style={{display:'flex',flexDirection:'column',gap:2}}>
                     <span style={{fontSize:10.5,color:'var(--muted)',textTransform:'uppercase',letterSpacing:.4,fontWeight:600}}>{l}</span>
@@ -3255,24 +3335,28 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
               </div>
             </div>
           </>)}
-          {sec('Compliance',<>
-            <div style={{gridColumn:'1 / -1'}}>{field('Special Training'+(chipsOf('special_training').length?' · '+chipsOf('special_training').length+' selected':''),multiChk('special_training',S.TRAININGS.filter(Boolean),customT,setCustomT,'Add another training…'))}</div>
-            {field('Hepatitis B Vaccination',cmb('hepatitis_b_vaccination',S.VACCINATION_STATES))}
-            {f.role!=='PCA'&&<>
-            {field('Registration / Licence No.',inp('licence_no','e.g. BNMC-12345'),
-              f.licence_verified?<span style={{fontSize:11,fontWeight:700,color:'#157a43',display:'inline-flex',alignItems:'center',gap:3}}><Ic d={I.check} s={12} c="#157a43"/>BNMC verified</span>:null)}
-            {/* An expired licence is a rostering problem, so it is flagged the moment
-                it is typed rather than waiting for someone to audit the register. */}
-            {field('Licence Expiry',inp('licence_expiry','YYYY-MM-DD','date'),
-              licenceState?<span style={{fontSize:11,fontWeight:700,color:licenceState.c}}>{licenceState.t}</span>:null)}
+
+          {cur==='compliance'&&(<>
+            {tabTitle('Compliance')}
+            {field('Special Training'+(chipsOf('special_training').length?' · '+chipsOf('special_training').length+' selected':''),multiChk('special_training',S.TRAININGS.filter(Boolean),customT,setCustomT,'Add another training…'))}
+            {row(<>
+              {cell('1 1 170px',field('Hepatitis B Vaccination',cmb('hepatitis_b_vaccination',S.VACCINATION_STATES)))}
+              {f.role!=='PCA'&&cell('2 1 200px',field('Registration / Licence No.',inp('licence_no','e.g. BNMC-12345'),
+                f.licence_verified?<span style={{fontSize:11,fontWeight:700,color:'#157a43',display:'inline-flex',alignItems:'center',gap:3}}><Ic d={I.check} s={12} c="#157a43"/>BNMC verified</span>:null))}
+              {/* An expired licence is a rostering problem, so it is flagged the moment
+                  it is typed rather than waiting for someone to audit the register. */}
+              {f.role!=='PCA'&&cell('1 1 150px',field('Licence Expiry',inp('licence_expiry','YYYY-MM-DD','date'),
+                licenceState?<span style={{fontSize:11,fontWeight:700,color:licenceState.c}}>{licenceState.t}</span>:null))}
+            </>)}
             {/* Checks the number above against the council's public register and keeps
                 the whole answer on the record. See the note above BnmcVerify. */}
-            <BnmcVerify f={f} set={set} store={store} empId={empId} editing={editing}/>
-            </>}
-            <div style={{gridColumn:'1 / -1'}}>{field('Remarks',inp('remarks','Any notes'))}</div>
+            {f.role!=='PCA'&&<BnmcVerify f={f} set={set} store={store} empId={empId} editing={editing}/>}
+            {field('Remarks',inp('remarks','Any notes'))}
           </>)}
-          {sec('Privileges',<>
-            <div style={{gridColumn:'1 / -1'}}>
+
+          {cur==='privileges'&&(<>
+            {tabTitle('Privileges')}
+            <div>
               {(()=>{
                 /* THE RECORD AND THE CATALOGUE SPEAK DIFFERENT DIALECTS. A staff record
                    holds whatever was typed or imported — "MICU", "CCU", "CT ICU" — while
@@ -3294,14 +3378,14 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
                 // record rather than what it resolved to.
                 const unknownDepts=selRaw.filter(d=>!deptOpts.includes(resolveDept(d)));
                 const hint=selDepts.length===0
-                  ? 'Select a department above first — privileges are assigned per department, in Settings → Department Privileges.'
+                  ? 'Select a department on the Job tab first — privileges are assigned per department, in Settings → Department Privileges.'
                   : unknownDepts.length
-                    ? `“${unknownDepts.join(', ')}” isn't a department Settings → Department Privileges recognises — re-pick the department above from the dropdown (it may have been renamed), then assign its privileges in Settings.`
+                    ? `“${unknownDepts.join(', ')}” isn't a department Settings → Department Privileges recognises — re-pick the department on the Job tab from the dropdown (it may have been renamed), then assign its privileges in Settings.`
                     : `No privileges have been assigned to ${selDepts.join(', ')} yet for this role. Assign them in Settings → Department Privileges.`;
                 return (<>
                   <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:9}}>
-                    <span style={{fontSize:11.5,color:'var(--muted)'}}>Tick every clinical activity this {f.role==='PCA'?'PCA':'nurse'} is privileged to perform — filtered to what's assigned to {selDepts.length?selDepts.join(', '):'their department'}.</span>
-                    <span style={{flex:1}}/>
+                    <span style={{flex:'1 1 280px',fontSize:11.5,color:'var(--muted)'}}>Tick every clinical activity this {f.role==='PCA'?'PCA':'nurse'} is privileged to perform — filtered to what's assigned to {selDepts.length?selDepts.join(', '):'their department'}.</span>
+                    {selDepts.length===0&&<button type="button" className="btn sm" onClick={()=>setTab('job')}>Choose a department</button>}
                     <button type="button" className="btn sm" onClick={async()=>{
                       const ok=await window.UI.confirm({title:'Leave this form?',message:'Managing department privileges opens Settings and leaves this form — anything typed here will be lost unless you Save changes first.',confirmLabel:'Leave without saving'});
                       if(ok){ window.__UNICO_SETTINGS_TAB__='deptprivileges'; setRoute({view:'settings'}); }
@@ -3312,40 +3396,69 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
               })()}
             </div>
           </>)}
+
           {/* Identity & contact details the design carries as standard. They live here
               rather than in Personal so that section stays about who the person IS;
-              these are the papers and the who-to-call. Admin-defined custom fields
-              follow underneath, unchanged. */}
-          {sec('Additional Details',<>
-            {field('NID / Passport No.',inp('nid','National ID or passport number'))}
-            {field('Blood Group',cmb('blood_group',['A+','A-','B+','B-','O+','O-','AB+','AB-']))}
-            {field('Emergency Contact',inp('emergency_contact','Name & phone — e.g. Rahima, 017XXXXXXXX'))}
-            {field('Emergency Contact Relation',inp('emergency_relation','e.g. Spouse, Father'))}
-            <div style={{gridColumn:'1 / -1'}}>{field('Languages Spoken'+(chipsOf('languages').length?' · '+chipsOf('languages').length+' selected':''),
-              multiChk('languages',['Bangla','English','Hindi','Urdu','Arabic'],customL,setCustomL,'Add another language…'))}</div>
+              these are the papers and the who-to-call. */}
+          {cur==='additional'&&(<>
+            {tabTitle('Additional Details')}
+            {row(<>
+              {cell('2 1 200px',field('NID / Passport No.',inp('nid','National ID or passport number')))}
+              {cell('1 1 110px',field('Blood Group',cmb('blood_group',['A+','A-','B+','B-','O+','O-','AB+','AB-'])))}
+              {cell('3 1 240px',field('Emergency Contact',inp('emergency_contact','Name & phone — e.g. Rahima, 017XXXXXXXX')))}
+              {cell('2 1 180px',field('Emergency Contact Relation',inp('emergency_relation','e.g. Spouse, Father')))}
+            </>)}
+            {field('Languages Spoken'+(chipsOf('languages').length?' · '+chipsOf('languages').length+' selected':''),
+              multiChk('languages',['Bangla','English','Hindi','Urdu','Arabic'],customL,setCustomL,'Add another language…'))}
+            {field('Extracurricular Activities'+(chipsOf('extracurricular').length?' · '+chipsOf('extracurricular').length+' selected':''),multiChk('extracurricular',S.EXTRACURRICULARS||[],customX,setCustomX,'Add another activity — e.g. Chess…'))}
           </>)}
-          {customFieldDefs.length>0&&sec('Custom Fields',customFieldDefs.map(cf=>{
-            const cv=(f.custom||{})[cf.id]||'';
-            const node = cf.kind==='multi'
-              ? <MultiSelectDropdown value={cv} onChange={v=>setCustom(cf.id,v)} options={cf.options||[]} placeholder={'Select '+cf.name.toLowerCase()+'…'}/>
-              : cf.kind==='text'
-                ? <input value={cv} onChange={e=>setCustom(cf.id,e.target.value)} placeholder={cf.name} style={{padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',outline:'none',width:'100%'}}/>
-                : <SelectDropdown value={cv} onChange={v=>setCustom(cf.id,v)} options={cf.options||[]} placeholder={'Select '+cf.name.toLowerCase()+'…'}/>;
-            return <div key={cf.id} style={cf.kind==='text'?null:{gridColumn:'1 / -1'}}>{field(cf.name,node)}</div>;
-          }))}
+
+          {/* Admin-defined custom fields (Settings → Staff Fields), unchanged. */}
+          {cur==='custom'&&(<>
+            {tabTitle('Custom Fields')}
+            {row(customFieldDefs.map(cf=>{
+              const cv=(f.custom||{})[cf.id]||'';
+              const node = cf.kind==='multi'
+                ? <MultiSelectDropdown value={cv} onChange={v=>setCustom(cf.id,v)} options={cf.options||[]} placeholder={'Select '+cf.name.toLowerCase()+'…'}/>
+                : cf.kind==='text'
+                  ? <input value={cv} onChange={e=>setCustom(cf.id,e.target.value)} placeholder={cf.name} style={{padding:'9px 11px',border:'1px solid var(--line)',borderRadius:7,fontSize:13,fontFamily:'inherit',outline:'none',width:'100%',...(narrow?{minHeight:44,fontSize:16}:{})}}/>
+                  : <SelectDropdown value={cv} onChange={v=>setCustom(cf.id,v)} options={cf.options||[]} placeholder={'Select '+cf.name.toLowerCase()+'…'}/>;
+              return <div key={cf.id} style={{flex:(narrow||cf.kind!=='text')?'1 1 100%':'1 1 240px',minWidth:0}}>{field(cf.name,node)}</div>;
+            }))}
+          </>)}
+
           {err&&<div style={{fontSize:12.5,color:'var(--rose)',fontWeight:600}}>{err}</div>}
-          <div style={{display:'flex',gap:10,borderTop:'1px solid var(--line-2)',paddingTop:14}}>
+          <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:10,borderTop:'1px solid var(--line-2)',paddingTop:12}}>
+            <button className="btn" disabled={tabIdx===0} onClick={()=>setTab(TABS[tabIdx-1][0])}>Back</button>
+            {tabIdx<TABS.length-1&&<button className="btn" style={{color:'var(--blue-700)',borderColor:'var(--blue-700)'}} onClick={()=>setTab(TABS[tabIdx+1][0])}>Next: {TABS[tabIdx+1][1]}<Ic d="M9 6l6 6-6 6" s={14}/></button>}
+            <span style={{flex:'1 1 180px',textAlign:narrow?'left':'right',fontSize:11.5,fontWeight:600,color:missing.length?'var(--blue-700)':'var(--pos)'}}>{missing.length?'Still to add: '+missing.join(', '):'Ready to save'}</span>
+            <button className="btn" onClick={leave}>Cancel</button>
             <button className="btn pri" disabled={saving} onClick={save}><Ic d={I.check} s={16} sw={2.4}/>{saving?'Saving?':editing?'Save changes':'Create staff'}</button>
-            <button className="btn" onClick={()=>setRoute(editing?{view:'staffProfile',emp:empId}:{view:S.staffGroupOf(f)==='Trainee'?'trainees':(f.role||'Nurse')==='PCA'?'pca':'nurses'})}>Cancel</button>
           </div>
         </div></div>
       </div>
+      <div style={{flex:'1 1 300px',minWidth:0}}>
+        <StaffFormRail f={f} editing={editing} set={set} store={store} empId={empId}/>
       </div>
-      <StaffFormRail f={f} editing={editing} set={set} store={store} empId={empId}/>
       </div>
       {saved&&<StaffSavedOverlay title={saved.title} sub={saved.sub} onClose={leaveAfterSave}/>}
     </div>
   );
+}
+
+// True while the element is narrower than `bp`. Measured on the element, not the window,
+// so the form lays out for the room it actually has beside the app's sidebar.
+function useStfNarrow(ref,bp){
+  const [narrow,setNarrow]=React.useState(false);
+  React.useEffect(()=>{
+    const el=ref.current; if(!el) return undefined;
+    const check=()=>setNarrow(el.offsetWidth>0&&el.offsetWidth<bp);
+    check();
+    if(typeof ResizeObserver==='undefined'){ window.addEventListener('resize',check); return ()=>window.removeEventListener('resize',check); }
+    const ro=new ResizeObserver(check); ro.observe(el);
+    return ()=>ro.disconnect();
+  },[]);
+  return narrow;
 }
 
 /* The mockup's save confirmation: a drawn tick over a dimmed screen. It is the ONLY

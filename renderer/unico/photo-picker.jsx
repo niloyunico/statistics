@@ -70,7 +70,9 @@
       // without them it can only go into the browser-mirrored overlay, which is how
       // portraits went missing after a redeploy.
       body: JSON.stringify({ image, kind: o.kind || 'staff', staffName: o.name || '',
-        staffId: o.staffId != null ? o.staffId : null, empId: o.empId || null }),
+        staffId: o.staffId != null ? o.staffId : null, empId: o.empId || null,
+        // kind=profile only: whose ACCOUNT photo (Access Control); absent = the signed-in person
+        username: o.username || null }),
     });
     const j = await r.json().catch(() => ({ ok: false, error: 'The server sent an unreadable reply.' }));
     if (!r.ok || !j.ok) throw new Error(j.error || 'Upload failed.');
@@ -82,7 +84,7 @@
     const r = await fetch('/api/upload', {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
       body: JSON.stringify({ publicId: publicId, kind: kind || 'staff',
-        staffId: w.staffId != null ? w.staffId : null, empId: w.empId || null }),
+        staffId: w.staffId != null ? w.staffId : null, empId: w.empId || null, username: w.username || null }),
     });
     const j = await r.json().catch(() => ({ ok: false }));
     if (!r.ok || !j.ok) throw new Error(j.error || 'Could not remove the photo.');
@@ -315,7 +317,8 @@
    *   zoomable makes an existing photo clickable: it opens large in a lightbox
    *   (pass zoomSub for the caption line under the name).
    */
-  function PhotoPicker({ value, onChange, initials, name, size, kind, readOnly, hue, w, h, radius, plain, zoomable, zoomSub, staffId, empId }) {
+  // username (kind 'profile' only): another person's account, set from Access Control by an administrator.
+  function PhotoPicker({ value, onChange, initials, name, size, kind, readOnly, hue, w, h, radius, plain, zoomable, zoomSub, staffId, empId, username }) {
     const [busy, setBusy] = React.useState(false);
     const [cfg, setCfg] = React.useState(null);
     const [cropSrc, setCropSrc] = React.useState(null);   // data URI awaiting framing
@@ -352,7 +355,7 @@
       setCropSrc(null);
       setBusy(true);
       try {
-        const up = await unicoUploadPhoto(dataUri, { kind: kind, name: name, staffId: staffId, empId: empId });
+        const up = await unicoUploadPhoto(dataUri, { kind: kind, name: name, staffId: staffId, empId: empId, username: username });
         onChange && onChange({ url: up.url, publicId: up.publicId });
         toast('Photo updated', 'success');
       } catch (e) { toast(String((e && e.message) || e), 'error'); }
@@ -361,6 +364,18 @@
 
     async function clear() {
       if (!value) { onChange && onChange(null); return; }
+      // An account photo shown in Access Control carries only its url: the server finds the stored file.
+      if (!value.publicId && kind === 'profile' && username) {
+        const sure = (window.UI && window.UI.confirm)
+          ? await window.UI.confirm({ title: 'Remove this photo?', message: 'The picture is deleted from storage permanently.', danger: true, confirmLabel: 'Remove' })
+          : true;
+        if (!sure) return;
+        setBusy(true);
+        try { await unicoDeletePhoto('', 'profile', { username: username }); onChange && onChange(null); toast('Photo removed', 'success'); }
+        catch (e) { toast(String((e && e.message) || e), 'error'); }
+        finally { setBusy(false); }
+        return;
+      }
       if (!value.publicId) {
         // No storage id (url-only / backfilled portrait): nothing to delete from storage,
         // but the copy on the staff record must be cleared too, or it comes straight back.
@@ -379,7 +394,7 @@
       if (!ok) return;
       setBusy(true);
       try {
-        await unicoDeletePhoto(value.publicId, kind, { staffId: staffId, empId: empId });
+        await unicoDeletePhoto(value.publicId, kind, { staffId: staffId, empId: empId, username: username });
         onChange && onChange(null);
         toast('Photo removed', 'success');
       } catch (e) { toast(String((e && e.message) || e), 'error'); }
@@ -451,9 +466,15 @@
             onCancel={() => setCropSrc(null)} onDone={uploadCropped} />
         )}
 
-        {!readOnly && value && value.url && !busy && (
-          <button type="button" className="btn sm" onClick={clear}
-            style={{ color: '#d23a52', borderColor: '#f1c6cd', fontSize: 11, padding: '3px 9px' }}>Remove photo</button>
+        {/* An editable, zoomable picker also offers View as a button beside Remove: clicking the
+            picture does open it large, but nothing on screen says so. */}
+        {value && value.url && !busy && !readOnly && (
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center' }}>
+            {zoomable && <button type="button" className="btn sm" onClick={() => setViewing(true)}
+              style={{ fontSize: 11, padding: '3px 9px' }}>View photo</button>}
+            {!readOnly && <button type="button" className="btn sm" onClick={clear}
+              style={{ color: '#d23a52', borderColor: '#f1c6cd', fontSize: 11, padding: '3px 9px' }}>Remove photo</button>}
+          </div>
         )}
         {!readOnly && cfg && !cfg.configured && (
           <div style={{ fontSize: 10.5, color: 'var(--muted)', maxWidth: 190, textAlign: 'center', lineHeight: 1.5 }}>

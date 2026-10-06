@@ -158,6 +158,57 @@ const ACHIEVEMENT = {
   const huge = ((over.body.categories || {}).ach || []).find((c) => c.label === 'Huge');
   ok('a category cannot award more than the per-cycle cap', huge && huge.levels[0][1] === 5, huge && huge.levels);
 
+  /* WHO A RECORD IS ABOUT. Employee numbers are blank for many staff, shared by a few and
+     corrected later; the staff RECORD id is what a personal file must hang on. */
+  const twenty = {}; for (let i = 1; i <= 20; i++) twenty[i] = 4;
+  const pA = { empId: '11410', staffId: '174', staffName: 'Ashraf Ali', cycleId: '2026-04-01', scores: twenty, status: 'draft' };
+  const pB = { empId: '11410', staffId: '177', staffName: 'Ashraf Ali Munna', cycleId: '2026-04-01', scores: { 1: 2 }, status: 'draft' };
+  const sA = await call('PUT', '/api/performance/appraisals', pA);
+  const sB = await call('PUT', '/api/performance/appraisals', pB);
+  ok('two people sharing an employee number each keep their own appraisal', sA.body.ok && sB.body.ok && sA.body.appraisal.id !== sB.body.appraisal.id, [sA.body.appraisal && sA.body.appraisal.id, sB.body.appraisal && sB.body.appraisal.id]);
+  const gDup = await call('GET', '/api/performance');
+  const ofA = gDup.body.appraisals.find((a) => a.staffId === '174' && a.cycleId === '2026-04-01');
+  ok('the first person\'s 20 ratings were not overwritten by the second', ofA && ofA.rated === 20, ofA && ofA.rated);
+  await call('POST', '/api/performance/incidents', Object.assign({}, INCIDENT, { empId: '11410', staffId: '177', staffName: 'Ashraf Ali Munna', cycleId: '2026-04-01', points: 2 }));
+  const gPts = await call('GET', '/api/performance');
+  ok('an incident filed against one of them does not deduct from the other',
+    gPts.body.appraisals.find((a) => a.staffId === '174' && a.cycleId === '2026-04-01').penalty === 0
+    && gPts.body.appraisals.find((a) => a.staffId === '177' && a.cycleId === '2026-04-01').penalty === 2);
+  await call('POST', '/api/performance/exits', { empId: '11410', staffId: '174', staffName: 'Ashraf Ali', lastDay: '2026-09-01' });
+  await call('POST', '/api/performance/exits', { empId: '11410', staffId: '177', staffName: 'Ashraf Ali Munna', lastDay: '2026-09-20' });
+  const gEx = await call('GET', '/api/performance');
+  ok('and each keeps their own exit record', gEx.body.exits.filter((x) => x.empId === '11410').length === 2, gEx.body.exits.map((x) => x.id));
+
+  // A form filed before record ids were sent stays where it is when its owner saves again.
+  const legacy = await call('PUT', '/api/performance/appraisals', { empId: '20001', staffName: 'Old Form', cycleId: '2026-01-01', scores: { 1: 3 }, status: 'draft' });
+  const again = await call('PUT', '/api/performance/appraisals', { empId: '20001', staffId: '901', staffName: 'Old Form', cycleId: '2026-01-01', scores: { 1: 5 }, status: 'draft' });
+  ok('an older form is updated in place rather than duplicated', legacy.body.appraisal.id === again.body.appraisal.id && again.body.appraisal.staffId === '901', [legacy.body.appraisal.id, again.body.appraisal.id]);
+
+  // Entries follow the staff record: a nurse appraised before she had an employee number.
+  const routes2 = [];
+  const app2 = { get: (p, ...h) => routes2.push({ m: 'GET', p, h }), post: () => {}, put: () => {}, delete: () => {} };
+  require('../staff-performance.js').mount(app2, { roster: async () => [{ id: 70, emp_id: '11999', name: 'Sianang Khumi' }] });
+  await call('PUT', '/api/performance/appraisals', { empId: '70', staffId: '70', staffName: 'Sianang Khumi', cycleId: '2026-01-10', scores: twenty, status: 'draft' });
+  const followed = await new Promise((resolve) => { const r = routes2[0]; r.h[r.h.length - 1]({ body: {}, params: {}, access: { unrestricted: true } }, { status() { return this; }, set() { return this; }, json(v) { resolve(v); } }); });
+  const hers = (followed.appraisals || []).find((a) => a.staffId === '70');
+  ok('her appraisal is handed out under the number entered later, not the old key', hers && hers.empId === '11999', hers && hers.empId);
+  // …and so is an exit record filed before record ids were kept (under the record id, same name).
+  await call('POST', '/api/performance/exits', { empId: '70', staffName: 'Sianang Khumi', lastDay: '2026-09-01' });
+  const followed2 = await new Promise((resolve) => { const r = routes2[0]; r.h[r.h.length - 1]({ body: {}, params: {}, access: { unrestricted: true } }, { status() { return this; }, set() { return this; }, json(v) { resolve(v); } }); });
+  ok('an older exit record filed under her record id follows her too', (followed2.exits || []).some((x) => x.staffName === 'Sianang Khumi' && x.empId === '11999'), (followed2.exits || []).map((x) => x.empId));
+
+  // Starting an appraisal is the Add permission (POST); changing a completed one is Edit (PUT).
+  const started = await call('POST', '/api/performance/appraisals', { empId: '30001', staffId: '930', staffName: 'New Starter', cycleId: '2026-02-01', scores: { 1: 4 }, status: 'draft' });
+  ok('an appraisal can be started with a POST', started.code === 200 && started.body.ok, started.body);
+  const draftAgain = await call('POST', '/api/performance/appraisals', { empId: '30001', staffId: '930', staffName: 'New Starter', cycleId: '2026-02-01', scores: twenty, status: 'discussed' });
+  ok('and saved again while it is still a draft, including completing it', draftAgain.code === 200 && draftAgain.body.appraisal.status === 'discussed', draftAgain.body);
+  const tooLate = await call('POST', '/api/performance/appraisals', { empId: '30001', staffId: '930', staffName: 'New Starter', cycleId: '2026-02-01', scores: { 1: 1 }, status: 'draft' });
+  ok('but a completed appraisal cannot be changed through the Add route', tooLate.code === 403, tooLate.body);
+
+  const ghost = await call('POST', '/api/performance/appraisals/:id/reopen', {}, { id: 'apr-NOBODY-2026-01-01' });
+  const gGhost = await call('GET', '/api/performance');
+  ok('reopening an appraisal that does not exist is refused and files nothing', ghost.code === 404 && !gGhost.body.appraisals.some((a) => a.id === 'apr-NOBODY-2026-01-01'), ghost.body);
+
   console.log('\n  ' + pass + ' passed, ' + fail + ' failed\n');
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error('  ERROR', e); process.exit(2); });

@@ -142,6 +142,19 @@ const staffArr = [
   const m5 = await access.mergeAppData(viewer, { unico_staff_v3: '[]' }, blob);
   eq('view-only cannot write', JSON.parse(m5.unico_staff_v3).map(r => r.id).sort(), [1, 2, 7, 8]);
 
+  // …but a change this browser actually SENT (a partial save names its changed keys) is refused
+  // out loud. Dropped silently, the staff form said "saved" for a record that never changed.
+  await rejects('a view-only account is told its staff edit was not saved',
+    access.mergeAppData(viewer, { unico_staff_v3: '[]' }, blob, { changed: ['unico_staff_v3'], staffBase: blob.unico_staff_v3 }), 409, /view staff records but not change/);
+  eq('a view-only save of OTHER keys is not disturbed by its untouched staff copy',
+    JSON.parse((await access.mergeAppData(viewer, { unico_staff_v3: blob.unico_staff_v3 }, blob, { changed: ['unico_store_v3'] })).unico_staff_v3).map(r => r.id).sort(), [1, 2, 7, 8]);
+  // A delete by an account without the delete permission: refused when the browser HELD the
+  // record and dropped it; a record it never held (added elsewhere meanwhile) is simply kept.
+  await rejects('a real delete without the delete permission is refused, not silently undone',
+    access.mergeAppData(staffUser, { unico_staff_v3: deleted }, blob, { changed: ['unico_staff_v3'], staffBase: scoped.unico_staff_v3 }), 409, /cannot delete/);
+  eq('a record the browser never held is kept without a refusal',
+    JSON.parse((await access.mergeAppData(staffUser, { unico_staff_v3: deleted }, blob, { changed: ['unico_staff_v3'], staffBase: deleted })).unico_staff_v3).map(r => r.id).sort(), [1, 2, 7, 8]);
+
   // Admin keeps the old full-mirror behaviour exactly.
   eq('admin write is a straight mirror', await access.mergeAppData(admin, { a: '1' }, blob), { a: '1' });
 

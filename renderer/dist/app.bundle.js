@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=c3ef997bda","reports":"/dist/reports.chunk.js?v=ec2b08c755","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=450a08877b","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=991d23f89e","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=9f20af3d17","reports":"/dist/reports.chunk.js?v=91b79edb37","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=2484d01352","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=35859a5969","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7333,7 +7333,14 @@ window.QI_CORRECTIONS_BY_DEFID = {
     var now = parseDate(at) || new Date();
     var empId = emp ? (emp.emp_id || String(emp.id)) : '';
     var doj = emp && emp.doj;
-    var mine = (appraisals || []).filter(function (x) { return x && String(x.empId) === String(empId); });
+    // The staff RECORD id decides when a form carries one: two people can share an employee
+    // number, and a number gets entered or corrected later. (A form filed before record ids
+    // were kept still matches on the key.)
+    var mine = (appraisals || []).filter(function (x) {
+      if (!x) return false;
+      if (x.staffId != null && String(x.staffId) !== '' && emp && emp.id != null) return String(x.staffId) === String(emp.id);
+      return String(x.empId) === String(empId);
+    });
     var cyc = cycleOf(doj, now);
     var current = mine.filter(function (x) { return cyc && x.cycleId === cyc.id; })[0] || null;
     // A form still open from an EARLIER window stays this person's appraisal until it
@@ -10930,6 +10937,12 @@ function Sidebar({
     window.addEventListener('unico:ds-missing', h);
     return () => window.removeEventListener('unico:ds-missing', h);
   }, []);
+  const [dcBadge, setDcBadge] = React.useState(() => window.__UNICO_DC_PENDING__ || 0);
+  React.useEffect(() => {
+    const h = e => setDcBadge(e && e.detail || 0);
+    window.addEventListener('unico:dc-pending', h);
+    return () => window.removeEventListener('unico:dc-pending', h);
+  }, []);
   const sub = unicoWorkspaceSub(view).filter(s => !s.mod || unicoCanAccessModule(s.mod));
   const subOn = s => s.match ? s.match.indexOf(view) >= 0 : view === s.view;
   const AUTO_OPEN = {
@@ -10980,7 +10993,7 @@ function Sidebar({
       className: "sb-sec"
     }, g.sec), items.map(it => {
       const active = it.on(view);
-      const badgeN = it.badge === 'sup' ? supBadge : it.badge === 'ds' ? dsBadge : it.badge ? qBadge : 0;
+      const badgeN = it.id === 'datacol' ? dcBadge : it.badge === 'sup' ? supBadge : it.badge === 'ds' ? dsBadge : it.badge ? qBadge : 0;
       const badge = badgeN > 0 ? badgeN : null;
       const auto = !!AUTO_OPEN[it.id];
       const itSub = auto && folded[it.id] ? [] : subFor(it, active);
@@ -11060,9 +11073,38 @@ function Sidebar({
         style: {
           marginLeft: 'auto'
         }
-      }, dsBadge)))));
+      }, dsBadge), s.view === 'dcReview' && dcBadge > 0 && React.createElement("span", {
+        className: "badge alert num",
+        style: {
+          marginLeft: 'auto'
+        },
+        title: dcBadge + ' waiting for approval'
+      }, dcBadge)))));
     }));
   })), React.createElement("div", {
+    className: "sb-bg",
+    "aria-hidden": "true"
+  }), React.createElement("div", {
+    className: "sb-promo-wrap",
+    "aria-hidden": "true"
+  }, React.createElement("div", {
+    className: "sb-promo"
+  }, React.createElement("svg", {
+    width: "28",
+    height: "25",
+    viewBox: "0 0 24 22",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "1.6",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  }, React.createElement("path", {
+    d: "M12 20.5C5 15.6 2.2 11.9 2.2 8.1 2.2 5.2 4.4 3 7.2 3c1.9 0 3.6 1 4.8 2.7C13.2 4 14.9 3 16.8 3c2.8 0 5 2.2 5 5.1 0 3.8-2.8 7.5-9.8 12.4z"
+  }), React.createElement("path", {
+    d: "M8.5 11.5l2.4 2.4 4.6-4.8"
+  })), React.createElement("div", {
+    className: "sb-promo-t"
+  }, "Your Health,", React.createElement("br", null), "Our Priority."))), React.createElement("div", {
     className: "sb-foot"
   }, (() => {
     const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
@@ -11336,6 +11378,72 @@ function PeriodPill({
     value: m
   }, fmtKey(m))))))));
 }
+function unicoUsePending(enabled) {
+  const [pend, setPend] = React.useState(null);
+  React.useEffect(() => {
+    if (!enabled) return;
+    let live = true,
+      seen = null;
+    const run = () => {
+      if (document.visibilityState === 'hidden' && seen) return;
+      fetch('/api/submissions?status=pending&limit=1000', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      }).then(r => r.ok ? r.json() : null).then(j => {
+        if (!live || !j || !j.ok || !Array.isArray(j.submissions)) return;
+        const items = j.submissions;
+        if (seen) {
+          const fresh = items.filter(x => x && x.id != null && !seen.has(String(x.id)));
+          if (fresh.length && window.UI && window.UI.toast) {
+            const x = fresh[0],
+              who = x.submittedBy || x.responsible && x.responsible.name || 'Someone';
+            window.UI.toast(fresh.length === 1 ? 'New submission waiting for approval — ' + who + ' · ' + unicoSubTitle(x) : fresh.length + ' new submissions waiting for approval', 'info');
+          }
+        }
+        seen = new Set(items.map(x => String(x && x.id)));
+        setPend({
+          count: items.length,
+          items
+        });
+        try {
+          window.__UNICO_DC_PENDING__ = items.length;
+          window.dispatchEvent(new CustomEvent('unico:dc-pending', {
+            detail: items.length
+          }));
+        } catch (e) {}
+      }).catch(() => {});
+    };
+    run();
+    const t = setInterval(run, 60000);
+    const vis = () => {
+      if (document.visibilityState === 'visible') run();
+    };
+    window.addEventListener('unico:data-refreshed', run);
+    document.addEventListener('visibilitychange', vis);
+    return () => {
+      live = false;
+      clearInterval(t);
+      window.removeEventListener('unico:data-refreshed', run);
+      document.removeEventListener('visibilitychange', vis);
+    };
+  }, [enabled]);
+  return pend;
+}
+function unicoSubTitle(x) {
+  const what = x.type === 'quality' ? (x.indicatorName || 'Quality indicator') + (x.areaName ? ' (' + x.areaName + ')' : '') : x.departmentName || x.department || 'Patient statistics';
+  return what + (x.month ? ' · ' + String(x.month).replace('-', ' 20') : '');
+}
+function unicoAgo(t) {
+  const n = Number(t) || Date.parse(t);
+  if (!n) return '';
+  const m = Math.round((Date.now() - n) / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return m + ' min ago';
+  const h = Math.round(m / 60);
+  if (h < 24) return h + ' h ago';
+  const d = Math.round(h / 24);
+  return d + ' day' + (d === 1 ? '' : 's') + ' ago';
+}
 function TopBar({
   route,
   setRoute,
@@ -11384,7 +11492,17 @@ function TopBar({
     };
   }, [submitter]);
   const dsTotal = dsMiss && dsMiss.total || 0;
-  const bellCount = missing.length + dsTotal;
+  const reviewer = (() => {
+    try {
+      return unicoCanAccessModule('datacol');
+    } catch (e) {
+      return false;
+    }
+  })();
+  const pend = unicoUsePending(reviewer);
+  const pendN = pend && pend.count || 0;
+  const bellCount = missing.length + dsTotal + pendN;
+  const bellNum = dsTotal + pendN;
   return React.createElement("div", {
     className: "topbar"
   }, React.createElement("button", {
@@ -11512,18 +11630,65 @@ function TopBar({
       color: '#d23a52',
       textDecoration: 'underline'
     }
-  }, "Submit now")), React.createElement("div", {
+  }, "Submit now")), reviewer && pendN > 0 && route.view !== 'dcReview' && React.createElement("button", {
+    type: "button",
+    className: "tb-dcpend",
+    onClick: () => setRoute({
+      view: 'dcReview'
+    }),
+    title: pendN + ' submission' + (pendN === 1 ? '' : 's') + ' waiting for approval — open Review & History',
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 8,
+      height: 34,
+      padding: '0 12px 0 10px',
+      borderRadius: 10,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      border: '1px solid rgba(224,138,30,.4)',
+      background: 'linear-gradient(135deg,#fff8ec,#ffedd2)',
+      color: '#9a5a07',
+      fontSize: 12.5,
+      fontWeight: 700,
+      whiteSpace: 'nowrap',
+      boxShadow: '0 4px 14px rgba(224,138,30,.2)',
+      animation: 'tbPendPulse 2.4s ease-in-out infinite'
+    }
+  }, React.createElement("style", null, '@keyframes tbPendPulse{0%,100%{box-shadow:0 4px 14px rgba(224,138,30,.2)}50%{box-shadow:0 4px 20px rgba(224,138,30,.42)}}@media (max-width:720px){.tb-dcpend .tb-dcpend-t{display:none}}@media (prefers-reduced-motion:reduce){.tb-dcpend{animation:none!important}}'), React.createElement(Ic, {
+    d: I.bell,
+    s: 15,
+    c: "#e08a1e"
+  }), React.createElement("span", {
+    className: "num",
+    style: {
+      background: '#e08a1e',
+      color: '#fff',
+      borderRadius: 8,
+      padding: '1px 7px',
+      fontSize: 11.5,
+      fontWeight: 800
+    }
+  }, pendN), React.createElement("span", {
+    className: "tb-dcpend-t"
+  }, "pending approval"), React.createElement("span", {
+    className: "tb-dcpend-t",
+    style: {
+      color: '#c26f05',
+      textDecoration: 'underline'
+    }
+  }, "Review now")), React.createElement("div", {
     style: {
       position: 'relative'
     }
   }, React.createElement("button", {
     className: "tb-icon",
     onClick: () => setNotifOpen(o => !o),
-    title: "Reminders"
+    title: "Notifications"
   }, React.createElement(Ic, {
     d: I.bell,
     s: 17
-  }), bellCount > 0 && (dsTotal > 0 ? React.createElement("span", {
+  }), bellCount > 0 && (bellNum > 0 ? React.createElement("span", {
     className: "num",
     style: {
       position: 'absolute',
@@ -11533,7 +11698,7 @@ function TopBar({
       height: 18,
       padding: '0 5px',
       borderRadius: 9,
-      background: '#d23a52',
+      background: dsTotal > 0 ? '#d23a52' : '#e08a1e',
       color: '#fff',
       fontSize: 10,
       fontWeight: 800,
@@ -11542,7 +11707,7 @@ function TopBar({
       boxSizing: 'border-box',
       border: '2px solid #fff'
     }
-  }, dsTotal > 99 ? '99+' : dsTotal) : React.createElement("span", {
+  }, bellNum > 99 ? '99+' : bellNum) : React.createElement("span", {
     className: "tb-dot"
   }))), notifOpen && React.createElement("div", {
     onMouseLeave: () => setNotifOpen(false),
@@ -11577,11 +11742,120 @@ function TopBar({
       fontSize: 13.5,
       fontWeight: 700
     }
-  }, "Reminders"), React.createElement("span", {
+  }, "Notifications"), React.createElement("span", {
     className: "spacer"
   }), bellCount > 0 && React.createElement("span", {
     className: "chip neg"
-  }, bellCount)), submitter && React.createElement("div", {
+  }, bellCount)), reviewer && React.createElement("div", {
+    style: {
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '10px 15px 6px',
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: pendN ? '#9a5a07' : 'var(--muted)'
+    }
+  }, "Waiting for approval", pendN ? ' · ' + pendN : ''), pend === null ? React.createElement("div", {
+    style: {
+      padding: '4px 15px 12px',
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Checking\u2026") : !pendN ? React.createElement("div", {
+    style: {
+      padding: '4px 15px 12px',
+      fontSize: 12,
+      color: 'var(--pos)',
+      fontWeight: 600
+    }
+  }, "Nothing pending \u2014 every submission has been reviewed.") : React.createElement("div", {
+    style: {
+      maxHeight: 220,
+      overflowY: 'auto'
+    }
+  }, pend.items.slice(0, 6).map(x => React.createElement("div", {
+    key: x.id,
+    onClick: () => {
+      setRoute({
+        view: 'dcReview'
+      });
+      setNotifOpen(false);
+    },
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '8px 15px',
+      cursor: 'pointer'
+    },
+    onMouseEnter: e => e.currentTarget.style.background = 'var(--panel-2)',
+    onMouseLeave: e => e.currentTarget.style.background = 'transparent'
+  }, React.createElement("div", {
+    style: {
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      background: '#fff3e0',
+      color: '#e08a1e',
+      display: 'grid',
+      placeItems: 'center',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: x.type === 'quality' ? I.heart : I.doc,
+    s: 14
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: 'var(--ink)',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, unicoSubTitle(x)), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, (x.submittedBy || x.responsible && x.responsible.name || '—') + (x.submittedAt ? ' · ' + unicoAgo(x.submittedAt) : ''))))), pendN > 6 && React.createElement("div", {
+    style: {
+      padding: '4px 15px 8px',
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "and ", pendN - 6, " more")), pendN > 0 && React.createElement("div", {
+    style: {
+      padding: '6px 12px 12px'
+    }
+  }, React.createElement("button", {
+    className: "btn pri sm",
+    style: {
+      width: '100%',
+      justifyContent: 'center'
+    },
+    onClick: () => {
+      setRoute({
+        view: 'dcReview'
+      });
+      setNotifOpen(false);
+    }
+  }, React.createElement(Ic, {
+    d: I.check,
+    s: 14
+  }), "Open Review & History"))), submitter && React.createElement("div", {
     style: {
       borderBottom: '1px solid var(--line-2)'
     }
@@ -11959,7 +12233,8 @@ Object.assign(window, {
         kind: o.kind || 'staff',
         staffName: o.name || '',
         staffId: o.staffId != null ? o.staffId : null,
-        empId: o.empId || null
+        empId: o.empId || null,
+        username: o.username || null
       })
     });
     const j = await r.json().catch(() => ({
@@ -11981,7 +12256,8 @@ Object.assign(window, {
         publicId: publicId,
         kind: kind || 'staff',
         staffId: w.staffId != null ? w.staffId : null,
-        empId: w.empId || null
+        empId: w.empId || null,
+        username: w.username || null
       })
     });
     const j = await r.json().catch(() => ({
@@ -12344,7 +12620,8 @@ Object.assign(window, {
     zoomable,
     zoomSub,
     staffId,
-    empId
+    empId,
+    username
   }) {
     const [busy, setBusy] = React.useState(false);
     const [cfg, setCfg] = React.useState(null);
@@ -12391,7 +12668,8 @@ Object.assign(window, {
           kind: kind,
           name: name,
           staffId: staffId,
-          empId: empId
+          empId: empId,
+          username: username
         });
         onChange && onChange({
           url: up.url,
@@ -12407,6 +12685,28 @@ Object.assign(window, {
     async function clear() {
       if (!value) {
         onChange && onChange(null);
+        return;
+      }
+      if (!value.publicId && kind === 'profile' && username) {
+        const sure = window.UI && window.UI.confirm ? await window.UI.confirm({
+          title: 'Remove this photo?',
+          message: 'The picture is deleted from storage permanently.',
+          danger: true,
+          confirmLabel: 'Remove'
+        }) : true;
+        if (!sure) return;
+        setBusy(true);
+        try {
+          await unicoDeletePhoto('', 'profile', {
+            username: username
+          });
+          onChange && onChange(null);
+          toast('Photo removed', 'success');
+        } catch (e) {
+          toast(String(e && e.message || e), 'error');
+        } finally {
+          setBusy(false);
+        }
         return;
       }
       if (!value.publicId) {
@@ -12438,7 +12738,8 @@ Object.assign(window, {
       try {
         await unicoDeletePhoto(value.publicId, kind, {
           staffId: staffId,
-          empId: empId
+          empId: empId,
+          username: username
         });
         onChange && onChange(null);
         toast('Photo removed', 'success');
@@ -12562,7 +12863,22 @@ Object.assign(window, {
       radius: R,
       onCancel: () => setCropSrc(null),
       onDone: uploadCropped
-    }), !readOnly && value && value.url && !busy && React.createElement("button", {
+    }), value && value.url && !busy && !readOnly && React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap',
+        justifyContent: 'center'
+      }
+    }, zoomable && React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      onClick: () => setViewing(true),
+      style: {
+        fontSize: 11,
+        padding: '3px 9px'
+      }
+    }, "View photo"), !readOnly && React.createElement("button", {
       type: "button",
       className: "btn sm",
       onClick: clear,
@@ -12572,7 +12888,7 @@ Object.assign(window, {
         fontSize: 11,
         padding: '3px 9px'
       }
-    }, "Remove photo"), !readOnly && cfg && !cfg.configured && React.createElement("div", {
+    }, "Remove photo")), !readOnly && cfg && !cfg.configured && React.createElement("div", {
       style: {
         fontSize: 10.5,
         color: 'var(--muted)',
@@ -13510,12 +13826,14 @@ Object.assign(window, {
     }
   }), right);
   const LIVE = {
-    thisWeek: false,
-    dutyToday: false,
-    announcements: false,
-    team: false,
-    offDays: false,
-    records: false
+    thisWeek: true,
+    dutyToday: true,
+    announcements: true,
+    team: true,
+    offDays: true,
+    records: true,
+    tasks: true,
+    schedule: true
   };
   function Soon({
     live,
@@ -13569,23 +13887,28 @@ Object.assign(window, {
   const MOOD_DEFS = [{
     label: 'Great',
     mouth: 'M7.5 14c1.2 2.2 2.7 3.2 4.5 3.2s3.3-1 4.5-3.2',
-    c: '#0f7a5f'
+    c: '#0f7a5f',
+    disc: '#1f9d57'
   }, {
     label: 'Good',
     mouth: 'M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8',
-    c: '#0072a3'
+    c: '#0072a3',
+    disc: '#0b84d6'
   }, {
     label: 'Okay',
     mouth: 'M8.5 15.5h7',
-    c: '#5c6f88'
+    c: '#5c6f88',
+    disc: '#c27a00'
   }, {
     label: 'Tired',
     mouth: 'M8.5 16.5c1-1.2 2.2-1.8 3.5-1.8s2.5.6 3.5 1.8',
-    c: '#b06a10'
+    c: '#b06a10',
+    disc: '#d6455d'
   }, {
     label: 'Stressed',
     mouth: 'M8 17c1.3-2 2.6-3 4-3s2.7 1 4 3',
-    c: '#b2263e'
+    c: '#b2263e',
+    disc: '#7a5be0'
   }];
   function HomeView({
     setRoute
@@ -14121,6 +14444,100 @@ Object.assign(window, {
       value: offStats ? offStats.left + ' left' : '—',
       note: offStats ? offStats.taken + ' taken of ' + offStats.total + ' this month' : 'Needs a published roster'
     }];
+    const FACT_ICONS = ['M4 6h16v12H4zM8 10h3M8 14h6M16 10v.01', 'M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 011 1v13a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z', 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8', 'M4 21V5a1 1 0 011-1h8a1 1 0 011 1v16M14 9h5a1 1 0 011 1v11M3 21h18M8 8h2M8 12h2M8 16h2'];
+    const canView = v => {
+      try {
+        return !window.unicoCanAccessView || window.unicoCanAccessView(v);
+      } catch (e) {
+        return true;
+      }
+    };
+    const staffStore = typeof window !== 'undefined' && window.useStaffStore ? window.useStaffStore() : null;
+    const staffList = staffStore && staffStore.staff || typeof window !== 'undefined' && window.STAFF_SEED || [];
+    const rosterKpis = useMemo(() => {
+      if (!canView('staffHome')) return null;
+      const S = typeof window !== 'undefined' && window.STAFF;
+      const list = staffList.filter(e => e && e.is_active && !e.former);
+      if (!S || !S.staffCounts || !S.matchesStaffGroup || !list.length) return null;
+      const counts = S.staffCounts(list);
+      const t1 = Date.now(),
+        t0 = t1 - 30 * 86400000;
+      const joined = g => list.filter(e => {
+        if (!S.matchesStaffGroup(e, g) || !e.doj) return false;
+        const t = Date.parse(e.doj);
+        return !isNaN(t) && t >= t0 && t <= t1;
+      }).length;
+      return [{
+        key: 'all',
+        view: 'staffHome',
+        label: 'Total Staff',
+        sub: 'Nurses, trainees & PCA',
+        n: counts.All,
+        j: joined('All'),
+        d: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8'
+      }, {
+        key: 'nurse',
+        view: 'nurseHome',
+        label: 'Active Nurses',
+        sub: 'Currently in service',
+        n: counts.Nurse,
+        j: joined('Nurse'),
+        d: 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8'
+      }, {
+        key: 'trainee',
+        view: 'traineeHome',
+        label: 'Trainee Nurses',
+        sub: 'Active trainee nurses',
+        n: counts.Trainee,
+        j: joined('Trainee'),
+        d: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5'
+      }, {
+        key: 'pca',
+        view: 'pcaHome',
+        label: 'PCA',
+        sub: 'Active staff members',
+        n: counts.PCA,
+        j: joined('PCA'),
+        d: 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8'
+      }];
+    }, [staffList, now.getDate()]);
+    const QUICK = [{
+      label: 'Duty Roster',
+      view: 'rosterHome',
+      c: '#0b6fbd',
+      bg: '#e1f0fc',
+      d: 'M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 011 1v13a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1zM8 13h3M8 17h6'
+    }, {
+      label: 'Staff Directory',
+      view: 'staffAll',
+      c: '#3350c9',
+      bg: '#e6ebfd',
+      d: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8'
+    }, {
+      label: 'Departments',
+      view: 'departments',
+      c: '#5f3bc9',
+      bg: '#eee8fc',
+      d: 'M4 21V5a1 1 0 011-1h8a1 1 0 011 1v16M14 9h5a1 1 0 011 1v11M3 21h18M8 8h2M8 12h2M8 16h2'
+    }, {
+      label: 'Data Submission',
+      view: 'dsHome',
+      c: '#0b6fbd',
+      bg: '#e1f0fc',
+      d: 'M12 16V4M7 9l5-5 5 5M5 20h14'
+    }, {
+      label: 'Patient Stats',
+      view: 'dsPatient',
+      c: '#12733f',
+      bg: '#e0f4e8',
+      d: 'M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-6'
+    }, {
+      label: 'Reports',
+      view: 'reports',
+      c: '#b02a40',
+      bg: '#fbe5e9',
+      d: 'M7 3h7l4 4v14H7zM14 3v4h4M10 13h5M10 17h5'
+    }].filter(q => canView(q.view));
     return React.createElement("div", {
       className: "unico-home",
       style: {
@@ -14693,15 +15110,49 @@ Object.assign(window, {
       style: sx('position:relative;display:flex;flex-wrap:wrap;gap:10px;flex:1 1 100%')
     }, idFacts.map((f, i) => React.createElement("div", {
       key: f.label,
-      style: fs(factChip(i))
+      style: Object.assign(fs(factChip(i)), {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10
+      })
+    }, React.createElement("span", {
+      "aria-hidden": "true",
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        flexShrink: 0,
+        background: night ? 'rgba(255,255,255,.12)' : 'rgba(0,114,163,.12)',
+        color: night ? '#9fd4ee' : '#0072a3'
+      }
+    }, React.createElement("svg", {
+      width: "17",
+      height: "17",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }, React.createElement("path", {
+      d: FACT_ICONS[i]
+    }))), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
     }, React.createElement("div", {
       style: sx('font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:' + ink.muted)
     }, f.label), React.createElement("div", {
       style: sx("font-size:13.5px;font-weight:700;margin-top:3px;font-family:'IBM Plex Mono',monospace;color:" + ink.strong)
-    }, f.value)))), React.createElement("div", {
+    }, f.value))))), React.createElement("div", {
       "aria-hidden": "true",
       style: sx('position:absolute;right:16px;bottom:9px;font-size:9.5px;letter-spacing:.6px;text-transform:uppercase;font-weight:600;color:' + (night ? 'rgba(199,210,224,.55)' : 'rgba(12,28,52,.45)') + ';pointer-events:none')
     }, "Click the sky \xB7 the sun changes the weather")), React.createElement("div", {
+      className: "hm-mood-row"
+    }, React.createElement("div", {
+      className: "hm-mood",
       style: Object.assign(sx(GLASS), {
         padding: '14px 16px'
       })
@@ -14716,20 +15167,32 @@ Object.assign(window, {
     }), React.createElement("span", {
       style: sx("font-size:10.5px;color:#9aa6b4;font-family:'IBM Plex Mono',monospace")
     }, mood ? 'Logged ' + to12(pad(new Date(moodAt).getHours()) + ':' + pad(new Date(moodAt).getMinutes())) + ' · this device only' : 'Private to you')), React.createElement("div", {
+      className: "hm-mood-picks",
       style: sx('display:flex;gap:8px;margin-top:10px;flex-wrap:wrap')
     }, MOOD_DEFS.map(m => React.createElement("button", {
       key: m.label,
       type: "button",
       onClick: () => pickMood(m.label),
       title: m.label,
-      style: fs('flex:1;min-width:88px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 4px;border-radius:12px;cursor:pointer;font-family:inherit;transition:transform .25s cubic-bezier(.2,.7,.3,1),border-color .25s;border:1px solid ' + (mood === m.label ? m.c : 'rgba(125,145,180,.22)') + ';background:' + (mood === m.label ? '#fff' : 'rgba(255,255,255,.55)') + ';color:' + (mood === m.label ? m.c : '#7d8ea8') + ';' + (mood === m.label ? 'animation:checkPop .4s cubic-bezier(.2,.7,.3,1);box-shadow:0 10px 22px rgba(31,59,90,.14)' : ''))
+      style: fs('flex:1;min-width:88px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:8px 4px;border-radius:12px;cursor:pointer;font-family:inherit;transition:transform .25s cubic-bezier(.2,.7,.3,1),border-color .25s;border:1px solid ' + (mood === m.label ? m.c : 'rgba(125,145,180,.22)') + ';background:' + (mood === m.label ? '#fff' : 'rgba(255,255,255,.55)') + ';color:' + (mood === m.label ? m.c : '#7d8ea8') + ';' + (mood === m.label ? 'animation:checkPop .4s cubic-bezier(.2,.7,.3,1);box-shadow:0 10px 22px rgba(31,59,90,.14)' : ''))
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 38,
+        height: 38,
+        borderRadius: '50%',
+        background: m.disc,
+        color: '#fff',
+        boxShadow: '0 4px 10px rgba(20,32,46,.14)'
+      }
     }, React.createElement("svg", {
       width: "26",
       height: "26",
       viewBox: "0 0 24 24",
       fill: "none",
       stroke: "currentColor",
-      strokeWidth: "1.8",
+      strokeWidth: "1.9",
       strokeLinecap: "round"
     }, React.createElement("circle", {
       cx: "12",
@@ -14739,14 +15202,139 @@ Object.assign(window, {
       d: m.mouth
     }), React.createElement("path", {
       d: "M8.5 9.5h.01M15.5 9.5h.01",
-      strokeWidth: "2.4"
-    })), React.createElement("span", {
+      strokeWidth: "2.6"
+    }))), React.createElement("span", {
       style: sx('font-size:9.5px;font-weight:700;letter-spacing:.3px')
     }, m.label))))), React.createElement("div", {
-      style: sx('display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;align-items:start')
-    }, React.createElement("div", {
-      style: sx('display:flex;flex-direction:column;gap:16px;min-width:0')
-    }, React.createElement(Soon, {
+      className: "hm-banner"
+    }, React.createElement("img", {
+      className: "hm-banner-nurse",
+      src: "/assets/home-nurse.webp",
+      alt: "",
+      width: "732",
+      height: "567"
+    }), React.createElement("div", {
+      className: "hm-banner-quote"
+    }, React.createElement("svg", {
+      width: "30",
+      height: "27",
+      viewBox: "0 0 24 22",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "1.7",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      "aria-hidden": "true"
+    }, React.createElement("path", {
+      d: "M12 20.5C5 15.6 2.2 11.9 2.2 8.1 2.2 5.2 4.4 3 7.2 3c1.9 0 3.6 1 4.8 2.7C13.2 4 14.9 3 16.8 3c2.8 0 5 2.2 5 5.1 0 3.8-2.8 7.5-9.8 12.4z"
+    })), React.createElement("div", {
+      className: "hm-banner-script"
+    }, "\u201CTogether", React.createElement("br", null), "for Better Care\u201D"), React.createElement("div", {
+      className: "hm-banner-org"
+    }, "UNICO Hospitals PLC")), React.createElement("div", {
+      className: "hm-banner-note"
+    }, React.createElement("svg", {
+      width: "26",
+      height: "20",
+      viewBox: "0 0 26 20",
+      "aria-hidden": "true"
+    }, React.createElement("path", {
+      d: "M0 20V11C0 4.6 3.6.8 10 0v4.2C7.1 4.9 5.6 6.6 5.4 9.4H10V20H0zm15 0V11C15 4.6 18.6.8 25 0v4.2c-2.9.7-4.4 2.4-4.6 5.2H25V20H15z",
+      fill: "currentColor"
+    })), React.createElement("div", null, "Small efforts every day make a big impact in people\u2019s lives.")), React.createElement("img", {
+      className: "hm-banner-plant",
+      src: "/assets/home-plant.webp",
+      alt: "",
+      width: "264",
+      height: "282"
+    }))), rosterKpis && canView('staffHome') && React.createElement("div", {
+      className: "ndb-kpis"
+    }, rosterKpis.map(k => React.createElement("button", {
+      key: k.key,
+      type: "button",
+      className: 'ndb-kpi ndb-kpi-' + k.key,
+      "aria-label": 'Open the ' + k.label + ' dashboard',
+      onClick: () => setRoute && setRoute({
+        view: k.view
+      })
+    }, React.createElement("svg", {
+      className: "ndb-kpi-wave",
+      viewBox: "0 0 300 60",
+      preserveAspectRatio: "none",
+      "aria-hidden": "true"
+    }, React.createElement("path", {
+      d: "M0 44c40-22 80 14 130-6s90-34 170-8v30H0z",
+      fill: "currentColor"
+    })), React.createElement("span", {
+      className: "ndb-kpi-top"
+    }, React.createElement("span", {
+      className: "ndb-kpi-ic"
+    }, React.createElement("svg", {
+      width: "24",
+      height: "24",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      "aria-hidden": "true"
+    }, React.createElement("path", {
+      d: k.d
+    }))), React.createElement("span", {
+      className: "ndb-kpi-body"
+    }, React.createElement("span", {
+      className: "ndb-kpi-l"
+    }, k.label), React.createElement("span", {
+      className: "num ndb-kpi-v"
+    }, Number(k.n || 0).toLocaleString()), React.createElement("span", {
+      className: "ndb-kpi-s"
+    }, k.sub))), React.createElement("span", {
+      className: "ndb-kpi-f"
+    }, React.createElement("svg", {
+      width: "13",
+      height: "13",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2.2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      "aria-hidden": "true"
+    }, React.createElement("path", {
+      d: "M3 17l6-6 4 4 8-8M15 7h6v6"
+    })), k.j > 0 ? '+' + k.j + ' joined in the last 30 days' : 'No new joiners in the last 30 days')))), React.createElement("div", {
+      className: "hm-pair"
+    }, QUICK.length > 0 && React.createElement("div", {
+      style: sx(GLASS)
+    }, cardH('Today’s Quick Access'), React.createElement("div", {
+      className: "hm-quick"
+    }, QUICK.map(q => React.createElement("button", {
+      key: q.view,
+      type: "button",
+      className: "hm-quick-item",
+      onClick: () => setRoute && setRoute({
+        view: q.view
+      })
+    }, React.createElement("span", {
+      className: "hm-quick-ic",
+      style: {
+        background: q.bg,
+        color: q.c
+      }
+    }, React.createElement("svg", {
+      width: "24",
+      height: "24",
+      viewBox: "0 0 24 24",
+      fill: "none",
+      stroke: "currentColor",
+      strokeWidth: "2",
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+      "aria-hidden": "true"
+    }, React.createElement("path", {
+      d: q.d
+    }))), React.createElement("span", null, q.label))))), React.createElement(Soon, {
       live: LIVE.thisWeek,
       label: "Unlocks when the Duty Roster module is rolled out to your ward."
     }, React.createElement("div", {
@@ -14791,7 +15379,11 @@ Object.assign(window, {
         view: 'rosterHome'
       }),
       style: sx('font-family:inherit;font-size:11.5px;font-weight:700;padding:7px 12px;border-radius:9px;cursor:pointer;border:1px solid rgba(0,144,202,.35);background:rgba(255,255,255,.7);color:#0072a3;white-space:nowrap')
-    }, "Request swap")))), React.createElement(Soon, {
+    }, "Request swap"))))), React.createElement("div", {
+      style: sx('display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;align-items:start')
+    }, React.createElement("div", {
+      style: sx('display:flex;flex-direction:column;gap:16px;min-width:0')
+    }, React.createElement(Soon, {
       live: LIVE.dutyToday,
       label: "Unlocks with the Duty Roster rollout."
     }, React.createElement("div", {
@@ -14809,7 +15401,44 @@ Object.assign(window, {
       style: sx('font-size:16px;font-weight:800;color:#16202e;margin-top:5px;letter-spacing:-.2px')
     }, d.value), React.createElement("div", {
       style: sx('font-size:11.5px;color:#6c7a8c;margin-top:2px')
-    }, d.note))))))), React.createElement("div", {
+    }, d.note)))))), React.createElement(Soon, {
+      live: LIVE.tasks,
+      label: "Unlocks when task tracking is added to UNICO."
+    }, React.createElement("div", {
+      style: sx(GLASS)
+    }, cardH('My Daily Tasks'), React.createElement("div", {
+      className: "hm-tasks"
+    }, [['Pending Tasks', 'Items to complete', '#0b6fbd'], ['In Progress', 'Currently working', '#0b6fbd'], ['Completed', 'Finished tasks', '#12733f'], ['Overdue', 'Need attention', '#b02a40']].map(([t, s, c]) => React.createElement("div", {
+      key: t,
+      className: "hm-task"
+    }, React.createElement("div", {
+      className: "hm-task-t",
+      style: {
+        color: c
+      }
+    }, t), React.createElement("div", {
+      className: "hm-task-v"
+    }, "\u2014"), React.createElement("div", {
+      className: "hm-task-s"
+    }, s), React.createElement("div", {
+      className: "hm-task-bar"
+    })))))), React.createElement(Soon, {
+      live: LIVE.schedule,
+      label: "Unlocks when a meetings and events calendar is added."
+    }, React.createElement("div", {
+      style: sx(GLASS)
+    }, cardH('Upcoming Schedule'), React.createElement("div", {
+      className: "hm-sched"
+    }, [0, 1, 2].map(i => React.createElement("div", {
+      key: i,
+      className: "hm-sched-row"
+    }, React.createElement("span", {
+      className: "hm-sched-dot"
+    }), React.createElement("span", {
+      className: "hm-sched-time"
+    }, "\u2014:\u2014"), React.createElement("span", {
+      className: "hm-sched-line"
+    }))))))), React.createElement("div", {
       style: sx('display:flex;flex-direction:column;gap:16px;min-width:0')
     }, React.createElement(Soon, {
       live: LIVE.announcements,
@@ -19058,12 +19687,12 @@ function StaffDeptChart({
       title: `Click to list ${staffDeptLabel(r.label)} ${noun}`,
       style: {
         display: 'grid',
-        gridTemplateColumns: '190px 1fr 64px',
+        gridTemplateColumns: 'minmax(96px,190px) minmax(0,1fr) 64px',
         alignItems: 'center',
         gap: 10,
         cursor: 'pointer',
         borderRadius: 7,
-        padding: '2px 4px',
+        padding: '3px 4px',
         background: sel === r.label ? 'var(--blue-50)' : 'transparent'
       },
       onMouseEnter: e => {
@@ -19085,8 +19714,8 @@ function StaffDeptChart({
       }
     }, staffDeptLabel(r.label)), React.createElement("div", {
       style: {
-        height: 18,
-        background: 'var(--panel-2)',
+        height: 10,
+        background: 'rgba(125,145,180,.16)',
         borderRadius: 6,
         overflow: 'hidden'
       }
@@ -19356,7 +19985,8 @@ function StaffExpChart({
 function StaffDesigChart({
   list,
   setRoute,
-  role = 'Nurse'
+  role = 'Nurse',
+  onViewAll
 }) {
   const {
     useState
@@ -19392,7 +20022,13 @@ function StaffDesigChart({
     className: "sub"
   }, "click a role to list staff"), React.createElement("span", {
     className: "spacer"
-  })), React.createElement("div", {
+  }), onViewAll && React.createElement("button", {
+    className: "ndb-link",
+    onClick: onViewAll
+  }, "View List", React.createElement(Ic, {
+    d: I.arrowR,
+    s: 13
+  }))), React.createElement("div", {
     className: "card-b"
   }, React.createElement("div", {
     style: {
@@ -19552,121 +20188,130 @@ function WorkforceDashboard({
   const bdayToday = bdays.filter(b => b.inDays === 0);
   const comp = S.compliance(list);
   const compIssues = comp.missing_vaccination.length + comp.missing_training.length + comp.missing_phone.length;
-  const Kpi = ({
-    label,
-    val,
-    foot,
+  const noun = group === 'Trainee' ? 'trainee nurses' : group === 'PCA' ? 'PCA' : group === 'Nurse' ? 'nurses' : 'staff';
+  const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+  const firstName = me && me.name ? String(me.name).trim().split(/\s+/)[0] : '';
+  const todayText = new Date().toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric'
+  });
+  const nowMs = Date.now(),
+    since30 = nowMs - 30 * 86400000;
+  const joined30 = g => scoped.filter(e => {
+    if (!S.matchesStaffGroup(e, g) || !e.doj) return false;
+    const t = Date.parse(e.doj);
+    return !isNaN(t) && t >= since30 && t <= nowMs;
+  }).length;
+  const niceDate = d => {
+    const t = Date.parse(d);
+    return isNaN(t) ? d || '—' : new Date(t).toLocaleDateString(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+  const deptCount = new Set(list.map(e => staffCanonDept(e.current_department))).size;
+  const canAdd = !window.unicoCan || window.unicoCan('staff', 'add');
+  const showComp = group === 'Nurse' || group === 'PCA';
+  const IC_USERS = 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8';
+  const IC_CAP = 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5';
+  const IC_WARN = 'M12 3l9.5 17h-19zM12 10v4.5M12 17.3v.2';
+  const IC_BUILD = 'M4 21V5a1 1 0 011-1h8a1 1 0 011 1v16M14 9h5a1 1 0 011 1v11M3 21h18M8 8h2M8 12h2M8 16h2M17 13v.01M17 17v.01';
+  const KPIS = [['All', 'All Staff', IC_USERS, 'Nurses, trainees & PCA'], ['Nurse', 'Nurses', I.steth, department ? 'Active in the selected department' : 'Active staff members'], ['Trainee', 'Trainee Nurses', IC_CAP, department ? 'Active in the selected department' : 'Active trainee nurses'], ['PCA', 'PCA', I.user, department ? 'Active in the selected department' : 'Active staff members']];
+  const Bars = ({
     color
-  }) => React.createElement("div", {
-    className: "card anim-pop",
+  }) => React.createElement("svg", {
+    className: "ndb-soft-bars",
+    width: "46",
+    height: "34",
+    viewBox: "0 0 46 34",
+    "aria-hidden": "true"
+  }, [[0, 20, 14], [12, 13, 21], [24, 7, 27], [36, 0, 34]].map(([x, y, h], i) => React.createElement("rect", {
+    key: i,
+    x: x,
+    y: y,
+    width: "8",
+    height: h,
+    rx: "3",
+    fill: color,
+    opacity: .35 + i * .2
+  })));
+  const personRow = (e, sub, right) => React.createElement("div", {
+    key: e.id,
+    className: "ndb-row",
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: e.id
+    })
+  }, React.createElement(Avatar, {
+    photo: e.photo,
+    name: e.name,
+    size: 34
+  }), React.createElement("div", {
     style: {
-      padding: '17px 20px',
-      borderLeft: `4px solid ${color}`,
-      display: 'flex',
-      flexDirection: 'column',
-      minHeight: 128
+      minWidth: 0,
+      flex: 1
     }
   }, React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: 'var(--ink-2)'
-    }
-  }, label), React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 38,
-      fontWeight: 700,
-      color,
-      margin: '12px 0 8px',
-      lineHeight: 1
-    }
-  }, val), React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      color: 'var(--muted)',
-      marginTop: 'auto'
-    }
-  }, foot));
+    className: "ndb-row-name"
+  }, e.name), React.createElement("div", {
+    className: "ndb-row-sub"
+  }, sub)), right);
   return React.createElement("div", {
-    className: "grid",
+    className: "grid ndb",
     style: {
       gap: 16
     }
-  }, React.createElement(SectionTitle, {
-    icon: role === 'PCA' ? I.bed : I.steth,
-    title: `${label} Dashboard`,
-    sub: `${list.length} active staff${department ? ' · ' + staffDeptLabel(department) : ' · all departments'}`,
-    right: React.createElement(React.Fragment, null, (!window.unicoCan || window.unicoCan('staff', 'add')) && React.createElement("button", {
-      className: "btn sm",
-      title: "Print the blank staff information form to fill in by hand",
-      onClick: openBlankForm
-    }, React.createElement(Ic, {
-      d: I.print,
-      s: 15
-    }), "Print staff information"), printForm && window.StaffPrintOptions && React.createElement(window.StaffPrintOptions, {
-      role,
-      onDone: () => setPrintForm(false)
-    }), React.createElement(RoleSwitch, {
-      role: group,
-      setRoute: setRoute,
-      views: dashboardViews
-    }), React.createElement("button", {
-      className: "btn sm",
-      onClick: () => setShowHi(true),
-      style: {
-        color: '#b8860b',
-        borderColor: '#e6c34d'
-      }
-    }, React.createElement(Ic, {
-      d: I.star,
-      s: 15
-    }), "Staff Highlight"), React.createElement("button", {
-      className: "btn sm",
-      onClick: () => setRoute({
-        view: listView
-      })
-    }, React.createElement(Ic, {
-      d: I.layers,
-      s: 15
-    }), "Directory"), (group === 'Nurse' || group === 'PCA') && React.createElement("button", {
-      className: "btn sm",
-      onClick: () => setRoute({
-        view: compView
-      })
-    }, React.createElement(Ic, {
-      d: I.heart,
-      s: 15
-    }), "Compliance"), React.createElement("button", {
-      className: "btn sm",
-      disabled: store.refreshing,
-      onClick: () => store.refresh()
-    }, React.createElement(Ic, {
-      d: I.activity,
-      s: 15
-    }), store.refreshing ? 'Refreshing…' : 'Refresh'), (!window.unicoCan || window.unicoCan('staff', 'add')) && React.createElement("button", {
-      className: "btn pri sm",
-      style: {
-        background: tone,
-        borderColor: tone
-      },
-      onClick: () => setRoute({
-        view: 'staffForm',
-        role,
-        designation: group === 'Trainee' ? 'Trainee Nurse' : ''
-      })
-    }, React.createElement(Ic, {
-      d: I.plus,
-      s: 15
-    }), "Add ", group === 'Trainee' ? 'Trainee Nurse' : role))
-  }), store.refreshError && React.createElement("div", {
+  }, React.createElement("div", {
+    className: "ndb-hero"
+  }, React.createElement("svg", {
+    className: "ndb-hero-ecg",
+    viewBox: "0 0 520 120",
+    preserveAspectRatio: "none",
+    "aria-hidden": "true"
+  }, React.createElement("path", {
+    d: "M0 70h150l14-26 18 58 22-88 20 78 12-22h70l10-16 12 30 16-52 14 38h152",
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: "2.4",
+    strokeLinecap: "round",
+    strokeLinejoin: "round"
+  })), React.createElement("div", {
+    className: "ndb-hero-main"
+  }, React.createElement("div", {
+    className: "ndb-hero-eyebrow"
+  }, React.createElement(Ic, {
+    d: role === 'PCA' ? I.bed : I.steth,
+    s: 14
+  }), label, " Dashboard"), React.createElement("h1", {
+    className: "ndb-hero-title"
+  }, "Welcome back", firstName ? ', ' + firstName : '', " \uD83D\uDC4B"), React.createElement("div", {
+    className: "ndb-hero-sub"
+  }, "Here\u2019s today\u2019s overview of your nursing staff and departmental activities.")), React.createElement("span", {
+    className: "ndb-hero-date"
+  }, React.createElement(Ic, {
+    d: I.cal,
+    s: 14
+  }), todayText), React.createElement("div", {
+    className: "ndb-hero-art"
+  }, React.createElement("img", {
+    className: "ndb-hero-nurse",
+    src: "/assets/nurse-hero.webp",
+    alt: "",
+    width: "432",
+    height: "390"
+  }), React.createElement("div", {
+    className: "ndb-hero-quote"
+  }, "\u201CDedicated Nurses,", React.createElement("br", null), "Healthier Tomorrows\u201D"))), store.refreshError && React.createElement("div", {
     role: "alert",
     style: {
       color: '#b4232f',
       fontSize: 13
     }
   }, store.refreshError), React.createElement("div", {
-    className: "card staff-dashboard-filters"
+    className: "card staff-dashboard-filters ndb-bar"
   }, React.createElement("div", {
     className: "field staff-dashboard-department"
   }, React.createElement("label", {
@@ -19682,64 +20327,184 @@ function WorkforceDashboard({
     key: d,
     value: d
   }, staffDeptLabel(d))))), React.createElement("span", {
-    className: "staff-dashboard-filter-summary"
-  }, "Showing ", React.createElement("b", null, fmt(list.length)), " active ", group === 'Trainee' ? 'trainee nurses' : group === 'PCA' ? 'PCA' : group === 'Nurse' ? 'nurses' : 'staff', department ? ' in ' + staffDeptLabel(department) : ' across all departments'), department && React.createElement("button", {
+    className: "staff-dashboard-filter-summary ndb-bar-summary"
+  }, React.createElement("span", {
+    className: "ndb-bar-ic"
+  }, React.createElement(Ic, {
+    d: I.user,
+    s: 14
+  })), React.createElement("span", null, "Showing ", React.createElement("b", null, fmt(list.length)), " active ", noun, department ? ' in ' + staffDeptLabel(department) : ' across all departments')), department && React.createElement("button", {
     className: "btn sm",
     onClick: () => setDepartment('')
-  }, "Clear filter")), React.createElement("div", {
-    className: "grid",
+  }, "Clear filter"), React.createElement("div", {
+    className: "ndb-bar-actions"
+  }, canAdd && React.createElement("button", {
+    className: "btn sm",
+    title: "Print the blank staff information form to fill in by hand",
+    onClick: openBlankForm
+  }, React.createElement(Ic, {
+    d: I.print,
+    s: 15
+  }), "Print Staff Information"), printForm && window.StaffPrintOptions && React.createElement(window.StaffPrintOptions, {
+    role,
+    onDone: () => setPrintForm(false)
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setShowHi(true),
     style: {
-      gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))'
+      color: '#8a6400',
+      borderColor: '#e6c34d'
     }
-  }, Object.entries({
-    All: 'All Staff',
-    Nurse: 'Nurses',
-    Trainee: 'Trainee Nurses',
-    PCA: 'PCA'
-  }).map(([key, name]) => React.createElement("button", {
-    key: key,
-    "aria-label": `View ${name} dashboard`,
+  }, React.createElement(Ic, {
+    d: I.star,
+    s: 15
+  }), "Staff Highlight"), React.createElement("button", {
+    className: "btn sm",
     onClick: () => setRoute({
-      view: dashboardViews[key]
-    }),
+      view: listView
+    })
+  }, React.createElement(Ic, {
+    d: I.layers,
+    s: 15
+  }), "Directory"), showComp && React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setRoute({
+      view: compView
+    })
+  }, React.createElement(Ic, {
+    d: I.heart,
+    s: 15
+  }), "Compliance"), React.createElement("button", {
+    className: "btn sm",
+    disabled: store.refreshing,
+    onClick: () => store.refresh()
+  }, React.createElement(Ic, {
+    d: I.activity,
+    s: 15
+  }), store.refreshing ? 'Refreshing…' : 'Refresh'), canAdd && React.createElement("button", {
+    className: "btn pri sm",
     style: {
-      border: 0,
-      padding: 0,
-      background: 'transparent',
-      textAlign: 'left',
-      font: 'inherit',
-      cursor: 'pointer'
-    }
-  }, React.createElement(Kpi, {
-    label: name,
-    val: fmt(counts[key]),
-    foot: key === 'All' ? 'includes nurses, trainees and PCA' : 'active staff in selected departments',
-    color: key === 'Trainee' ? '#e08a1e' : key === 'PCA' ? '#6a52d4' : '#0090ca'
-  })))), React.createElement("div", {
-    className: "grid",
-    style: {
-      gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))'
-    }
-  }, React.createElement(Kpi, {
-    label: "Departments",
-    val: fmt(new Set(list.map(e => staffCanonDept(e.current_department))).size),
-    foot: "distinct units staffed",
-    color: "#6a52d4"
-  }), React.createElement(Kpi, {
-    label: "Vaccinated",
-    val: k.vaccinated_pct + '%',
-    foot: "Hep-B completed / vaccinated",
-    color: "#1f9d57"
-  }), React.createElement(Kpi, {
-    label: "Compliance Issues",
-    val: fmt(compIssues),
-    foot: `${comp.missing_vaccination.length} vacc · ${comp.missing_training.length} training · click for details`,
-    color: "#d23a52"
+      background: tone,
+      borderColor: tone
+    },
+    onClick: () => setRoute({
+      view: 'staffForm',
+      role,
+      designation: group === 'Trainee' ? 'Trainee Nurse' : ''
+    })
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 15
+  }), "Add ", group === 'Trainee' ? 'Trainee Nurse' : role))), React.createElement("div", {
+    className: "ndb-kpis"
+  }, KPIS.map(([key, name, icon, sub]) => {
+    const j = joined30(key);
+    return React.createElement("button", {
+      key: key,
+      type: "button",
+      className: 'ndb-kpi ndb-kpi-' + key.toLowerCase() + (group === key ? ' on' : ''),
+      "aria-label": `View ${name} dashboard`,
+      "aria-current": group === key ? 'page' : undefined,
+      onClick: () => setRoute({
+        view: dashboardViews[key]
+      })
+    }, React.createElement("svg", {
+      className: "ndb-kpi-wave",
+      viewBox: "0 0 300 60",
+      preserveAspectRatio: "none",
+      "aria-hidden": "true"
+    }, React.createElement("path", {
+      d: "M0 44c40-22 80 14 130-6s90-34 170-8v30H0z",
+      fill: "currentColor"
+    })), React.createElement("span", {
+      className: "ndb-kpi-top"
+    }, React.createElement("span", {
+      className: "ndb-kpi-ic"
+    }, React.createElement(Ic, {
+      d: icon,
+      s: 24
+    })), React.createElement("span", {
+      className: "ndb-kpi-body"
+    }, React.createElement("span", {
+      className: "ndb-kpi-l"
+    }, name), React.createElement("span", {
+      className: "num ndb-kpi-v"
+    }, fmt(counts[key])), React.createElement("span", {
+      className: "ndb-kpi-s"
+    }, sub))), React.createElement("span", {
+      className: "ndb-kpi-f"
+    }, React.createElement(Ic, {
+      d: I.trend,
+      s: 13
+    }), j > 0 ? '+' + j + ' joined in the last 30 days' : 'No new joiners in the last 30 days'));
   })), React.createElement("div", {
-    className: "grid",
+    className: "ndb-softs"
+  }, React.createElement("div", {
+    className: "ndb-soft ndb-soft-violet"
+  }, React.createElement("span", {
+    className: "ndb-soft-ic"
+  }, React.createElement(Ic, {
+    d: IC_BUILD,
+    s: 22
+  })), React.createElement("div", {
+    className: "ndb-soft-body"
+  }, React.createElement("div", {
+    className: "ndb-soft-l"
+  }, "Departments"), React.createElement("div", {
+    className: "num ndb-soft-v"
+  }, fmt(deptCount)), React.createElement("div", {
+    className: "ndb-soft-s"
+  }, "Distinct units staffed")), React.createElement(Bars, {
+    color: "#6a52d4"
+  })), React.createElement("div", {
+    className: "ndb-soft ndb-soft-green"
+  }, React.createElement("span", {
+    className: "ndb-soft-ic"
+  }, React.createElement(Ic, {
+    d: I.syringe,
+    s: 22
+  })), React.createElement("div", {
+    className: "ndb-soft-body"
+  }, React.createElement("div", {
+    className: "ndb-soft-l"
+  }, "Vaccinated"), React.createElement("div", {
+    className: "num ndb-soft-v"
+  }, k.vaccinated_pct, "%"), React.createElement("div", {
+    className: "ndb-soft-s"
+  }, "Hep-B completed / vaccinated"), React.createElement("div", {
+    className: "ndb-soft-track",
+    role: "img",
+    "aria-label": k.vaccinated_pct + '% vaccinated'
+  }, React.createElement("div", {
     style: {
-      gridTemplateColumns: '1.25fr 1fr'
+      width: Math.max(0, Math.min(100, k.vaccinated_pct)) + '%'
     }
+  }))), React.createElement(Bars, {
+    color: "#1f9d57"
+  })), React.createElement("button", {
+    type: "button",
+    className: "ndb-soft ndb-soft-rose",
+    onClick: () => setRoute({
+      view: compView
+    }),
+    title: "Open the compliance list"
+  }, React.createElement("span", {
+    className: "ndb-soft-ic"
+  }, React.createElement(Ic, {
+    d: IC_WARN,
+    s: 22
+  })), React.createElement("div", {
+    className: "ndb-soft-body"
+  }, React.createElement("div", {
+    className: "ndb-soft-l"
+  }, "Compliance Issues"), React.createElement("div", {
+    className: "num ndb-soft-v"
+  }, fmt(compIssues)), React.createElement("div", {
+    className: "ndb-soft-s"
+  }, comp.missing_vaccination.length, " vaccination \xB7 ", comp.missing_training.length, " training \xB7 ", comp.missing_phone.length, " phone")), React.createElement(Bars, {
+    color: "#d23a52"
+  }))), React.createElement("div", {
+    className: "ndb-cols ndb-cols-wide"
   }, React.createElement(StaffDeptChart, {
     list: list,
     setRoute: setRoute,
@@ -19748,22 +20513,30 @@ function WorkforceDashboard({
   }), React.createElement(StaffDesigChart, {
     list: list,
     setRoute: setRoute,
-    role: group
+    role: group,
+    onViewAll: () => setRoute({
+      view: listView
+    })
   })), (group === 'Nurse' || group === 'PCA') && window.PerfBands && React.createElement(window.PerfBands, {
     role: role,
     setRoute: setRoute
   }), React.createElement("div", {
-    className: "grid",
-    style: {
-      gridTemplateColumns: '1fr 1.25fr'
-    }
+    className: "ndb-cols"
   }, React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-h"
   }, React.createElement("h3", null, "Hep-B Vaccination"), React.createElement("span", {
     className: "spacer"
-  })), React.createElement("div", {
+  }), showComp && React.createElement("button", {
+    className: "ndb-link",
+    onClick: () => setRoute({
+      view: compView
+    })
+  }, "View Details", React.createElement(Ic, {
+    d: I.arrowR,
+    s: 13
+  }))), React.createElement("div", {
     className: "card-b",
     style: {
       display: 'grid',
@@ -19779,66 +20552,28 @@ function WorkforceDashboard({
     setRoute: setRoute,
     role: group
   })), React.createElement("div", {
-    className: "grid",
-    style: {
-      gridTemplateColumns: '1fr 1fr'
-    }
+    className: "ndb-cols ndb-cols-3"
   }, React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-h"
   }, React.createElement("h3", null, "Recent Joiners"), React.createElement("span", {
     className: "spacer"
-  })), React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 2
-    }
-  }, recent.map(e => React.createElement("div", {
-    key: e.id,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 11,
-      padding: '8px 4px',
-      borderBottom: '1px solid var(--line-2)',
-      cursor: 'pointer'
-    },
+  }), React.createElement("button", {
+    className: "ndb-link",
     onClick: () => setRoute({
-      view: 'staffProfile',
-      emp: e.id
+      view: 'staffNewEntries'
     })
-  }, React.createElement(Avatar, {
-    photo: e.photo,
-    name: e.name,
-    size: 32
-  }), React.createElement("div", {
-    style: {
-      minWidth: 0,
-      flex: 1
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    }
-  }, e.name), React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--muted)'
-    }
-  }, e.designation, " \xB7 ", e.current_department)), React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 11.5,
-      color: 'var(--muted)'
-    }
-  }, e.doj))))), React.createElement("div", {
+  }, "View All", React.createElement(Ic, {
+    d: I.arrowR,
+    s: 13
+  }))), React.createElement("div", {
+    className: "card-b ndb-list"
+  }, recent.length === 0 && React.createElement("div", {
+    className: "ndb-empty"
+  }, "No joining dates recorded yet."), recent.map(e => personRow(e, [e.designation, e.current_department].filter(Boolean).join(' · ') || '—', React.createElement("div", {
+    className: "num ndb-row-date"
+  }, niceDate(e.doj)))))), React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-h"
@@ -19849,88 +20584,36 @@ function WorkforceDashboard({
   }), React.createElement("span", {
     className: "tag num"
   }, annv.length)), React.createElement("div", {
-    className: "card-b",
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 2
-    }
+    className: "card-b ndb-list"
   }, annv.length === 0 && React.createElement("div", {
-    style: {
-      color: 'var(--faint)',
-      fontSize: 12.5,
-      padding: '14px 4px'
-    }
+    className: "ndb-empty"
   }, "No anniversaries in the window."), annv.slice(0, 6).map(({
     e,
     annv,
     years
-  }) => React.createElement("div", {
-    key: e.id,
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 11,
-      padding: '8px 4px',
-      borderBottom: '1px solid var(--line-2)',
-      cursor: 'pointer'
-    },
-    onClick: () => setRoute({
-      view: 'staffProfile',
-      emp: e.id
-    })
-  }, React.createElement(Avatar, {
-    photo: e.photo,
-    name: e.name,
-    size: 32
-  }), React.createElement("div", {
-    style: {
-      minWidth: 0,
-      flex: 1
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    }
-  }, e.name), React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--muted)'
-    }
-  }, e.current_department)), React.createElement("span", {
+  }) => personRow(e, e.current_department || '—', React.createElement(React.Fragment, null, React.createElement("span", {
     className: "tag",
     style: {
       background: 'var(--blue-50)',
       color: 'var(--blue-700)'
     }
   }, years, " yr", years > 1 ? 's' : ''), React.createElement("div", {
-    className: "num",
+    className: "num ndb-row-date",
     style: {
-      fontSize: 11.5,
-      color: 'var(--muted)',
-      width: 54,
-      textAlign: 'right'
+      width: 50
     }
   }, annv.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric'
   }))))))), React.createElement("div", {
-    className: "card"
+    className: "card",
+    style: {
+      display: 'flex',
+      flexDirection: 'column'
+    }
   }, React.createElement("div", {
     className: "card-h"
-  }, React.createElement("span", {
-    style: {
-      color: '#d4529b',
-      display: 'inline-flex'
-    }
-  }, React.createElement(Ic, {
-    d: I.heart,
-    s: 16
-  })), React.createElement("h3", null, "Birthday Reminders"), React.createElement("span", {
+  }, React.createElement("h3", null, "Birthday Reminders"), React.createElement("span", {
     className: "sub"
   }, "next 30 days"), React.createElement("span", {
     className: "spacer"
@@ -19944,91 +20627,125 @@ function WorkforceDashboard({
   }, "\uD83C\uDF82 ", bdayToday.length, " today"), React.createElement("span", {
     className: "tag num"
   }, bdays.length)), React.createElement("div", {
-    className: "card-b",
+    className: "card-b ndb-list",
     style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill,minmax(230px,1fr))',
-      gap: 2
+      flex: 1
     }
   }, bdays.length === 0 && React.createElement("div", {
-    style: {
-      color: 'var(--faint)',
-      fontSize: 12.5,
-      padding: '14px 4px'
-    }
-  }, "No birthdays in the window", list.filter(e => e.dob).length === 0 ? ' — no date of birth recorded yet. Add it on a staff profile (Personal → Date of Birth).' : '.'), bdays.slice(0, 12).map(({
+    className: "ndb-empty"
+  }, "No birthdays in the window", list.filter(e => e.dob).length === 0 ? ' — no date of birth recorded yet. Add it on a staff profile (Personal → Date of Birth).' : '.'), bdays.slice(0, 5).map(({
     e,
     bday,
     turns,
     inDays
   }) => React.createElement("div", {
     key: e.id,
+    className: 'ndb-row' + (inDays === 0 ? ' ndb-row-today' : ''),
     onClick: () => setRoute({
       view: 'staffProfile',
       emp: e.id
-    }),
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 11,
-      padding: '8px 9px',
-      borderRadius: 9,
-      cursor: 'pointer',
-      background: inDays === 0 ? 'linear-gradient(120deg,#fdeef6,#fff)' : 'transparent',
-      border: '1px solid ' + (inDays === 0 ? '#f5c9e0' : 'transparent')
-    }
+    })
   }, React.createElement(Avatar, {
     photo: e.photo,
     name: e.name,
-    size: 32
+    size: 34
   }), React.createElement("div", {
     style: {
       minWidth: 0,
       flex: 1
     }
   }, React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 600,
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    }
+    className: "ndb-row-name"
   }, inDays === 0 ? '🎂 ' : '', e.name), React.createElement("div", {
-    style: {
-      fontSize: 11,
-      color: 'var(--muted)',
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    }
+    className: "ndb-row-sub"
   }, e.current_department || '—', turns ? ' · turns ' + turns : '')), React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 11.5,
-      fontWeight: inDays === 0 ? 700 : 400,
-      color: inDays === 0 ? '#b02a72' : 'var(--muted)',
-      textAlign: 'right',
-      flexShrink: 0
-    }
+    className: "num ndb-row-date",
+    style: inDays === 0 ? {
+      fontWeight: 700,
+      color: '#b02a72'
+    } : null
   }, inDays === 0 ? 'Today' : inDays === 1 ? 'Tomorrow' : bday.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric'
-  })))))), React.createElement("div", {
-    className: "card feature",
+  })))), bdays.length > 5 && React.createElement("div", {
+    className: "ndb-empty",
     style: {
-      padding: '14px 18px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 16,
-      flexWrap: 'wrap'
+      padding: '6px 4px 0'
     }
-  }, React.createElement("div", {
+  }, "+", bdays.length - 5, " more in the next 30 days"), React.createElement("div", {
+    className: "ndb-celebrate"
+  }, React.createElement("svg", {
+    width: "44",
+    height: "44",
+    viewBox: "0 0 48 48",
+    "aria-hidden": "true"
+  }, React.createElement("rect", {
+    x: "8",
+    y: "24",
+    width: "32",
+    height: "16",
+    rx: "4",
+    fill: "#f58fb8"
+  }), React.createElement("rect", {
+    x: "8",
+    y: "24",
+    width: "32",
+    height: "6",
+    rx: "3",
+    fill: "#fbc4da"
+  }), React.createElement("rect", {
+    x: "14",
+    y: "14",
+    width: "3",
+    height: "10",
+    rx: "1.5",
+    fill: "#6a52d4"
+  }), React.createElement("rect", {
+    x: "22.5",
+    y: "12",
+    width: "3",
+    height: "12",
+    rx: "1.5",
+    fill: "#0090ca"
+  }), React.createElement("rect", {
+    x: "31",
+    y: "14",
+    width: "3",
+    height: "10",
+    rx: "1.5",
+    fill: "#e08a1e"
+  }), React.createElement("circle", {
+    cx: "15.5",
+    cy: "11",
+    r: "2.4",
+    fill: "#f0a93b"
+  }), React.createElement("circle", {
+    cx: "24",
+    cy: "9",
+    r: "2.4",
+    fill: "#f0a93b"
+  }), React.createElement("circle", {
+    cx: "32.5",
+    cy: "11",
+    r: "2.4",
+    fill: "#f0a93b"
+  })), React.createElement("div", null, React.createElement("div", {
+    className: "ndb-celebrate-t"
+  }, "Celebrate ", React.createElement("b", null, "Our Team")), React.createElement("div", {
+    className: "ndb-celebrate-s"
+  }, "Birthdays make our team stronger!")))))), React.createElement("div", {
+    className: "card feature ndb-gaps"
+  }, React.createElement("span", {
+    className: "ndb-gaps-ic"
+  }, React.createElement(Ic, {
+    d: IC_WARN,
+    s: 20
+  })), React.createElement("div", {
     style: {
       fontSize: 13.5,
       fontWeight: 700
     }
-  }, "Compliance gaps"), [['Missing vaccination', comp.missing_vaccination.length, '#d23a52'], ['No training recorded', comp.missing_training.length, '#e08a1e'], ['No phone on file', comp.missing_phone.length, '#6a52d4']].map(([l, n, c]) => React.createElement("div", {
+  }, "Compliance gaps"), [['Missing vaccination', comp.missing_vaccination.length, '#d23a52'], ['No training recorded', comp.missing_training.length, '#b5670a'], ['No phone on file', comp.missing_phone.length, '#6a52d4']].map(([l, n, c]) => React.createElement("div", {
     key: l,
     style: {
       display: 'flex',
@@ -21147,10 +21864,10 @@ function ManageStaff({
   }, React.createElement("span", {
     onClick: ev => {
       ev.stopPropagation();
-      store.toggleFav(e.id);
+      if (!window.unicoCan || window.unicoCan('staff', 'edit')) store.toggleFav(e.id);
     },
     style: {
-      cursor: 'pointer',
+      cursor: !window.unicoCan || window.unicoCan('staff', 'edit') ? 'pointer' : 'default',
       fontSize: 16,
       color: e.fav ? '#e0a81e' : '#c4ccd6'
     }

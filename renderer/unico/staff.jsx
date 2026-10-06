@@ -331,11 +331,11 @@ function StaffDeptChart({list, setRoute, tone='#0090ca', role='Nurse'}){
           const pct=Math.round((r.value/total)*100), w=(r.value/max)*100, top=sortMode==='count'&&i===0;
           return (
             <div key={r.label} onClick={()=>setSel(s=>s===r.label?'':r.label)} title={`Click to list ${staffDeptLabel(r.label)} ${noun}`}
-              style={{display:'grid',gridTemplateColumns:'190px 1fr 64px',alignItems:'center',gap:10,cursor:'pointer',borderRadius:7,padding:'2px 4px',background:sel===r.label?'var(--blue-50)':'transparent'}}
+              style={{display:'grid',gridTemplateColumns:'minmax(96px,190px) minmax(0,1fr) 64px',alignItems:'center',gap:10,cursor:'pointer',borderRadius:7,padding:'3px 4px',background:sel===r.label?'var(--blue-50)':'transparent'}}
               onMouseEnter={e=>{const b=e.currentTarget.querySelector('.dbar');if(b)b.style.filter='brightness(1.08)';}}
               onMouseLeave={e=>{const b=e.currentTarget.querySelector('.dbar');if(b)b.style.filter='none';}}>
               <div style={{fontSize:12,fontWeight:top?700:600,color:top?'var(--ink)':'var(--ink-2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{staffDeptLabel(r.label)}</div>
-              <div style={{height:18,background:'var(--panel-2)',borderRadius:6,overflow:'hidden'}}>
+              <div style={{height:10,background:'rgba(125,145,180,.16)',borderRadius:6,overflow:'hidden'}}>
                 <div className="dbar" style={{height:'100%',width:mounted?w+'%':'0%',minWidth:r.value?6:0,background:`linear-gradient(90deg,${tone},${tone2})`,borderRadius:6,transition:`width .8s ${Math.min(i,22)*45}ms cubic-bezier(.2,.8,.25,1),filter .15s`}}/>
               </div>
               <div style={{textAlign:'right',whiteSpace:'nowrap'}}>
@@ -416,7 +416,7 @@ function StaffExpChart({list, setRoute, role='Nurse'}){
 }
 
 /* ---------------- Designation Breakdown — interactive (click a role → staff list) ---------------- */
-function StaffDesigChart({list, setRoute, role='Nurse'}){
+function StaffDesigChart({list, setRoute, role='Nurse', onViewAll}){
   const {useState}=React;
   const [sel,setSel]=useState(null);   // designation label ('Other' = the grouped rest)
   const S=window.STAFF;
@@ -433,7 +433,9 @@ function StaffDesigChart({list, setRoute, role='Nurse'}){
   if(sel){ curLabel=sel; curList=members[sel]||[]; }
   return (
     <div className="card">
-      <div className="card-h"><h3>Designation Breakdown</h3><span className="sub">click a role to list staff</span><span className="spacer"/></div>
+      <div className="card-h"><h3>Designation Breakdown</h3><span className="sub">click a role to list staff</span><span className="spacer"/>
+        {onViewAll&&<button className="ndb-link" onClick={onViewAll}>View List<Ic d={I.arrowR} s={13}/></button>}
+      </div>
       <div className="card-b">
         <div style={{display:'grid',placeItems:'center'}}><Donut data={donut} size={188} centerValue={fmt(list.length)} centerLabel="staff" onSlice={(i,d)=>setSel(s=>s===d.label?null:d.label)}/></div>
         {curList&&(
@@ -496,128 +498,221 @@ function WorkforceDashboard({store, setRoute, role='Nurse', group=role}){
   const comp=S.compliance(list);
   const compIssues=comp.missing_vaccination.length+comp.missing_training.length+comp.missing_phone.length;
 
-  const Kpi=({label,val,foot,color})=>(
-    <div className="card anim-pop" style={{padding:'17px 20px',borderLeft:`4px solid ${color}`,display:'flex',flexDirection:'column',minHeight:128}}>
-      <div style={{fontSize:13,fontWeight:700,color:'var(--ink-2)'}}>{label}</div>
-      <div className="num" style={{fontSize:38,fontWeight:700,color,margin:'12px 0 8px',lineHeight:1}}>{val}</div>
-      <div style={{fontSize:11.5,color:'var(--muted)',marginTop:'auto'}}>{foot}</div>
+  /* ---- dashboard look (2026-10): welcome banner, colour KPI cards, soft stat cards ----
+     Same figures, same drill-downs, same buttons as before — only the presentation changed.
+     Styles are the .ndb-* rules in theme.css. */
+  const noun=group==='Trainee'?'trainee nurses':group==='PCA'?'PCA':group==='Nurse'?'nurses':'staff';
+  const me=(typeof window!=='undefined'&&window.__UNICO_USER__)||null;
+  const firstName=me&&me.name?String(me.name).trim().split(/\s+/)[0]:'';
+  const todayText=new Date().toLocaleDateString(undefined,{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
+  // The line under each KPI: people who actually joined in the last 30 days. The roster keeps
+  // no month-by-month history, so a "% from last month" trend would have to be invented.
+  const nowMs=Date.now(), since30=nowMs-30*86400000;
+  const joined30=(g)=>scoped.filter(e=>{ if(!S.matchesStaffGroup(e,g)||!e.doj) return false; const t=Date.parse(e.doj); return !isNaN(t)&&t>=since30&&t<=nowMs; }).length;
+  const niceDate=(d)=>{ const t=Date.parse(d); return isNaN(t)?(d||'—'):new Date(t).toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'}); };
+  const deptCount=new Set(list.map(e=>staffCanonDept(e.current_department))).size;
+  const canAdd=!window.unicoCan||window.unicoCan('staff','add');
+  const showComp=group==='Nurse'||group==='PCA';
+  const IC_USERS='M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8';
+  const IC_CAP='M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5';
+  const IC_WARN='M12 3l9.5 17h-19zM12 10v4.5M12 17.3v.2';
+  const IC_BUILD='M4 21V5a1 1 0 011-1h8a1 1 0 011 1v16M14 9h5a1 1 0 011 1v11M3 21h18M8 8h2M8 12h2M8 16h2M17 13v.01M17 17v.01';
+  const KPIS=[
+    ['All','All Staff',IC_USERS,'Nurses, trainees & PCA'],
+    ['Nurse','Nurses',I.steth,department?'Active in the selected department':'Active staff members'],
+    ['Trainee','Trainee Nurses',IC_CAP,department?'Active in the selected department':'Active trainee nurses'],
+    ['PCA','PCA',I.user,department?'Active in the selected department':'Active staff members'],
+  ];
+  const Bars=({color})=>(
+    <svg className="ndb-soft-bars" width="46" height="34" viewBox="0 0 46 34" aria-hidden="true">
+      {[[0,20,14],[12,13,21],[24,7,27],[36,0,34]].map(([x,y,h],i)=><rect key={i} x={x} y={y} width="8" height={h} rx="3" fill={color} opacity={.35+i*.2}/>)}
+    </svg>
+  );
+  const personRow=(e,sub,right)=>(
+    <div key={e.id} className="ndb-row" onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
+      <Avatar photo={e.photo} name={e.name} size={34}/>
+      <div style={{minWidth:0,flex:1}}>
+        <div className="ndb-row-name">{e.name}</div>
+        <div className="ndb-row-sub">{sub}</div>
+      </div>
+      {right}
     </div>
   );
   return (
-    <div className="grid" style={{gap:16}}>
-      <SectionTitle icon={role==='PCA'?I.bed:I.steth} title={`${label} Dashboard`} sub={`${list.length} active staff${department?' · '+staffDeptLabel(department):' · all departments'}`}
-        right={<>{(!window.unicoCan||window.unicoCan('staff','add'))&&
-            <button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={openBlankForm}><Ic d={I.print} s={15}/>Print staff information</button>}
-          {printForm&&window.StaffPrintOptions&&React.createElement(window.StaffPrintOptions,{role,onDone:()=>setPrintForm(false)})}
-          <RoleSwitch role={group} setRoute={setRoute} views={dashboardViews}/>
-          <button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#b8860b',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
-          <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>
-          {(group==='Nurse'||group==='PCA')&&<button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>}
-          <button className="btn sm" disabled={store.refreshing} onClick={()=>store.refresh()}><Ic d={I.activity} s={15}/>{store.refreshing?'Refreshing…':'Refresh'}</button>
-          {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role,designation:group==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {group==='Trainee'?'Trainee Nurse':role}</button>}</>}/>
+    <div className="grid ndb" style={{gap:16}}>
+      {/* welcome banner */}
+      <div className="ndb-hero">
+        <svg className="ndb-hero-ecg" viewBox="0 0 520 120" preserveAspectRatio="none" aria-hidden="true">
+          <path d="M0 70h150l14-26 18 58 22-88 20 78 12-22h70l10-16 12 30 16-52 14 38h152" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+        <div className="ndb-hero-main">
+          <div className="ndb-hero-eyebrow"><Ic d={role==='PCA'?I.bed:I.steth} s={14}/>{label} Dashboard</div>
+          <h1 className="ndb-hero-title">Welcome back{firstName?', '+firstName:''} 👋</h1>
+          <div className="ndb-hero-sub">Here’s today’s overview of your nursing staff and departmental activities.</div>
+        </div>
+        <span className="ndb-hero-date"><Ic d={I.cal} s={14}/>{todayText}</span>
+        {/* The portrait is decorative (empty alt). Its edges are faded in the file itself, so
+            it sits on the banner without a visible box. */}
+        <div className="ndb-hero-art">
+          <img className="ndb-hero-nurse" src="/assets/nurse-hero.webp" alt="" width="432" height="390"/>
+          <div className="ndb-hero-quote">“Dedicated Nurses,<br/>Healthier Tomorrows”</div>
+        </div>
+      </div>
       {store.refreshError&&<div role="alert" style={{color:'#b4232f',fontSize:13}}>{store.refreshError}</div>}
-      <div className="card staff-dashboard-filters">
+
+      {/* department filter + every dashboard action on one bar */}
+      <div className="card staff-dashboard-filters ndb-bar">
         <div className="field staff-dashboard-department">
           <label htmlFor="staff-dashboard-department">Department</label>
           <select id="staff-dashboard-department" aria-label="Dashboard department" value={department} onChange={e=>setDepartment(e.target.value)}>
             <option value="">All departments</option>{departmentOptions.map(d=><option key={d} value={d}>{staffDeptLabel(d)}</option>)}
           </select>
         </div>
-        <span className="staff-dashboard-filter-summary">Showing <b>{fmt(list.length)}</b> active {group==='Trainee'?'trainee nurses':group==='PCA'?'PCA':group==='Nurse'?'nurses':'staff'}{department?' in '+staffDeptLabel(department):' across all departments'}</span>
+        <span className="staff-dashboard-filter-summary ndb-bar-summary"><span className="ndb-bar-ic"><Ic d={I.user} s={14}/></span><span>Showing <b>{fmt(list.length)}</b> active {noun}{department?' in '+staffDeptLabel(department):' across all departments'}</span></span>
         {department&&<button className="btn sm" onClick={()=>setDepartment('')}>Clear filter</button>}
-      </div>
-      <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))'}}>
-        {Object.entries({All:'All Staff',Nurse:'Nurses',Trainee:'Trainee Nurses',PCA:'PCA'}).map(([key,name])=><button key={key} aria-label={`View ${name} dashboard`} onClick={()=>setRoute({view:dashboardViews[key]})} style={{border:0,padding:0,background:'transparent',textAlign:'left',font:'inherit',cursor:'pointer'}}><Kpi label={name} val={fmt(counts[key])} foot={key==='All'?'includes nurses, trainees and PCA':'active staff in selected departments'} color={key==='Trainee'?'#e08a1e':key==='PCA'?'#6a52d4':'#0090ca'}/></button>)}
-      </div>
-      <div className="grid" style={{gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))'}}>
-        <Kpi label="Departments" val={fmt(new Set(list.map(e=>staffCanonDept(e.current_department))).size)} foot="distinct units staffed" color="#6a52d4"/>
-        <Kpi label="Vaccinated" val={k.vaccinated_pct+'%'} foot="Hep-B completed / vaccinated" color="#1f9d57"/>
-        <Kpi label="Compliance Issues" val={fmt(compIssues)} foot={`${comp.missing_vaccination.length} vacc · ${comp.missing_training.length} training · click for details`} color="#d23a52"/>
+        <div className="ndb-bar-actions">
+          {canAdd&&<button className="btn sm" title="Print the blank staff information form to fill in by hand" onClick={openBlankForm}><Ic d={I.print} s={15}/>Print Staff Information</button>}
+          {printForm&&window.StaffPrintOptions&&React.createElement(window.StaffPrintOptions,{role,onDone:()=>setPrintForm(false)})}
+          <button className="btn sm" onClick={()=>setShowHi(true)} style={{color:'#8a6400',borderColor:'#e6c34d'}}><Ic d={I.star} s={15}/>Staff Highlight</button>
+          <button className="btn sm" onClick={()=>setRoute({view:listView})}><Ic d={I.layers} s={15}/>Directory</button>
+          {showComp&&<button className="btn sm" onClick={()=>setRoute({view:compView})}><Ic d={I.heart} s={15}/>Compliance</button>}
+          <button className="btn sm" disabled={store.refreshing} onClick={()=>store.refresh()}><Ic d={I.activity} s={15}/>{store.refreshing?'Refreshing…':'Refresh'}</button>
+          {canAdd&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role,designation:group==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {group==='Trainee'?'Trainee Nurse':role}</button>}
+        </div>
       </div>
 
-      <div className="grid" style={{gridTemplateColumns:'1.25fr 1fr'}}>
+      {/* the four roster groups — each card opens that group's dashboard; the open one is ringed */}
+      <div className="ndb-kpis">
+        {KPIS.map(([key,name,icon,sub])=>{ const j=joined30(key); return (
+          <button key={key} type="button" className={'ndb-kpi ndb-kpi-'+key.toLowerCase()+(group===key?' on':'')} aria-label={`View ${name} dashboard`} aria-current={group===key?'page':undefined} onClick={()=>setRoute({view:dashboardViews[key]})}>
+            <svg className="ndb-kpi-wave" viewBox="0 0 300 60" preserveAspectRatio="none" aria-hidden="true"><path d="M0 44c40-22 80 14 130-6s90-34 170-8v30H0z" fill="currentColor"/></svg>
+            <span className="ndb-kpi-top">
+              <span className="ndb-kpi-ic"><Ic d={icon} s={24}/></span>
+              <span className="ndb-kpi-body">
+                <span className="ndb-kpi-l">{name}</span>
+                <span className="num ndb-kpi-v">{fmt(counts[key])}</span>
+                <span className="ndb-kpi-s">{sub}</span>
+              </span>
+            </span>
+            <span className="ndb-kpi-f"><Ic d={I.trend} s={13}/>{j>0?('+'+j+' joined in the last 30 days'):'No new joiners in the last 30 days'}</span>
+          </button>
+        );})}
+      </div>
+
+      <div className="ndb-softs">
+        <div className="ndb-soft ndb-soft-violet">
+          <span className="ndb-soft-ic"><Ic d={IC_BUILD} s={22}/></span>
+          <div className="ndb-soft-body">
+            <div className="ndb-soft-l">Departments</div>
+            <div className="num ndb-soft-v">{fmt(deptCount)}</div>
+            <div className="ndb-soft-s">Distinct units staffed</div>
+          </div>
+          <Bars color="#6a52d4"/>
+        </div>
+        <div className="ndb-soft ndb-soft-green">
+          <span className="ndb-soft-ic"><Ic d={I.syringe} s={22}/></span>
+          <div className="ndb-soft-body">
+            <div className="ndb-soft-l">Vaccinated</div>
+            <div className="num ndb-soft-v">{k.vaccinated_pct}%</div>
+            <div className="ndb-soft-s">Hep-B completed / vaccinated</div>
+            <div className="ndb-soft-track" role="img" aria-label={k.vaccinated_pct+'% vaccinated'}><div style={{width:Math.max(0,Math.min(100,k.vaccinated_pct))+'%'}}/></div>
+          </div>
+          <Bars color="#1f9d57"/>
+        </div>
+        <button type="button" className="ndb-soft ndb-soft-rose" onClick={()=>setRoute({view:compView})} title="Open the compliance list">
+          <span className="ndb-soft-ic"><Ic d={IC_WARN} s={22}/></span>
+          <div className="ndb-soft-body">
+            <div className="ndb-soft-l">Compliance Issues</div>
+            <div className="num ndb-soft-v">{fmt(compIssues)}</div>
+            <div className="ndb-soft-s">{comp.missing_vaccination.length} vaccination · {comp.missing_training.length} training · {comp.missing_phone.length} phone</div>
+          </div>
+          <Bars color="#d23a52"/>
+        </button>
+      </div>
+
+      <div className="ndb-cols ndb-cols-wide">
         <StaffDeptChart list={list} setRoute={setRoute} tone={tone} role={group}/>
-        <StaffDesigChart list={list} setRoute={setRoute} role={group}/>
+        <StaffDesigChart list={list} setRoute={setRoute} role={group} onViewAll={()=>setRoute({view:listView})}/>
       </div>
 
       {/* Recognition + appraisal bands sit BELOW the roster charts: the dashboard should open on
          the roster numbers, not on the performance cycle (user, 2026-09-20). */}
       {(group==='Nurse'||group==='PCA')&&window.PerfBands && <window.PerfBands role={role} setRoute={setRoute}/>}
 
-      <div className="grid" style={{gridTemplateColumns:'1fr 1.25fr'}}>
+      <div className="ndb-cols">
         <div className="card">
-          <div className="card-h"><h3>Hep-B Vaccination</h3><span className="spacer"/></div>
+          <div className="card-h"><h3>Hep-B Vaccination</h3><span className="spacer"/>
+            {showComp&&<button className="ndb-link" onClick={()=>setRoute({view:compView})}>View Details<Ic d={I.arrowR} s={13}/></button>}
+          </div>
           <div className="card-b" style={{display:'grid',placeItems:'center'}}><Donut data={vacc} size={172} centerValue={k.vaccinated_pct+'%'} centerLabel="compliant"/></div>
         </div>
         <StaffExpChart list={list} setRoute={setRoute} role={group}/>
       </div>
 
-      <div className="grid" style={{gridTemplateColumns:'1fr 1fr'}}>
+      <div className="ndb-cols ndb-cols-3">
         <div className="card">
-          <div className="card-h"><h3>Recent Joiners</h3><span className="spacer"/></div>
-          <div className="card-b" style={{display:'flex',flexDirection:'column',gap:2}}>
-            {recent.map(e=>(
-              <div key={e.id} style={{display:'flex',alignItems:'center',gap:11,padding:'8px 4px',borderBottom:'1px solid var(--line-2)',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-                <Avatar photo={e.photo} name={e.name} size={32}/>
-                <div style={{minWidth:0,flex:1}}><div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
-                  <div style={{fontSize:11,color:'var(--muted)'}}>{e.designation} · {e.current_department}</div></div>
-                <div className="num" style={{fontSize:11.5,color:'var(--muted)'}}>{e.doj}</div>
-              </div>
-            ))}
+          <div className="card-h"><h3>Recent Joiners</h3><span className="spacer"/>
+            <button className="ndb-link" onClick={()=>setRoute({view:'staffNewEntries'})}>View All<Ic d={I.arrowR} s={13}/></button>
+          </div>
+          <div className="card-b ndb-list">
+            {recent.length===0&&<div className="ndb-empty">No joining dates recorded yet.</div>}
+            {recent.map(e=>personRow(e,[e.designation,e.current_department].filter(Boolean).join(' · ')||'—',
+              <div className="num ndb-row-date">{niceDate(e.doj)}</div>))}
           </div>
         </div>
         <div className="card">
           <div className="card-h"><h3>Upcoming Anniversaries</h3><span className="sub">next 60 days</span><span className="spacer"/><span className="tag num">{annv.length}</span></div>
-          <div className="card-b" style={{display:'flex',flexDirection:'column',gap:2}}>
-            {annv.length===0&&<div style={{color:'var(--faint)',fontSize:12.5,padding:'14px 4px'}}>No anniversaries in the window.</div>}
-            {annv.slice(0,6).map(({e,annv,years})=>(
-              <div key={e.id} style={{display:'flex',alignItems:'center',gap:11,padding:'8px 4px',borderBottom:'1px solid var(--line-2)',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-                <Avatar photo={e.photo} name={e.name} size={32}/>
-                <div style={{minWidth:0,flex:1}}><div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
-                  <div style={{fontSize:11,color:'var(--muted)'}}>{e.current_department}</div></div>
-                <span className="tag" style={{background:'var(--blue-50)',color:'var(--blue-700)'}}>{years} yr{years>1?'s':''}</span>
-                <div className="num" style={{fontSize:11.5,color:'var(--muted)',width:54,textAlign:'right'}}>{annv.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</div>
+          <div className="card-b ndb-list">
+            {annv.length===0&&<div className="ndb-empty">No anniversaries in the window.</div>}
+            {annv.slice(0,6).map(({e,annv,years})=>personRow(e,e.current_department||'—',<>
+              <span className="tag" style={{background:'var(--blue-50)',color:'var(--blue-700)'}}>{years} yr{years>1?'s':''}</span>
+              <div className="num ndb-row-date" style={{width:50}}>{annv.toLocaleDateString(undefined,{month:'short',day:'numeric'})}</div>
+            </>))}
+          </div>
+        </div>
+        {/* Birthday reminder. Reads `dob` from the staff record — the same field the profile
+            form captures — so nobody maintains a second list. Today's birthdays are pinned
+            at the top in celebration colours; the rest is a plain 30-day look-ahead. */}
+        <div className="card" style={{display:'flex',flexDirection:'column'}}>
+          <div className="card-h">
+            <h3>Birthday Reminders</h3><span className="sub">next 30 days</span><span className="spacer"/>
+            {bdayToday.length>0&&<span className="tag" style={{background:'#fdeef6',color:'#b02a72',fontWeight:700}}>🎂 {bdayToday.length} today</span>}
+            <span className="tag num">{bdays.length}</span>
+          </div>
+          <div className="card-b ndb-list" style={{flex:1}}>
+            {bdays.length===0&&<div className="ndb-empty">
+              No birthdays in the window{list.filter(e=>e.dob).length===0?' — no date of birth recorded yet. Add it on a staff profile (Personal → Date of Birth).':'.'}
+            </div>}
+            {bdays.slice(0,5).map(({e,bday,turns,inDays})=>(
+              <div key={e.id} className={'ndb-row'+(inDays===0?' ndb-row-today':'')} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
+                <Avatar photo={e.photo} name={e.name} size={34}/>
+                <div style={{minWidth:0,flex:1}}>
+                  <div className="ndb-row-name">{inDays===0?'🎂 ':''}{e.name}</div>
+                  <div className="ndb-row-sub">{e.current_department||'—'}{turns?' · turns '+turns:''}</div>
+                </div>
+                <div className="num ndb-row-date" style={inDays===0?{fontWeight:700,color:'#b02a72'}:null}>
+                  {inDays===0?'Today':inDays===1?'Tomorrow':bday.toLocaleDateString(undefined,{month:'short',day:'numeric'})}
+                </div>
               </div>
             ))}
+            {bdays.length>5&&<div className="ndb-empty" style={{padding:'6px 4px 0'}}>+{bdays.length-5} more in the next 30 days</div>}
+            <div className="ndb-celebrate">
+              <svg width="44" height="44" viewBox="0 0 48 48" aria-hidden="true">
+                <rect x="8" y="24" width="32" height="16" rx="4" fill="#f58fb8"/><rect x="8" y="24" width="32" height="6" rx="3" fill="#fbc4da"/>
+                <rect x="14" y="14" width="3" height="10" rx="1.5" fill="#6a52d4"/><rect x="22.5" y="12" width="3" height="12" rx="1.5" fill="#0090ca"/><rect x="31" y="14" width="3" height="10" rx="1.5" fill="#e08a1e"/>
+                <circle cx="15.5" cy="11" r="2.4" fill="#f0a93b"/><circle cx="24" cy="9" r="2.4" fill="#f0a93b"/><circle cx="32.5" cy="11" r="2.4" fill="#f0a93b"/>
+              </svg>
+              <div><div className="ndb-celebrate-t">Celebrate <b>Our Team</b></div><div className="ndb-celebrate-s">Birthdays make our team stronger!</div></div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Birthday reminder. Reads `dob` from the staff record — the same field the profile
-          form captures — so nobody maintains a second list. Today's birthdays are pinned
-          at the top in celebration colours; the rest is a plain 30-day look-ahead. */}
-      <div className="card">
-        <div className="card-h">
-          <span style={{color:'#d4529b',display:'inline-flex'}}><Ic d={I.heart} s={16}/></span>
-          <h3>Birthday Reminders</h3><span className="sub">next 30 days</span><span className="spacer"/>
-          {bdayToday.length>0&&<span className="tag" style={{background:'#fdeef6',color:'#b02a72',fontWeight:700}}>🎂 {bdayToday.length} today</span>}
-          <span className="tag num">{bdays.length}</span>
-        </div>
-        <div className="card-b" style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(230px,1fr))',gap:2}}>
-          {bdays.length===0&&<div style={{color:'var(--faint)',fontSize:12.5,padding:'14px 4px'}}>
-            No birthdays in the window{list.filter(e=>e.dob).length===0?' — no date of birth recorded yet. Add it on a staff profile (Personal → Date of Birth).':'.'}
-          </div>}
-          {bdays.slice(0,12).map(({e,bday,turns,inDays})=>(
-            <div key={e.id} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}
-              style={{display:'flex',alignItems:'center',gap:11,padding:'8px 9px',borderRadius:9,cursor:'pointer',
-                background:inDays===0?'linear-gradient(120deg,#fdeef6,#fff)':'transparent',border:'1px solid '+(inDays===0?'#f5c9e0':'transparent')}}>
-              <Avatar photo={e.photo} name={e.name} size={32}/>
-              <div style={{minWidth:0,flex:1}}>
-                <div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{inDays===0?'🎂 ':''}{e.name}</div>
-                <div style={{fontSize:11,color:'var(--muted)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.current_department||'—'}{turns?' · turns '+turns:''}</div>
-              </div>
-              <div className="num" style={{fontSize:11.5,fontWeight:inDays===0?700:400,color:inDays===0?'#b02a72':'var(--muted)',textAlign:'right',flexShrink:0}}>
-                {inDays===0?'Today':inDays===1?'Tomorrow':bday.toLocaleDateString(undefined,{month:'short',day:'numeric'})}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* compliance strip */}
-      <div className="card feature" style={{padding:'14px 18px',display:'flex',alignItems:'center',gap:16,flexWrap:'wrap'}}>
+      <div className="card feature ndb-gaps">
+        <span className="ndb-gaps-ic"><Ic d={IC_WARN} s={20}/></span>
         <div style={{fontSize:13.5,fontWeight:700}}>Compliance gaps</div>
-        {[['Missing vaccination',comp.missing_vaccination.length,'#d23a52'],['No training recorded',comp.missing_training.length,'#e08a1e'],['No phone on file',comp.missing_phone.length,'#6a52d4']].map(([l,n,c])=>(
+        {[['Missing vaccination',comp.missing_vaccination.length,'#d23a52'],['No training recorded',comp.missing_training.length,'#b5670a'],['No phone on file',comp.missing_phone.length,'#6a52d4']].map(([l,n,c])=>(
           <div key={l} style={{display:'flex',alignItems:'center',gap:8}}>
             <span className="num" style={{fontSize:20,fontWeight:700,color:c}}>{n}</span>
             <span style={{fontSize:12,color:'var(--muted)'}}>{l}</span>
@@ -949,7 +1044,7 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
             <tbody>
               {sorted.map(e=>(
                 <tr key={e.id} style={{opacity:e.is_active?1:.55}}>
-                  <td style={{textAlign:'center'}}><span onClick={ev=>{ev.stopPropagation();store.toggleFav(e.id);}} style={{cursor:'pointer',fontSize:16,color:e.fav?'#e0a81e':'#c4ccd6'}}>{e.fav?'★':'☆'}</span></td>
+                  <td style={{textAlign:'center'}}><span onClick={ev=>{ev.stopPropagation(); if(!window.unicoCan||window.unicoCan('staff','edit')) store.toggleFav(e.id);}} style={{cursor:(!window.unicoCan||window.unicoCan('staff','edit'))?'pointer':'default',fontSize:16,color:e.fav?'#e0a81e':'#c4ccd6'}}>{e.fav?'★':'☆'}</span></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={e.photo} name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)',display:'flex',alignItems:'center',gap:5}}><span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</span>{/* BNMC tick: the council's own answer on the day it was checked (staff-profile.jsx
                       shows it in full). Absent = never checked, which is NOT the same as failed, so

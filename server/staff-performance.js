@@ -100,6 +100,32 @@ const outDoc = (d) => { if (!d) return null; const { _id, ...r } = d; return { i
 const num = (v, lo, hi) => { const n = Number(v); if (!isFinite(n)) return null; return Math.max(lo, Math.min(hi, n)); };
 const who = (req) => (req.user && (req.user.name || req.user.sub)) || 'local';
 
+/* ---- who an entry is about --------------------------------------------------- */
+
+/* The staff RECORD id decides whenever both sides carry one. The employee number cannot:
+   in the live register it is blank for dozens of people (their entries are then filed
+   under the record id), shared by a few, and gets filled in or corrected later. Matching
+   on the number alone let two people who share one overwrite each other's appraisal and
+   exit record, and detached a person's whole history the day their number was entered. */
+const samePerson = (a, b) => ((a && a.staffId && b && b.staffId)
+  ? String(a.staffId) === String(b.staffId)
+  : String((a && a.empId) || '') === String((b && b.empId) || ''));
+const sameName = (a, b) => { const n = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase(); return !n(a) || !n(b) || n(a) === n(b); };
+
+/* The document one person's form lives in: filed under the record id. A form filed before
+   record ids were sent (under the employee number) is still found and kept where it is —
+   unless it is clearly somebody else's (another record id, or another name on a shared number). */
+async function docFor(name, prefix, p, suffix) {
+  const legacyId = prefix + p.empId + suffix;
+  if (!p.staffId) return { id: legacyId, existing: await findEntry(name, legacyId) };
+  const id = prefix + 's' + p.staffId + suffix;
+  const own = await findEntry(name, id);
+  if (own || !p.empId) return { id, existing: own };
+  const legacy = await findEntry(name, legacyId);
+  if (legacy && (legacy.staffId ? String(legacy.staffId) === String(p.staffId) : sameName(legacy.staffName, p.staffName))) return { id: legacyId, existing: legacy };
+  return { id, existing: null };
+}
+
 /* ---- scoring ---------------------------------------------------------------- */
 
 // scores: { "1".."20": 1..5 }. Only whole 1-5 values count; a partly-filled draft
@@ -143,6 +169,7 @@ function normAppraisal(input, existing) {
   const status = STATUSES.indexOf(s(i.status)) >= 0 ? s(i.status) : (prev.status || 'draft');
   return {
     empId: s(i.empId || prev.empId, 40),
+    staffId: s(i.staffId || prev.staffId, 40),   // the staff RECORD id - see samePerson
     cycleId: s(i.cycleId || prev.cycleId, 40),
     cycleLabel: s(i.cycleLabel || prev.cycleLabel, 80),
     cycleStart: s(i.cycleStart || prev.cycleStart, 20),
@@ -275,6 +302,7 @@ function normExit(input) {
   const sep = SEPARATION_TYPES.indexOf(s(i.separation)) >= 0 ? s(i.separation) : 'Resignation';
   return {
     empId: s(i.empId, 40),
+    staffId: s(i.staffId, 40),             // the staff RECORD id - see samePerson
     staffName: s(i.staffName, 120),
     department: s(i.department, 120),
     designation: s(i.designation, 120),
@@ -399,18 +427,20 @@ async function findEntry(name, id) {
   return c ? outDoc(await c.findOne({ _id: String(id) })) : ((mem[name] || []).find((x) => x.id === id) || null);
 }
 // Has the authority already filed (actioned) this person's appraisal for that window?
-async function isFiled(empId, cycleId) {
-  if (!empId || !cycleId) return false;
-  const a = await findEntry(APPRAISALS, 'apr-' + empId + '-' + cycleId);
+async function isFiled(p, cycleId) {
+  if (!p || (!p.empId && !p.staffId) || !cycleId) return false;
+  const a = (await docFor(APPRAISALS, 'apr-', p, '-' + cycleId)).existing;
   return !!(a && a.status === 'actioned');
 }
 const FILED_MSG = 'That appraisal window is already filed (Part H recorded). Reopen the appraisal before changing its registers.';
 
-async function pointsFor(empId, cycleId) {
+// `who` is the person (an entry or appraisal carrying empId / staffId) or a bare employee number.
+async function pointsFor(who, cycleId) {
+  const p = who && typeof who === 'object' ? who : { empId: who };
   // Deliberately uncached: this is the arithmetic that sets somebody's grade, and it
   // runs on the write paths, where a stale baseline could file the wrong score.
   const [inc, ach] = await Promise.all([listAll(INCIDENTS), listAll(ACHIEVEMENTS)]);
-  const mine = (list) => list.filter((x) => x.empId === empId && (!cycleId || x.cycleId === cycleId));
+  const mine = (list) => list.filter((x) => samePerson(x, p) && (!cycleId || x.cycleId === cycleId));
   const penalty = mine(inc).reduce((t, x) => t + (Number(x.points) || 0), 0);
   const bonus = mine(ach).reduce((t, x) => t + (Number(x.points) || 0), 0);
   return { rawBonus: bonus, rawPenalty: penalty, bonus: Math.min(bonus, BONUS_CAP), penalty: Math.min(penalty, PENALTY_CAP) };
@@ -448,6 +478,10 @@ function decorate(a, pts) {
 
 function mount(app, opts) {
   const guard = (opts && opts.requireApi) || function (req, res, next) { next(); };
+  // The staff register, for handing entries out under each person's current key (GET below).
+  // Injectable for the self-test; with no database there is no register to follow.
+  const rosterOf = (opts && opts.roster) || (() => (process.env.MONGODB_URI
+    ? require('./staff-roster').loadRoster({ cached: true }) : Promise.resolve([])));
   // Part H changes somebody's employment standing. Only an unrestricted session (the
   // CNS / administrator) may record it, whatever the module level says.
   const adminOnly = (req, res, next) => {
@@ -463,42 +497,67 @@ function mount(app, opts) {
       const [appraisals, incidents, achievements, exits] = registers
         ? [registers.appraisals, registers.incidents, registers.achievements, registers.exits]
         : await Promise.all([listCached(APPRAISALS), listCached(INCIDENTS), listCached(ACHIEVEMENTS), listCached(EXITS)]);
-      // Settle every appraisal against its own cycle's registers.
-      const byKey = {};
-      incidents.forEach((x) => { const k = x.empId + '|' + x.cycleId; (byKey[k] = byKey[k] || { b: 0, p: 0 }).p += Number(x.points) || 0; });
-      achievements.forEach((x) => { const k = x.empId + '|' + x.cycleId; (byKey[k] = byKey[k] || { b: 0, p: 0 }).b += Number(x.points) || 0; });
-      const out = appraisals.map((a) => {
-        const k = a.empId + '|' + a.cycleId;
-        const raw = byKey[k] || { b: 0, p: 0 };
-        return decorate(a, { rawBonus: raw.b, rawPenalty: raw.p, bonus: Math.min(raw.b, BONUS_CAP), penalty: Math.min(raw.p, PENALTY_CAP) });
+      // Settle every appraisal against its own cycle's registers (matched per PERSON).
+      const sumFor = (list, a) => list.reduce((t, x) => t + (x.cycleId === a.cycleId && samePerson(x, a) ? (Number(x.points) || 0) : 0), 0);
+      const settledList = appraisals.map((a) => {
+        const b = sumFor(achievements, a), p = sumFor(incidents, a);
+        return decorate(a, { rawBonus: b, rawPenalty: p, bonus: Math.min(b, BONUS_CAP), penalty: Math.min(p, PENALTY_CAP) });
       });
-      res.json({ ok: true, appraisals: out, incidents, achievements, exits, categories, caps: { bonus: BONUS_CAP, penalty: PENALTY_CAP }, separationTypes: SEPARATION_TYPES });
+      /* Every screen looks a person's entries up by `emp_id || record id`. So an entry that
+         knows its staff record is handed out under that record's CURRENT key: the history of
+         a nurse filed before she had an employee number stays hers once the number is entered
+         or corrected. Read-time only - nothing stored is rewritten. */
+      let keyOf = null, nameOf = null, liveKeys = null;
+      try {
+        const roster = await rosterOf();
+        keyOf = new Map((roster || []).map((r) => [String(r.id), String(r.emp_id || '').trim() || String(r.id)]));
+        nameOf = new Map((roster || []).map((r) => [String(r.id), r.name]));
+        liveKeys = new Set(keyOf.values());
+      } catch (e) { keyOf = null; }
+      const recordOf = (x) => {
+        if (x.staffId) return keyOf.has(String(x.staffId)) ? String(x.staffId) : null;
+        // An entry from before record ids were kept, filed under the RECORD id because the person
+        // had no number then: once the number is entered nobody holds that key any more. Same
+        // record id and same name -> still theirs.
+        const k = String(x.empId || '');
+        return (k && !liveKeys.has(k) && keyOf.has(k) && nameOf.get(k) && sameName(x.staffName, nameOf.get(k)) && String(x.staffName || '').trim()) ? k : null;
+      };
+      const follow = (list) => (keyOf ? list.map((x) => { const id = recordOf(x);
+        return (id && keyOf.get(id) !== x.empId) ? Object.assign({}, x, { empId: keyOf.get(id) }) : x; }) : list);
+      res.json({ ok: true, appraisals: follow(settledList), incidents: follow(incidents), achievements: follow(achievements), exits: follow(exits), categories, caps: { bonus: BONUS_CAP, penalty: PENALTY_CAP }, separationTypes: SEPARATION_TYPES });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load performance records.' }); }
   });
 
   // Create or update one appraisal. Keyed by employee + cycle so a second "start
   // appraisal" for the same window edits the existing form instead of producing a
   // duplicate record in somebody's personal file.
-  app.put('/api/performance/appraisals', guard, async (req, res) => {
+  const saveAppraisal = (creating) => async (req, res) => {
     try {
       const b = obj(req.body);
-      const empId = s(b.empId, 40), cycleId = s(b.cycleId, 40);
-      if (!empId || !cycleId) return res.status(400).json({ ok: false, error: 'Employee and appraisal cycle are required.' });
-      const id = 'apr-' + empId + '-' + cycleId;
-      const c = await col(APPRAISALS);
-      const existing = c ? outDoc(await c.findOne({ _id: id })) : mem[APPRAISALS].find((x) => x.id === id);
+      const p = { empId: s(b.empId, 40), staffId: s(b.staffId, 40), staffName: s(b.staffName, 120) }, cycleId = s(b.cycleId, 40);
+      if ((!p.empId && !p.staffId) || !cycleId) return res.status(400).json({ ok: false, error: 'Employee and appraisal cycle are required.' });
+      const { id, existing } = await docFor(APPRAISALS, 'apr-', p, '-' + cycleId);
       if (existing && existing.status === 'actioned') {
         return res.status(409).json({ ok: false, error: 'This appraisal is locked: the authority has already recorded its action.' });
+      }
+      // POST is the Add permission: it starts an appraisal and keeps saving it while it is
+      // still a draft. Changing a completed one is an edit (PUT).
+      if (creating && existing && existing.status !== 'draft') {
+        return res.status(403).json({ ok: false, error: 'This appraisal has already been completed. Changing it needs the Edit permission for Performance.' });
       }
       const doc = normAppraisal(b, existing);
       doc.updatedAt = Date.now();
       doc.updatedBy = who(req);
       if (!existing) { doc.createdAt = Date.now(); doc.createdBy = who(req); }
       const saved = await upsert(APPRAISALS, id, doc);
-      const pts = await pointsFor(empId, cycleId);
+      const pts = await pointsFor(saved, cycleId);
       res.json({ ok: true, appraisal: decorate(saved, pts) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not save the appraisal.' }); }
-  });
+  };
+  app.put('/api/performance/appraisals', guard, saveAppraisal(false));
+  /* An account holding Add but not Edit could open a new appraisal and fill it in, and then
+     had no way to save it: the only route was a PUT, which the module guard reads as Edit. */
+  app.post('/api/performance/appraisals', guard, saveAppraisal(true));
 
   // Part H — the authority's action, and the lock that files the form.
   app.post('/api/performance/appraisals/:id/action', guard, adminOnly, async (req, res) => {
@@ -511,7 +570,7 @@ function mount(app, opts) {
       const t = tallyScores(existing.scores);
       if (!t.complete) return res.status(400).json({ ok: false, error: 'Every one of the 20 parameters must be rated before the authority can act.' });
       // The score the action is taken on, frozen onto the filed form.
-      const snap = decorate(existing, await pointsFor(existing.empId, existing.cycleId));
+      const snap = decorate(existing, await pointsFor(existing, existing.cycleId));
       const patch = {
         filed: { base: snap.base, rawBonus: snap.rawBonus, rawPenalty: snap.rawPenalty, bonus: snap.bonus,
           penalty: snap.penalty, score: snap.score, grade: snap.grade, rating: snap.rating, at: Date.now() },
@@ -524,7 +583,7 @@ function mount(app, opts) {
         actionedAt: Date.now(),
       };
       const saved = await upsert(APPRAISALS, id, patch);
-      const pts = await pointsFor(saved.empId, saved.cycleId);
+      const pts = await pointsFor(saved, saved.cycleId);
       res.json({ ok: true, appraisal: decorate(saved, pts) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not record the action.' }); }
   });
@@ -551,9 +610,10 @@ function mount(app, opts) {
   app.post('/api/performance/appraisals/:id/reopen', guard, adminOnly, async (req, res) => {
     try {
       const id = s(req.params.id, 80);
+      // upsert() creates what it does not find - reopening a mistyped id used to file an empty appraisal.
+      if (!(await findEntry(APPRAISALS, id))) return res.status(404).json({ ok: false, error: 'Appraisal not found.' });
       const saved = await upsert(APPRAISALS, id, { status: 'discussed', reopenedBy: who(req), reopenedAt: Date.now() });
-      if (!saved) return res.status(404).json({ ok: false, error: 'Appraisal not found.' });
-      const pts = await pointsFor(saved.empId, saved.cycleId);
+      const pts = await pointsFor(saved, saved.cycleId);
       res.json({ ok: true, appraisal: decorate(saved, pts) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not reopen the appraisal.' }); }
   });
@@ -564,16 +624,16 @@ function mount(app, opts) {
       const doc = normIncident(req.body);
       if (!doc.empId) return res.status(400).json({ ok: false, error: 'A staff member is required.' });
       if (!doc.what.trim()) return res.status(400).json({ ok: false, error: 'Describe what happened.' });
-      if (await isFiled(doc.empId, doc.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
+      if (await isFiled(doc, doc.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
       doc.createdAt = Date.now(); doc.createdBy = who(req);
       const saved = await upsert(INCIDENTS, genId('inc'), doc);
-      res.json({ ok: true, incident: saved, points: await pointsFor(doc.empId, doc.cycleId) });
+      res.json({ ok: true, incident: saved, points: await pointsFor(doc, doc.cycleId) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not record the incident.' }); }
   });
   app.delete('/api/performance/incidents/:id', guard, async (req, res) => {
     try {
       const entry = await findEntry(INCIDENTS, s(req.params.id, 80));
-      if (entry && await isFiled(entry.empId, entry.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
+      if (entry && await isFiled(entry, entry.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
       const ok = await removeOne(INCIDENTS, s(req.params.id, 80));
       res.json({ ok, error: ok ? undefined : 'Entry not found.' });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not remove the entry.' }); }
@@ -585,16 +645,16 @@ function mount(app, opts) {
       const doc = normAchievement(req.body);
       if (!doc.empId) return res.status(400).json({ ok: false, error: 'A staff member is required.' });
       if (!doc.what.trim()) return res.status(400).json({ ok: false, error: 'Describe the achievement.' });
-      if (await isFiled(doc.empId, doc.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
+      if (await isFiled(doc, doc.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
       doc.createdAt = Date.now(); doc.createdBy = who(req);
       const saved = await upsert(ACHIEVEMENTS, genId('ach'), doc);
-      res.json({ ok: true, achievement: saved, points: await pointsFor(doc.empId, doc.cycleId) });
+      res.json({ ok: true, achievement: saved, points: await pointsFor(doc, doc.cycleId) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not record the achievement.' }); }
   });
   app.delete('/api/performance/achievements/:id', guard, async (req, res) => {
     try {
       const entry = await findEntry(ACHIEVEMENTS, s(req.params.id, 80));
-      if (entry && await isFiled(entry.empId, entry.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
+      if (entry && await isFiled(entry, entry.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
       const ok = await removeOne(ACHIEVEMENTS, s(req.params.id, 80));
       res.json({ ok, error: ok ? undefined : 'Entry not found.' });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not remove the entry.' }); }
@@ -603,10 +663,10 @@ function mount(app, opts) {
   app.post('/api/performance/exits', guard, async (req, res) => {
     try {
       const doc = normExit(req.body);
-      if (!doc.empId) return res.status(400).json({ ok: false, error: 'A staff member is required.' });
+      if (!doc.empId && !doc.staffId) return res.status(400).json({ ok: false, error: 'A staff member is required.' });
       if (!doc.lastDay) return res.status(400).json({ ok: false, error: 'The last working day is required — the attrition month is taken from it.' });
       doc.createdAt = Date.now(); doc.createdBy = who(req);
-      const saved = await upsert(EXITS, 'exit-' + doc.empId, doc);   // one exit record per person
+      const saved = await upsert(EXITS, (await docFor(EXITS, 'exit-', doc, '')).id, doc);   // one exit record per person
       res.json({ ok: true, exit: saved });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not record the exit.' }); }
   });

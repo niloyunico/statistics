@@ -10153,10 +10153,28 @@ function AcPerson({
       gap: 14,
       alignItems: 'center'
     }
-  }, React.createElement(AcAvatar, {
-    u: u,
-    size: 60
-  }), React.createElement("div", {
+  }, (() => {
+    const me2 = window.__UNICO_USER__;
+    const full = !me2 || me2.role === 'Administrator';
+    const may = (!window.unicoCan || window.unicoCan('users', 'edit')) && (u.role !== 'Administrator' || full);
+    return may && window.PhotoPicker ? React.createElement(window.PhotoPicker, {
+      value: u.photo || null,
+      size: 60,
+      kind: "profile",
+      username: u.username,
+      zoomable: true,
+      zoomSub: '@' + u.username,
+      initials: K.inits(u.name || u.username),
+      name: u.name || u.username,
+      onChange: next => {
+        if (isMe && window.unicoSetAccountPhoto) window.unicoSetAccountPhoto(next);
+        reload();
+      }
+    }) : React.createElement(AcAvatar, {
+      u: u,
+      size: 60
+    });
+  })(), React.createElement("div", {
     style: {
       minWidth: 0
     }

@@ -336,6 +336,34 @@
     );
   }
   const inputStyle = { width: '100%', padding: '9px 11px', border: '1px solid var(--line)', borderRadius: 8, fontFamily: 'inherit', fontSize: 13.5, background: '#fff', color: 'var(--ink)', outline: 'none' };
+  // A field that sizes itself inside a wrapping row (`flex`), so a form can sit several
+  // fields on one line on a desktop and let them stack on a phone without a media query.
+  function DqField({ label, hint, flex, children }) {
+    return (
+      <div style={{ flex: flex || '1 1 100%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <label style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--ink-2)' }}>{label}</label>
+        {children}
+        {hint && <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.45 }}>{hint}</div>}
+      </div>
+    );
+  }
+  const DQ_SEX = ['M', 'F', 'Other'];
+  // True while the element is narrower than `bp`. Measured on the element, not the window:
+  // the same form is shown full-page, inside the portal and inside the "Missing data" pop-up.
+  function useDcNarrow(ref, bp) {
+    const [narrow, setNarrow] = useState(false);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el) return undefined;
+      const check = () => setNarrow(el.offsetWidth > 0 && el.offsetWidth < bp);
+      check();
+      if (typeof ResizeObserver === 'undefined') { window.addEventListener('resize', check); return () => window.removeEventListener('resize', check); }
+      const ro = new ResizeObserver(check);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }, []);
+    return narrow;
+  }
   function Banner({ ok, children, onClose }) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '11px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, marginBottom: 14, color: ok ? 'var(--pos)' : 'var(--rose)', background: ok ? 'var(--pos-bg)' : 'var(--neg-bg)', border: '1px solid ' + (ok ? '#bfe6cd' : '#f1c6cd') }}>
@@ -1388,6 +1416,12 @@
     const [done, setDone] = useState(null);
     const [flash, setFlash] = useState(null); // 3s success popup
     const [guideOpen, setGuideOpen] = useState(false); // HQI guide collapsed by default (click "Show" to expand)
+    // An incident indicator with nothing logged is "nothing entered", not a measured 0: the
+    // collector either logs the incidents or says outright that there were none.
+    const [zeroOk, setZeroOk] = useState(false);
+    const [openInc, setOpenInc] = useState(-1);   // which incident card is unfolded (-1 = none)
+    const rootRef = React.useRef(null);
+    const narrow = useDcNarrow(rootRef, 640);     // phone-width layout, from the form's OWN width
     const [resps, setResps] = useState([]);
     useEffect(() => { if (!lockResp) dcApi.get('/api/responsibles').then((r) => setResps(r.ok ? r.responsibles : [])).catch(() => {}); }, []);
     // Reset the indicator when the AREA changes — but skip the first run so a jumped-in
@@ -1506,7 +1540,9 @@
     const autoCount = isIncidentType;
 
     const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n
-      : autoCount ? incidents.filter(dcIncidentFilled).length : (Number(directNum) || 0);
+      // Every logged incident counts: a card left blank must be filled in or removed before
+      // the month can be saved, so the count on screen is the count that is sent.
+      : autoCount ? incidents.length : (Number(directNum) || 0);
     // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
     // OPTIONALLY add one to compute a rate. In "By group" / "By department" modes the total
     // denominator is the sum of the group/matrix cells; "Direct value" uses the single field.
@@ -1599,6 +1635,23 @@
         if (fr.capa && typeof fr.capa === 'object') setCapa({ finding: fr.capa.finding || '', corrective: fr.capa.corrective || '', preventive: fr.capa.preventive || '' });
       }
     }, [areaKey, indId, month]); // eslint-disable-line
+    // A month that already holds a reading (or a rejected row being fixed) opens as an edit of
+    // that figure, so its zero needs no second confirmation; a fresh month always does.
+    useEffect(() => {
+      const has = (o) => !!(o && o[month] != null && o[month] !== '');
+      const fr = prefill && prefill.from;
+      const fromRow = !!(fr && fr.area === areaKey && fr.indicatorId === indId && fr.month === month && !fr.notObserved);
+      setZeroOk(!!(curInd && (has(curInd.mNum) || has(curInd.months))) || fromRow);
+      setOpenInc(-1);
+    }, [areaKey, indId, month]); // eslint-disable-line
+
+    // Every field of an incident report is required except the remark; the department and the
+    // injured staff member join the list only on the indicators that ask for them.
+    const incReq = [['patientName', 'Patient name'], ['uhid', 'UHID'], ['age', 'Age'], ['gender', 'Sex'], ['incidentDate', 'Date of incident'], ['admissionDate', 'Admission date'], ['diagnosis', 'Diagnosis']]
+      .concat(hospitalWide ? [['department', 'Department where it happened']] : [])
+      .concat(victimField ? [['victimName', 'Victim name'], ['victimId', 'Victim emp ID / UHID']] : [])
+      .concat([['details', 'Incident details'], ['finding', 'Finding / root cause'], ['corrective', 'Corrective action'], ['preventive', 'Preventive action']]);
+    const incMissing = (x) => incReq.filter(([k]) => String(x[k] == null ? '' : x[k]).trim() === '');
 
     // The numerator (by group or direct) drives the count / rate.
     const result = computeAsRate ? (denNum > 0 ? Math.round((numerator / denNum) * mult * 100) / 100 : 0) : numerator;
@@ -1647,6 +1700,16 @@
         if (!explicitZero) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error'); return; }
       }
       if (hospitalWide && !notObserved && incidents.some((x) => dcIncidentFilled(x) && !x.department)) { toast('Choose the department where each incident happened.', 'error'); return; }
+      if (!notObserved && autoCount && numMode === 'direct') {
+        if (incidents.length === 0 && !zeroOk) { toast('Nothing entered — add each incident, or press “Confirm 0 cases” if there were none this month.', 'error'); return; }
+        const bad = incidents.findIndex((x) => incMissing(x).length > 0);
+        if (bad >= 0) {
+          const miss = incMissing(incidents[bad]);
+          setOpenInc(bad);
+          toast('Incident ' + (bad + 1) + ' — ' + (miss.length === incReq.length ? 'fill it in, or remove it' : ('still needs: ' + miss.slice(0, 3).map((m) => m[1]).join(', ') + (miss.length > 3 ? ' and ' + (miss.length - 3) + ' more' : ''))), 'error');
+          return;
+        }
+      }
       if (qCorrection) { setQCmp({ prior: qPriorLocal() }); return; }
       sendQ(false, '');
     };
@@ -1680,7 +1743,7 @@
         responsible: lockResp ? { name: me.name } : (matched ? { id: matched.id, name: matched.name } : (responsible ? { name: responsible } : null)),
       }).then((r) => {
         setBusy(false);
-        if (r.ok) { setQCmp(null); setQReason(''); setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: corr ? 'Edit request sent!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); if (!denLockedForCollector) setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast(corr ? 'Edit request sent for review' : 'Saved monthly value', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
+        if (r.ok) { setQCmp(null); setQReason(''); setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: corr ? 'Edit request sent!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setOpenInc(-1); setZeroOk(false); if (!denLockedForCollector) setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast(corr ? 'Edit request sent for review' : 'Saved monthly value', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
         else if (r.code === 'exists') setQCmp({ prior: r.prior || {} });
         else if (r.code === 'pending') { setQCmp(null); setQPending({ id: r.pendingId, message: r.error }); }
         else toast(r.error || 'Submission failed', 'error');
@@ -1688,397 +1751,487 @@
     };
 
     const showEntry = (indId && !isNew) || (isNew && newInd.name);
+
+    /* ---------- compact layout (2026-10) ----------
+       One card: a selector bar, a one-line indicator strip (definitions fold away), then the
+       entry on the left and the result on the right, with the actions in a footer. Every rule
+       above is unchanged — this block only decides where things sit and what is highlighted. */
+    const pad = narrow ? 12 : 18;
+    const big = narrow ? { minHeight: 44, fontSize: 16 } : null;
+    const inp = (extra) => Object.assign({}, inputStyle, big || {}, extra || {});
+    const btnBig = narrow ? { minHeight: 44, flex: '1 1 auto', justifyContent: 'center' } : null;
+    const typedQ = (v) => String(v == null ? '' : v).trim() !== '';
+    // A field that still needs a value is tinted blue; only the FIRST one on screen pulses, so
+    // the eye is led to one place at a time. `need()` is called in document order while the
+    // JSX below is built, which is what makes "first" mean first on the page.
+    let pulseFree = true, needCount = 0;
+    const need = (empty, visible) => {
+      if (!empty) return null;
+      needCount += 1;
+      const p = pulseFree && visible !== false;
+      if (p) pulseFree = false;
+      // The whole `border`, never just borderColor: React clears a dropped longhand to '', which
+      // wipes the colour the shorthand set and leaves the box with a black border.
+      return { border: '1px solid #0090ca', background: '#eef8fc', animation: p ? 'dqf-pulse 1.8s ease-out infinite' : undefined };
+    };
+    // Nothing has been entered for this month yet — shown as "—", never as a confident 0.
+    const nothingEntered = !notObserved && (
+      numMode === 'group' ? !GROUP_KEYS.some(([k]) => typedQ(groups[k]))
+        : numMode === 'dept' ? !deptRows.some((r) => GROUP_KEYS.some(([k]) => typedQ(r.g[k].n)))
+          : autoCount ? (incidents.length === 0 && !zeroOk)
+            : !typedQ(directNum));
+    const noValue = notObserved || nothingEntered || ratePending;
+    const NO_C = '#5b3fa8';   // "Not observed" — the colour the Quality console uses for it
+    const LBL = { fontSize: 11.5, fontWeight: 600, color: 'var(--ink-2)' };
+    const star = <span style={{ color: 'var(--rose)' }}> *</span>;
+    const hasDefs = !!(isRate || numDef || guide);
+
+    // The indicator's own recorded history, newest last. A month with no reading is left out
+    // rather than plotted as zero -- a gap in reporting is not a month of perfect performance.
+    const bench = dcBenchmark(curInd);
+    const val = noValue ? null : Number(result);
+    const meets = dcMeets(bench, val);
+    const order = MO();
+    const mi = Math.max(0, order.indexOf(month));
+    const hist = order.slice(Math.max(0, mi - 5), mi).map((m) => {
+      const g = (o) => (o && o[m] != null && o[m] !== '' && !isNaN(Number(o[m]))) ? Number(o[m]) : null;
+      const v = curInd ? (g(curInd.months) == null ? g(curInd.mNum) : g(curInd.months)) : null;
+      return { m: m, v: v, no: !!(curInd && curInd.mNotObserved && curInd.mNotObserved[m]) };
+    });
+    const known = hist.filter((h) => h.v != null);
+    const prev = known.length ? known[known.length - 1] : null;
+    // Two things worth stopping a nurse for: an identical repeat (usually a copy-paste of
+    // last month) and a swing large enough to be a typo.
+    const dup = prev && val != null && prev.v === val;
+    const swing = (prev && val != null && prev.v) ? Math.round(((val - prev.v) / Math.abs(prev.v)) * 100) : null;
+    const anomaly = swing != null && Math.abs(swing) > 40;
+    const scale = Math.max.apply(null, [1].concat(known.map((h) => h.v)).concat(bench ? [bench.value] : []).concat(val != null ? [val] : []));
+
+    const clearForm = () => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setOpenInc(-1); setZeroOk(false); if (!denLockedForCollector) setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); setDone(null); };
+    const addIncidentOpen = () => { setOpenInc(incidents.length); addIncident(); };
+    const delIncidentAt = (i) => { delIncident(i); setOpenInc((o) => (o === i ? -1 : o > i ? o - 1 : o)); };
+
+    // The denominator, for every "direct" entry. Incident indicators word it around the cases
+    // logged above; the others around the numerator beside it.
+    const denField = (flex) => (
+      <DqField flex={flex}
+        label={<span>{denLabel} <span style={{ color: (isIncidentType && isRate && !(denNum > 0) && !denLockedForCollector) ? 'var(--rose)' : 'var(--muted)', fontWeight: (isIncidentType && isRate) ? 700 : 400 }}>{denLockedForCollector ? '(set by administrator)' : denAdminOnly ? '(admin-set — applies to all months)' : isRate ? (isIncidentType ? '(denominator — required to compute the rate)' : '(denominator — required)') : '(denominator — optional, for a rate)'}</span></span>}
+        hint={denLockedForCollector
+          ? (denLabel + ' is maintained by the administrator — you enter only the ' + (isIncidentType ? 'number of cases' : 'numerator') + ' above.')
+          : (isRate ? denDef : ('Leave blank to record a plain count' + (isIncidentType ? ' of incidents' : '') + '. Enter the base for ' + monthLabel(month) + ' (e.g. total ' + (isIncidentType ? 'patient-days' : 'procedures / discharges / patient-days') + ') to compute a rate per ' + mult + '.'))}>
+        <input type="number" step="any" readOnly={denLockedForCollector}
+          style={inp(denLockedForCollector ? { background: 'var(--panel-2)', color: 'var(--ink-2)', cursor: 'not-allowed' } : need(isRate && !typedQ(den)))}
+          value={den} onChange={(e) => { if (!denLockedForCollector) setDen(e.target.value); }}
+          placeholder={denLockedForCollector ? 'Set by administrator' : (isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)')} />
+      </DqField>
+    );
+
     return (
-      <div className="grid" style={{ gap: 14, maxWidth: onSubmitted ? "none" : 760 }}>
+      <div ref={rootRef} className="grid dqf" style={{ gap: 14, maxWidth: onSubmitted ? 'none' : 1080 }}>
+        <style>{'@keyframes dqf-pulse{0%{box-shadow:0 0 0 0 rgba(0,144,202,.55)}70%{box-shadow:0 0 0 7px rgba(0,144,202,0)}100%{box-shadow:0 0 0 0 rgba(0,144,202,0)}}'
+          + '.dqf input:focus,.dqf select:focus,.dqf textarea:focus{border-color:#0072a3!important;background:#fff!important;box-shadow:0 0 0 3px rgba(0,144,202,.28)!important;animation:none!important}'
+          + '@media (prefers-reduced-motion:reduce){.dqf *{animation:none!important}}'}</style>
         <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Enter the month's value — by staff group (Nurse / Doctor / PCA / Other) or directly — the count / rate is calculated automatically." />
         {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
         {qCmp && <DcCompareModal title={'Data already recorded for ' + (area ? area.name : '') + ' · ' + ((curInd && curInd.name) || '') + ' · ' + monthLabel(month)} rows={dcQualityCompareRows(qCmp.prior, qNext(), numLabel, denLabel)} reason={qReason} setReason={setQReason} busy={busy} onEdit={() => setQCmp(null)} onSend={() => sendQ(true, qReason.trim())} />}
         {qPending && <DcPendingNotice id={qPending.id} message={qPending.message} onClose={() => setQPending(null)} />}
         {done && <Banner ok onClose={() => setDone(null)}>Saved ✓ — {done.area} · {monthLabel(done.month)} sent for admin review.</Banner>}
-        <Card>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-            <Field label="Quality area / unit">
-              <select style={inputStyle} value={areaKey} onChange={(e) => setAreaKey(e.target.value)}>
+        <Card style={{ padding: 0 }}>
+          {/* 1 — what is being reported: area, month, indicator on one row */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, padding: '14px ' + pad + 'px', borderBottom: '1px solid var(--line-2)' }}>
+            <DqField flex={narrow ? '1 1 140px' : '1 1 200px'} label="Quality area / unit">
+              <select style={inp()} value={areaKey} onChange={(e) => setAreaKey(e.target.value)}>
                 {areas.map((a) => <option key={a.key} value={a.key}>{/overall\s*hospital/i.test(a.key) ? 'All Departments (Overall Hospital)' : a.name}</option>)}
               </select>
-            </Field>
-            <Field label="Reporting month">
-              <select style={inputStyle} value={month} onChange={(e) => setMonth(e.target.value)}>
+            </DqField>
+            <DqField flex={narrow ? '1 1 140px' : '1 1 170px'} label="Reporting month">
+              <select style={inp()} value={month} onChange={(e) => setMonth(e.target.value)}>
                 {monthOpts.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
               </select>
-            </Field>
+            </DqField>
+            <DqField flex={narrow ? '1 1 100%' : '2 1 280px'} label="Indicator" hint={inds.length === 0 ? ('No indicators are assigned to ' + (area ? area.name : 'this area') + ' yet. Ask an administrator to assign them (Quality → Assign by Department), then reload this page.') : undefined}>
+              <select style={inp(need(!indId && inds.length > 0))} value={indId} onChange={(e) => setIndId(e.target.value)}>
+                <option value="">{inds.length ? 'Select…' : '— no indicators for this area —'}</option>
+                {inds.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+              </select>
+            </DqField>
           </div>
-          <Field label="Indicator" hint={inds.length === 0 ? ('No indicators are assigned to ' + (area ? area.name : 'this area') + ' yet. Ask an administrator to assign them (Quality → Assign by Department), then reload this page.') : undefined}>
-            <select style={inputStyle} value={indId} onChange={(e) => setIndId(e.target.value)}>
-              <option value="">{inds.length ? 'Select…' : '— no indicators for this area —'}</option>
-              {inds.map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-            </select>
-          </Field>
           {isNew && (
-            <div style={{ border: '1px dashed var(--line)', borderRadius: 9, padding: '12px 14px', marginBottom: 13 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 14 }}>
-                <Field label="New indicator name"><input style={inputStyle} value={newInd.name} onChange={(e) => setNewInd({ ...newInd, name: e.target.value })} placeholder="e.g. CAUTI Rate" /></Field>
-                <Field label="Calculation">
-                  <select style={inputStyle} value={newInd.formula} onChange={(e) => setNewInd({ ...newInd, formula: e.target.value })}>
+            <div style={{ border: '1px dashed var(--line)', borderRadius: 9, padding: '12px 14px', margin: '12px ' + pad + 'px 0' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                <DqField flex="2 1 220px" label="New indicator name"><input style={inp()} value={newInd.name} onChange={(e) => setNewInd({ ...newInd, name: e.target.value })} placeholder="e.g. CAUTI Rate" /></DqField>
+                <DqField flex="1 1 160px" label="Calculation">
+                  <select style={inp()} value={newInd.formula} onChange={(e) => setNewInd({ ...newInd, formula: e.target.value })}>
                     <option value="count">Count</option>
                     <option value="pct">Percentage (%)</option>
                     <option value="rate1000">Rate per 1000</option>
                   </select>
-                </Field>
+                </DqField>
               </div>
               {newInd.formula !== 'count' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 14 }}>
-                  <Field label="Numerator label"><input style={inputStyle} value={newInd.numLabel} onChange={(e) => setNewInd({ ...newInd, numLabel: e.target.value })} placeholder="e.g. CAUTI cases" /></Field>
-                  <Field label="Denominator label"><input style={inputStyle} value={newInd.denLabel} onChange={(e) => setNewInd({ ...newInd, denLabel: e.target.value })} placeholder="e.g. catheter days" /></Field>
-                  <Field label="Unit (optional)"><input style={inputStyle} value={newInd.unit} onChange={(e) => setNewInd({ ...newInd, unit: e.target.value })} placeholder="e.g. per 1000 cath-days" /></Field>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
+                  <DqField flex="1 1 160px" label="Numerator label"><input style={inp()} value={newInd.numLabel} onChange={(e) => setNewInd({ ...newInd, numLabel: e.target.value })} placeholder="e.g. CAUTI cases" /></DqField>
+                  <DqField flex="1 1 160px" label="Denominator label"><input style={inp()} value={newInd.denLabel} onChange={(e) => setNewInd({ ...newInd, denLabel: e.target.value })} placeholder="e.g. catheter days" /></DqField>
+                  <DqField flex="1 1 160px" label="Unit (optional)"><input style={inp()} value={newInd.unit} onChange={(e) => setNewInd({ ...newInd, unit: e.target.value })} placeholder="e.g. per 1000 cath-days" /></DqField>
                 </div>
               )}
             </div>
           )}
+
+          {/* 2 — the indicator in one line: formula, benchmark, live result; definitions fold away */}
           {showEntry && (
-            <>
-              <div style={{ background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9, padding: '10px 13px', marginBottom: 13, fontSize: 12, color: 'var(--blue-700)' }}>
-                {(def.name || newInd.name) && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 7, paddingBottom: 7, borderBottom: '1px solid var(--blue-100,#cfe6f7)' }}>
-                    <span style={{ fontSize: 9.5, fontWeight: 800, color: '#1d4ed8', textTransform: 'uppercase', letterSpacing: .5, background: '#dbeafe', borderRadius: 20, padding: '2px 8px' }}>Quality indicator</span>
-                    <span style={{ fontSize: 14, fontWeight: 800, color: '#0f2a5a' }}>{indNameQ}</span>
-                    {benchmarkQ && <span style={{ fontSize: 11, fontWeight: 700, color: '#0b6aa2', background: '#fff', border: '1px solid #cfe6f7', borderRadius: 20, padding: '2px 9px' }}>Benchmark {benchmarkQ}</span>}
-                    {!ratePending && <span style={{ marginLeft: 'auto', fontSize: 12, fontWeight: 800, color: 'var(--blue-700)' }}>= {result}{rateUnit ? ' ' + rateUnit : ''}</span>}
-                  </div>
-                )}
-                <div style={{ fontFamily: 'var(--mono)' }}><b style={{ fontStyle: 'italic', marginRight: 6 }}>ƒ</b>{formulaTextQ}</div>
-                {(isRate || numDef) && (
-                  <div style={{ marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--blue-100,#cfe6f7)', color: 'var(--ink-2)', display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {numDef && <div><b>{numLabel}:</b> {numDef}</div>}
-                    {isRate && <div><b>How to count {denLabel} (denominator):</b> {denDef}</div>}
-                  </div>
-                )}
-              </div>
-              {/* NOT OBSERVED — record that no observation / data collection happened this
-                  month, instead of forcing a number (or worse, a fake 0). Marked RED so it
-                  reads as an exception, and the WHY is a required field of its own. */}
-              <div style={{ border: '1px solid ' + (notObserved ? '#e8a3b0' : 'var(--line)'), background: notObserved ? 'rgba(210,58,82,.07)' : 'transparent', borderRadius: 9, padding: '10px 13px', marginBottom: 13 }}>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={notObserved} onChange={(e) => setNotObserved(e.target.checked)} style={{ marginTop: 2, flexShrink: 0, accentColor: '#d23a52' }} />
-                  <span style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                    <b style={{ color: '#d23a52' }}>⛔ Not observed this month</b>
-                    <span style={{ display: 'block', fontSize: 11.5, color: 'var(--muted)', marginTop: 1 }}>
-                      Tick when no observation / data collection was done for {monthLabel(month)} — the month is recorded as <b style={{ color: '#d23a52' }}>Not observed</b> instead of a value, so it can never be mistaken for a real 0.
-                    </span>
-                  </span>
-                </label>
-                {notObserved && (
-                  <div style={{ marginTop: 9, paddingTop: 9, borderTop: '1px solid #e8a3b0' }}>
-                    <div style={{ fontSize: 11.5, fontWeight: 700, color: '#d23a52', marginBottom: 5 }}>Why was it not observed? <span style={{ fontWeight: 400 }}>(required)</span></div>
-                    <input
-                      style={{ ...inputStyle, borderColor: noReason.trim() ? undefined : '#d23a52', background: '#fff' }}
-                      value={noReason} onChange={(e) => setNoReason(e.target.value)}
-                      placeholder="e.g. staff shortage / unit closed / no eligible cases / auditor on leave"
-                    />
-                    <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5, lineHeight: 1.5 }}>
-                      Value entry is disabled — this reason is saved as the month’s note (“Not observed — …”).
-                    </div>
-                  </div>
-                )}
-              </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 12px', padding: '9px ' + pad + 'px', borderBottom: '1px solid var(--line-2)', background: 'var(--blue-50)' }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--blue-700)', minWidth: 0 }}><b style={{ fontStyle: 'italic', marginRight: 6 }}>ƒ</b>{formulaTextQ}</span>
+              {benchmarkQ && <span style={{ fontSize: 11, fontWeight: 700, color: '#0b6aa2', background: '#fff', border: '1px solid #cfe6f7', borderRadius: 20, padding: '2px 9px' }}>Benchmark {benchmarkQ}</span>}
+              {!noValue && <span style={{ fontSize: 12, fontWeight: 800, color: 'var(--blue-700)' }}>= {result}{rateUnit ? ' ' + rateUnit : ''}</span>}
+              {hasDefs && (
+                <button type="button" aria-expanded={guideOpen} onClick={() => setGuideOpen((o) => !o)}
+                  style={{ marginLeft: narrow ? 0 : 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, minHeight: narrow ? 44 : 30, padding: '0 8px', border: 0, borderRadius: 7, background: 'transparent', color: 'var(--blue-700)', fontFamily: 'inherit', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                  {guideOpen ? 'Hide definition' : 'Definition & how to count'}
+                  {guide && <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, background: '#fff', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 5, padding: '1px 6px' }}>{guide.code}</span>}
+                </button>
+              )}
+            </div>
+          )}
+          {showEntry && hasDefs && guideOpen && (
+            <div style={{ padding: '12px ' + pad + 'px', borderBottom: '1px solid var(--line-2)', display: 'grid', gap: 10, fontSize: 12 }}>
+              {(isRate || numDef) && (
+                <div style={{ color: 'var(--ink-2)', display: 'flex', flexWrap: 'wrap', gap: '6px 24px', lineHeight: 1.5 }}>
+                  {numDef && <div style={{ flex: '1 1 280px' }}><b>{numLabel}:</b> {numDef}</div>}
+                  {isRate && <div style={{ flex: '1 1 280px' }}><b>How to count {denLabel} (denominator):</b> {denDef}</div>}
+                </div>
+              )}
               {guide && (
-                <div style={{ border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 9, marginBottom: 13, overflow: 'hidden' }}>
-                  <div onClick={() => setGuideOpen((o) => !o)} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 13px', background: 'var(--blue-50)', cursor: 'pointer', userSelect: 'none' }}>
-                    <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue-700)' }}>📐 How to measure this — HQI guide</span>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: 10.5, color: 'var(--blue-700)', background: '#fff', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 5, padding: '1px 6px' }}>{guide.code}</span>
-                    <span style={{ flex: 1 }} />
-                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>{guideOpen ? 'Hide' : 'Show'}</span>
+                <React.Fragment>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--blue-700)' }}>How to measure this — HQI guide</div>
+                  <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--blue-700)' }}><b style={{ fontStyle: 'italic', marginRight: 6 }}>ƒ</b>{guide.formula}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                    <div style={{ flex: '1 1 260px', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '9px 11px' }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--blue)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 3 }}>Numerator — what to count</div><div style={{ color: 'var(--ink-2)', lineHeight: 1.5 }}>{guide.numDef}</div></div>
+                    {guide.denDef && <div style={{ flex: '1 1 260px', background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '9px 11px' }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--violet,#6a52d4)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 3 }}>Denominator — what to count</div><div style={{ color: 'var(--ink-2)', lineHeight: 1.5 }}>{guide.denDef}</div></div>}
                   </div>
-                  {guideOpen && (
-                    <div style={{ padding: '12px 14px', display: 'grid', gap: 10, fontSize: 12 }}>
-                      <div style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--blue-700)' }}><b style={{ fontStyle: 'italic', marginRight: 6 }}>ƒ</b>{guide.formula}</div>
-                      <div style={{ display: 'grid', gridTemplateColumns: guide.denDef ? '1fr 1fr' : '1fr', gap: 10 }}>
-                        <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '9px 11px' }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--blue)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 3 }}>Numerator — what to count</div><div style={{ color: 'var(--ink-2)', lineHeight: 1.5 }}>{guide.numDef}</div></div>
-                        {guide.denDef && <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '9px 11px' }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--violet,#6a52d4)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 3 }}>Denominator — what to count</div><div style={{ color: 'var(--ink-2)', lineHeight: 1.5 }}>{guide.denDef}</div></div>}
+                  {guide.example && <div style={{ background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 8, padding: '9px 11px' }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--blue-700)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 3 }}>Worked example</div><div style={{ fontFamily: 'var(--mono)', color: 'var(--blue-700)', lineHeight: 1.55 }}>{guide.example}</div></div>}
+                  {guide.interpretation && <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '9px 11px' }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--pos,#1f9d57)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 3 }}>Interpretation &amp; action</div><div style={{ color: 'var(--ink-2)', lineHeight: 1.5 }}>{guide.interpretation}</div></div>}
+                  {(guide.multiplier || guide.source || guide.reference) && (
+                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 10.5, color: 'var(--muted)' }}>
+                      {guide.multiplier && <span><b style={{ color: 'var(--ink-2)' }}>Multiplier:</b> {guide.multiplier}</span>}
+                      {guide.source && <span><b style={{ color: 'var(--ink-2)' }}>Source:</b> {guide.source}</span>}
+                      {guide.reference && <span><b style={{ color: 'var(--ink-2)' }}>Reference:</b> {guide.reference}</span>}
+                    </div>
+                  )}
+                </React.Fragment>
+              )}
+            </div>
+          )}
+
+          {/* 3 — entry on the left, result on the right (stacks on a narrow screen) */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 16, padding: '16px ' + pad + 'px' }}>
+            <div style={{ flex: '999 1 440px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 14 }}>
+              {!showEntry && (
+                <div style={{ fontSize: 12.5, color: 'var(--muted)', border: '1px dashed var(--line)', borderRadius: 10, padding: '14px 16px' }}>
+                  Choose the indicator above — its entry fields, benchmark and recent months appear here.
+                </div>
+              )}
+              {showEntry && !notObserved && (<>
+                <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 10, ...(need(autoCount && numMode === 'direct' && nothingEntered) || {}) }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px 12px', flexWrap: 'wrap' }}>
+                    {autoCount && numMode === 'direct' && (
+                      <span className="num" style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: nothingEntered ? 'var(--rose)' : 'var(--ink)' }}>{nothingEntered ? '—' : incidents.length}</span>
+                    )}
+                    <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{numLabel}{isRate ? ' (numerator ÷ denominator)' : ''}</span>
+                        <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{numerator}{isRate ? ' / ' + denNum : ''}</span>
                       </div>
-                      {guide.example && <div style={{ background: 'var(--blue-50)', border: '1px solid var(--blue-100,#cfe6f7)', borderRadius: 8, padding: '9px 11px' }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--blue-700)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 3 }}>🔢 Worked example</div><div style={{ fontFamily: 'var(--mono)', color: 'var(--blue-700)', lineHeight: 1.55 }}>{guide.example}</div></div>}
-                      {guide.interpretation && <div style={{ background: 'var(--panel-2)', border: '1px solid var(--line)', borderRadius: 8, padding: '9px 11px' }}><div style={{ fontSize: 9.5, fontWeight: 700, color: 'var(--pos,#1f9d57)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 3 }}>💡 Interpretation &amp; action</div><div style={{ color: 'var(--ink-2)', lineHeight: 1.5 }}>{guide.interpretation}</div></div>}
-                      {(guide.multiplier || guide.source || guide.reference) && (
-                        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', fontSize: 10.5, color: 'var(--muted)' }}>
-                          {guide.multiplier && <span><b style={{ color: 'var(--ink-2)' }}>Multiplier:</b> {guide.multiplier}</span>}
-                          {guide.source && <span><b style={{ color: 'var(--ink-2)' }}>Source:</b> {guide.source}</span>}
-                          {guide.reference && <span><b style={{ color: 'var(--ink-2)' }}>Reference:</b> {guide.reference}</span>}
+                      {autoCount && numMode === 'direct' && (
+                        <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
+                          {nothingEntered ? 'Nothing entered yet — log each incident, or confirm there were none.'
+                            : incidents.length ? 'Auto — one per incident logged below, with patient & CAPA detail.'
+                              : 'Zero confirmed — no incidents this month.'}
                         </div>
                       )}
                     </div>
-                  )}
-                </div>
-              )}
-              {!notObserved && (<>
-              {numMode === 'direct' && !isIncidentType && (
-                <Field
-                  label={<span>{denLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>{denLockedForCollector ? '(set by administrator)' : denAdminOnly ? '(admin-set — applies to all months)' : isRate ? '(denominator — required)' : '(denominator — optional, for a rate)'}</span></span>}
-                  hint={denLockedForCollector ? (denLabel + ' is maintained by the administrator — you enter only the numerator above.') : (isRate ? denDef : ('Leave blank to record a plain count. Enter the base for ' + monthLabel(month) + ' (e.g. total procedures / discharges / patient-days) to compute a rate per ' + mult + '.'))}>
-                  <input type="number" step="any" readOnly={denLockedForCollector} style={{ ...inputStyle, ...(denLockedForCollector ? { background: 'var(--panel-2)', color: 'var(--ink-2)', cursor: 'not-allowed' } : {}) }} value={den} onChange={(e) => { if (!denLockedForCollector) setDen(e.target.value); }} placeholder={denLockedForCollector ? 'Set by administrator' : (isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)')} />
-                </Field>
-              )}
-              <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginBottom: 13 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>{numLabel}{isRate ? ' (numerator ÷ denominator)' : ''}</div>
-                  <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{numerator}{isRate ? ' / ' + denNum : ''}</span>
-                  <span style={{ flex: 1 }} />
-                  {/* Staff-group / by-department breakdown is Hand-Hygiene-only. Every other
-                      indicator just enters the value directly, so the mode switch is hidden. */}
-                  {isHandHygiene && (
-                    <div className="seg">
-                      <button className={numMode === 'group' ? 'on' : ''} onClick={() => setNumMode('group')}>By group</button>
-                      <button className={numMode === 'dept' ? 'on' : ''} onClick={() => { setNumMode('dept'); if (!isHandHygiene && deptRows.length === 0) setDeptRows([blankDeptRow()]); }}>By department</button>
-                      <button className={numMode === 'direct' ? 'on' : ''} onClick={() => setNumMode('direct')}>Direct value</button>
-                    </div>
-                  )}
-                </div>
-                {numMode === 'group' ? (
-                  <>
-                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>
-                      {isRate
-                        ? ('Enter each staff group’s ' + numLabel.toLowerCase() + ' (numerator) and ' + denLabel.toLowerCase() + ' (denominator) — they add up to the totals.')
-                        : ('Enter the ' + (numLabel || 'value').toLowerCase() + ' for each staff group — they add up to the total value.')}
-                    </div>
-                    {GROUP_KEYS.map(([k, lbl]) => (
-                      <div key={k} style={{ display: 'grid', gridTemplateColumns: isRate ? '78px 1fr 1fr' : '78px 1fr', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>{lbl}</div>
-                        <input type="number" min="0" step="any" style={inputStyle} value={groups[k]} onChange={(e) => setGroups((g) => ({ ...g, [k]: e.target.value }))} placeholder={isRate ? 'numerator' : '0'} />
-                        {isRate && <input type="number" min="0" step="any" style={inputStyle} value={groupsDen[k]} onChange={(e) => setGroupsDen((g) => ({ ...g, [k]: e.target.value }))} placeholder="denominator" />}
-                      </div>
-                    ))}
-                    {isRate && (
-                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-                        <span>Total {numLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupSum}</b></span>
-                        <span>Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupDenSum}</b></span>
+                    {/* Staff-group / by-department breakdown is Hand-Hygiene-only. Every other
+                        indicator just enters the value directly, so the mode switch is hidden. */}
+                    {isHandHygiene && (
+                      <div className="seg">
+                        <button className={numMode === 'group' ? 'on' : ''} onClick={() => setNumMode('group')}>By group</button>
+                        <button className={numMode === 'dept' ? 'on' : ''} onClick={() => { setNumMode('dept'); if (!isHandHygiene && deptRows.length === 0) setDeptRows([blankDeptRow()]); }}>By department</button>
+                        <button className={numMode === 'direct' ? 'on' : ''} onClick={() => setNumMode('direct')}>Direct value</button>
                       </div>
                     )}
-                  </>
-                ) : numMode === 'dept' ? (
-                  <>
-                    <div style={{ fontSize: 11.5, color: 'var(--muted)', marginBottom: 8 }}>{isHandHygiene ? (hhDepartments.length === 1 ? <>Enter <b style={{ color: 'var(--ink-2)' }}>{hhDepartments[0]}</b>’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group. Pick <b style={{ color: 'var(--ink-2)' }}>Overall Hospital</b> above to enter every department at once.</> : <>All <b style={{ color: 'var(--ink-2)' }}>{hhDepartments.length}</b> departments are listed below — just fill in each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group. They roll up to the hospital total automatically.</>) : <>Enter each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group — every department &amp; group rolls up to the hospital total.</>}</div>
-                    {deptRows.map((r, i) => {
-                      const rn = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].n) || 0), 0);
-                      const rd = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].d) || 0), 0);
-                      const rv = isRate ? (rd > 0 ? Math.round((rn / rd) * mult * 100) / 100 + (formula === 'pct' ? '%' : '') : '—') : rn;
-                      return (
-                        <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', marginBottom: 8, background: 'var(--panel-2)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                            {isHandHygiene
-                              ? <div style={{ flex: 1, fontWeight: 700, fontSize: 13, color: 'var(--ink)', padding: '5px 2px' }}>{r.dept}</div>
-                              : <input style={{ ...inputStyle, flex: 1, fontWeight: 600 }} value={r.dept} onChange={(e) => setDeptName(i, e.target.value)} placeholder="Department (e.g. OPD)" />}
-                            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)', whiteSpace: 'nowrap' }}>{rv}</span>
-                            {!isHandHygiene && deptRows.length > 1 && <button className="icon-btn" title="Remove department" style={{ width: 26, height: 26, border: 0, background: 'transparent', color: 'var(--rose)' }} onClick={() => delDeptRow(i)}><Ic d={I.x} s={13} /></button>}
-                          </div>
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-                            {GROUP_KEYS.map(([k, lbl]) => (
-                              <div key={k}>
-                                <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', marginBottom: 3 }}>{lbl}</div>
-                                <div style={{ display: 'flex', gap: 4 }}>
-                                  <input type="number" min="0" step="any" style={{ ...inputStyle, padding: '6px 7px' }} value={r.g[k].n} onChange={(e) => setDeptCell(i, k, 'n', e.target.value)} placeholder={isRate ? 'num' : '0'} />
-                                  {isRate && <input type="number" min="0" step="any" style={{ ...inputStyle, padding: '6px 7px' }} value={r.g[k].d} onChange={(e) => setDeptCell(i, k, 'd', e.target.value)} placeholder="den" />}
+                    {autoCount && numMode === 'direct' && (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, flex: narrow ? '1 1 100%' : '0 1 auto' }}>
+                        <button type="button" className="btn" style={{ color: 'var(--blue-700)', borderColor: 'var(--blue-700)', ...(btnBig || {}) }} onClick={addIncidentOpen}><Ic d={I.plus} s={14} />Add incident</button>
+                        {nothingEntered && <button type="button" className="btn" style={btnBig || undefined} onClick={() => setZeroOk(true)}>Confirm 0 cases</button>}
+                        {!nothingEntered && incidents.length === 0 && !qExists && <button type="button" className="btn" style={{ border: 0, background: 'transparent', color: 'var(--muted)', ...(narrow ? { minHeight: 44 } : {}) }} onClick={() => setZeroOk(false)}>Undo</button>}
+                      </div>
+                    )}
+                  </div>
+
+                  {numMode === 'group' ? (
+                    <>
+                      <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
+                        {isRate
+                          ? ('Enter each staff group’s ' + numLabel.toLowerCase() + ' (numerator) and ' + denLabel.toLowerCase() + ' (denominator) — they add up to the totals.')
+                          : ('Enter the ' + (numLabel || 'value').toLowerCase() + ' for each staff group — they add up to the total value.')}
+                      </div>
+                      {GROUP_KEYS.map(([k, lbl]) => (
+                        <div key={k} style={{ display: 'grid', gridTemplateColumns: isRate ? '78px 1fr 1fr' : '78px 1fr', gap: 8, alignItems: 'center' }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)' }}>{lbl}</div>
+                          <input type="number" min="0" step="any" style={inp()} value={groups[k]} onChange={(e) => setGroups((g) => ({ ...g, [k]: e.target.value }))} placeholder={isRate ? 'numerator' : '0'} />
+                          {isRate && <input type="number" min="0" step="any" style={inp()} value={groupsDen[k]} onChange={(e) => setGroupsDen((g) => ({ ...g, [k]: e.target.value }))} placeholder="denominator" />}
+                        </div>
+                      ))}
+                      {isRate && (
+                        <div style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                          <span>Total {numLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupSum}</b></span>
+                          <span>Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupDenSum}</b></span>
+                        </div>
+                      )}
+                    </>
+                  ) : numMode === 'dept' ? (
+                    <>
+                      <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>{isHandHygiene ? (hhDepartments.length === 1 ? <>Enter <b style={{ color: 'var(--ink-2)' }}>{hhDepartments[0]}</b>’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group. Pick <b style={{ color: 'var(--ink-2)' }}>Overall Hospital</b> above to enter every department at once.</> : <>All <b style={{ color: 'var(--ink-2)' }}>{hhDepartments.length}</b> departments are listed below — just fill in each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group. They roll up to the hospital total automatically.</>) : <>Enter each department’s {numLabel.toLowerCase()}{isRate ? ' (numerator) & ' + denLabel.toLowerCase() + ' (denominator)' : ''} by staff group — every department &amp; group rolls up to the hospital total.</>}</div>
+                      {deptRows.map((r, i) => {
+                        const rn = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].n) || 0), 0);
+                        const rd = GROUP_KEYS.reduce((s, [k]) => s + (Number(r.g[k].d) || 0), 0);
+                        const rv = isRate ? (rd > 0 ? Math.round((rn / rd) * mult * 100) / 100 + (formula === 'pct' ? '%' : '') : '—') : rn;
+                        return (
+                          <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '9px 11px', background: 'var(--panel-2)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
+                              {isHandHygiene
+                                ? <div style={{ flex: 1, fontWeight: 700, fontSize: 13, color: 'var(--ink)', padding: '3px 2px' }}>{r.dept}</div>
+                                : <input style={inp({ flex: 1, fontWeight: 600 })} value={r.dept} onChange={(e) => setDeptName(i, e.target.value)} placeholder="Department (e.g. OPD)" />}
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)', whiteSpace: 'nowrap' }}>{rv}</span>
+                              {!isHandHygiene && deptRows.length > 1 && <button className="icon-btn" title="Remove department" style={{ width: 26, height: 26, border: 0, background: 'transparent', color: 'var(--rose)' }} onClick={() => delDeptRow(i)}><Ic d={I.x} s={13} /></button>}
+                            </div>
+                            <div style={{ display: 'grid', gridTemplateColumns: narrow ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))', gap: 8 }}>
+                              {GROUP_KEYS.map(([k, lbl]) => (
+                                <div key={k}>
+                                  <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', marginBottom: 3 }}>{lbl}</div>
+                                  <div style={{ display: 'flex', gap: 4 }}>
+                                    <input type="number" min="0" step="any" style={inp({ padding: '6px 7px', minWidth: 0 })} value={r.g[k].n} onChange={(e) => setDeptCell(i, k, 'n', e.target.value)} placeholder={isRate ? 'num' : '0'} />
+                                    {isRate && <input type="number" min="0" step="any" style={inp({ padding: '6px 7px', minWidth: 0 })} value={r.g[k].d} onChange={(e) => setDeptCell(i, k, 'd', e.target.value)} placeholder="den" />}
+                                  </div>
                                 </div>
-                              </div>
-                            ))}
+                              ))}
+                            </div>
                           </div>
+                        );
+                      })}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                        {!isHandHygiene && <button className="btn sm" onClick={addDeptRow}><Ic d={I.plus} s={13} />Add department</button>}
+                        <span style={{ flex: 1 }} />
+                        <span style={{ fontSize: 11, color: 'var(--muted)' }}>Total {numLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{deptTot.n}</b>{isRate ? <> · Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{deptTot.d}</b></> : null}</span>
+                      </div>
+                    </>
+                  ) : autoCount ? (
+                    /* Incident reports — one card each. Only one is open at a time so several
+                       incidents stay a short list; every field but the remark is required. */
+                    incidents.map((x, i) => {
+                      const miss = incMissing(x);
+                      const open = openInc === i;
+                      if (!open) needCount += miss.length;
+                      const f = (k) => need(!typedQ(x[k]), true);
+                      const summary = [x.patientName, x.uhid, x.incidentDate].filter(typedQ).join(' · ');
+                      return (
+                        <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 9, background: 'var(--panel-2)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px 4px 12px' }}>
+                            <button type="button" aria-expanded={open} onClick={() => setOpenInc(open ? -1 : i)}
+                              style={{ flex: '1 1 0', minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, minHeight: narrow ? 44 : 34, padding: 0, border: 0, background: 'transparent', color: 'var(--ink)', fontFamily: 'inherit', textAlign: 'left', cursor: 'pointer' }}>
+                              <span style={{ display: 'inline-flex', transform: open ? 'rotate(90deg)' : 'none', color: 'var(--muted)' }}><Ic d="M9 6l6 6-6 6" s={13} /></span>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--rose)', textTransform: 'uppercase', letterSpacing: .3, whiteSpace: 'nowrap' }}>Incident {i + 1}</span>
+                              {!open && <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12, color: 'var(--muted)' }}>{summary || 'No details yet'}</span>}
+                            </button>
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, whiteSpace: 'nowrap', background: miss.length ? 'var(--blue-50)' : 'var(--pos-bg)', color: miss.length ? 'var(--blue-700)' : 'var(--pos)' }}>{miss.length ? miss.length + ' of ' + incReq.length + ' left' : 'Complete'}</span>
+                            <button className="btn sm" style={{ color: 'var(--rose)', borderColor: '#f1c6cd', ...(narrow ? { minHeight: 44 } : {}) }} onClick={() => delIncidentAt(i)}><Ic d={I.x} s={12} />Remove</button>
+                          </div>
+                          {open && (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9, padding: '4px 12px 12px' }}>
+                              <DqField flex={narrow ? '1 1 100%' : '2 1 200px'} label={<span>Patient name{star}</span>}><input style={inp(f('patientName'))} value={x.patientName} onChange={(e) => setIncidentField(i, 'patientName', e.target.value)} placeholder="Name" /></DqField>
+                              <DqField flex={narrow ? '1 1 100%' : '1 1 130px'} label={<span>UHID{star}</span>}><input style={inp(f('uhid'))} value={x.uhid} onChange={(e) => setIncidentField(i, 'uhid', e.target.value)} placeholder="Hospital ID" /></DqField>
+                              <DqField flex={narrow ? '1 1 90px' : '1 1 80px'} label={<span>Age{star}</span>}><input style={inp(f('age'))} inputMode="numeric" value={x.age} onChange={(e) => setIncidentField(i, 'age', e.target.value)} placeholder="e.g. 54" /></DqField>
+                              <DqField flex={narrow ? '1 1 110px' : '1 1 100px'} label={<span>Sex{star}</span>}>
+                                <select style={inp(f('gender'))} value={x.gender || ''} onChange={(e) => setIncidentField(i, 'gender', e.target.value)}>
+                                  <option value="">M / F</option>
+                                  {DQ_SEX.concat(x.gender && DQ_SEX.indexOf(x.gender) < 0 ? [x.gender] : []).map((g) => <option key={g} value={g}>{g}</option>)}
+                                </select>
+                              </DqField>
+                              <DqField flex={narrow ? '1 1 100%' : '1 1 150px'} label={<span>Date of incident{star}</span>}><input type="date" style={inp(f('incidentDate'))} value={x.incidentDate} onChange={(e) => setIncidentField(i, 'incidentDate', e.target.value)} /></DqField>
+                              <DqField flex={narrow ? '1 1 100%' : '1 1 150px'} label={<span>Admission date{star}</span>}><input type="date" style={inp(f('admissionDate'))} value={x.admissionDate} onChange={(e) => setIncidentField(i, 'admissionDate', e.target.value)} /></DqField>
+                              <DqField flex={narrow ? '1 1 100%' : '2 1 220px'} label={<span>Diagnosis{star}</span>}><input style={inp(f('diagnosis'))} value={x.diagnosis} onChange={(e) => setIncidentField(i, 'diagnosis', e.target.value)} placeholder="Diagnosis" /></DqField>
+                              {hospitalWide && (
+                                <DqField flex="1 1 100%" label={<span>Department where it happened{star}</span>}>
+                                  <select style={inp(f('department'))} value={x.department || ''} onChange={(e) => setIncidentField(i, 'department', e.target.value)}>
+                                    <option value="">— choose the department —</option>
+                                    {incidentDepts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                                  </select>
+                                </DqField>
+                              )}
+                              {victimField && (
+                                <div style={{ flex: '1 1 100%', padding: '9px 11px', borderRadius: 8, background: 'var(--warn-bg,#fff4e0)', border: '1px solid #f0d9a8' }}>
+                                  <div style={{ fontSize: 10.5, fontWeight: 700, color: '#9a6b00', textTransform: 'uppercase', letterSpacing: .3, marginBottom: 6 }}>Injured staff member (victim)</div>
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9 }}>
+                                    <DqField flex="1 1 180px" label={<span>Victim name (staff){star}</span>}><input style={inp(f('victimName'))} value={x.victimName} onChange={(e) => setIncidentField(i, 'victimName', e.target.value)} placeholder="Employee name" /></DqField>
+                                    <DqField flex="1 1 180px" label={<span>Victim emp ID / UHID{star}</span>}><input style={inp(f('victimId'))} value={x.victimId} onChange={(e) => setIncidentField(i, 'victimId', e.target.value)} placeholder="Emp ID / UHID" /></DqField>
+                                  </div>
+                                </div>
+                              )}
+                              <DqField flex="1 1 100%" label={<span>Incident details{star}</span>}><textarea style={inp({ minHeight: 52, ...(f('details') || {}) })} value={x.details} onChange={(e) => setIncidentField(i, 'details', e.target.value)} placeholder="What happened" /></DqField>
+                              <DqField flex={narrow ? '1 1 100%' : '1 1 180px'} label={<span>Finding / root cause{star}</span>}><textarea style={inp({ minHeight: 52, ...(f('finding') || {}) })} value={x.finding} onChange={(e) => setIncidentField(i, 'finding', e.target.value)} placeholder="Root cause" /></DqField>
+                              <DqField flex={narrow ? '1 1 100%' : '1 1 180px'} label={<span>Corrective action{star}</span>}><textarea style={inp({ minHeight: 52, ...(f('corrective') || {}) })} value={x.corrective} onChange={(e) => setIncidentField(i, 'corrective', e.target.value)} placeholder="Action taken to correct" /></DqField>
+                              <DqField flex={narrow ? '1 1 100%' : '1 1 180px'} label={<span>Preventive action{star}</span>}><textarea style={inp({ minHeight: 52, ...(f('preventive') || {}) })} value={x.preventive} onChange={(e) => setIncidentField(i, 'preventive', e.target.value)} placeholder="Prevent recurrence" /></DqField>
+                              <DqField flex="1 1 100%" label={<span>Remark <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(optional)</span></span>}><input style={inp()} value={x.remark} onChange={(e) => setIncidentField(i, 'remark', e.target.value)} placeholder="Optional note" /></DqField>
+                            </div>
+                          )}
                         </div>
                       );
-                    })}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 2 }}>
-                      {!isHandHygiene && <button className="btn sm" onClick={addDeptRow}><Ic d={I.plus} s={13} />Add department</button>}
-                      <span style={{ flex: 1 }} />
-                      <span style={{ fontSize: 11, color: 'var(--muted)' }}>Total {numLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{deptTot.n}</b>{isRate ? <> · Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{deptTot.d}</b></> : null}</span>
+                    })
+                  ) : (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                      <DqField flex="1 1 200px" label={<span>{numLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(enter the number directly)</span></span>} hint={numDef || undefined}>
+                        <input type="number" min="0" step="any" style={inp(need(!typedQ(directNum)))} value={directNum} onChange={(e) => setDirectNum(e.target.value)} placeholder={isRate ? ('Total ' + (numLabel || 'numerator').toLowerCase() + ' this month') : 'Total this month'} />
+                      </DqField>
+                      {denField('1 1 200px')}
                     </div>
-                  </>
-                ) : autoCount ? (
-                  <Field label={<span>{numLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(auto — one per incident logged below)</span></span>}>
-                    <div style={{ ...inputStyle, background: 'var(--panel-2)', fontWeight: 700, color: 'var(--ink)' }}>{incidents.length}</div>
-                  </Field>
-                ) : (
-                  <Field label={<span>{numLabel} <span style={{ color: 'var(--muted)', fontWeight: 400 }}>(enter the number directly{isIncidentType ? ', or log each incident below' : ''})</span></span>} hint={numDef || undefined}>
-                    <input type="number" min="0" step="any" style={inputStyle} value={directNum} onChange={(e) => setDirectNum(e.target.value)} placeholder={isRate ? ('Total ' + (numLabel || 'numerator').toLowerCase() + ' this month') : 'Total this month'} />
-                  </Field>
+                  )}
+                </div>
+                {/* For incident indicators the denominator lives HERE — next to the incidents
+                    and the computed value — so a rate isn't stuck at 0 for a hidden field. */}
+                {autoCount && numMode === 'direct' && denField('1 1 100%')}
+                {/hand\s*hygiene/i.test(indNameQ) && (
+                  <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '11px 13px' }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 8 }}>Observation &amp; action <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 11 }}>(optional)</span></div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 9 }}>
+                      <DqField flex="1 1 100%" label="Observation / finding"><textarea style={inp({ minHeight: 42 })} value={capa.finding} onChange={(e) => setCapa((c) => ({ ...c, finding: e.target.value }))} placeholder="What was observed this month" /></DqField>
+                      <DqField flex="1 1 200px" label="Corrective action"><textarea style={inp({ minHeight: 42 })} value={capa.corrective} onChange={(e) => setCapa((c) => ({ ...c, corrective: e.target.value }))} placeholder="Action taken to correct" /></DqField>
+                      <DqField flex="1 1 200px" label="Preventive action"><textarea style={inp({ minHeight: 42 })} value={capa.preventive} onChange={(e) => setCapa((c) => ({ ...c, preventive: e.target.value }))} placeholder="Action to prevent recurrence" /></DqField>
+                    </div>
+                  </div>
+                )}
+              </>)}
+
+              {/* NOT OBSERVED — record that no observation / data collection happened this month,
+                  instead of forcing a number (or worse, a fake 0). The WHY is a required field. */}
+              {showEntry && (
+                <div style={{ border: '1px solid ' + (notObserved ? '#d6cbf3' : 'var(--line)'), background: notObserved ? '#f4f0fd' : 'transparent', borderRadius: 10, padding: '9px 13px' }}>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={notObserved} onChange={(e) => setNotObserved(e.target.checked)} style={{ marginTop: 2, flexShrink: 0, width: 16, height: 16, accentColor: NO_C }} />
+                    <span style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                      <b style={{ color: notObserved ? NO_C : 'var(--ink)' }}>Not observed this month</b>
+                      <span style={{ display: 'block', fontSize: 11.5, color: 'var(--muted)' }}>
+                        Tick when no observation / data collection was done for {monthLabel(month)} — the month is recorded as <b style={{ color: NO_C }}>Not observed</b> instead of a value, so it can never be mistaken for a real 0.
+                      </span>
+                    </span>
+                  </label>
+                  {notObserved && (
+                    <div style={{ marginTop: 9, paddingTop: 9, borderTop: '1px solid #d6cbf3' }}>
+                      <div style={{ fontSize: 11.5, fontWeight: 700, color: NO_C, marginBottom: 5 }}>Why was it not observed? <span style={{ fontWeight: 400 }}>(required)</span></div>
+                      <input style={inp(need(!noReason.trim()))} value={noReason} onChange={(e) => setNoReason(e.target.value)} placeholder="e.g. staff shortage / unit closed / no eligible cases / auditor on leave" />
+                      <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 5, lineHeight: 1.5 }}>
+                        Value entry is disabled — this reason is saved as the month’s note (“Not observed — …”).
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>
+                {lockResp
+                  ? <DqField flex="1 1 220px" label="Responsible person"><input style={inp({ background: 'var(--panel-2)', color: 'var(--ink-2)' })} value={me.name} readOnly /></DqField>
+                  : <DqField flex="1 1 220px" label="Responsible person" hint={assigned.length ? 'Assigned: ' + assigned.map((a) => a.name).join(', ') : 'Pick from staff or type a new name.'}>
+                      <ResponsiblePicker value={responsible} onChange={setResponsible} suggestions={assigned} />
+                    </DqField>}
+                <DqField flex="1 1 260px" label="Remark (optional)"><input style={inp()} value={remark} onChange={(e) => setRemark(e.target.value)} placeholder="Any note for this month" /></DqField>
+              </div>
+              {qCorrection && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 13px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', border: '1px solid #f0d9a8' }}>
+                  <Ic d={I.doc} s={16} />
+                  <span style={{ flex: 1 }}>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)}. Submitting sends a <b>correction</b> to an administrator for review — the recorded value won’t change until it is approved. Submitting shows your changes next to it, asks for a reason and sends an edit request.</span>
+                </div>
+              )}
+            </div>
+
+            {showEntry && (
+              <div style={{ flex: '1 1 280px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', background: 'var(--panel-2)', border: '1px solid ' + (ratePending ? '#f1c6cd' : 'var(--line-2)'), borderRadius: 10 }}>
+                <div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4 }}>Computed value</div>
+                  <div style={{ display: 'flex', alignItems: 'baseline', flexWrap: 'wrap', gap: '2px 9px', marginTop: 3 }}>
+                    <span className="num" style={{ fontSize: 28, fontWeight: 800, lineHeight: 1.1, color: notObserved ? NO_C : nothingEntered ? 'var(--rose)' : ratePending ? 'var(--muted)' : 'var(--blue-700)' }}>{notObserved ? 'N/O' : noValue ? '—' : result}</span>
+                    {unitQ ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)' }}>{unitQ}</span> : null}
+                  </div>
+                  {!notObserved && (ratePending
+                    ? <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--rose)', marginTop: 4 }}>{numLabel} = {numerator} · enter {denLabel} (denominator) to compute the rate</div>
+                    : <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4 }}>{computeAsRate ? (numLabel + ' = ' + (nothingEntered ? '—' : numerator) + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '')) : (numLabel + ' = ' + (nothingEntered ? '—' : numerator))}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</div>)}
+                </div>
+                {nothingEntered && (
+                  <div style={{ border: '1px solid #f1c6cd', background: 'var(--neg-bg)', borderRadius: 9, padding: '9px 12px', fontSize: 12, color: '#a92c42', lineHeight: 1.5 }}>
+                    <b>{monthLabel(month)} has no value yet.</b> {autoCount ? 'Log each incident, confirm 0 cases, or mark the month Not observed.' : 'Enter the figure, or mark the month Not observed.'}
+                  </div>
+                )}
+                {notObserved && (
+                  <div style={{ border: '1px solid #d6cbf3', background: '#f4f0fd', borderRadius: 9, padding: '9px 12px', fontSize: 12, color: NO_C, lineHeight: 1.5 }}>
+                    <b>Not observed.</b> {monthLabel(month)} is recorded as Not observed, so it can never be mistaken for a real 0.
+                  </div>
+                )}
+                {curInd && bench && meets !== null && (
+                  <div style={{ border: '1px solid ' + (meets ? '#bfe5cf' : '#f1c6cd'), background: meets ? 'rgba(31,157,87,.08)' : 'rgba(210,58,82,.08)', borderRadius: 9, padding: '9px 12px' }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: meets ? 'var(--pos)' : 'var(--rose)' }}>{meets ? 'Within benchmark' : 'Outside benchmark'} ({bench.text})</div>
+                    {!meets && <div style={{ fontSize: 11, color: 'var(--rose)', fontWeight: 600, marginTop: 2 }}>A remark is expected when a month is off benchmark.</div>}
+                    <div style={{ position: 'relative', height: 7, borderRadius: 5, background: 'rgba(125,145,180,.18)', marginTop: 8 }}>
+                      <div style={{ width: Math.max(2, Math.min(100, (val / scale) * 100)) + '%', height: '100%', borderRadius: 5, background: meets ? 'var(--pos)' : 'var(--rose)' }} />
+                      <span title={'Benchmark ' + bench.text} style={{ position: 'absolute', top: -3, left: Math.max(0, Math.min(100, (bench.value / scale) * 100)) + '%', width: 2, height: 13, background: '#16202e', opacity: .55 }} />
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, color: 'var(--muted)', fontFamily: 'var(--mono)', marginTop: 3 }}>
+                      <span>0</span><span>{Math.round(scale * 100) / 100}</span>
+                    </div>
+                  </div>
+                )}
+                {curInd && (dup || anomaly) && (
+                  <div style={{ border: '1px solid #f0d9a8', background: 'var(--warn-bg,#fff4e0)', borderRadius: 9, padding: '9px 12px', fontSize: 12, color: '#9a6b00', lineHeight: 1.5 }}>
+                    {dup
+                      ? <span><b>Possible duplicate.</b> This is identical to {monthLabel(prev.m)} ({prev.v}). Check you are not re-entering last month’s figure.</span>
+                      : <span><b>Anomaly — {swing > 0 ? '+' : ''}{swing}% swing.</b> {monthLabel(prev.m)} was {prev.v}. If that is right, say why in the remark.</span>}
+                  </div>
+                )}
+                {curInd && known.length > 0 && (
+                  <div>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 6 }}>Last {hist.length} month{hist.length === 1 ? '' : 's'} and this one</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(' + (hist.length + 1) + ', minmax(0, 1fr))', gap: 5 }}>
+                      {hist.map((h) => {
+                        const off = h.v != null && dcMeets(bench, h.v) === false;
+                        return (
+                          <div key={h.m} title={h.v != null ? (monthLabel(h.m) + ': ' + h.v) : h.no ? (monthLabel(h.m) + ': not observed') : (monthLabel(h.m) + ': nothing recorded')}
+                            style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, padding: '5px 2px', borderRadius: 7, background: h.v != null ? '#fff' : h.no ? '#f4f0fd' : 'var(--neg-bg)', border: '1px ' + (h.v != null || h.no ? 'solid ' : 'dashed ') + (h.v != null ? 'var(--line)' : h.no ? '#d6cbf3' : '#e8a3b0') }}>
+                            <span className="num" style={{ fontSize: 12, fontWeight: 700, color: off ? 'var(--rose)' : h.v != null ? 'var(--ink)' : h.no ? NO_C : '#a92c42' }}>{h.v != null ? h.v : h.no ? 'N/O' : '—'}</span>
+                            <span style={{ fontSize: 9.5, color: 'var(--ink-2)', fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}>{String(h.m).split('-')[0]}</span>
+                          </div>
+                        );
+                      })}
+                      <div title={monthLabel(month) + ' — this entry'}
+                        style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, padding: '5px 2px', borderRadius: 7, background: notObserved ? '#f4f0fd' : noValue ? 'var(--neg-bg)' : 'var(--blue-50)', border: '1px ' + (noValue && !notObserved ? 'dashed #e8a3b0' : notObserved ? 'solid #d6cbf3' : 'solid var(--blue-700)') }}>
+                        <span className="num" style={{ fontSize: 12, fontWeight: 700, color: notObserved ? NO_C : noValue ? '#a92c42' : 'var(--blue-700)' }}>{notObserved ? 'N/O' : noValue ? '—' : result}</span>
+                        <span style={{ fontSize: 9.5, color: 'var(--ink-2)', fontFamily: 'var(--mono)', whiteSpace: 'nowrap' }}>{String(month).split('-')[0]}</span>
+                      </div>
+                    </div>
+                    {known.length < hist.length && (
+                      <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 6 }}>{hist.length - known.length} of the last {hist.length} months has no reading on record.</div>
+                    )}
+                  </div>
                 )}
               </div>
-              {isIncidentType && (
-                <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginBottom: 13 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)' }}>Incident reports</div>
-                    <span style={{ fontSize: 11, color: 'var(--muted)' }}>log each occurrence with patient &amp; CAPA detail — the count fills in automatically</span>
-                    <span style={{ flex: 1 }} />
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{incidents.length} logged</span>
-                  </div>
-                  {incidents.map((x, i) => (
-                    <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '11px 12px', marginBottom: 8, background: 'var(--panel-2)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
-                        <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--rose)', textTransform: 'uppercase', letterSpacing: .3 }}>Incident {i + 1}</div>
-                        <span style={{ flex: 1 }} />
-                        <button className="btn sm" style={{ color: 'var(--rose)', borderColor: '#f1c6cd' }} onClick={() => delIncident(i)}><Ic d={I.x} s={12} />Remove</button>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                        <Field label="Patient name"><input style={inputStyle} value={x.patientName} onChange={(e) => setIncidentField(i, 'patientName', e.target.value)} placeholder="Name" /></Field>
-                        <Field label="UHID"><input style={inputStyle} value={x.uhid} onChange={(e) => setIncidentField(i, 'uhid', e.target.value)} placeholder="Hospital ID" /></Field>
-                        <Field label="Age"><input style={inputStyle} value={x.age} onChange={(e) => setIncidentField(i, 'age', e.target.value)} placeholder="e.g. 54" /></Field>
-                        <Field label="Sex"><input style={inputStyle} value={x.gender} onChange={(e) => setIncidentField(i, 'gender', e.target.value)} placeholder="M / F" /></Field>
-                        <Field label="Date of incident"><input type="date" style={inputStyle} value={x.incidentDate} onChange={(e) => setIncidentField(i, 'incidentDate', e.target.value)} /></Field>
-                        <Field label="Admission date"><input type="date" style={inputStyle} value={x.admissionDate} onChange={(e) => setIncidentField(i, 'admissionDate', e.target.value)} /></Field>
-                        <Field label="Diagnosis"><input style={inputStyle} value={x.diagnosis} onChange={(e) => setIncidentField(i, 'diagnosis', e.target.value)} placeholder="Diagnosis" /></Field>
-                      </div>
-                      {hospitalWide && (
-                        <Field label={<span>Department where it happened <span style={{ color: 'var(--rose)' }}>*</span></span>}>
-                          <select style={inputStyle} value={x.department || ''} onChange={(e) => setIncidentField(i, 'department', e.target.value)}>
-                            <option value="">— choose the department —</option>
-                            {incidentDepts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-                          </select>
-                        </Field>
-                      )}
-                      {victimField && (
-                        <div style={{ marginBottom: 4, padding: '9px 11px', borderRadius: 8, background: 'var(--warn-bg,#fff4e0)', border: '1px solid #f0d9a8' }}>
-                          <div style={{ fontSize: 10.5, fontWeight: 700, color: '#9a6b00', textTransform: 'uppercase', letterSpacing: .3, marginBottom: 6 }}>Injured staff member (victim)</div>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                            <Field label="Victim name (staff)"><input style={inputStyle} value={x.victimName} onChange={(e) => setIncidentField(i, 'victimName', e.target.value)} placeholder="Employee name" /></Field>
-                            <Field label="Victim emp ID / UHID"><input style={inputStyle} value={x.victimId} onChange={(e) => setIncidentField(i, 'victimId', e.target.value)} placeholder="Emp ID / UHID" /></Field>
-                          </div>
-                        </div>
-                      )}
-                      <Field label="Incident details"><textarea style={{ ...inputStyle, minHeight: 40 }} value={x.details} onChange={(e) => setIncidentField(i, 'details', e.target.value)} placeholder="What happened" /></Field>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                        <Field label="Finding / root cause"><textarea style={{ ...inputStyle, minHeight: 40 }} value={x.finding} onChange={(e) => setIncidentField(i, 'finding', e.target.value)} placeholder="Root cause" /></Field>
-                        <Field label="Corrective action"><textarea style={{ ...inputStyle, minHeight: 40 }} value={x.corrective} onChange={(e) => setIncidentField(i, 'corrective', e.target.value)} placeholder="Action taken to correct" /></Field>
-                      </div>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                        <Field label="Preventive action"><textarea style={{ ...inputStyle, minHeight: 40 }} value={x.preventive} onChange={(e) => setIncidentField(i, 'preventive', e.target.value)} placeholder="Prevent recurrence" /></Field>
-                        <Field label="Remark"><input style={inputStyle} value={x.remark} onChange={(e) => setIncidentField(i, 'remark', e.target.value)} placeholder="Optional note" /></Field>
-                      </div>
-                    </div>
-                  ))}
-                  <button className="btn sm" onClick={addIncident}><Ic d={I.plus} s={13} />Add incident</button>
-                </div>
-              )}
-              {/* For incident indicators the denominator lives HERE — next to the incidents
-                  and the computed value — so a rate isn't stuck at 0 for a hidden field. */}
-              {isIncidentType && numMode === 'direct' && (
-                <Field
-                  label={<span>{denLabel} <span style={{ color: (isRate && !(denNum > 0) && !denLockedForCollector) ? 'var(--rose)' : 'var(--muted)', fontWeight: isRate ? 700 : 400 }}>{denLockedForCollector ? '(set by administrator)' : denAdminOnly ? '(admin-set — applies to all months)' : isRate ? '(denominator — required to compute the rate)' : '(denominator — optional, for a rate)'}</span></span>}
-                  hint={denLockedForCollector ? (denLabel + ' is maintained by the administrator — you enter only the number of cases above.') : (isRate ? denDef : ('Leave blank to record a plain count of incidents. Enter the base for ' + monthLabel(month) + ' (e.g. total patient-days) to compute a rate per ' + mult + '.'))}>
-                  <input type="number" step="any" readOnly={denLockedForCollector} style={{ ...inputStyle, ...(denLockedForCollector ? { background: 'var(--panel-2)', color: 'var(--ink-2)', cursor: 'not-allowed' } : (isRate && !(denNum > 0) ? { borderColor: 'var(--rose)' } : {})) }} value={den} onChange={(e) => { if (!denLockedForCollector) setDen(e.target.value); }} placeholder={denLockedForCollector ? 'Set by administrator' : (isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)')} />
-                </Field>
-              )}
-              <div style={{ border: '1px solid ' + (ratePending ? '#f1c6cd' : 'var(--line)'), borderRadius: 9, padding: '13px 16px', marginBottom: 4, background: 'var(--panel-2)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: .4 }}>Computed value</div>
-                <span className="num" style={{ fontSize: 22, fontWeight: 800, color: ratePending ? 'var(--muted)' : 'var(--blue-700)' }}>{ratePending ? '—' : result}</span>
-                {unitQ ? <span style={{ fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--ink-2)' }}>{unitQ}</span> : null}
-                <span style={{ flex: 1 }} />
-                {ratePending
-                  ? <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--rose)' }}>{numLabel} = {numerator} · enter {denLabel} (denominator) to compute the rate</span>
-                  : <span style={{ fontSize: 11, color: 'var(--muted)' }}>{computeAsRate ? (numLabel + ' = ' + numerator + (denEntered ? ' · ' + denLabel + ' = ' + denNum : '')) : (numLabel + ' = ' + numerator)}{benchmarkQ ? '   ·   Benchmark ' + benchmarkQ : ''}</span>}
-              </div>
-              {(() => {
-                const bench = dcBenchmark(curInd);
-                const val = ratePending ? null : Number(result);
-                const meets = dcMeets(bench, val);
-                // The indicator's own recorded history, newest last. A month with no
-                // reading is left out rather than plotted as zero -- a gap in reporting
-                // is not a month of perfect performance.
-                const order = MO();
-                const mi = Math.max(0, order.indexOf(month));
-                const win = order.slice(Math.max(0, mi - 5), mi);
-                const hist = win.map((m) => {
-                  const g = (o) => (o && o[m] != null && o[m] !== '' && !isNaN(Number(o[m]))) ? Number(o[m]) : null;
-                  const v = curInd ? (g(curInd.months) == null ? g(curInd.mNum) : g(curInd.months)) : null;
-                  return { m: m, v: v };
-                });
-                const known = hist.filter((h) => h.v != null);
-                const prev = known.length ? known[known.length - 1] : null;
-                // Two things worth stopping a nurse for: an identical repeat (usually a
-                // copy-paste of last month) and a swing large enough to be a typo.
-                const dup = prev && val != null && prev.v === val;
-                const swing = (prev && val != null && prev.v) ? Math.round(((val - prev.v) / Math.abs(prev.v)) * 100) : null;
-                const anomaly = swing != null && Math.abs(swing) > 40;
-                const scale = Math.max.apply(null, [1].concat(known.map((h) => h.v)).concat(bench ? [bench.value] : []).concat(val != null ? [val] : []));
-                if (!curInd) return null;
-                return (
-                  <React.Fragment>
-                    {bench && meets !== null && (
-                      <div style={{ marginTop: 11, border: '1px solid ' + (meets ? '#bfe5cf' : '#f1c6cd'), background: meets ? 'rgba(31,157,87,.08)' : 'rgba(210,58,82,.08)', borderRadius: 9, padding: '11px 14px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 11.5, fontWeight: 700, color: meets ? 'var(--pos)' : 'var(--rose)' }}>
-                            {meets ? 'Within benchmark' : 'Outside benchmark'} ({bench.text})
-                          </span>
-                          <span style={{ flex: 1 }} />
-                          {!meets && <span style={{ fontSize: 11, color: 'var(--rose)', fontWeight: 600 }}>A remark is expected when a month is off benchmark.</span>}
-                        </div>
-                        <div style={{ position: 'relative', height: 8, borderRadius: 5, background: 'rgba(125,145,180,.18)', marginTop: 10 }}>
-                          <div style={{ width: Math.max(2, Math.min(100, (val / scale) * 100)) + '%', height: '100%', borderRadius: 5, background: meets ? 'var(--pos)' : 'var(--rose)' }} />
-                          <span title={'Benchmark ' + bench.text} style={{ position: 'absolute', top: -3, left: Math.max(0, Math.min(100, (bench.value / scale) * 100)) + '%', width: 2, height: 14, background: '#16202e', opacity: .55 }} />
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5, color: 'var(--muted)', fontFamily: 'var(--mono)', marginTop: 3 }}>
-                          <span>0</span><span>{Math.round(scale * 100) / 100}</span>
-                        </div>
-                      </div>
-                    )}
-                    {(dup || anomaly) && (
-                      <div style={{ marginTop: 11, border: '1px solid #f0d9a8', background: 'var(--warn-bg,#fff4e0)', borderRadius: 9, padding: '11px 14px', fontSize: 12, color: '#9a6b00', lineHeight: 1.55 }}>
-                        {dup
-                          ? <span><b>Possible duplicate.</b> This is identical to {monthLabel(prev.m)} ({prev.v}). Check you are not re-entering last month\u2019s figure.</span>
-                          : <span><b>Anomaly \u2014 {swing > 0 ? '+' : ''}{swing}% swing.</b> {monthLabel(prev.m)} was {prev.v}. If that is right, say why in the remark.</span>}
-                      </div>
-                    )}
-                    {known.length > 0 && (
-                      <div style={{ marginTop: 11, border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px' }}>
-                        <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 10 }}>Last {known.length} month{known.length === 1 ? '' : 's'}</div>
-                        <div style={{ position: 'relative', display: 'flex', alignItems: 'flex-end', gap: 8, height: 74 }}>
-                          {bench && <div title={'Benchmark ' + bench.text} style={{ position: 'absolute', left: 0, right: 0, bottom: Math.max(0, Math.min(70, (bench.value / scale) * 70)), borderTop: '1px dashed rgba(22,32,46,.4)' }} />}
-                          {hist.map((h) => (
-                            <div key={h.m} style={{ flex: 1, minWidth: 22, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-                              <span className="num" style={{ fontSize: 10, color: 'var(--muted)' }}>{h.v == null ? '' : h.v}</span>
-                              {h.v == null
-                                ? <div title="Nothing recorded" style={{ width: '100%', height: 4, borderRadius: 3, background: 'rgba(125,145,180,.2)' }} />
-                                : <div style={{ width: '100%', height: Math.max(4, (h.v / scale) * 56), borderRadius: '4px 4px 0 0', background: dcMeets(bench, h.v) === false ? 'var(--rose)' : 'var(--blue)' }} />}
-                            </div>
-                          ))}
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, marginTop: 5 }}>
-                          {hist.map((h) => <span key={h.m} style={{ flex: 1, minWidth: 22, textAlign: 'center', fontSize: 9.5, color: 'var(--faint)', fontFamily: 'var(--mono)' }}>{h.m}</span>)}
-                        </div>
-                        {known.length < hist.length && (
-                          <div style={{ fontSize: 10.5, color: 'var(--muted)', marginTop: 7 }}>{hist.length - known.length} of the last {hist.length} months has no reading on record.</div>
-                        )}
-                      </div>
-                    )}
-                  </React.Fragment>
-                );
-              })()}
-              {/hand\s*hygiene/i.test(indNameQ) && (
-              <div style={{ border: '1px solid var(--line)', borderRadius: 9, padding: '12px 14px', marginTop: 13 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', marginBottom: 8 }}>Observation &amp; action <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: 11 }}>(optional)</span></div>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  <Field label="Observation / finding"><textarea style={{ ...inputStyle, minHeight: 42 }} value={capa.finding} onChange={(e) => setCapa((c) => ({ ...c, finding: e.target.value }))} placeholder="What was observed this month" /></Field>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    <Field label="Corrective action"><textarea style={{ ...inputStyle, minHeight: 42 }} value={capa.corrective} onChange={(e) => setCapa((c) => ({ ...c, corrective: e.target.value }))} placeholder="Action taken to correct" /></Field>
-                    <Field label="Preventive action"><textarea style={{ ...inputStyle, minHeight: 42 }} value={capa.preventive} onChange={(e) => setCapa((c) => ({ ...c, preventive: e.target.value }))} placeholder="Action to prevent recurrence" /></Field>
-                  </div>
-                </div>
-              </div>
-              )}
-              </>)}
-            </>
-          )}
-          {lockResp
-            ? <Field label="Responsible person"><input style={{ ...inputStyle, background: 'var(--panel-2)', color: 'var(--ink-2)' }} value={me.name} readOnly /></Field>
-            : <Field label="Responsible person" hint={assigned.length ? 'Assigned: ' + assigned.map((a) => a.name).join(', ') : 'Pick from staff or type a new name.'}>
-                <ResponsiblePicker value={responsible} onChange={setResponsible} suggestions={assigned} />
-              </Field>}
-          <Field label="Remark (optional)"><input style={inputStyle} value={remark} onChange={(e) => setRemark(e.target.value)} placeholder="Any note for this month" /></Field>
-          {qCorrection && (
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '11px 14px', borderRadius: 9, fontSize: 12.5, fontWeight: 600, marginBottom: 14, color: '#9a6b00', background: 'var(--warn-bg,#fff4e0)', border: '1px solid #f0d9a8' }}>
-              <Ic d={I.doc} s={16} />
-              <span style={{ flex: 1 }}>{(curInd && curInd.name) || 'This indicator'} already has data for {monthLabel(month)}. Submitting sends a <b>correction</b> to an administrator for review — the recorded value won’t change until it is approved.</span>
-            </div>
-          )}
-          {qCorrection && <div style={{ fontSize: 11.5, color: '#9a6b00', fontWeight: 600, margin: '0 0 10px' }}>{monthLabel(month)} is already on record — submitting shows your changes next to it, asks for a reason and sends an edit request.</div>}
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button className="btn pri" disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
-            <button className="btn" disabled={busy} onClick={() => { setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); if (!denLockedForCollector) setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); setDone(null); }}>Clear</button>
+            )}
+          </div>
+
+          {/* 4 — actions */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px', padding: '11px ' + pad + 'px', borderTop: '1px solid var(--line-2)', background: 'rgba(247,249,252,.6)', borderRadius: '0 0 16px 16px' }}>
+            <button className="btn pri" style={btnBig || undefined} disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
+            <button className="btn" style={narrow ? { minHeight: 44 } : undefined} disabled={busy} onClick={clearForm}>Clear</button>
+            <span style={{ flex: narrow ? '1 1 100%' : '1 1 160px', textAlign: narrow ? 'left' : 'right', fontSize: 11.5, fontWeight: 600, color: !indId ? 'var(--muted)' : needCount > 0 ? 'var(--blue-700)' : 'var(--pos)' }}>
+              {!indId ? 'Choose an indicator to start'
+                : needCount > 0 ? (needCount + (needCount === 1 ? ' thing' : ' things') + ' still needed — highlighted in blue')
+                  : ('Ready to save · ' + monthLabel(month))}
+            </span>
           </div>
         </Card>
       </div>
@@ -5714,15 +5867,23 @@ function StaffPrintOptions({role,onDone}){
   const count=Number(quantity);
   const valid=Number.isInteger(count)&&count>=1&&count<=100;
   if(printing) return React.createElement(window.UnicoStaffRegForm,{role,quantity:count,onDone});
-  return <div role="dialog" aria-modal="true" aria-label="Print staff forms" style={{position:'fixed',inset:0,zIndex:10000,background:'rgba(0,0,0,.45)',display:'grid',placeItems:'center',padding:20}}>
-    <div className="card" style={{padding:24,width:'min(420px,100%)'}}>
-      <h3 style={{marginTop:0}}>Print staff forms</h3>
-      <label>Number of forms<input autoFocus type="number" min="1" max="100" step="1" aria-label="Number of staff forms" value={quantity} onChange={ev=>setQuantity(ev.target.value)} style={{display:'block',width:'100%',marginTop:8}} /></label>
+  /* Rendered on document.body: opened from the dashboard toolbar, whose glass panel (backdrop-
+     filter) turns position:fixed into 'fixed to that panel' — the dialog was clipped to it and the
+     KPI cards below painted over its lower half. Solid card, so nothing shows through it either. */
+  const dlg=<div role="dialog" aria-modal="true" aria-label="Print staff forms" onClick={ev=>{ if(ev.target===ev.currentTarget) onDone&&onDone(); }}
+    onKeyDown={ev=>{ if(ev.key==='Escape') onDone&&onDone(); }}
+    style={{position:'fixed',inset:0,zIndex:10000,background:'rgba(15,28,45,.5)',display:'grid',placeItems:'center',padding:20}}>
+    <div style={{padding:24,width:'min(420px,100%)',background:'#fff',borderRadius:14,boxShadow:'0 24px 60px rgba(15,28,45,.35)',border:'1px solid var(--line)'}}>
+      <h3 style={{marginTop:0,marginBottom:14}}>Print staff forms</h3>
+      <label style={{display:'block',fontSize:12.5,fontWeight:600,color:'var(--ink-2)'}}>Number of forms<input autoFocus type="number" min="1" max="100" step="1" aria-label="Number of staff forms" value={quantity} onChange={ev=>setQuantity(ev.target.value)}
+        onKeyDown={ev=>{ if(ev.key==='Enter'&&valid) setPrinting(true); }}
+        style={{display:'block',width:'100%',marginTop:8,padding:'9px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:14,fontFamily:'inherit',boxSizing:'border-box'}} /></label>
       <p style={{fontSize:13,color:'var(--muted)'}}>Each form has two pages with its own form number and matching block symbols. Choose 1–100 forms.</p>
-      <p style={{fontSize:13}}>Total: {valid?count*2:'—'} pages. Keep Copies set to 1 in the print dialog so form numbers stay unique.</p>
-      <div style={{display:'flex',justifyContent:'flex-end',gap:10}}><button className="btn" onClick={onDone}>Cancel</button><button className="btn pri" disabled={!valid} onClick={()=>setPrinting(true)}>Print {valid?count:''} forms</button></div>
+      <p style={{fontSize:13}}>Total: <b>{valid?count*2:'—'}</b> pages. Keep Copies set to 1 in the print dialog so form numbers stay unique.</p>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:10}}><button className="btn" onClick={onDone}>Cancel</button><button className="btn pri" disabled={!valid} onClick={()=>setPrinting(true)}>Print {valid?count+' form'+(count===1?'':'s'):'forms'}</button></div>
     </div>
   </div>;
+  return (typeof document!=='undefined'&&document.body&&typeof ReactDOM!=='undefined'&&ReactDOM.createPortal) ? ReactDOM.createPortal(dlg,document.body) : dlg;
 }
 
   if (typeof window !== 'undefined') window.StaffPrintOptions = StaffPrintOptions;
@@ -6606,7 +6767,7 @@ function StaffPrintOptions({role,onDone}){
             )}
             {view === 'missing' && (hasPatient || hasQuality) && <CollectorMissing depts={depts} areas={areas} month={month} user={user} />}
             {view === 'status' && hasQuality && <CollectorDash depts={depts} areas={areas} month={month} setMonth={setMonth} onNav={go} onFill={fillFor} user={user} can={(v) => (v === 'patient' ? hasPatient : v === 'quality' ? hasQuality : true) && screenOk(v)} />}
-            {view === 'quality' && hasQuality && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month, from: jump && jump.from }} /></div>}
+            {view === 'quality' && hasQuality && <div style={{ maxWidth: 1080, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month, from: jump && jump.from }} /></div>}
             {view === 'patient' && hasPatient && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataPatientForm key={jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p'} depts={depts} prefill={{ responsible: user.name, dept: jump && jump.dept, month: jump && jump.dept ? jump.month : null, from: jump && jump.from }} /></div>}
             {view === 'history' && <div style={{ maxWidth: 1240, margin: '0 auto' }}><CollectorHistory month={month} onFixQuality={fillFor} onFixPatient={fillStat} /></div>}
             {view === 'roster' && <CollectorRoster />}

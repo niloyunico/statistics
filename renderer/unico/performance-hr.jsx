@@ -437,7 +437,7 @@ function ExitModal({ roster, perf, staffStore, prefill, onClose }) {
     if (!person) return;
     setBusy(true);
     perf.addExit({
-      empId, staffName: person.name, department: person.current_department, designation: person.designation,
+      empId, staffId: String(person.id), staffName: person.name, department: person.current_department, designation: person.designation,
       doj: person.doj, noticeDate, lastDay, separation, reason, interview, clearance, rehire,
       handoverTo, contact, settlementDate, noticeServed,
       lastGrade: row && row.last ? row.last.grade : '',
@@ -452,14 +452,11 @@ function ExitModal({ roster, perf, staffStore, prefill, onClose }) {
         <button className="btn pri" disabled={busy || !empId || !lastDay} onClick={submit}>{busy ? 'Saving…' : 'Save exit record'}</button>
       </>}>
       <div style={{ display: 'grid', gap: 10 }}>
-        <label style={{ display: 'grid', gap: 4 }}><span className="sub">Staff member *</span>
-          <select value={empId} onChange={(e) => setEmpId(e.target.value)} style={XF}>
-            <option value="">Select…</option>
-            {options.map((e) => {
-              const id = e.emp_id || String(e.id);
-              return <option key={id} value={id}>{e.name} — {id}{e.former ? ' (archived)' : ''}</option>;
-            })}
-          </select></label>
+        <div style={{ display: 'grid', gap: 4 }}><span className="sub">Staff member *</span>
+          {/* the searchable picker from performance.jsx (same chunk, loaded first) */}
+          {React.createElement(window.PerfStaffPick, { value: empId, onChange: setEmpId, autoFocus: !empId,
+            options: options.map((e) => { const id = e.emp_id || String(e.id);
+              return { key: id, name: e.name || '', emp: e, sub: [id, e.designation, e.current_department, e.former ? 'archived' : ''].filter(Boolean).join(' · ') }; }) })}</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10 }}>
           <label style={{ display: 'grid', gap: 4 }}><span className="sub">Notice received</span>
             <input type="date" value={noticeDate} onChange={(e) => setNoticeDate(e.target.value)} style={XF} /></label>

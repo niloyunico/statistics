@@ -132,13 +132,17 @@
    * but cannot be interacted with. Flip a flag to true to unlock that card
    * for everyone; no other change is needed.
    */
+  // All unlocked (2026-10-06, at the hospital's request). Each card shows its own empty state
+  // where the data is not there yet; tasks and schedule have no source in UNICO, so they show dashes.
   const LIVE = {
-    thisWeek: false,       // needs: duty roster rolled out to every ward
-    dutyToday: false,      // needs: same roster rollout
-    announcements: false,  // needs: someone owning the notices
-    team: false,           // needs: roster rollout
-    offDays: false,        // needs: roster rollout
-    records: false,        // needs: certification register filled in
+    thisWeek: true,        // duty roster (shows 'not on the published roster' until a ward publishes)
+    dutyToday: true,       // same roster
+    announcements: true,   // Nursing Services notices
+    team: true,            // roster
+    offDays: true,         // roster
+    records: true,         // certification register
+    tasks: true,           // no task tracker in UNICO yet: figures show '—'
+    schedule: true,        // no meetings / events calendar yet: rows show '—'
   };
 
   function Soon({ live, label, children }) {
@@ -161,11 +165,11 @@
   }
 
   const MOOD_DEFS = [
-    { label: 'Great', mouth: 'M7.5 14c1.2 2.2 2.7 3.2 4.5 3.2s3.3-1 4.5-3.2', c: '#0f7a5f' },
-    { label: 'Good', mouth: 'M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8', c: '#0072a3' },
-    { label: 'Okay', mouth: 'M8.5 15.5h7', c: '#5c6f88' },
-    { label: 'Tired', mouth: 'M8.5 16.5c1-1.2 2.2-1.8 3.5-1.8s2.5.6 3.5 1.8', c: '#b06a10' },
-    { label: 'Stressed', mouth: 'M8 17c1.3-2 2.6-3 4-3s2.7 1 4 3', c: '#b2263e' },
+    { label: 'Great', mouth: 'M7.5 14c1.2 2.2 2.7 3.2 4.5 3.2s3.3-1 4.5-3.2', c: '#0f7a5f', disc: '#1f9d57' },
+    { label: 'Good', mouth: 'M8.5 14.5c1 1.2 2.2 1.8 3.5 1.8s2.5-.6 3.5-1.8', c: '#0072a3', disc: '#0b84d6' },
+    { label: 'Okay', mouth: 'M8.5 15.5h7', c: '#5c6f88', disc: '#c27a00' },
+    { label: 'Tired', mouth: 'M8.5 16.5c1-1.2 2.2-1.8 3.5-1.8s2.5.6 3.5 1.8', c: '#b06a10', disc: '#d6455d' },
+    { label: 'Stressed', mouth: 'M8 17c1.3-2 2.6-3 4-3s2.7 1 4 3', c: '#b2263e', disc: '#7a5be0' },
   ];
 
   function HomeView({ setRoute }) {
@@ -524,6 +528,52 @@
       { label: 'Off days', value: offStats ? offStats.left + ' left' : '—', note: offStats ? offStats.taken + ' taken of ' + offStats.total + ' this month' : 'Needs a published roster' },
     ];
 
+    /* ---- 2026-10 additions (the "Home" reference design): banner, roster cards, quick access ----
+       Added beside what was already here — the sky header, the mood row and every card below
+       are untouched. Styles are the .hm-* and .ndb-kpi rules in theme.css. */
+    const FACT_ICONS = [
+      'M4 6h16v12H4zM8 10h3M8 14h6M16 10v.01',                                  // staff id
+      'M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 011 1v13a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1z',   // date of joining
+      'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8',     // designation
+      'M4 21V5a1 1 0 011-1h8a1 1 0 011 1v16M14 9h5a1 1 0 011 1v11M3 21h18M8 8h2M8 12h2M8 16h2',  // department
+    ];
+    const canView = (v) => { try { return !window.unicoCanAccessView || window.unicoCanAccessView(v); } catch (e) { return true; } };
+    // The register only reaches accounts that hold the staff module, so the four roster
+    // cards appear for them alone (canView('staffHome') below); everyone else does not get the row.
+    // LIVE: read from the one shared staff store (staff-data.js), which re-reads the register every
+    // 30 s and on every save — so a nurse added or archived anywhere moves these figures without a
+    // reload. It used to count the page-load snapshot (STAFF_SEED) and only refresh once a day.
+    // A scoped account counts the staff it is allowed to see. The store does not poll for an
+    // account without the staff module.
+    const staffStore = (typeof window !== 'undefined' && window.useStaffStore) ? window.useStaffStore() : null;
+    const staffList = (staffStore && staffStore.staff) || (typeof window !== 'undefined' && window.STAFF_SEED) || [];
+    const rosterKpis = useMemo(() => {
+      if (!canView('staffHome')) return null;
+      const S = typeof window !== 'undefined' && window.STAFF;
+      const list = staffList.filter((e) => e && e.is_active && !e.former);
+      if (!S || !S.staffCounts || !S.matchesStaffGroup || !list.length) return null;
+      const counts = S.staffCounts(list);
+      // Under each figure: people who actually joined in the last 30 days. There is no
+      // month-by-month history to compute a "% from last month" from.
+      const t1 = Date.now(), t0 = t1 - 30 * 86400000;
+      const joined = (g) => list.filter((e) => { if (!S.matchesStaffGroup(e, g) || !e.doj) return false; const t = Date.parse(e.doj); return !isNaN(t) && t >= t0 && t <= t1; }).length;
+      return [
+        { key: 'all', view: 'staffHome', label: 'Total Staff', sub: 'Nurses, trainees & PCA', n: counts.All, j: joined('All'), d: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8' },
+        { key: 'nurse', view: 'nurseHome', label: 'Active Nurses', sub: 'Currently in service', n: counts.Nurse, j: joined('Nurse'), d: 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8' },
+        { key: 'trainee', view: 'traineeHome', label: 'Trainee Nurses', sub: 'Active trainee nurses', n: counts.Trainee, j: joined('Trainee'), d: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5' },
+        { key: 'pca', view: 'pcaHome', label: 'PCA', sub: 'Active staff members', n: counts.PCA, j: joined('PCA'), d: 'M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8' },
+      ];
+    }, [staffList, now.getDate()]);  // eslint-disable-line react-hooks/exhaustive-deps
+    // Shortcuts to the screens this account may actually open.
+    const QUICK = [
+      { label: 'Duty Roster', view: 'rosterHome', c: '#0b6fbd', bg: '#e1f0fc', d: 'M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 011 1v13a1 1 0 01-1 1H5a1 1 0 01-1-1V6a1 1 0 011-1zM8 13h3M8 17h6' },
+      { label: 'Staff Directory', view: 'staffAll', c: '#3350c9', bg: '#e6ebfd', d: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8' },
+      { label: 'Departments', view: 'departments', c: '#5f3bc9', bg: '#eee8fc', d: 'M4 21V5a1 1 0 011-1h8a1 1 0 011 1v16M14 9h5a1 1 0 011 1v11M3 21h18M8 8h2M8 12h2M8 16h2' },
+      { label: 'Data Submission', view: 'dsHome', c: '#0b6fbd', bg: '#e1f0fc', d: 'M12 16V4M7 9l5-5 5 5M5 20h14' },
+      { label: 'Patient Stats', view: 'dsPatient', c: '#12733f', bg: '#e0f4e8', d: 'M4 20V4M4 20h16M8 16v-4M12 16V8M16 16v-6' },
+      { label: 'Reports', view: 'reports', c: '#b02a40', bg: '#fbe5e9', d: 'M7 3h7l4 4v14H7zM14 3v4h4M10 13h5M10 17h5' },
+    ].filter((q) => canView(q.view));
+
     return (
       <div className="unico-home" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <style>{KEYFRAMES}</style>
@@ -722,69 +772,136 @@
           {/* ID facts */}
           <div style={sx('position:relative;display:flex;flex-wrap:wrap;gap:10px;flex:1 1 100%')}>
             {idFacts.map((f, i) => (
-              <div key={f.label} style={fs(factChip(i))}>
+              <div key={f.label} style={Object.assign(fs(factChip(i)), { display: 'flex', alignItems: 'center', gap: 10 })}>
+                <span aria-hidden="true" style={{ display: 'inline-grid', placeItems: 'center', width: 34, height: 34, borderRadius: 10, flexShrink: 0, background: night ? 'rgba(255,255,255,.12)' : 'rgba(0,114,163,.12)', color: night ? '#9fd4ee' : '#0072a3' }}>
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={FACT_ICONS[i]} /></svg>
+                </span>
+                <div style={{ minWidth: 0 }}>
                 <div style={sx('font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:' + ink.muted)}>{f.label}</div>
                 <div style={sx("font-size:13.5px;font-weight:700;margin-top:3px;font-family:'IBM Plex Mono',monospace;color:" + ink.strong)}>{f.value}</div>
+                </div>
               </div>
             ))}
           </div>
           <div aria-hidden="true" style={sx('position:absolute;right:16px;bottom:9px;font-size:9.5px;letter-spacing:.6px;text-transform:uppercase;font-weight:600;color:' + (night ? 'rgba(199,210,224,.55)' : 'rgba(12,28,52,.45)') + ';pointer-events:none')}>Click the sky · the sun changes the weather</div>
         </div>
 
+        {/* Mood check-in and the care banner share one row (two columns; stacked on narrow screens). */}
+        <div className="hm-mood-row">
         {/* ====================== HOW ARE YOU FEELING ====================== */}
-        <div style={Object.assign(sx(GLASS), { padding: '14px 16px' })}>
+        <div className="hm-mood" style={Object.assign(sx(GLASS), { padding: '14px 16px' })}>
           <div style={sx('display:flex;align-items:center;gap:8px')}>
             <div style={sx('font-size:10.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#7d8ea8')}>How are you feeling?</div>
             <span style={{ flex: 1 }} />
             <span style={sx("font-size:10.5px;color:#9aa6b4;font-family:'IBM Plex Mono',monospace")}>{mood ? 'Logged ' + to12(pad(new Date(moodAt).getHours()) + ':' + pad(new Date(moodAt).getMinutes())) + ' · this device only' : 'Private to you'}</span>
           </div>
-          <div style={sx('display:flex;gap:8px;margin-top:10px;flex-wrap:wrap')}>
+          <div className="hm-mood-picks" style={sx('display:flex;gap:8px;margin-top:10px;flex-wrap:wrap')}>
             {MOOD_DEFS.map((m) => (
               <button key={m.label} type="button" onClick={() => pickMood(m.label)} title={m.label}
-                style={fs('flex:1;min-width:88px;display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px 4px;border-radius:12px;cursor:pointer;font-family:inherit;transition:transform .25s cubic-bezier(.2,.7,.3,1),border-color .25s;border:1px solid ' + (mood === m.label ? m.c : 'rgba(125,145,180,.22)') + ';background:' + (mood === m.label ? '#fff' : 'rgba(255,255,255,.55)') + ';color:' + (mood === m.label ? m.c : '#7d8ea8') + ';' + (mood === m.label ? 'animation:checkPop .4s cubic-bezier(.2,.7,.3,1);box-shadow:0 10px 22px rgba(31,59,90,.14)' : ''))}>
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9.5" /><path d={m.mouth} /><path d="M8.5 9.5h.01M15.5 9.5h.01" strokeWidth="2.4" /></svg>
+                style={fs('flex:1;min-width:88px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:8px 4px;border-radius:12px;cursor:pointer;font-family:inherit;transition:transform .25s cubic-bezier(.2,.7,.3,1),border-color .25s;border:1px solid ' + (mood === m.label ? m.c : 'rgba(125,145,180,.22)') + ';background:' + (mood === m.label ? '#fff' : 'rgba(255,255,255,.55)') + ';color:' + (mood === m.label ? m.c : '#7d8ea8') + ';' + (mood === m.label ? 'animation:checkPop .4s cubic-bezier(.2,.7,.3,1);box-shadow:0 10px 22px rgba(31,59,90,.14)' : ''))}>
+                <span style={{ display: 'inline-grid', placeItems: 'center', width: 38, height: 38, borderRadius: '50%', background: m.disc, color: '#fff', boxShadow: '0 4px 10px rgba(20,32,46,.14)' }}>
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><circle cx="12" cy="12" r="9.5" /><path d={m.mouth} /><path d="M8.5 9.5h.01M15.5 9.5h.01" strokeWidth="2.6" /></svg>
+                </span>
                 <span style={sx('font-size:9.5px;font-weight:700;letter-spacing:.3px')}>{m.label}</span>
               </button>
             ))}
           </div>
         </div>
 
+        {/* ================= TOGETHER FOR BETTER CARE — banner ================= */}
+        <div className="hm-banner">
+          <img className="hm-banner-nurse" src="/assets/home-nurse.webp" alt="" width="732" height="567" />
+          <div className="hm-banner-quote">
+            <svg width="30" height="27" viewBox="0 0 24 22" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 20.5C5 15.6 2.2 11.9 2.2 8.1 2.2 5.2 4.4 3 7.2 3c1.9 0 3.6 1 4.8 2.7C13.2 4 14.9 3 16.8 3c2.8 0 5 2.2 5 5.1 0 3.8-2.8 7.5-9.8 12.4z" /></svg>
+            <div className="hm-banner-script">“Together<br />for Better Care”</div>
+            <div className="hm-banner-org">UNICO Hospitals PLC</div>
+          </div>
+          <div className="hm-banner-note">
+            <svg width="26" height="20" viewBox="0 0 26 20" aria-hidden="true"><path d="M0 20V11C0 4.6 3.6.8 10 0v4.2C7.1 4.9 5.6 6.6 5.4 9.4H10V20H0zm15 0V11C15 4.6 18.6.8 25 0v4.2c-2.9.7-4.4 2.4-4.6 5.2H25V20H15z" fill="currentColor" /></svg>
+            <div>Small efforts every day make a big impact in people’s lives.</div>
+          </div>
+          <img className="hm-banner-plant" src="/assets/home-plant.webp" alt="" width="264" height="282" />
+        </div>
+        </div>
+
+        {/* ======================= ROSTER AT A GLANCE ======================= */}
+        {rosterKpis && canView('staffHome') && (
+          <div className="ndb-kpis">
+            {rosterKpis.map((k) => (
+              <button key={k.key} type="button" className={'ndb-kpi ndb-kpi-' + k.key} aria-label={'Open the ' + k.label + ' dashboard'} onClick={() => setRoute && setRoute({ view: k.view })}>
+                <svg className="ndb-kpi-wave" viewBox="0 0 300 60" preserveAspectRatio="none" aria-hidden="true"><path d="M0 44c40-22 80 14 130-6s90-34 170-8v30H0z" fill="currentColor" /></svg>
+                <span className="ndb-kpi-top">
+                  <span className="ndb-kpi-ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={k.d} /></svg></span>
+                  <span className="ndb-kpi-body">
+                    <span className="ndb-kpi-l">{k.label}</span>
+                    <span className="num ndb-kpi-v">{Number(k.n || 0).toLocaleString()}</span>
+                    <span className="ndb-kpi-s">{k.sub}</span>
+                  </span>
+                </span>
+                <span className="ndb-kpi-f">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8M15 7h6v6" /></svg>
+                  {k.j > 0 ? '+' + k.j + ' joined in the last 30 days' : 'No new joiners in the last 30 days'}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Quick access and this week's roster side by side (stacked when there is not room). */}
+        <div className="hm-pair">
+          {/* ========================= QUICK ACCESS ========================= */}
+          {QUICK.length > 0 && (
+            <div style={sx(GLASS)}>
+              {cardH('Today’s Quick Access')}
+              <div className="hm-quick">
+                {QUICK.map((q) => (
+                  <button key={q.view} type="button" className="hm-quick-item" onClick={() => setRoute && setRoute({ view: q.view })}>
+                    <span className="hm-quick-ic" style={{ background: q.bg, color: q.c }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={q.d} /></svg>
+                    </span>
+                    <span>{q.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+              <Soon live={LIVE.thisWeek} label="Unlocks when the Duty Roster module is rolled out to your ward.">
+              <div style={sx(GLASS)}>
+                {cardH('This week', <span style={sx('font-size:11px;color:#9aa6b4')}>Click a day</span>)}
+                <div style={sx('display:grid;grid-template-columns:repeat(auto-fit,minmax(58px,1fr));gap:8px')}>
+                  {week.map((w, i) => {
+                    const isSel = i === sel;
+                    return (
+                      <button key={i} type="button" onClick={() => setSelDay(i)}
+                        style={sx('display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;border-radius:12px;cursor:pointer;font-family:inherit;transition:transform .25s cubic-bezier(.2,.7,.3,1),box-shadow .25s;border:1px solid ' + (isSel ? 'rgba(0,144,202,.5)' : w.today ? 'rgba(58,181,167,.5)' : 'rgba(125,145,180,.22)') + ';background:' + (isSel ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(255,255,255,.62)') + ';color:' + (isSel ? '#fff' : w.off ? '#9aa6b4' : '#16202e') + ';box-shadow:' + (isSel ? '0 10px 24px rgba(0,144,202,.35)' : 'none'))}>
+                        <span style={sx('font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;opacity:.75')}>{w.dow}</span>
+                        <span style={sx("font-size:19px;font-weight:800;font-family:'IBM Plex Mono',monospace;line-height:1.1")}>{w.date}</span>
+                        <span style={sx('font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:10px;background:' + (isSel ? 'rgba(255,255,255,.22)' : w.off ? 'rgba(125,145,180,.14)' : 'rgba(0,144,202,.12)') + ';color:' + (isSel ? '#fff' : w.off ? '#8894a6' : '#0072a3'))}>{w.code || (w.off ? 'Off' : '—')}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div key={sel} style={fs('display:flex;align-items:center;gap:12px;margin-top:12px;padding:11px 13px;border-radius:12px;border:1px solid rgba(125,145,180,.22);background:rgba(255,255,255,.62);animation:fadeSwap .3s ease')}>
+                  <span style={sx('width:10px;height:10px;border-radius:50%;flex-shrink:0;background:' + (sd && sd.off ? '#b6c0cc' : '#27a8db'))} />
+                  <div style={sx('flex:1;min-width:0')}>
+                    <div style={sx('font-size:13px;font-weight:700;color:#16202e')}>
+                      {sd ? sd.full.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'short' }) + (sd.code ? (sd.off ? ' · Off' : ' · ' + sd.code) : ' · Nothing rostered') : ''}
+                    </div>
+                    <div style={sx('font-size:11.5px;color:#6c7a8c;margin-top:1px')}>
+                      {sd && sd.info && sd.info.label ? sd.info.label + ' · ' + unit : sd && sd.off && sd.code ? 'No duty scheduled. Enjoy your rest day.' : 'Not on the published roster for this day.'}
+                    </div>
+                  </div>
+                  <button type="button" title="Opens the Duty Roster module" onClick={() => setRoute && setRoute({ view: 'rosterHome' })}
+                    style={sx('font-family:inherit;font-size:11.5px;font-weight:700;padding:7px 12px;border-radius:9px;cursor:pointer;border:1px solid rgba(0,144,202,.35);background:rgba(255,255,255,.7);color:#0072a3;white-space:nowrap')}>Request swap</button>
+                </div>
+              </div>
+
+              </Soon>
+        </div>
+
         <div style={sx('display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:16px;align-items:start')}>
           {/* --------------------------- left --------------------------- */}
           <div style={sx('display:flex;flex-direction:column;gap:16px;min-width:0')}>
-            <Soon live={LIVE.thisWeek} label="Unlocks when the Duty Roster module is rolled out to your ward.">
-            <div style={sx(GLASS)}>
-              {cardH('This week', <span style={sx('font-size:11px;color:#9aa6b4')}>Click a day</span>)}
-              <div style={sx('display:grid;grid-template-columns:repeat(auto-fit,minmax(58px,1fr));gap:8px')}>
-                {week.map((w, i) => {
-                  const isSel = i === sel;
-                  return (
-                    <button key={i} type="button" onClick={() => setSelDay(i)}
-                      style={sx('display:flex;flex-direction:column;align-items:center;gap:4px;padding:10px 4px;border-radius:12px;cursor:pointer;font-family:inherit;transition:transform .25s cubic-bezier(.2,.7,.3,1),box-shadow .25s;border:1px solid ' + (isSel ? 'rgba(0,144,202,.5)' : w.today ? 'rgba(58,181,167,.5)' : 'rgba(125,145,180,.22)') + ';background:' + (isSel ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(255,255,255,.62)') + ';color:' + (isSel ? '#fff' : w.off ? '#9aa6b4' : '#16202e') + ';box-shadow:' + (isSel ? '0 10px 24px rgba(0,144,202,.35)' : 'none'))}>
-                      <span style={sx('font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase;opacity:.75')}>{w.dow}</span>
-                      <span style={sx("font-size:19px;font-weight:800;font-family:'IBM Plex Mono',monospace;line-height:1.1")}>{w.date}</span>
-                      <span style={sx('font-size:9px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:10px;background:' + (isSel ? 'rgba(255,255,255,.22)' : w.off ? 'rgba(125,145,180,.14)' : 'rgba(0,144,202,.12)') + ';color:' + (isSel ? '#fff' : w.off ? '#8894a6' : '#0072a3'))}>{w.code || (w.off ? 'Off' : '—')}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              <div key={sel} style={fs('display:flex;align-items:center;gap:12px;margin-top:12px;padding:11px 13px;border-radius:12px;border:1px solid rgba(125,145,180,.22);background:rgba(255,255,255,.62);animation:fadeSwap .3s ease')}>
-                <span style={sx('width:10px;height:10px;border-radius:50%;flex-shrink:0;background:' + (sd && sd.off ? '#b6c0cc' : '#27a8db'))} />
-                <div style={sx('flex:1;min-width:0')}>
-                  <div style={sx('font-size:13px;font-weight:700;color:#16202e')}>
-                    {sd ? sd.full.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'short' }) + (sd.code ? (sd.off ? ' · Off' : ' · ' + sd.code) : ' · Nothing rostered') : ''}
-                  </div>
-                  <div style={sx('font-size:11.5px;color:#6c7a8c;margin-top:1px')}>
-                    {sd && sd.info && sd.info.label ? sd.info.label + ' · ' + unit : sd && sd.off && sd.code ? 'No duty scheduled. Enjoy your rest day.' : 'Not on the published roster for this day.'}
-                  </div>
-                </div>
-                <button type="button" title="Opens the Duty Roster module" onClick={() => setRoute && setRoute({ view: 'rosterHome' })}
-                  style={sx('font-family:inherit;font-size:11.5px;font-weight:700;padding:7px 12px;border-radius:9px;cursor:pointer;border:1px solid rgba(0,144,202,.35);background:rgba(255,255,255,.7);color:#0072a3;white-space:nowrap')}>Request swap</button>
-              </div>
-            </div>
-
-            </Soon>
-
             <Soon live={LIVE.dutyToday} label="Unlocks with the Duty Roster rollout.">
             <div style={sx(GLASS)}>
               {cardH('My duty today', <span style={sx("font-size:11px;color:#9aa6b4;font-family:'IBM Plex Mono',monospace")}>{dateLine}</span>)}
@@ -795,6 +912,32 @@
                     <div style={sx('font-size:16px;font-weight:800;color:#16202e;margin-top:5px;letter-spacing:-.2px')}>{d.value}</div>
                     <div style={sx('font-size:11.5px;color:#6c7a8c;margin-top:2px')}>{d.note}</div>
                   </div>
+                ))}
+              </div>
+            </div>
+            </Soon>
+            <Soon live={LIVE.tasks} label="Unlocks when task tracking is added to UNICO.">
+            <div style={sx(GLASS)}>
+              {cardH('My Daily Tasks')}
+              <div className="hm-tasks">
+                {[['Pending Tasks', 'Items to complete', '#0b6fbd'], ['In Progress', 'Currently working', '#0b6fbd'], ['Completed', 'Finished tasks', '#12733f'], ['Overdue', 'Need attention', '#b02a40']].map(([t, s, c]) => (
+                  <div key={t} className="hm-task">
+                    <div className="hm-task-t" style={{ color: c }}>{t}</div>
+                    <div className="hm-task-v">—</div>
+                    <div className="hm-task-s">{s}</div>
+                    <div className="hm-task-bar" />
+                  </div>
+                ))}
+              </div>
+            </div>
+            </Soon>
+
+            <Soon live={LIVE.schedule} label="Unlocks when a meetings and events calendar is added.">
+            <div style={sx(GLASS)}>
+              {cardH('Upcoming Schedule')}
+              <div className="hm-sched">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="hm-sched-row"><span className="hm-sched-dot" /><span className="hm-sched-time">—:—</span><span className="hm-sched-line" /></div>
                 ))}
               </div>
             </div>

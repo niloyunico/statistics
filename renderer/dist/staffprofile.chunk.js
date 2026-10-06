@@ -5988,10 +5988,9 @@ function StaffFormRail({
   return React.createElement("div", {
     style: {
       display: 'flex',
-      flexDirection: 'column',
-      gap: 14,
-      position: 'sticky',
-      top: 12
+      flexWrap: 'wrap',
+      alignItems: 'flex-start',
+      gap: 12
     }
   }, React.createElement("div", {
     className: "card",
@@ -5999,8 +5998,11 @@ function StaffFormRail({
       background: 'linear-gradient(160deg,#16243a,#0d1b2e)',
       border: '1px solid rgba(255,255,255,.12)',
       color: '#fff',
-      padding: '22px 18px',
-      textAlign: 'center'
+      padding: '16px 16px 12px',
+      textAlign: 'center',
+      flex: '1 1 260px',
+      minWidth: 0,
+      order: 0
     }
   }, React.createElement("div", {
     style: {
@@ -6022,14 +6024,14 @@ function StaffFormRail({
     initials: name ? initials : '?',
     name: name || 'New staff member',
     kind: "staff",
-    size: 112,
+    size: 76,
     radius: "50%",
     staffId: f.id != null ? f.id : null,
     empId: f.emp_id || null,
     readOnly: !(window.unicoCan ? window.unicoCan('staff', 'edit') : true),
     style: {
       background: name ? 'linear-gradient(135deg,#3ab5a7,#0090ca)' : 'linear-gradient(135deg,#2b8f83,#0072a3)',
-      fontSize: 38,
+      fontSize: 27,
       fontWeight: 700,
       color: '#fff',
       boxShadow: '0 10px 30px rgba(0,144,202,.35)',
@@ -6040,7 +6042,7 @@ function StaffFormRail({
     type: "button",
     onClick: () => setLibOpen(true),
     style: {
-      marginTop: 10,
+      marginTop: 8,
       border: '1px solid rgba(255,255,255,.28)',
       background: 'rgba(255,255,255,.08)',
       color: '#dbe9f7',
@@ -6059,9 +6061,12 @@ function StaffFormRail({
     onClose: () => setLibOpen(false)
   }), React.createElement("div", {
     style: {
-      fontSize: 16,
+      fontSize: 15,
       fontWeight: 700,
-      marginTop: 12
+      marginTop: 9,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap'
     }
   }, name || 'New ' + (isPca ? 'PCA' : 'nurse')), React.createElement("div", {
     style: {
@@ -6075,7 +6080,7 @@ function StaffFormRail({
       gap: 6,
       justifyContent: 'center',
       flexWrap: 'wrap',
-      marginTop: 10
+      marginTop: 8
     }
   }, React.createElement("span", {
     style: {
@@ -6109,13 +6114,18 @@ function StaffFormRail({
   }, t))), React.createElement("div", {
     style: {
       borderTop: '1px solid rgba(255,255,255,.14)',
-      marginTop: 14,
-      paddingTop: 10,
+      marginTop: 10,
+      paddingTop: 8,
       fontSize: 10.4,
       color: '#8fa3ba'
     }
   }, f.photo && f.photo.url ? 'Photo saved with this record.' : 'Tap the camera to add a photo — or leave it and the initials are used.')), React.createElement("div", {
-    className: "card"
+    className: "card",
+    style: {
+      flex: '1 1 260px',
+      minWidth: 0,
+      order: 2
+    }
   }, React.createElement("div", {
     className: "card-h"
   }, React.createElement("h3", null, "Experience total")), React.createElement("div", {
@@ -6219,7 +6229,12 @@ function StaffFormRail({
       lineHeight: 1.5
     }
   }, "Calculated as previous experience plus UNICO tenure from the date of joining \u2014 the same rule as the staff register."))), React.createElement("div", {
-    className: "card"
+    className: "card",
+    style: {
+      flex: '1 1 260px',
+      minWidth: 0,
+      order: 3
+    }
   }, React.createElement("div", {
     className: "card-h"
   }, React.createElement("h3", null, "Deployment profile"), React.createElement("div", {
@@ -6278,13 +6293,16 @@ function StaffFormRail({
       padding: '9px 11px',
       marginTop: 2
     }
-  }, "Independent in and Shifts available stay blank \u2014 the staff record has no competency or shift-availability field to read them from. Privileges granted comes from the checklist below."))), React.createElement("div", {
+  }, "Independent in and Shifts available stay blank \u2014 the staff record has no competency or shift-availability field to read them from. Privileges granted comes from the checklist on the Privileges tab."))), React.createElement("div", {
     className: "card",
     style: {
-      padding: 16,
+      padding: 14,
       display: 'flex',
       flexDirection: 'column',
-      gap: 11
+      gap: 9,
+      flex: '1 1 260px',
+      minWidth: 0,
+      order: 1
     }
   }, React.createElement("div", {
     style: {
@@ -7088,6 +7106,9 @@ function StaffForm({
   const [saving, setSaving] = React.useState(false);
   const [printForm, setPrintForm] = React.useState(false);
   const [customL, setCustomL] = React.useState('');
+  const [tab, setTab] = React.useState('personal');
+  const rootRef = React.useRef(null);
+  const narrow = useStfNarrow(rootRef, 640);
   const priorInit0 = existing && existing.prior_experience_years != null && existing.prior_experience_years !== '' && !isNaN(existing.prior_experience_years) ? +existing.prior_experience_years : 0;
   const [dpY, setDpY] = React.useState(() => {
     const y = Math.floor(priorInit0);
@@ -7110,7 +7131,11 @@ function StaffForm({
       [id]: v
     }
   }));
-  const inp = (k, ph, type = 'text') => React.createElement("input", {
+  const touch = narrow ? {
+    minHeight: 44,
+    fontSize: 16
+  } : null;
+  const inp = (k, ph, type = 'text', hlStyle) => React.createElement("input", {
     value: f[k] || '',
     onChange: e => set(k, e.target.value),
     placeholder: ph,
@@ -7122,7 +7147,9 @@ function StaffForm({
       fontSize: 13,
       fontFamily: k === 'phone' || k === 'doj' || k === 'emp_id' ? 'IBM Plex Mono' : 'inherit',
       outline: 'none',
-      width: '100%'
+      width: '100%',
+      ...(touch || {}),
+      ...(hlStyle || {})
     }
   });
   const cmb = (k, opts) => React.createElement("select", {
@@ -7135,7 +7162,8 @@ function StaffForm({
       fontSize: 13,
       fontFamily: 'inherit',
       background: '#fff',
-      width: '100%'
+      width: '100%',
+      ...(touch || {})
     }
   }, React.createElement("option", {
     value: ""
@@ -7207,10 +7235,9 @@ function StaffForm({
       c: '#157a43'
     };
   })();
-  const multiChk = (k, opts, customText, setCustomText, ph) => {
+  const multiChk = (k, opts, customText, setCustomText, ph, groups) => {
     const sel = chipsOf(k);
     const extras = sel.filter(x => !opts.includes(x));
-    const all = [...opts, ...extras];
     const setSel = arr => set(k, arr.join(', '));
     const toggle = o => setSel(sel.includes(o) ? sel.filter(x => x !== o) : [...sel, o]);
     const addCustom = () => {
@@ -7218,51 +7245,66 @@ function StaffForm({
       if (v && !sel.includes(v)) setSel([...sel, v]);
       setCustomText('');
     };
-    return React.createElement("div", null, React.createElement("div", {
-      style: {
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 7
-      }
-    }, all.map(o => {
+    const chip = o => {
       const on = sel.includes(o);
-      return React.createElement("span", {
+      return React.createElement("button", {
+        type: "button",
         key: o,
+        "aria-pressed": on,
         onClick: () => toggle(o),
         style: {
           cursor: 'pointer',
           display: 'inline-flex',
           alignItems: 'center',
           gap: 6,
-          padding: '6px 11px',
+          minHeight: narrow ? 38 : 28,
+          padding: '0 10px',
           borderRadius: 20,
-          fontSize: 12,
+          fontSize: narrow ? 13 : 12,
           fontWeight: 600,
-          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-          background: on ? 'var(--blue-50)' : '#fff',
-          color: on ? 'var(--blue-700)' : 'var(--ink-2)'
-        }
-      }, React.createElement("span", {
-        style: {
-          width: 14,
-          height: 14,
-          borderRadius: 4,
-          display: 'grid',
-          placeItems: 'center',
-          flexShrink: 0,
-          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-          background: on ? 'var(--blue)' : '#fff'
+          fontFamily: 'inherit',
+          border: '1px solid ' + (on ? 'var(--blue-700)' : 'var(--line)'),
+          background: on ? 'var(--blue-700)' : '#fff',
+          color: on ? '#fff' : 'var(--ink-2)'
         }
       }, on && React.createElement(Ic, {
         d: I.check,
-        s: 10,
-        c: "#fff"
-      })), o);
-    })), React.createElement("div", {
+        s: 11,
+        c: "#fff",
+        sw: 3
+      }), o);
+    };
+    const parts = groups && groups.length > 1 ? groups : [['', opts]];
+    return React.createElement("div", {
       style: {
         display: 'flex',
-        gap: 7,
-        marginTop: 9
+        flexDirection: 'column',
+        gap: 8
+      }
+    }, parts.map(([cap, list], gi) => React.createElement("div", {
+      key: gi,
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 6
+      }
+    }, cap && React.createElement("span", {
+      style: {
+        flex: '0 0 100%',
+        fontSize: 10.5,
+        fontWeight: 700,
+        letterSpacing: .5,
+        textTransform: 'uppercase',
+        color: 'var(--muted)'
+      }
+    }, cap), list.map(chip), gi === parts.length - 1 && extras.map(chip), gi === parts.length - 1 && React.createElement("span", {
+      style: {
+        flex: '1 1 220px',
+        minWidth: 0,
+        maxWidth: 360,
+        display: 'inline-flex',
+        gap: 6
       }
     }, React.createElement("input", {
       value: customText || '',
@@ -7276,22 +7318,27 @@ function StaffForm({
       placeholder: ph || 'Add another…',
       style: {
         flex: 1,
-        padding: '8px 11px',
-        border: '1px solid var(--line)',
-        borderRadius: 7,
-        fontSize: 12.5,
+        minWidth: 0,
+        minHeight: narrow ? 38 : 28,
+        padding: '0 12px',
+        border: '1px dashed var(--faint)',
+        borderRadius: 20,
+        fontSize: narrow ? 16 : 12.5,
         fontFamily: 'inherit',
         outline: 'none'
       }
     }), React.createElement("button", {
       type: "button",
       className: "btn sm",
+      style: {
+        borderRadius: 20
+      },
       onClick: addCustom,
       disabled: !(customText || '').trim()
     }, React.createElement(Ic, {
       d: I.plus,
       s: 13
-    }), "Add")));
+    }), "Add")))));
   };
   const field = (label, node, extra) => React.createElement("div", {
     className: "field"
@@ -7355,25 +7402,37 @@ function StaffForm({
   };
   const save = async () => {
     if (saveLock.current) return;
-    const fail = m => {
+    const fail = (m, t) => {
       setErr(m);
+      if (t) setTab(t);
       try {
         window.UI && window.UI.toast && window.UI.toast(m, 'error');
       } catch (e) {}
     };
     if (!f.name || !f.name.trim()) {
-      fail('Name is required');
+      fail('Name is required', 'personal');
       return;
     }
     if (f.doj && isNaN(new Date(f.doj))) {
-      fail('Date of Joining must be YYYY-MM-DD');
+      fail('Date of Joining must be YYYY-MM-DD', 'job');
       return;
+    }
+    {
+      const no = String(f.emp_id || '').trim(),
+        was = String(initialForm.current && initialForm.current.emp_id || '').trim();
+      if (no && (pendingId.current == null || no.toLowerCase() !== was.toLowerCase())) {
+        const other = allStaff.find(x => x && x.id !== pendingId.current && x.is_active !== false && !x.former && String(x.emp_id || '').trim().toLowerCase() === no.toLowerCase());
+        if (other) {
+          fail('Employee ID ' + no + ' already belongs to ' + (other.name || 'another staff member') + '. Give this record its own number.', 'personal');
+          return;
+        }
+      }
     }
     const cleanEntries = entries.filter(x => entYears(x) > 0 || x.fromDate || x.toDate || x.org && x.org.trim() || x.dept && x.dept.trim());
     for (const entry of cleanEntries) {
       const dateError = S.experienceDateError(entry, f.doj);
       if (dateError) {
-        fail(dateError);
+        fail(dateError, 'experience');
         return;
       }
     }
@@ -7408,6 +7467,7 @@ function StaffForm({
       if (!window.unicoFlushNow) throw new Error('Database saving is unavailable. Keep this form open and reconnect.');
       const result = await window.unicoFlushNow();
       if (!result || result.ok !== true) throw new Error(result && result.error || 'Database did not confirm the save. Keep this form open and retry.');
+      initialForm.current = data;
     } catch (ex) {
       const msg = ex && ex.message || 'the record could not be written';
       setErr('Not saved to database — ' + msg + ' Your edits remain in this tab.');
@@ -7434,39 +7494,99 @@ function StaffForm({
       view: S.staffGroupOf(f) === 'Trainee' ? 'trainees' : (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
     });
   };
-  const sec = (title, kids) => React.createElement("div", {
+  const TABS = [['personal', 'Personal'], ['job', 'Job'], ['experience', 'Experience'], ['compliance', 'Compliance'], ['privileges', 'Privileges'], ['additional', 'Additional']].concat(customFieldDefs.length ? [['custom', 'Custom Fields']] : []);
+  const tabIdx = Math.max(0, TABS.findIndex(t => t[0] === tab));
+  const cur = TABS[tabIdx][0];
+  const leave = () => setRoute(editing ? {
+    view: 'staffProfile',
+    emp: empId
+  } : {
+    view: S.staffGroupOf(f) === 'Trainee' ? 'trainees' : (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
+  });
+  const nameOk = !!(f.name && f.name.trim()),
+    qualOk = chipsOf('qualification').length > 0,
+    dojOk = !!f.doj,
+    deptOk = chipsOf('current_department').length > 0;
+  const needs = {
+    personal: (nameOk ? 0 : 1) + (qualOk ? 0 : 1),
+    job: (deptOk ? 0 : 1) + (dojOk ? 0 : 1)
+  };
+  const missing = [!nameOk && 'name', !qualOk && 'qualification', !deptOk && 'department', !dojOk && 'date of joining'].filter(Boolean);
+  let pulseFree = true;
+  const hl = empty => {
+    if (!empty) return null;
+    const p = pulseFree;
+    pulseFree = false;
+    return {
+      border: '1px solid #0090ca',
+      background: '#eef8fc',
+      animation: p ? 'stf-pulse 1.8s ease-out infinite' : undefined
+    };
+  };
+  const ring = (empty, node) => {
+    const h = hl(empty);
+    return h ? React.createElement("div", {
+      style: {
+        borderRadius: 8,
+        outline: '1.5px solid #0090ca',
+        outlineOffset: 1,
+        animation: h.animation
+      }
+    }, node) : node;
+  };
+  const row = kids => React.createElement("div", {
     style: {
       display: 'flex',
-      flexDirection: 'column',
+      flexWrap: 'wrap',
       gap: 12
     }
-  }, React.createElement("div", {
+  }, kids);
+  const cell = (flex, node, nflex) => React.createElement("div", {
+    style: {
+      flex: narrow ? nflex || '1 1 100%' : flex,
+      minWidth: 0
+    }
+  }, node);
+  const rowInpN = {
+    ...rowInp,
+    ...(narrow ? {
+      minHeight: 44,
+      fontSize: 16
+    } : {})
+  };
+  const expLbl = (flex, nflex) => ({
+    flex: narrow ? nflex || '1 1 100%' : flex,
+    minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 4,
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: 'var(--ink-2)'
+  });
+  const tabTitle = t => React.createElement("div", {
     style: {
       fontSize: 13,
       fontWeight: 700,
-      color: 'var(--ink)',
-      borderBottom: '1px solid var(--line-2)',
-      paddingBottom: 7
+      color: 'var(--ink)'
     }
-  }, title), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: '1fr 1fr',
-      gap: 14
-    }
-  }, kids));
+  }, t);
+  const qualOpts = S.qualificationsFor(f.role);
+  const qSplit = qualOpts.indexOf('Community Health Nursing');
+  const qualGroups = (f.role || 'Nurse') !== 'PCA' && qSplit > 0 ? [['Degrees and licences', qualOpts.slice(0, qSplit)], ['Specialised diplomas', qualOpts.slice(qSplit)]] : null;
   const MK = window.MK;
   return React.createElement("div", {
-    className: "mk-scope grid",
+    ref: rootRef,
+    className: "mk-scope grid stf-form",
     style: {
       gap: 14
     }
-  }, React.createElement("div", {
+  }, React.createElement("style", null, '@keyframes stf-pulse{0%{box-shadow:0 0 0 0 rgba(0,144,202,.55)}70%{box-shadow:0 0 0 7px rgba(0,144,202,0)}100%{box-shadow:0 0 0 0 rgba(0,144,202,0)}}' + '.stf-form input:focus,.stf-form select:focus{animation:none!important;border-color:#0072a3!important;background:#fff!important}' + '@media (prefers-reduced-motion:reduce){.stf-form *{animation:none!important}}'), React.createElement("div", {
     className: "card",
     style: {
       padding: '12px 18px',
       display: 'flex',
-      gap: 13,
+      gap: '10px 13px',
       alignItems: 'center',
       flexWrap: 'wrap',
       position: 'sticky',
@@ -7499,7 +7619,8 @@ function StaffForm({
     style: {
       display: 'flex',
       gap: 8,
-      alignItems: 'center'
+      alignItems: 'center',
+      flexWrap: 'wrap'
     }
   }, !editing && window.UnicoStaffRegForm && (!window.unicoCan || window.unicoCan('staff', 'add')) && React.createElement("button", {
     className: "btn sm",
@@ -7513,12 +7634,7 @@ function StaffForm({
     onDone: () => setPrintForm(false)
   }), React.createElement("button", {
     className: "btn sm",
-    onClick: () => setRoute(editing ? {
-      view: 'staffProfile',
-      emp: empId
-    } : {
-      view: S.staffGroupOf(f) === 'Trainee' ? 'trainees' : (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
-    })
+    onClick: leave
   }, "Cancel"), React.createElement("button", {
     className: "btn pri sm",
     disabled: saving,
@@ -7562,23 +7678,80 @@ function StaffForm({
       color: (f.role || 'Nurse') === r ? '#fff' : 'var(--muted)',
       background: (f.role || 'Nurse') === r ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent'
     }
-  }, r))))), React.createElement("div", {
+  }, r)))), React.createElement("div", {
+    role: "tablist",
+    "aria-label": "Form sections",
     style: {
-      display: 'grid',
-      gridTemplateColumns: 'minmax(0,1fr) 320px',
+      flex: '1 1 100%',
+      display: 'flex',
+      gap: 3,
+      padding: 3,
+      overflowX: 'auto',
+      borderRadius: 10,
+      background: 'rgba(125,145,180,.14)'
+    }
+  }, TABS.map(([id, label], i) => {
+    const on = id === cur;
+    const tracked = id in needs;
+    const n = tracked ? needs[id] : 0;
+    return React.createElement("button", {
+      key: id,
+      type: "button",
+      role: "tab",
+      "aria-selected": on,
+      onClick: () => setTab(id),
+      style: {
+        flex: '1 0 auto',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 7,
+        minHeight: narrow ? 44 : 34,
+        padding: '0 12px',
+        border: 0,
+        borderRadius: 8,
+        background: on ? 'var(--blue-700)' : 'transparent',
+        color: on ? '#fff' : 'var(--ink-2)',
+        fontFamily: 'inherit',
+        fontSize: 12.5,
+        fontWeight: 700,
+        whiteSpace: 'nowrap',
+        cursor: 'pointer'
+      }
+    }, React.createElement("span", {
+      className: "num",
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 19,
+        height: 19,
+        borderRadius: '50%',
+        fontSize: 11,
+        fontWeight: 700,
+        background: on ? 'rgba(255,255,255,.24)' : 'rgba(255,255,255,.8)',
+        color: on ? '#fff' : 'var(--ink-2)'
+      }
+    }, i + 1), label, tracked && React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        padding: '1px 7px',
+        borderRadius: 9,
+        background: on ? 'rgba(255,255,255,.22)' : n ? 'var(--blue-100)' : 'var(--pos-bg)',
+        color: on ? '#fff' : n ? 'var(--blue-700)' : 'var(--pos)'
+      }
+    }, n ? n + ' needed' : 'Ready'));
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
       gap: 14,
-      alignItems: 'start'
+      alignItems: 'flex-start'
     }
   }, React.createElement("div", {
-    className: "grid",
     style: {
-      gap: 16,
+      flex: '999 1 520px',
       minWidth: 0
-    }
-  }, React.createElement("div", {
-    className: "grid",
-    style: {
-      alignItems: 'start'
     }
   }, React.createElement("div", {
     className: "card"
@@ -7587,40 +7760,43 @@ function StaffForm({
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: 20
+      gap: 14
     }
-  }, sec('Personal', React.createElement(React.Fragment, null, field('Emp ID', inp('emp_id', 'e.g. 11234')), field('Name *', inp('name', 'Full name')), field('Phone', inp('phone', '01XXXXXXXXX')), field('Gender', cmb('gender', ['Female', 'Male', 'Other'])), field('Date of Birth', inp('dob', 'YYYY-MM-DD', 'date'), f.dob && ageOf(f.dob) != null ? React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: 'var(--muted)'
-    }
-  }, ageOf(f.dob), " yrs") : null), React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1'
-    }
-  }, field('Qualification' + (chipsOf('qualification').length ? ' · ' + chipsOf('qualification').length + ' selected' : ''), multiChk('qualification', S.qualificationsFor(f.role), customQ, setCustomQ))), React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1'
-    }
-  }, field('Extracurricular Activities' + (chipsOf('extracurricular').length ? ' · ' + chipsOf('extracurricular').length + ' selected' : ''), multiChk('extracurricular', S.EXTRACURRICULARS || [], customX, setCustomX, 'Add another activity — e.g. Chess…'))))), sec('Job', React.createElement(React.Fragment, null, field('Designation', React.createElement(SelectDropdown, {
+  }, cur === 'personal' && (() => {
+    const nameHl = hl(!nameOk);
+    const qh = hl(!qualOk);
+    return React.createElement(React.Fragment, null, tabTitle('Personal'), row(React.createElement(React.Fragment, null, cell('3 1 200px', field('Name *', inp('name', 'Full name', 'text', nameHl))), cell('1 1 100px', field('Emp ID', inp('emp_id', 'e.g. 11234')), '1 1 130px'), cell('1 1 130px', field('Phone', inp('phone', '01XXXXXXXXX')), '1 1 130px'), cell('1 1 100px', field('Gender', cmb('gender', ['Female', 'Male', 'Other'])), '1 1 130px'), cell('1 1 140px', field('Date of Birth', inp('dob', 'YYYY-MM-DD', 'date'), f.dob && ageOf(f.dob) != null ? React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, ageOf(f.dob), " yrs") : null), '1 1 130px'))), React.createElement("div", {
+      style: {
+        border: '1px solid ' + (qh ? '#0090ca' : 'var(--line-2)'),
+        background: qh ? '#eef8fc' : 'transparent',
+        borderRadius: 10,
+        padding: '10px 12px',
+        animation: qh ? qh.animation : undefined
+      }
+    }, field('Qualification' + (chipsOf('qualification').length ? ' · ' + chipsOf('qualification').length + ' selected' : ''), multiChk('qualification', qualOpts, customQ, setCustomQ, undefined, qualGroups), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "Tap every one that applies"))));
+  })(), cur === 'job' && React.createElement(React.Fragment, null, tabTitle('Job'), row(React.createElement(React.Fragment, null, cell('2 1 190px', field('Designation', React.createElement(SelectDropdown, {
     value: f.designation,
     onChange: v => set('designation', v),
     options: desigOpts,
     labelFn: canonDesig,
     placeholder: "Select or type \u2014 e.g. Nurse Manager, Supervisor"
-  })), field('Current Department' + (chipsOf('current_department').length > 1 ? ' · ' + chipsOf('current_department').length + ' selected' : ''), React.createElement(MultiSelectDropdown, {
+  }))), cell('2 1 200px', field('Current Department' + (chipsOf('current_department').length > 1 ? ' · ' + chipsOf('current_department').length + ' selected' : ''), ring(!deptOk, React.createElement(MultiSelectDropdown, {
     value: f.current_department,
     onChange: v => set('current_department', v),
     options: deptOpts,
     labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
     placeholder: "Select department(s)\u2026"
-  })), field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date')), chipsOf('current_department').length > 1 ? field('Primary Department', React.createElement(SelectDropdown, {
-    value: f.primary_department || '',
-    onChange: v => set('primary_department', v),
-    options: chipsOf('current_department'),
-    labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
-    placeholder: "Which unit is home?"
-  })) : null, field('Total Experience', React.createElement("div", {
+  })))), cell('1 1 140px', field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date', hl(!dojOk))), '1 1 150px'), cell('1 1 150px', field('Total Experience', React.createElement("div", {
     style: {
       padding: '9px 11px',
       border: '1px dashed var(--line)',
@@ -7633,17 +7809,21 @@ function StaffForm({
   }, S.fmtYM(totalY)), React.createElement("span", {
     style: {
       fontSize: 11,
-      color: 'var(--muted)'
+      color: 'var(--muted)',
+      whiteSpace: 'nowrap'
     }
-  }, "auto = previous + UNICO")), React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1'
-    }
-  }, React.createElement("label", {
+  }, "auto = previous + UNICO")), '1 1 150px'), chipsOf('current_department').length > 1 ? cell('1 1 240px', field('Primary Department', React.createElement(SelectDropdown, {
+    value: f.primary_department || '',
+    onChange: v => set('primary_department', v),
+    options: chipsOf('current_department'),
+    labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
+    placeholder: "Which unit is home?"
+  }))) : null)), React.createElement("label", {
     style: {
       display: 'flex',
       alignItems: 'center',
       gap: 9,
+      minHeight: narrow ? 44 : undefined,
       fontSize: 12.5,
       color: 'var(--ink-2)',
       cursor: 'pointer'
@@ -7652,14 +7832,7 @@ function StaffForm({
     type: "checkbox",
     checked: !!f.can_float,
     onChange: e => set('can_float', e.target.checked)
-  }), "Can be floated to other units when they are short")))), sec('Previous Experience', React.createElement(React.Fragment, null, React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 9
-    }
-  }, React.createElement("span", {
+  }), "Can be floated to other units when they are short")), cur === 'experience' && React.createElement(React.Fragment, null, tabTitle('Previous Experience'), React.createElement("span", {
     style: {
       fontSize: 11.5,
       color: 'var(--muted)'
@@ -7667,23 +7840,18 @@ function StaffForm({
   }, "Record your career journey ", React.createElement("b", null, "before joining UNICO"), " using From and To dates for each organisation. Duration is calculated automatically. If dates are unavailable, choose Years / months. UNICO tenure is added from Date of Joining."), React.createElement("div", {
     style: {
       display: 'flex',
-      alignItems: 'flex-end',
-      gap: 10,
+      alignItems: 'center',
+      gap: '8px 12px',
       flexWrap: 'wrap',
       background: 'var(--panel-2)',
       border: '1px solid var(--line)',
       borderRadius: 9,
-      padding: '11px 14px'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 4
+      padding: '9px 13px'
     }
   }, React.createElement("label", {
     style: {
-      fontSize: 11,
+      flex: '1 1 240px',
+      fontSize: 11.5,
       color: 'var(--ink-2)',
       fontWeight: 600
     }
@@ -7694,13 +7862,14 @@ function StaffForm({
       gap: 6
     }
   }, React.createElement("input", {
+    "aria-label": "Previous experience years",
     value: hasRows ? String(Math.floor(rowsPriorSum) || '') : dpY,
     disabled: hasRows,
     onChange: ev => setDpY(ev.target.value.replace(/[^\d.]/g, '')),
     placeholder: "0",
     inputMode: "decimal",
     style: {
-      ...rowInp,
+      ...rowInpN,
       width: 64,
       textAlign: 'center',
       fontFamily: 'IBM Plex Mono',
@@ -7712,13 +7881,14 @@ function StaffForm({
       color: 'var(--muted)'
     }
   }, "yrs"), React.createElement("input", {
+    "aria-label": "Previous experience months",
     value: hasRows ? String(Math.round(rowsPriorSum % 1 * 12) || '') : dpM,
     disabled: hasRows,
     onChange: ev => setDpM(ev.target.value.replace(/[^\d]/g, '')),
     placeholder: "0",
     inputMode: "numeric",
     style: {
-      ...rowInp,
+      ...rowInpN,
       width: 64,
       textAlign: 'center',
       fontFamily: 'IBM Plex Mono',
@@ -7729,17 +7899,17 @@ function StaffForm({
       fontSize: 11.5,
       color: 'var(--muted)'
     }
-  }, "mo"))), hasRows && React.createElement("span", {
+  }, "mo")), hasRows && React.createElement("span", {
     style: {
+      flex: '1 1 200px',
       fontSize: 11,
-      color: 'var(--muted)',
-      paddingBottom: 6
+      color: 'var(--muted)'
     }
   }, "Auto-summed from the organisation breakdown below.")), React.createElement("span", {
     style: {
       fontSize: 11.5,
-      color: 'var(--muted)',
-      marginTop: 2
+      color: 'var(--ink-2)',
+      fontWeight: 600
     }
   }, "Career journey by organisation / role:"), entries.length === 0 && React.createElement("div", {
     style: {
@@ -7747,109 +7917,152 @@ function StaffForm({
       color: 'var(--faint)',
       padding: '2px 0'
     }
-  }, "No itemised roles added."), entries.map((x, i) => React.createElement("div", {
-    key: i,
-    className: "card",
+  }, "No itemised roles added."), entries.map((x, i) => {
+    const dates = S.experienceUsesDates(x);
+    return React.createElement("div", {
+      key: i,
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        alignItems: 'flex-end',
+        gap: 6,
+        padding: 10,
+        border: '1px solid var(--line-2)',
+        borderRadius: 9,
+        background: 'var(--panel-2)'
+      }
+    }, React.createElement("label", {
+      style: expLbl('2 1 118px')
+    }, "Organisation", React.createElement("input", {
+      "aria-label": `Experience ${i + 1} organisation`,
+      value: x.org || '',
+      onChange: ev => setEntry(i, 'org', ev.target.value),
+      placeholder: "e.g. City Hospital",
+      style: rowInpN
+    })), React.createElement("div", {
+      style: expLbl('2 1 118px')
+    }, "Department / role", React.createElement(ComboInput, {
+      value: x.dept || '',
+      onChange: v => setEntry(i, 'dept', v),
+      options: deptOpts,
+      labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
+      placeholder: "Department / role \u2014 type anything",
+      style: rowInpN
+    })), React.createElement("label", {
+      style: expLbl('1 1 124px')
+    }, "Experience entry", React.createElement("select", {
+      "aria-label": `Experience ${i + 1} entry method`,
+      value: dates ? 'dates' : 'duration',
+      onChange: ev => set('prior_experience_entries', entries.map((row, j) => j === i ? {
+        ...row,
+        mode: ev.target.value,
+        fromDate: ev.target.value === 'duration' ? '' : row.fromDate,
+        toDate: ev.target.value === 'duration' ? '' : row.toDate,
+        years: ev.target.value === 'duration' ? String(Math.floor(entYears(row))) : row.years,
+        months: ev.target.value === 'duration' ? String(Math.round(entYears(row) % 1 * 12)) : row.months
+      } : row)),
+      style: rowInpN
+    }, React.createElement("option", {
+      value: "dates"
+    }, "From date / To date (default)"), React.createElement("option", {
+      value: "duration"
+    }, "Years / months"))), React.createElement("label", {
+      style: expLbl('1 1 124px', '1 1 140px')
+    }, "From date", React.createElement("input", {
+      "aria-label": `Experience ${i + 1} from date`,
+      type: "date",
+      value: x.fromDate || '',
+      onChange: ev => setEntryDate(i, 'fromDate', ev.target.value),
+      style: rowInpN
+    })), React.createElement("label", {
+      style: expLbl('1 1 124px', '1 1 140px')
+    }, "To date", React.createElement("input", {
+      "aria-label": `Experience ${i + 1} to date`,
+      type: "date",
+      min: x.fromDate || undefined,
+      max: f.doj || undefined,
+      value: x.toDate || '',
+      onChange: ev => setEntryDate(i, 'toDate', ev.target.value),
+      style: rowInpN
+    })), !dates && React.createElement(React.Fragment, null, React.createElement("label", {
+      style: expLbl('1 1 76px', '1 1 90px')
+    }, "Years", React.createElement("input", {
+      "aria-label": `Experience ${i + 1} years`,
+      value: x.years || '',
+      onChange: ev => setEntry(i, 'years', ev.target.value.replace(/[^\d.]/g, '')),
+      placeholder: "0",
+      inputMode: "decimal",
+      style: rowInpN
+    })), React.createElement("label", {
+      style: expLbl('1 1 76px', '1 1 90px')
+    }, "Months", React.createElement("input", {
+      "aria-label": `Experience ${i + 1} months`,
+      value: x.months || '',
+      onChange: ev => setEntry(i, 'months', ev.target.value.replace(/[^\d]/g, '')),
+      placeholder: "0",
+      inputMode: "numeric",
+      style: rowInpN
+    }))), React.createElement("div", {
+      style: {
+        flex: '0 0 62px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        fontSize: 11.5,
+        fontWeight: 600,
+        color: 'var(--ink-2)'
+      }
+    }, "Duration", React.createElement("span", {
+      className: "num",
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        minHeight: narrow ? 44 : 35,
+        fontSize: 13,
+        fontWeight: 700,
+        color: '#6a52d4'
+      }
+    }, S.fmtYM(entYears(x)))), React.createElement("button", {
+      className: "icon-btn danger",
+      title: "Remove",
+      "aria-label": `Remove experience ${i + 1}`,
+      onClick: () => delEntry(i),
+      style: narrow ? {
+        width: 44,
+        height: 44
+      } : {
+        marginBottom: 3
+      }
+    }, React.createElement(Ic, {
+      d: I.x,
+      s: 14
+    })), !dates && React.createElement("span", {
+      style: {
+        flex: '1 1 100%',
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Saved duration is preserved. Switch the entry to \u201CFrom date / To date\u201D to calculate it automatically, or keep Years / months."));
+  }), React.createElement("div", {
     style: {
-      padding: 12,
-      display: 'grid',
-      gridTemplateColumns: '1fr 1fr',
-      gap: 8,
-      alignItems: 'center'
+      display: 'flex',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: '10px 22px'
     }
-  }, React.createElement("label", null, "Organisation", React.createElement("input", {
-    "aria-label": `Experience ${i + 1} organisation`,
-    value: x.org || '',
-    onChange: ev => setEntry(i, 'org', ev.target.value),
-    placeholder: "e.g. City Hospital",
-    style: rowInp
-  })), React.createElement(ComboInput, {
-    value: x.dept || '',
-    onChange: v => setEntry(i, 'dept', v),
-    options: deptOpts,
-    labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
-    placeholder: "Department / role \u2014 type anything",
-    style: rowInp
-  }), React.createElement("label", null, "Experience entry", React.createElement("select", {
-    "aria-label": `Experience ${i + 1} entry method`,
-    value: S.experienceUsesDates(x) ? 'dates' : 'duration',
-    onChange: ev => set('prior_experience_entries', entries.map((row, j) => j === i ? {
-      ...row,
-      mode: ev.target.value,
-      fromDate: ev.target.value === 'duration' ? '' : row.fromDate,
-      toDate: ev.target.value === 'duration' ? '' : row.toDate,
-      years: ev.target.value === 'duration' ? String(Math.floor(entYears(row))) : row.years,
-      months: ev.target.value === 'duration' ? String(Math.round(entYears(row) % 1 * 12)) : row.months
-    } : row)),
-    style: rowInp
-  }, React.createElement("option", {
-    value: "dates"
-  }, "From date / To date (default)"), React.createElement("option", {
-    value: "duration"
-  }, "Years / months"))), React.createElement("span", {
-    style: {
-      fontSize: 12,
-      color: 'var(--muted)'
-    }
-  }, "Duration: ", S.fmtYM(entYears(x))), React.createElement("label", null, "From date", React.createElement("input", {
-    "aria-label": `Experience ${i + 1} from date`,
-    type: "date",
-    value: x.fromDate || '',
-    onChange: ev => setEntryDate(i, 'fromDate', ev.target.value),
-    style: rowInp
-  })), React.createElement("label", null, "To date", React.createElement("input", {
-    "aria-label": `Experience ${i + 1} to date`,
-    type: "date",
-    min: x.fromDate || undefined,
-    max: f.doj || undefined,
-    value: x.toDate || '',
-    onChange: ev => setEntryDate(i, 'toDate', ev.target.value),
-    style: rowInp
-  })), !S.experienceUsesDates(x) && React.createElement(React.Fragment, null, React.createElement("span", {
-    style: {
-      gridColumn: '1 / -1',
-      fontSize: 11.5,
-      color: 'var(--muted)'
-    }
-  }, "Saved duration is preserved. Enter both dates above to calculate it automatically, or keep Years / months below."), React.createElement("label", null, "Years", React.createElement("input", {
-    "aria-label": `Experience ${i + 1} years`,
-    value: x.years || '',
-    onChange: ev => setEntry(i, 'years', ev.target.value.replace(/[^\d.]/g, '')),
-    placeholder: "0",
-    inputMode: "decimal",
-    style: rowInp
-  })), React.createElement("label", null, "Months", React.createElement("input", {
-    "aria-label": `Experience ${i + 1} months`,
-    value: x.months || '',
-    onChange: ev => setEntry(i, 'months', ev.target.value.replace(/[^\d]/g, '')),
-    placeholder: "0",
-    inputMode: "numeric",
-    style: rowInp
-  }))), React.createElement("button", {
-    className: "icon-btn danger",
-    title: "Remove",
-    onClick: () => delEntry(i),
-    style: {
-      justifySelf: 'center'
-    }
-  }, React.createElement(Ic, {
-    d: I.x,
-    s: 14
-  })))), React.createElement("div", null, React.createElement("button", {
+  }, React.createElement("button", {
     className: "btn sm",
     onClick: addEntry
   }, React.createElement(Ic, {
     d: I.plus,
     s: 14
-  }), "Add previous experience")), React.createElement("div", {
+  }), "Add previous experience"), React.createElement("div", {
     style: {
+      flex: '1 1 300px',
       display: 'flex',
       gap: 20,
       flexWrap: 'wrap',
-      background: 'var(--panel-2)',
-      borderRadius: 9,
-      padding: '11px 14px',
-      marginTop: 2
+      justifyContent: narrow ? 'flex-start' : 'flex-end'
     }
   }, [['Previous', S.fmtYM(priorSum), '#6a52d4'], ['UNICO (from DOJ)', f.doj ? S.fmtYM(unicoY) : '—', '#1f9d57'], ['Total experience', S.fmtYM(totalY), 'var(--blue)']].map(([l, v, c], i) => React.createElement("div", {
     key: l,
@@ -7873,11 +8086,7 @@ function StaffForm({
       fontWeight: i === 2 ? 800 : 700,
       color: c
     }
-  }, v))))))), sec('Compliance', React.createElement(React.Fragment, null, React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1'
-    }
-  }, field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…'))), field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES)), f.role !== 'PCA' && React.createElement(React.Fragment, null, field('Registration / Licence No.', inp('licence_no', 'e.g. BNMC-12345'), f.licence_verified ? React.createElement("span", {
+  }, v)))))), cur === 'compliance' && React.createElement(React.Fragment, null, tabTitle('Compliance'), field('Special Training' + (chipsOf('special_training').length ? ' · ' + chipsOf('special_training').length + ' selected' : ''), multiChk('special_training', S.TRAININGS.filter(Boolean), customT, setCustomT, 'Add another training…')), row(React.createElement(React.Fragment, null, cell('1 1 170px', field('Hepatitis B Vaccination', cmb('hepatitis_b_vaccination', S.VACCINATION_STATES))), f.role !== 'PCA' && cell('2 1 200px', field('Registration / Licence No.', inp('licence_no', 'e.g. BNMC-12345'), f.licence_verified ? React.createElement("span", {
     style: {
       fontSize: 11,
       fontWeight: 700,
@@ -7890,27 +8099,19 @@ function StaffForm({
     d: I.check,
     s: 12,
     c: "#157a43"
-  }), "BNMC verified") : null), field('Licence Expiry', inp('licence_expiry', 'YYYY-MM-DD', 'date'), licenceState ? React.createElement("span", {
+  }), "BNMC verified") : null)), f.role !== 'PCA' && cell('1 1 150px', field('Licence Expiry', inp('licence_expiry', 'YYYY-MM-DD', 'date'), licenceState ? React.createElement("span", {
     style: {
       fontSize: 11,
       fontWeight: 700,
       color: licenceState.c
     }
-  }, licenceState.t) : null), React.createElement(BnmcVerify, {
+  }, licenceState.t) : null)))), f.role !== 'PCA' && React.createElement(BnmcVerify, {
     f: f,
     set: set,
     store: store,
     empId: empId,
     editing: editing
-  })), React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1'
-    }
-  }, field('Remarks', inp('remarks', 'Any notes'))))), sec('Privileges', React.createElement(React.Fragment, null, React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1'
-    }
-  }, (() => {
+  }), field('Remarks', inp('remarks', 'Any notes'))), cur === 'privileges' && React.createElement(React.Fragment, null, tabTitle('Privileges'), React.createElement("div", null, (() => {
     const selRaw = chipsOf('current_department');
     const resolveDept = d => {
       try {
@@ -7925,7 +8126,7 @@ function StaffForm({
       if (existing.privileges[k]) allowedKeys.add(k);
     });
     const unknownDepts = selRaw.filter(d => !deptOpts.includes(resolveDept(d)));
-    const hint = selDepts.length === 0 ? 'Select a department above first — privileges are assigned per department, in Settings → Department Privileges.' : unknownDepts.length ? `“${unknownDepts.join(', ')}” isn't a department Settings → Department Privileges recognises — re-pick the department above from the dropdown (it may have been renamed), then assign its privileges in Settings.` : `No privileges have been assigned to ${selDepts.join(', ')} yet for this role. Assign them in Settings → Department Privileges.`;
+    const hint = selDepts.length === 0 ? 'Select a department on the Job tab first — privileges are assigned per department, in Settings → Department Privileges.' : unknownDepts.length ? `“${unknownDepts.join(', ')}” isn't a department Settings → Department Privileges recognises — re-pick the department on the Job tab from the dropdown (it may have been renamed), then assign its privileges in Settings.` : `No privileges have been assigned to ${selDepts.join(', ')} yet for this role. Assign them in Settings → Department Privileges.`;
     return React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         display: 'flex',
@@ -7936,14 +8137,15 @@ function StaffForm({
       }
     }, React.createElement("span", {
       style: {
+        flex: '1 1 280px',
         fontSize: 11.5,
         color: 'var(--muted)'
       }
-    }, "Tick every clinical activity this ", f.role === 'PCA' ? 'PCA' : 'nurse', " is privileged to perform \u2014 filtered to what's assigned to ", selDepts.length ? selDepts.join(', ') : 'their department', "."), React.createElement("span", {
-      style: {
-        flex: 1
-      }
-    }), React.createElement("button", {
+    }, "Tick every clinical activity this ", f.role === 'PCA' ? 'PCA' : 'nurse', " is privileged to perform \u2014 filtered to what's assigned to ", selDepts.length ? selDepts.join(', ') : 'their department', "."), selDepts.length === 0 && React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      onClick: () => setTab('job')
+    }, "Choose a department"), React.createElement("button", {
       type: "button",
       className: "btn sm",
       onClick: async () => {
@@ -7966,11 +8168,7 @@ function StaffForm({
       allowedKeys: allowedKeys,
       emptyHint: hint
     }));
-  })()))), sec('Additional Details', React.createElement(React.Fragment, null, field('NID / Passport No.', inp('nid', 'National ID or passport number')), field('Blood Group', cmb('blood_group', ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-'])), field('Emergency Contact', inp('emergency_contact', 'Name & phone — e.g. Rahima, 017XXXXXXXX')), field('Emergency Contact Relation', inp('emergency_relation', 'e.g. Spouse, Father')), React.createElement("div", {
-    style: {
-      gridColumn: '1 / -1'
-    }
-  }, field('Languages Spoken' + (chipsOf('languages').length ? ' · ' + chipsOf('languages').length + ' selected' : ''), multiChk('languages', ['Bangla', 'English', 'Hindi', 'Urdu', 'Arabic'], customL, setCustomL, 'Add another language…'))))), customFieldDefs.length > 0 && sec('Custom Fields', customFieldDefs.map(cf => {
+  })())), cur === 'additional' && React.createElement(React.Fragment, null, tabTitle('Additional Details'), row(React.createElement(React.Fragment, null, cell('2 1 200px', field('NID / Passport No.', inp('nid', 'National ID or passport number'))), cell('1 1 110px', field('Blood Group', cmb('blood_group', ['A+', 'A-', 'B+', 'B-', 'O+', 'O-', 'AB+', 'AB-']))), cell('3 1 240px', field('Emergency Contact', inp('emergency_contact', 'Name & phone — e.g. Rahima, 017XXXXXXXX'))), cell('2 1 180px', field('Emergency Contact Relation', inp('emergency_relation', 'e.g. Spouse, Father'))))), field('Languages Spoken' + (chipsOf('languages').length ? ' · ' + chipsOf('languages').length + ' selected' : ''), multiChk('languages', ['Bangla', 'English', 'Hindi', 'Urdu', 'Arabic'], customL, setCustomL, 'Add another language…')), field('Extracurricular Activities' + (chipsOf('extracurricular').length ? ' · ' + chipsOf('extracurricular').length + ' selected' : ''), multiChk('extracurricular', S.EXTRACURRICULARS || [], customX, setCustomX, 'Add another activity — e.g. Chess…'))), cur === 'custom' && React.createElement(React.Fragment, null, tabTitle('Custom Fields'), row(customFieldDefs.map(cf => {
     const cv = (f.custom || {})[cf.id] || '';
     const node = cf.kind === 'multi' ? React.createElement(MultiSelectDropdown, {
       value: cv,
@@ -7988,7 +8186,11 @@ function StaffForm({
         fontSize: 13,
         fontFamily: 'inherit',
         outline: 'none',
-        width: '100%'
+        width: '100%',
+        ...(narrow ? {
+          minHeight: 44,
+          fontSize: 16
+        } : {})
       }
     }) : React.createElement(SelectDropdown, {
       value: cv,
@@ -7998,11 +8200,12 @@ function StaffForm({
     });
     return React.createElement("div", {
       key: cf.id,
-      style: cf.kind === 'text' ? null : {
-        gridColumn: '1 / -1'
+      style: {
+        flex: narrow || cf.kind !== 'text' ? '1 1 100%' : '1 1 240px',
+        minWidth: 0
       }
     }, field(cf.name, node));
-  })), err && React.createElement("div", {
+  }))), err && React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: 'var(--rose)',
@@ -8011,11 +8214,38 @@ function StaffForm({
   }, err), React.createElement("div", {
     style: {
       display: 'flex',
+      flexWrap: 'wrap',
+      alignItems: 'center',
       gap: 10,
       borderTop: '1px solid var(--line-2)',
-      paddingTop: 14
+      paddingTop: 12
     }
   }, React.createElement("button", {
+    className: "btn",
+    disabled: tabIdx === 0,
+    onClick: () => setTab(TABS[tabIdx - 1][0])
+  }, "Back"), tabIdx < TABS.length - 1 && React.createElement("button", {
+    className: "btn",
+    style: {
+      color: 'var(--blue-700)',
+      borderColor: 'var(--blue-700)'
+    },
+    onClick: () => setTab(TABS[tabIdx + 1][0])
+  }, "Next: ", TABS[tabIdx + 1][1], React.createElement(Ic, {
+    d: "M9 6l6 6-6 6",
+    s: 14
+  })), React.createElement("span", {
+    style: {
+      flex: '1 1 180px',
+      textAlign: narrow ? 'left' : 'right',
+      fontSize: 11.5,
+      fontWeight: 600,
+      color: missing.length ? 'var(--blue-700)' : 'var(--pos)'
+    }
+  }, missing.length ? 'Still to add: ' + missing.join(', ') : 'Ready to save'), React.createElement("button", {
+    className: "btn",
+    onClick: leave
+  }, "Cancel"), React.createElement("button", {
     className: "btn pri",
     disabled: saving,
     onClick: save
@@ -8023,25 +8253,39 @@ function StaffForm({
     d: I.check,
     s: 16,
     sw: 2.4
-  }), saving ? 'Saving?' : editing ? 'Save changes' : 'Create staff'), React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute(editing ? {
-      view: 'staffProfile',
-      emp: empId
-    } : {
-      view: S.staffGroupOf(f) === 'Trainee' ? 'trainees' : (f.role || 'Nurse') === 'PCA' ? 'pca' : 'nurses'
-    })
-  }, "Cancel")))))), React.createElement(StaffFormRail, {
+  }), saving ? 'Saving?' : editing ? 'Save changes' : 'Create staff'))))), React.createElement("div", {
+    style: {
+      flex: '1 1 300px',
+      minWidth: 0
+    }
+  }, React.createElement(StaffFormRail, {
     f: f,
     editing: editing,
     set: set,
     store: store,
     empId: empId
-  })), saved && React.createElement(StaffSavedOverlay, {
+  }))), saved && React.createElement(StaffSavedOverlay, {
     title: saved.title,
     sub: saved.sub,
     onClose: leaveAfterSave
   }));
+}
+function useStfNarrow(ref, bp) {
+  const [narrow, setNarrow] = React.useState(false);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    const check = () => setNarrow(el.offsetWidth > 0 && el.offsetWidth < bp);
+    check();
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', check);
+      return () => window.removeEventListener('resize', check);
+    }
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return narrow;
 }
 function StaffSavedOverlay({
   title,

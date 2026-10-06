@@ -150,12 +150,38 @@ function mount(app, opts) {
     return kind;
   }
 
+  /* WHOSE ACCOUNT PHOTO a profile upload / removal is for. Normally the signed-in person —
+     the account is taken from the SESSION, never the body, so nobody can swap a colleague's
+     picture. The one exception is account management: an administrator (or an account with
+     Edit on Access Control) may name another account in `username`. Only a full administrator
+     may change an administrator's photo. Returns the username, null when not signed in, or
+     false after having answered the request. */
+  async function profileTarget(req, res, body) {
+    const self = req.user && (req.user.sub || req.user.username);
+    const named = String(body.username || '').trim().toLowerCase();
+    if (!named || named === String(self || '').toLowerCase()) return self || null;
+    const a = req.access || await access.forRequest(req);
+    if (!a || !(a.unrestricted || access.can(a, 'users', 'edit'))) {
+      res.status(403).json({ ok: false, error: 'Only an administrator can change another person\'s account photo.' });
+      return false;
+    }
+    const doc = await (await getUsers()).findOne({ username: named }, { projection: { role: 1 } });
+    if (!doc) { res.status(404).json({ ok: false, error: 'That account does not exist.' }); return false; }
+    if (doc.role === 'Administrator' && !a.unrestricted) {
+      res.status(403).json({ ok: false, error: 'Only a full administrator can change an administrator\'s photo.' });
+      return false;
+    }
+    return named;
+  }
+
   // ---- upload -------------------------------------------------------------
   app.post('/api/upload', requireApi, async (req, res) => {
     if (!storage.status().configured) return notConfigured(res);
     const body = (req.body && typeof req.body === 'object') ? req.body : {};
     const kind = await allow(req, res, body.kind);
     if (!kind) return;
+    const target = kind.folder === KINDS.profile.folder ? await profileTarget(req, res, body) : null;
+    if (target === false) return;
 
     const img = decodeImage(body.image);
     if (img.error) return res.status(img.code).json({ ok: false, error: img.error });
@@ -164,9 +190,9 @@ function mount(app, opts) {
       const up = await storage.uploadBuffer(img.buf, { folder: kind.folder });
 
       // An avatar belongs to the account document, which the renderer cannot patch —
-      // so this route owns that write. The target is the SESSION user, never the body.
+      // so this route owns that write. The target is decided by profileTarget() above.
       if (kind.folder === KINDS.profile.folder) {
-        const who = req.user && (req.user.sub || req.user.username);
+        const who = target;
         if (who) {
           const users = await getUsers();
           const prev = await users.findOne({ username: who }, { projection: { photo: 1 } });
@@ -192,7 +218,8 @@ function mount(app, opts) {
         action: 'photo_upload',
         ip: activity.ipOf(req),
         detail: kind.folder + ' · ' + up.publicId + ' · ' + Math.round(up.bytes / 1024) + ' KB'
-          + (body.staffName ? ' · ' + String(body.staffName).slice(0, 60) : ''),
+          + (body.staffName ? ' · ' + String(body.staffName).slice(0, 60) : '')
+          + (target && target !== (req.user && (req.user.sub || req.user.username)) ? ' · for @' + target : ''),
       }));
 
       res.json({ ok: true, url: up.url, publicId: up.publicId, width: up.width, height: up.height, bytes: up.bytes });
@@ -209,8 +236,20 @@ function mount(app, opts) {
     const body = (req.body && typeof req.body === 'object') ? req.body : {};
     const kind = await allow(req, res, body.kind);
     if (!kind) return;
+    const target = kind.folder === KINDS.profile.folder ? await profileTarget(req, res, body) : null;
+    if (target === false) return;
 
-    const publicId = String(body.publicId || '').trim();
+    let publicId = String(body.publicId || '').trim();
+    // An account photo's storage id never leaves the server (users-admin exposes only the url),
+    // so a removal from Access Control arrives without one: look it up on the account itself.
+    if (!publicId && target && kind.folder === KINDS.profile.folder) {
+      try {
+        const users = await getUsers();
+        const doc = await users.findOne({ username: target }, { projection: { photo: 1 } });
+        publicId = String((doc && doc.photo && doc.photo.publicId) || '');
+        if (!publicId) { await users.updateOne({ username: target }, { $unset: { photo: '' } }); return res.json({ ok: true, storage: 'nothing to delete' }); }
+      } catch (e) { return res.status(500).json({ ok: false, error: 'Could not remove the account photo.' }); }
+    }
     // A portrait saved without a publicId (url-only, or backfilled with publicId '') has
     // nothing to delete from storage, but its link on the staff document must still be
     // cleared: that copy is what the roster merge restored the "removed" photo from.
@@ -226,9 +265,8 @@ function mount(app, opts) {
 
     try {
       if (storage.isImageKitId(publicId) || (storage.isBlobId && storage.isBlobId(publicId))) await storage.getAsset(publicId);
-      if (kind.folder === KINDS.profile.folder) {
-        const who = req.user && (req.user.sub || req.user.username);
-        if (who) await (await getUsers()).updateOne({ username: who }, { $unset: { photo: '' } });
+      if (kind.folder === KINDS.profile.folder && target) {
+        await (await getUsers()).updateOne({ username: target }, { $unset: { photo: '' } });
       }
       // Removing a portrait must clear the server copy too, or the merge on the
       // client would helpfully put it back.

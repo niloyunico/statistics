@@ -232,7 +232,7 @@ function usePerfStore() {
     reload: () => load({
       fresh: true
     }),
-    saveAppraisal: (body, msg) => wrap(perfApi.put('/api/performance/appraisals', body), msg),
+    saveAppraisal: (body, msg, creating) => wrap((creating ? perfApi.post : perfApi.put)('/api/performance/appraisals', body), msg),
     recordAction: (id, body) => wrap(perfApi.post('/api/performance/appraisals/' + id + '/action', body), 'Action recorded. The form is now filed to the personal record.'),
     reopen: id => wrap(perfApi.post('/api/performance/appraisals/' + id + '/reopen', {}), 'Appraisal reopened for correction.'),
     addIncident: body => wrap(perfApi.post('/api/performance/incidents', body), 'Incident recorded. The deduction now shows on the appraisal.'),
@@ -1226,6 +1226,7 @@ function PerfForm({
   };
   const body = status => ({
     empId: row.empId,
+    staffId: String(row.emp.id),
     cycleId: saved ? saved.cycleId : row.cycle.id,
     cycleLabel: saved ? saved.cycleLabel : row.cycle.label,
     cycleStart: saved ? saved.cycleStart : row.cycle.start.toISOString().slice(0, 10),
@@ -1243,11 +1244,13 @@ function PerfForm({
     status,
     assessorName: window.__UNICO_USER__ && window.__UNICO_USER__.name || 'Administrator'
   });
+  const mayEdit = perfCan('edit');
+  const maySave = mayEdit || perfCan('add') && (!saved || saved.status === 'draft');
   const save = (status, msg) => {
     setBusy(true);
-    perf.saveAppraisal(body(status), msg).then(() => {
+    perf.saveAppraisal(body(status), msg, !mayEdit).then(r => {
       setBusy(false);
-      setDirty(false);
+      if (r && r.ok) setDirty(false);
     });
   };
   const canComplete = t.complete && missing.length === 0;
@@ -1426,14 +1429,14 @@ function PerfForm({
     style: {
       color: MK.MUTED
     }
-  }, "\xB7 appraisals run every 6 months from the individual\u2019s date of joining"))), !locked && perfCan('edit') && (() => {
+  }, "\xB7 appraisals run every 6 months from the individual\u2019s date of joining"))), !locked && maySave && (() => {
     const keep = saved && saved.status && saved.status !== 'draft' ? saved.status : 'draft';
     return React.createElement("button", {
       className: "btn",
       disabled: busy,
       onClick: () => save(keep, keep === 'draft' ? 'Draft saved.' : 'Changes saved.')
     }, busy ? 'Saving…' : keep === 'draft' ? 'Save draft' : 'Save changes');
-  })(), !locked && perfCan('edit') && React.createElement("button", {
+  })(), !locked && maySave && React.createElement("button", {
     className: "btn pri",
     disabled: busy || !canComplete,
     title: canComplete ? '' : 'Rate all 20 parameters and add remarks for any 1–2 first',
@@ -4214,6 +4217,222 @@ function CategoryManager({
     }
   }, "Both lists are saved together, whichever tab you are on.")));
 }
+function PerfStaffPick({
+  options,
+  value,
+  onChange,
+  autoFocus
+}) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(!value);
+  const [hi, setHi] = useState(0);
+  const picked = (options || []).find(o => o.key === value) || null;
+  const list = useMemo(() => {
+    const toks = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = (options || []).filter(o => {
+      const hay = (o.name + ' ' + o.sub).toLowerCase();
+      return toks.every(t => hay.indexOf(t) >= 0);
+    });
+    if (toks.length) {
+      const t0 = toks[0],
+        starts = o => o.name.toLowerCase().indexOf(t0) === 0 ? 1 : 0;
+      hits.sort((a, b) => starts(b) - starts(a) || a.name.localeCompare(b.name));
+    }
+    return hits;
+  }, [options, q]);
+  const SHOW = 60;
+  const shown = list.slice(0, SHOW);
+  const choose = o => {
+    onChange(o.key);
+    setQ('');
+    setOpen(false);
+  };
+  const box = {
+    border: '1px solid var(--line,#dde3ec)',
+    borderRadius: 9,
+    background: '#fff'
+  };
+  if (picked && !open) {
+    return React.createElement("div", {
+      style: Object.assign({
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '7px 10px'
+      }, box)
+    }, React.createElement(MK.Av, {
+      name: picked.name,
+      emp: picked.emp,
+      empId: picked.key,
+      size: 30
+    }), React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 13,
+        color: MK.INK
+      }
+    }, picked.name), React.createElement("div", {
+      style: {
+        fontSize: 11.2,
+        color: MK.FAINT,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, picked.sub)), React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      onClick: () => {
+        setOpen(true);
+        setHi(0);
+      }
+    }, "Change"));
+  }
+  const onKey = e => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHi(h => Math.min(h + 1, Math.max(0, shown.length - 1)));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHi(h => Math.max(h - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (shown[hi]) choose(shown[hi]);
+    } else if (e.key === 'Escape' && picked) {
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      setQ('');
+    }
+  };
+  return React.createElement("div", null, React.createElement("div", {
+    style: Object.assign({
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      padding: '0 10px'
+    }, box, {
+      borderColor: '#0090ca'
+    })
+  }, React.createElement(Ic, {
+    d: I.search,
+    s: 15,
+    c: MK.FAINT
+  }), React.createElement("input", {
+    autoFocus: autoFocus !== false,
+    value: q,
+    onChange: e => {
+      setQ(e.target.value);
+      setHi(0);
+    },
+    onKeyDown: onKey,
+    placeholder: "Search by name, employee no., designation or unit\u2026",
+    style: {
+      flex: 1,
+      border: 0,
+      outline: 'none',
+      background: 'transparent',
+      padding: '9px 0',
+      fontSize: 13,
+      fontFamily: 'inherit',
+      minWidth: 0
+    }
+  }), q && React.createElement("button", {
+    type: "button",
+    onClick: () => {
+      setQ('');
+      setHi(0);
+    },
+    title: "Clear",
+    style: {
+      border: 0,
+      background: 'none',
+      cursor: 'pointer',
+      color: MK.FAINT,
+      fontSize: 16,
+      lineHeight: 1
+    }
+  }, "\xD7"), picked && React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => {
+      setOpen(false);
+      setQ('');
+    }
+  }, "Cancel")), React.createElement("div", {
+    role: "listbox",
+    style: Object.assign({
+      marginTop: 6,
+      maxHeight: 236,
+      overflowY: 'auto'
+    }, box)
+  }, shown.map((o, i) => React.createElement("div", {
+    key: o.key,
+    role: "option",
+    "aria-selected": i === hi,
+    ref: i === hi ? el => {
+      if (el && el.scrollIntoView) el.scrollIntoView({
+        block: 'nearest'
+      });
+    } : undefined,
+    onMouseDown: e => {
+      e.preventDefault();
+      choose(o);
+    },
+    onMouseEnter: () => setHi(i),
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      padding: '6px 10px',
+      cursor: 'pointer',
+      background: i === hi ? 'var(--blue-50,#eef8fc)' : 'transparent',
+      borderBottom: '1px solid var(--line-2,#f0f3f7)'
+    }
+  }, React.createElement(MK.Av, {
+    name: o.name,
+    emp: o.emp,
+    empId: o.key,
+    size: 26
+  }), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 600,
+      fontSize: 12.8,
+      color: MK.INK
+    }
+  }, o.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: MK.FAINT,
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, o.sub)))), !shown.length && React.createElement("div", {
+    style: {
+      padding: '14px 12px',
+      fontSize: 12.5,
+      color: MK.FAINT
+    }
+  }, "No staff match \u201C", q, "\u201D."), list.length > SHOW && React.createElement("div", {
+    style: {
+      padding: '8px 12px',
+      fontSize: 11.5,
+      color: MK.FAINT
+    }
+  }, list.length - SHOW, " more \u2014 keep typing to narrow the list.")));
+}
+window.PerfStaffPick = PerfStaffPick;
 function EntryModal({
   kind,
   roster,
@@ -4288,25 +4507,23 @@ function EntryModal({
       display: 'grid',
       gap: 12
     }
-  }, React.createElement("label", {
+  }, React.createElement("div", {
     style: {
       display: 'grid',
       gap: 5
     }
   }, React.createElement("span", {
     className: "sub"
-  }, "Staff member *"), React.createElement("select", {
+  }, "Staff member *"), React.createElement(PerfStaffPick, {
     value: empId,
-    onChange: e => setEmpId(e.target.value),
-    style: {
-      width: '100%'
-    }
-  }, React.createElement("option", {
-    value: ""
-  }, "Select\u2026"), roster.rows.map(r => React.createElement("option", {
-    key: r.empId,
-    value: r.empId
-  }, r.name, " \u2014 ", r.empId, " \xB7 ", r.dept)))), React.createElement("div", {
+    onChange: setEmpId,
+    options: roster.rows.map(r => ({
+      key: r.empId,
+      name: r.name || '',
+      emp: r.emp,
+      sub: [r.empId, r.designation, r.dept].filter(Boolean).join(' · ')
+    }))
+  })), React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
@@ -6845,6 +7062,7 @@ function ExitModal({
     setBusy(true);
     perf.addExit({
       empId,
+      staffId: String(person.id),
       staffName: person.name,
       department: person.current_department,
       designation: person.designation,
@@ -6884,26 +7102,27 @@ function ExitModal({
       display: 'grid',
       gap: 10
     }
-  }, React.createElement("label", {
+  }, React.createElement("div", {
     style: {
       display: 'grid',
       gap: 4
     }
   }, React.createElement("span", {
     className: "sub"
-  }, "Staff member *"), React.createElement("select", {
+  }, "Staff member *"), React.createElement(window.PerfStaffPick, {
     value: empId,
-    onChange: e => setEmpId(e.target.value),
-    style: XF
-  }, React.createElement("option", {
-    value: ""
-  }, "Select\u2026"), options.map(e => {
-    const id = e.emp_id || String(e.id);
-    return React.createElement("option", {
-      key: id,
-      value: id
-    }, e.name, " \u2014 ", id, e.former ? ' (archived)' : '');
-  }))), React.createElement("div", {
+    onChange: setEmpId,
+    autoFocus: !empId,
+    options: options.map(e => {
+      const id = e.emp_id || String(e.id);
+      return {
+        key: id,
+        name: e.name || '',
+        emp: e,
+        sub: [id, e.designation, e.current_department, e.former ? 'archived' : ''].filter(Boolean).join(' · ')
+      };
+    })
+  })), React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',

@@ -195,7 +195,8 @@ function usePerfStore() {
   return {
     ...state,
     reload: () => load({ fresh: true }),
-    saveAppraisal: (body, msg) => wrap(perfApi.put('/api/performance/appraisals', body), msg),
+    // `creating`: an account with Add but not Edit starts an appraisal (POST) — see PerfForm.
+    saveAppraisal: (body, msg, creating) => wrap((creating ? perfApi.post : perfApi.put)('/api/performance/appraisals', body), msg),
     recordAction: (id, body) => wrap(perfApi.post('/api/performance/appraisals/' + id + '/action', body), 'Action recorded. The form is now filed to the personal record.'),
     reopen: (id) => wrap(perfApi.post('/api/performance/appraisals/' + id + '/reopen', {}), 'Appraisal reopened for correction.'),
     addIncident: (body) => wrap(perfApi.post('/api/performance/incidents', body), 'Incident recorded. The deduction now shows on the appraisal.'),
@@ -635,14 +636,23 @@ function PerfForm({ roster, perf, empId, setRoute }) {
   const body = (status) => ({
     // An appraisal from an earlier window saves back to ITS window — never re-keyed into
     // the current one, which would create a second record carrying the old scores.
-    empId: row.empId, cycleId: saved ? saved.cycleId : row.cycle.id, cycleLabel: saved ? saved.cycleLabel : row.cycle.label,
+    // staffId is the staff RECORD id: it keeps this form with the person when their employee
+    // number is entered or corrected later, and apart from a colleague who shares the number.
+    empId: row.empId, staffId: String(row.emp.id), cycleId: saved ? saved.cycleId : row.cycle.id, cycleLabel: saved ? saved.cycleLabel : row.cycle.label,
     cycleStart: saved ? saved.cycleStart : row.cycle.start.toISOString().slice(0, 10),
     cycleEnd: saved ? saved.cycleEnd : row.cycle.end.toISOString().slice(0, 10),
     staffName: row.name, designation: row.designation, department: row.dept, doj: row.doj,
     scores, remarks, assessorRemarks, strengths, development, discussedOn, status,
     assessorName: (window.__UNICO_USER__ && window.__UNICO_USER__.name) || 'Administrator',
   });
-  const save = (status, msg) => { setBusy(true); perf.saveAppraisal(body(status), msg).then(() => { setBusy(false); setDirty(false); }); };
+  /* WHO MAY SAVE. Edit always; Add may start an appraisal and keep saving it while it is still
+     a draft. The buttons used to need Edit alone, so an account that was allowed to START an
+     appraisal filled in all 20 parameters and then had nothing to save them with. */
+  const mayEdit = perfCan('edit');
+  const maySave = mayEdit || (perfCan('add') && (!saved || saved.status === 'draft'));
+  // Only a CONFIRMED save clears the unsaved flag: a refused or failed one left the form
+  // looking saved, and Part H unlocked on scores the server never received.
+  const save = (status, msg) => { setBusy(true); perf.saveAppraisal(body(status), msg, !mayEdit).then((r) => { setBusy(false); if (r && r.ok) setDirty(false); }); };
   const canComplete = t.complete && missing.length === 0;
 
   const statusLabel = (STATUS_META[saved ? saved.status : 'none'] || STATUS_META.none).label;
@@ -693,11 +703,11 @@ function PerfForm({ roster, perf, empId, setRoute }) {
           </div>
           {/* Saving a form that is already submitted/discussed keeps its stage: "Save draft"
               moved a completed form back to draft and undid the discussion. */}
-          {!locked && perfCan('edit') && (() => {
+          {!locked && maySave && (() => {
             const keep = saved && saved.status && saved.status !== 'draft' ? saved.status : 'draft';
             return <button className="btn" disabled={busy} onClick={() => save(keep, keep === 'draft' ? 'Draft saved.' : 'Changes saved.')}>{busy ? 'Saving…' : keep === 'draft' ? 'Save draft' : 'Save changes'}</button>;
           })()}
-          {!locked && perfCan('edit') && (
+          {!locked && maySave && (
             <button className="btn pri" disabled={busy || !canComplete}
               title={canComplete ? '' : 'Rate all 20 parameters and add remarks for any 1–2 first'}
               onClick={() => save('discussed', 'Appraisal completed — record Part H at the foot of the form to file it.')}>
@@ -1983,6 +1993,78 @@ function CategoryManager({ kind, perf, onClose }) {
   );
 }
 
+/* STAFF PICKER WITH SEARCH. The dialogs used a plain <select> listing every person on the
+   roster (~240) in one long scroll. Type any part of the name, employee number, designation
+   or unit; arrow keys + Enter pick, Esc goes back. Shared with the exit dialog
+   (performance-hr.jsx) through window.PerfStaffPick.
+   options: [{ key, name, sub, emp }] — key is what onChange receives. */
+function PerfStaffPick({ options, value, onChange, autoFocus }) {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(!value);
+  const [hi, setHi] = useState(0);
+  const picked = (options || []).find((o) => o.key === value) || null;
+  const list = useMemo(() => {
+    const toks = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const hits = (options || []).filter((o) => { const hay = (o.name + ' ' + o.sub).toLowerCase(); return toks.every((t) => hay.indexOf(t) >= 0); });
+    if (toks.length) {
+      const t0 = toks[0], starts = (o) => (o.name.toLowerCase().indexOf(t0) === 0 ? 1 : 0);
+      hits.sort((a, b) => (starts(b) - starts(a)) || a.name.localeCompare(b.name));
+    }
+    return hits;
+  }, [options, q]);
+  const SHOW = 60;
+  const shown = list.slice(0, SHOW);
+  const choose = (o) => { onChange(o.key); setQ(''); setOpen(false); };
+  const box = { border: '1px solid var(--line,#dde3ec)', borderRadius: 9, background: '#fff' };
+  if (picked && !open) {
+    return (
+      <div style={Object.assign({ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 10px' }, box)}>
+        <MK.Av name={picked.name} emp={picked.emp} empId={picked.key} size={30} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: MK.INK }}>{picked.name}</div>
+          <div style={{ fontSize: 11.2, color: MK.FAINT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{picked.sub}</div>
+        </div>
+        <button type="button" className="btn sm" onClick={() => { setOpen(true); setHi(0); }}>Change</button>
+      </div>
+    );
+  }
+  const onKey = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHi((h) => Math.min(h + 1, Math.max(0, shown.length - 1))); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (shown[hi]) choose(shown[hi]); }
+    else if (e.key === 'Escape' && picked) { e.preventDefault(); e.stopPropagation(); setOpen(false); setQ(''); }
+  };
+  return (
+    <div>
+      <div style={Object.assign({ display: 'flex', alignItems: 'center', gap: 8, padding: '0 10px' }, box, { borderColor: '#0090ca' })}>
+        <Ic d={I.search} s={15} c={MK.FAINT} />
+        <input autoFocus={autoFocus !== false} value={q} onChange={(e) => { setQ(e.target.value); setHi(0); }} onKeyDown={onKey}
+          placeholder="Search by name, employee no., designation or unit…"
+          style={{ flex: 1, border: 0, outline: 'none', background: 'transparent', padding: '9px 0', fontSize: 13, fontFamily: 'inherit', minWidth: 0 }} />
+        {q && <button type="button" onClick={() => { setQ(''); setHi(0); }} title="Clear" style={{ border: 0, background: 'none', cursor: 'pointer', color: MK.FAINT, fontSize: 16, lineHeight: 1 }}>×</button>}
+        {picked && <button type="button" className="btn sm" onClick={() => { setOpen(false); setQ(''); }}>Cancel</button>}
+      </div>
+      <div role="listbox" style={Object.assign({ marginTop: 6, maxHeight: 236, overflowY: 'auto' }, box)}>
+        {shown.map((o, i) => (
+          <div key={o.key} role="option" aria-selected={i === hi}
+            ref={i === hi ? (el) => { if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest' }); } : undefined}
+            onMouseDown={(e) => { e.preventDefault(); choose(o); }} onMouseEnter={() => setHi(i)}
+            style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 10px', cursor: 'pointer', background: i === hi ? 'var(--blue-50,#eef8fc)' : 'transparent', borderBottom: '1px solid var(--line-2,#f0f3f7)' }}>
+            <MK.Av name={o.name} emp={o.emp} empId={o.key} size={26} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 12.8, color: MK.INK }}>{o.name}</div>
+              <div style={{ fontSize: 11, color: MK.FAINT, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.sub}</div>
+            </div>
+          </div>
+        ))}
+        {!shown.length && <div style={{ padding: '14px 12px', fontSize: 12.5, color: MK.FAINT }}>No staff match “{q}”.</div>}
+        {list.length > SHOW && <div style={{ padding: '8px 12px', fontSize: 11.5, color: MK.FAINT }}>{list.length - SHOW} more — keep typing to narrow the list.</div>}
+      </div>
+    </div>
+  );
+}
+window.PerfStaffPick = PerfStaffPick;
+
 function EntryModal({ kind, roster, perf, onClose }) {
   const isAch = kind === 'ach';
   const cats = catsOf(perf, kind);
@@ -2033,11 +2115,9 @@ function EntryModal({ kind, roster, perf, onClose }) {
         <button className="btn pri" disabled={busy || !empId || !what.trim()} onClick={submit}>{busy ? 'Saving…' : (isAch ? 'Save achievement' : 'Save incident')}</button>
       </>}>
       <div style={{ display: 'grid', gap: 12 }}>
-        <label style={{ display: 'grid', gap: 5 }}><span className="sub">Staff member *</span>
-          <select value={empId} onChange={(e) => setEmpId(e.target.value)} style={{ width: '100%' }}>
-            <option value="">Select…</option>
-            {roster.rows.map((r) => <option key={r.empId} value={r.empId}>{r.name} — {r.empId} · {r.dept}</option>)}
-          </select></label>
+        <div style={{ display: 'grid', gap: 5 }}><span className="sub">Staff member *</span>
+          <PerfStaffPick value={empId} onChange={setEmpId}
+            options={roster.rows.map((r) => ({ key: r.empId, name: r.name || '', emp: r.emp, sub: [r.empId, r.designation, r.dept].filter(Boolean).join(' · ') }))} /></div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <label style={{ display: 'grid', gap: 4 }}><span className="sub">Category</span>
             <select value={category} onChange={(e) => setCategory(e.target.value)}>{cats.map((c) => <option key={c.id}>{c.label}</option>)}</select></label>
