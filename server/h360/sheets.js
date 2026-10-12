@@ -325,7 +325,7 @@ function patientRow(patient, carried, picture, options) {
 async function hospitalPicture(store, date, shift) {
   await store.ready;
   const run = await store.col('runs').find().sort({ collectedAt: -1 }).limit(1).next();
-  if (!run) return { collectedAt: null, patients: [], left: [], register: [], suggestions: new Map() };
+  if (!run) return { collectedAt: null, patients: [], left: [], register: [], suggestions: new Map(), opd: null };
   const patients = await store.col('patients').find({ lastRunId: run._id }).sort({ seq: 1 }).toArray();
 
   const { from, to } = period(date, shift);
@@ -346,7 +346,9 @@ async function hospitalPicture(store, date, shift) {
     .limit(2000)
     .toArray();
   const suggestions = new Map([...patients, ...left].filter((patient) => patient.suggestion).map((patient) => [patient.admissionNo, patient.suggestion]));
-  return { collectedAt: run.collectedAt, patients, left, register, suggestions };
+  // The OPD list of the report's own day, when it was read.
+  const opd = await store.col('opd').findOne({ _id: date }, { projection: { rows: 0 } });
+  return { collectedAt: run.collectedAt, patients, left, register, suggestions, opd };
 }
 
 // A row of the IPD Admission list, shaped like a patient of a station list.
@@ -595,6 +597,7 @@ async function draft(store, { date, shift }) {
   }
   data.census.rows = censusRows(picture.patients);
   data.census.fields.ipd = picture.patients.length ? String(picture.patients.length) : '';
+  if (picture.opd && picture.opd.counts) data.census.fields.opd = String(picture.opd.counts.attended);
   importSections({ date, shift, data }, picture, options);
 
   return {
@@ -786,6 +789,8 @@ function applyPicture(report, picture, carried, options) {
   report.data.census.rows = censusRows(picture.patients);
   report.data.census.fields.ipd = String(picture.patients.length);
   if (options.sections) changed.sections = importSections(report, picture, options);
+  // OPD patients who have come (vitals taken, or seen by the doctor), where nothing is written yet.
+  if (picture.opd && picture.opd.counts && !text(report.data.census.fields.opd)) report.data.census.fields.opd = String(picture.opd.counts.attended);
   return { added, gone, moved, died, requested, changed };
 }
 
@@ -842,7 +847,8 @@ async function fill(store, sheet, sent, carried) {
   if (!picture.collectedAt) throw fail(409, 'Nothing has been collected from H360 yet. Collect the patients first (H360 Patients).');
   const report = upgrade({ date: sheet.date, shift: sheet.shift, data: { ...blankData(), ...(sheet.data || {}) } });
   const result = applyPicture(report, picture, carried || new Map(), options);
-  return { data: report.data, sourceCollectedAt: picture.collectedAt, census: report.data.census.rows, ...result };
+  const opd = picture.opd && picture.opd.counts ? { date: picture.opd.date, collectedAt: picture.opd.collectedAt, counts: picture.opd.counts } : null;
+  return { data: report.data, sourceCollectedAt: picture.collectedAt, census: report.data.census.rows, opd, ...result };
 }
 
 module.exports = {

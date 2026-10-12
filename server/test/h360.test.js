@@ -20,6 +20,7 @@ const register = require('../h360/register');
 const views = require('../h360/views');
 const httpSession = require('../h360/session-http');
 const browserSession = require('../h360/session-browser');
+const opdList = require('../h360/opd');
 
 let passed = 0;
 const ok = (name) => { passed++; console.log('  ok  ' + name); };
@@ -122,9 +123,22 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.strictEqual(ownAlpha.alerts.Allergy, 'Penicillin');
     ok('a full collection keeps every record on the PC and only the log sheet content in the app database');
 
-    assert.ok(!mock.state.hits.some((hit) => /discharge|bill/.test(hit)), 'an action page was opened');
+    assert.ok(!mock.state.hits.some((hit) => /discharge|bill|vitals-entry|opd-emr/.test(hit)), 'an action page was opened');
     assert.deepStrictEqual([...new Set(mock.state.hits.filter((hit) => !hit.startsWith('GET ')))].sort(), ['POST /login', 'POST /v2/ipd/nurse-station-received-patient']);
     ok('nothing but view-only pages was requested: no discharge, billing or other action link');
+
+/* the OPD Nurse Station list */
+    assert.ok(lines.some((m) => /OPD list: 4 out-patients, 2 with vitals taken, 2 seen by the doctor/.test(m)), lines.join(' | '));
+    const opdShared = await sharedDb.collection('h360Opd').findOne({ _id: TODAY });
+    assert.deepStrictEqual(opdShared.counts, { all: 4, appointed: 2, prescribed: 2, vitals: 2, attended: 3 });
+    assert.strictEqual(opdShared.rows, undefined);
+    assert.deepStrictEqual(opdShared.departments.map((d) => [d.department, d.total, d.vitals]).sort(), [['Family medicine', 2, 0], ['General Surgery', 2, 2]]);
+    const opdOwn = await localDb.collection('opd').findOne({ _id: TODAY });
+    assert.deepStrictEqual(opdOwn.rows.map((row) => [row.name, row.serial, row.status, row.vitals]).sort(), [
+      ['OPD ANNA', '24', 'Appointed (Vitals Taken)', true], ['OPD BEN', '10', 'Appointed', false], ['OPD CARA', '2', 'Prescribed', false], ['OPD DAN', '', 'Prescribed (Vitals Taken)', true]]);
+    assert.strictEqual(opdOwn.rows[0].department.length > 0 && opdOwn.rows[0].doctor.startsWith('Dr.'), true);
+    assert.strictEqual((await service.outPatients()).rows.length, 4);
+    ok('the OPD list is read: every out-patient of the day, who has had vitals taken, who has been seen; the app database keeps the counts only');
 
     const viewed = await service.patient('1002');
     assert.strictEqual(viewed.records, 'here');
@@ -151,6 +165,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.strictEqual(sheet.data.pressureSores.rows[0].name, 'TEST BRAVO');
     assert.strictEqual(sheet.data.general.rows.find((row) => row.item === 'Planned Discharges').value, '01');
     assert.strictEqual(sheet.data.census.fields.ipd, '3');
+    assert.strictEqual(sheet.data.census.fields.opd, '3');
     ok('a new log sheet is filled from the collection: a discharge request goes to Discharged, and the IPD Admission list adds an unlisted admission and a discharge');
 
     /* a list-only refresh from the live site */
@@ -239,6 +254,47 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     where = 'pc';
     ok('a Nurse Station page that fills its list by script: known stations are used, an empty answer changes nothing, and no address from a script is ever requested');
 
+/* the live site reads the records too: the lists first, then a few patients per step */
+    process.env.H360_STEP_MS = '1';
+    const live = h360.createService({ sharedDb: async () => sharedDb, localDb: async () => localDb, site: () => 'cloud', openSession: (cfg) => httpSession.open(cfg) });
+    delete process.env.H360_STEP_MS;
+    await sharedDb.collection('h360Patients').updateMany({}, { $unset: { suggestion: '', recordsAt: '' }, $set: { profile: {}, 'data.Age': '' } });
+    const loginsBefore = mock.state.hits.filter((hit) => hit === 'POST /login').length;
+    let going = await live.cloudStart('quick', 'tester');
+    assert.strictEqual(going.resumable, true);
+    assert.deepStrictEqual([going.progress.patients, going.progress.done, going.progress.stage], [2, 0, 'records']);
+    assert.ok(!JSON.stringify(going).includes('cookies'));
+    await assert.rejects(live.cloudStep('not-this-one'), (err) => err.status === 409);
+    let steps = 0;
+    while (going.resumable && steps < 10) { going = await live.cloudStep(going.id); steps++; }
+    assert.ok(steps >= 1 && steps <= 2, 'steps: ' + steps);
+    assert.deepStrictEqual([going.progress.done, going.progress.stage, going.resumable], [2, 'done', false]);
+    assert.ok(going.progress.pages >= 14, 'pages: ' + going.progress.pages);
+    assert.deepStrictEqual(going.progress.stations.map((item) => [item.total, item.done]), [[1, 1], [1, 1]]);
+    assert.ok(going.log.some((line) => /Done: the records of 2 patients were read/.test(line.message)));
+    assert.strictEqual(mock.state.hits.filter((hit) => hit === 'POST /login').length, loginsBefore + 1, 'one sign-in for the lists and all the steps');
+    const bravoLive = await sharedDb.collection('h360Patients').findOne({ uhid: 'U0002' });
+    assert.strictEqual(bravoLive.suggestion.diagnosis, 'Pneumonia\nDM');
+    assert.strictEqual(bravoLive.suggestion.surgeries[0].surgery, 'Appendectomy');
+    assert.deepStrictEqual([bravoLive.profile.Age, bravoLive.data.Age, bravoLive.profile['Contact No']], ['9 Y 2 M 0 D', '9 Y 2 M 0 D', undefined]);
+    assert.ok(bravoLive.recordsAt && Number(bravoLive.data.Records) >= 4);
+    assert.strictEqual(await sharedDb.collection('h360Modules').countDocuments(), 0);
+    assert.strictEqual((await live.cloudState()).resumable, false);
+    // straight afterwards there is nothing left for a quick update; a full collection reads everyone again
+    const nothing = await live.cloudStart('quick', 'tester');
+    assert.deepStrictEqual([nothing.resumable, nothing.progress.patients], [false, 0]);
+    await settings.saveLevel(sharedDb, 'all', 'admin');
+    let whole = await live.cloudStart('full', 'tester');
+    assert.strictEqual(whole.progress.patients, 2);
+    for (let i = 0; whole.resumable && i < 10; i++) whole = await live.cloudStep(whole.id);
+    assert.ok((await sharedDb.collection('h360Modules').countDocuments({ hasData: true })) >= 6);
+    assert.strictEqual((await live.patient('1002')).records, 'shared');
+    assert.strictEqual((await sharedDb.collection('h360Patients').findOne({ uhid: 'U0002' })).profile['Contact No'], '01711111111');
+    await settings.saveLevel(sharedDb, 'sheet', 'admin');
+    await storeLib.trimToSheet(sharedStore);
+    assert.ok(!mock.state.hits.some((hit) => /discharge|bill|vitals-entry|opd-emr/.test(hit)), 'an action page was opened');
+    ok('the live site reads the records in steps: one sign-in, progress kept in the database, nothing stored under "log sheet only", everything under "everything"');
+
     /* reports of the stand-alone collector */
     const { ObjectId } = require('mongodb');
     const oldId = new ObjectId();
@@ -265,6 +321,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.strictEqual(JSON.parse((await get('/api/h360/patients')).body).rows.length, 2);
     assert.strictEqual(JSON.parse((await get('/api/h360/admissions')).body).rows.length, 5);
     assert.strictEqual(JSON.parse((await get('/api/h360/schema')).body).sections.length, 18);
+    assert.strictEqual(JSON.parse((await get('/api/h360/opd')).body).counts.vitals, 2);
     assert.strictEqual(JSON.parse((await get('/api/h360/sheets')).body).length, 2);
     const word = await get(`/api/h360/sheets/${sheet.id}/docx`);
     assert.strictEqual(word.body.slice(0, 2).toString(), 'PK');
@@ -300,6 +357,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     // ALPHA was typed under New Admission; H360 now shows a discharge request, so the row moves as it is
     assert.deepStrictEqual(got.discharged.map((row) => [row.name, row.dept, row.diagnosis, row.billing || '']), [['TEST ALPHA', 'IPD Cabin Level 10', 'Fever', ''], ['TEST ECHO', 'Level-9', '', 'Cleared']]);
     assert.deepStrictEqual(filledIn.body.requested, ['TEST ALPHA']);
+    assert.deepStrictEqual(filledIn.body.opd.counts, { all: 4, appointed: 2, prescribed: 2, vitals: 2, attended: 3 });
     assert.deepStrictEqual((({ name, surgery, anaesthetist, anaesthesia }) => ({ name, surgery, anaesthetist, anaesthesia }))(got.surgeries[0]), { name: 'TEST BRAVO', surgery: 'Appendectomy', anaesthetist: 'Dr. Sleep', anaesthesia: 'GA' });
     assert.strictEqual(got.pressureSore[0].name, 'TEST BRAVO');
     assert.deepStrictEqual(got.general, { plannedDischarge: '01' });
@@ -361,14 +419,17 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
         assert.strictEqual(read.shape.source, 'query');
         assert.strictEqual(read.rows.length, 5, 'the whole list, not only its first page');
         assert.strictEqual(read.rows.find((row) => row.fields.uhid === 'U0003').fields.outcome, 'lama');
+        const outPatients = opdList.parse(await viaBrowser.opd());
+        assert.deepStrictEqual(outPatients.counts, { all: 4, appointed: 2, prescribed: 2, vitals: 2, attended: 3 });
+        assert.strictEqual(outPatients.date, TODAY);
         const pageHtml = await viaBrowser.get(mock.state.base + '/consultation-note/1001');
         assert.ok(/stable on room air/.test(pageHtml.html));
       } finally {
         await viaBrowser.close();
       }
-      ok('through Chrome: sign-in, stations, lists, and the whole IPD Admission list as the page loads it');
+      ok('through Chrome: sign-in, stations, lists, the whole IPD Admission list as the page loads it, and the three OPD lists');
     }
-    assert.ok(!mock.state.hits.some((hit) => /discharge|bill/.test(hit)), 'an action page was opened');
+    assert.ok(!mock.state.hits.some((hit) => /discharge|bill|vitals-entry|opd-emr/.test(hit)), 'an action page was opened');
   } finally {
     if (appServer) appServer.close();
     hospital.close();

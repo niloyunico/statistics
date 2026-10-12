@@ -9,8 +9,8 @@ const crypto = require('crypto');
 const { ObjectId } = require('mongodb');
 const STATION_COLUMN = 'Nurse Station';
 
-const LOCAL = { patients: 'patients', modules: 'modules', runs: 'runs', templates: 'templates', register: 'register' };
-const SHARED = { patients: 'h360Patients', modules: 'h360Modules', runs: 'h360Runs', templates: 'h360Templates', register: 'h360Register' };
+const LOCAL = { patients: 'patients', modules: 'modules', runs: 'runs', templates: 'templates', register: 'register', opd: 'opd' };
+const SHARED = { patients: 'h360Patients', modules: 'h360Modules', runs: 'h360Runs', templates: 'h360Templates', register: 'h360Register', opd: 'h360Opd' };
 
 // What the log sheet needs of a patient; the rest (contact numbers, address,
 // attendants, alerts) stays on the hospital PC under 'sheet'.
@@ -101,7 +101,7 @@ async function save(store, snapshot, { level = 'full', suggestions = null, recor
             ...(detail.profile ? { profile: sheet ? only(detail.profile, SHEET_PROFILE) : detail.profile } : {}),
             ...(detail.alerts ? { alerts: sheet ? {} : detail.alerts } : {}),
             ...(detail.menusAt ? { menusAt: new Date(detail.menusAt) } : {}),
-            ...(suggestion ? { suggestion } : {}),
+            ...(suggestion ? { suggestion, recordsAt: collectedAt } : {}),
           },
           $unset: { inactiveSince: '' },
           $setOnInsert: { firstSeenAt: collectedAt, ...(detail.profile ? {} : { profile: {} }), ...(detail.alerts ? {} : { alerts: {} }) },
@@ -150,6 +150,10 @@ async function save(store, snapshot, { level = 'full', suggestions = null, recor
   } else if (level === 'all') {
     await syncRecords(store, runId, snapshot, records);
   }
+  // The page furniture already recognised is remembered wherever records may be read.
+  if (level !== 'full' && snapshot.knownTemplates && snapshot.knownTemplates.length) {
+    await writeAll(store.col('templates'), snapshot.knownTemplates.map((_id) => ({ updateOne: { filter: { _id }, update: { $setOnInsert: { learnedAt: collectedAt } }, upsert: true } })));
+  }
 
   // The IPD Admission list: one document per admission, kept from run to run.
   const register = snapshot.register || { rows: [], shape: { found: false } };
@@ -164,6 +168,20 @@ async function save(store, snapshot, { level = 'full', suggestions = null, recor
       upsert: true,
     },
   })));
+
+  // The OPD list: one document per day. The counts are log sheet content; who the
+  // out-patients are is kept only where every record is kept.
+  const outPatients = snapshot.opd || { found: false };
+  if (outPatients.found && outPatients.date) {
+    await store.col('opd').updateOne(
+      { _id: outPatients.date },
+      {
+        $set: { date: outPatients.date, collectedAt, counts: outPatients.counts, departments: outPatients.departments, tabs: outPatients.tabs || [], ...(sheet ? {} : { rows: outPatients.rows }) },
+        ...(sheet ? { $unset: { rows: '' } } : {}),
+      },
+      { upsert: true }
+    );
+  }
 
   // Patients missing from this run have left the stations (discharged or moved).
   // Those of a station whose list could not be read are left as they were.
@@ -186,6 +204,7 @@ async function save(store, snapshot, { level = 'full', suggestions = null, recor
     site,
     level,
     register: { ...register.shape, rows: register.rows.length },
+    opd: { found: Boolean(outPatients.found), date: outPatients.date || '', counts: outPatients.counts || null, ...(outPatients.error ? { error: outPatients.error } : {}) },
   });
   return runId;
 }
@@ -305,6 +324,13 @@ async function loadRegister(store, limit = 1000) {
   return { collectedAt: run.collectedAt.toISOString(), shape: run.register, rows: docs.map(({ fields, raw }) => ({ fields, raw: raw || null })) };
 }
 
+// The OPD list as last read: the newest day, or the day asked for.
+async function loadOpd(store, date) {
+  await store.ready;
+  if (date) return store.col('opd').findOne({ _id: date });
+  return store.col('opd').find().sort({ collectedAt: -1 }).limit(1).next();
+}
+
 // Takes the full records and the extra patient details out of the shared database,
 // for when it is to hold the log sheet content only.
 async function trimToSheet(store) {
@@ -321,8 +347,42 @@ async function trimToSheet(store) {
   }
   await writeAll(store.col('patients'), operations);
   await store.col('register').updateMany({}, { $unset: { raw: '' } });
+  await store.col('opd').updateMany({}, { $unset: { rows: '' } });
   await store.col('runs').updateMany({}, { $set: { columns: SHEET_COLUMNS } });
   return { records: removed.deletedCount, patients: operations.length };
+}
+
+// The records of ONE patient, read on their own (the live site reads a few patients at a
+// time): what the records say goes with the patient; the records themselves only under 'all'.
+async function savePatientRecords(store, doc, patient, { level, suggestion }) {
+  await store.ready;
+  const sheet = level === 'sheet';
+  const modules = patient.modules || [];
+  const at = new Date();
+  const profile = patient.profile || null;
+  const set = { recordsAt: at, 'data.Records': String(modules.filter((module) => module.entries.length > 0 || module.values.length > 0).length) };
+  if (suggestion) set.suggestion = suggestion;
+  if (patient.menusAt) set.menusAt = new Date(patient.menusAt);
+  if (profile) {
+    set.profile = sheet ? only(profile, SHEET_PROFILE) : profile;
+    set['data.Age'] = String(profile.Age || '');
+    set['data.Gender'] = String(profile.Gender || '');
+    if (!sheet) for (const name of ['Patient Type', 'Blood Group', 'Contact No', 'Address']) set['data.' + name] = String(profile[name] || '');
+  }
+  if (!sheet && patient.alerts) set.alerts = patient.alerts;
+  await store.col('patients').updateOne({ _id: doc._id }, { $set: set });
+  if (level === 'all') {
+    await writeAll(store.col('modules'), modules.map((module) => ({
+      replaceOne: {
+        filter: { admissionNo: doc.admissionNo, key: module.key },
+        replacement: {
+          ...module, admissionNo: doc.admissionNo, patientNo: doc.patientNo, patientName: (doc.data || {})['Patient Name'] || '', uhid: doc.uhid,
+          hasData: module.entries.length > 0 || module.values.length > 0, fetchedAt: new Date(module.fetchedAt), lastRunId: doc.lastRunId,
+        },
+        upsert: true,
+      },
+    })));
+  }
 }
 
 // The stations of the patients in a store, by the number H360 gives each station.
@@ -445,6 +505,6 @@ function addRecordSheets(workbook, snapshot, records) {
 }
 
 module.exports = {
-  LOCAL, SHARED, SHEET_COLUMNS, open, save, latestRun, loadMemory, loadLatest, loadPatient, loadRecords, loadRegister, trimToSheet, stationsOfPatients,
+  LOCAL, SHARED, SHEET_COLUMNS, open, save, latestRun, loadMemory, loadLatest, loadPatient, loadRecords, loadRegister, loadOpd, trimToSheet, stationsOfPatients, savePatientRecords,
   buildWorkbook, excelName,
 };

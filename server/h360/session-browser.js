@@ -103,6 +103,34 @@ function fetchMore({ url, method, body }) {
 
 const MAX_ROWS = 1000;
 
+// Runs in the OPD Nurse Station page: the patient cards that are on show, as their lines of
+// text. A card is the smallest box around one "Appointment Date:" line (see opd.js).
+function readCards() {
+  const out = [];
+  const seen = new Set();
+  const count = (el) => ((el.textContent || '').match(/Appointment Date\s*:/gi) || []).length;
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (!/Appointment Date\s*:/i.test(node.nodeValue)) continue;
+    let el = node.parentElement;
+    if (!el || !(el.offsetWidth || el.offsetHeight || el.getClientRects().length)) continue;
+    while (el.parentElement && !el.parentElement.matches('body, .row, .tab-pane, .tab-content, form, main, section') && count(el.parentElement) === 1) el = el.parentElement;
+    if (seen.has(el)) continue;
+    seen.add(el);
+    const link = el.querySelector('a[href]');
+    out.push({ lines: (el.innerText || '').split('\n').map((line) => line.trim()).filter(Boolean), link: link ? link.getAttribute('href') : '' });
+  }
+  return out;
+}
+
+// Runs in the OPD Nurse Station page: the first day of the date range it is showing.
+function readFromDate() {
+  const box = [...document.querySelectorAll('input')].find((input) => /from/i.test((input.name || '') + (input.id || '') + (input.placeholder || '')))
+    || [...document.querySelectorAll('input')].find((input) => /^\d{1,2}[-\/]\d{1,2}[-\/]\d{4}$/.test(input.value || ''));
+  return box ? box.value : '';
+}
+
 async function open(cfg) {
   const browser = await launchBrowser(cfg.headless);
   let page;
@@ -191,6 +219,33 @@ async function open(cfg) {
           }
         }
         return { answers: answers.map(({ path, method, body }) => ({ path, method, body })), html: await tab.content() };
+      } finally {
+        await tab.close().catch(() => {});
+      }
+    },
+    // Opens the OPD Nurse Station Patient List in its own tab and reads the cards of each of
+    // its three lists (Appointed, Prescribed, All). Switching between the lists is all it does.
+    async opd() {
+      const opd = require('./opd');
+      const tab = await context.newPage();
+      tab.setDefaultTimeout(30000);
+      tab.on('dialog', (dialog) => dialog.dismiss().catch(() => {}));
+      try {
+        await tab.goto(cfg.baseUrl + opd.OPD_PATH, { waitUntil: 'domcontentloaded' });
+        if (isLoginUrl(tab.url())) throw new Error('H360 did not open the OPD Nurse Station page for this login.');
+        await tab.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
+        const date = await tab.evaluate(readFromDate).catch(() => '');
+        const first = { tab: '', cards: await tab.evaluate(readCards) };
+        const views = [];
+        for (const [name, pattern] of opd.TABS) {
+          const header = tab.getByText(pattern).first();
+          if (!(await header.count()) || !(await header.isVisible().catch(() => false))) continue;
+          await header.click({ timeout: 5000 }).catch(() => {});
+          await tab.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
+          await tab.waitForTimeout(400);
+          views.push({ tab: name, cards: await tab.evaluate(readCards) });
+        }
+        return { views: views.length ? views : [first], date };
       } finally {
         await tab.close().catch(() => {});
       }

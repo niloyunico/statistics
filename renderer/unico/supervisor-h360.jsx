@@ -34,6 +34,7 @@ const h3Shift = () => { const h = new Date().getHours(); return h < 14 ? 'Mornin
 const h3Portal = (node) => { try { if (typeof document !== 'undefined' && typeof ReactDOM !== 'undefined' && ReactDOM.createPortal) return ReactDOM.createPortal(node, document.body); } catch (e) {} return node; };
 const H3_STATION = 'Nurse Station';
 // A patient whose discharge has been requested in H360 (the rows it shows in pink).
+const onPcSite = (status) => !status || status.site === 'pc';
 const h3Requested = (row) => /^yes/i.test(String((row || {})['Discharge Request'] || ''));
 const H3_SITE = { pc: 'the hospital PC', cloud: 'the live site' };
 
@@ -134,7 +135,7 @@ function H3PatientDrawer({ admissionNo, onClose }) {
             <h4>Patient</h4>
             <H3Pairs items={Object.entries(row).filter(([name]) => name !== 'Records').concat(Object.entries(patient.alerts || {}))} />
             {admission.length > 0 && <details className="h3-rec"><summary>More admission details</summary><div className="h3-rec-b"><H3Pairs items={admission} /></div></details>}
-            {patient.records === 'pc-only' && <div className="sup-alert info" style={{ marginTop: 12 }}>The records of this patient (notes, vital signs, medicines) are kept on the hospital PC only. Open the app there to read them, or ask the administrator to keep everything in the app database.</div>}
+            {patient.records === 'pc-only' && <div className="sup-alert info" style={{ marginTop: 12 }}>The records of this patient (notes, vital signs, medicines) are not kept in the app database, which holds the log sheet content only. Open the app on the hospital PC to read them, or ask the administrator to keep everything in the app database.</div>}
             {patient.records !== 'pc-only' && !saved.length && <React.Fragment><h4>Records with saved data (0)</h4><div className="h3-muted">None yet. Run a collection to read them.</div></React.Fragment>}
             {tabs.map((tab) => {
               const inTab = saved.filter((r) => (r.tab || "Nurse's Tab") === tab);
@@ -200,9 +201,39 @@ function H3Settings({ status, reload, onClose }) {
   );
 }
 
+// The OPD Nurse Station list of the day: how many out-patients, how many have had their
+// vitals taken, how many the doctor has seen; by department, and one by one where kept.
+function H3Opd({ opd, onPc, query }) {
+  if (!opd || !opd.counts) return <div className="sup-card"><div className="sup-card-b h3-muted">The OPD list has not been read yet. {onPc ? 'It is read with every collection.' : 'It is read by the collection on the hospital PC.'}</div></div>;
+  const c = opd.counts;
+  const q = String(query || '').trim().toLowerCase();
+  const rows = (opd.rows || []).filter((row) => !q || [row.name, row.department, row.doctor, row.status, row.serial].some((value) => String(value || '').toLowerCase().includes(q)));
+  return (
+    <React.Fragment>
+      <div className="h3-muted">OPD Nurse Station list of {h3ShowDate(opd.date)}, read {h3When(opd.collectedAt)}. A report takes "came to OPD" as its OPD total.</div>
+      <div className="h3-tiles">
+        <div className="h3-tile"><b>{c.all}</b><span>Out-patients today</span></div>
+        <div className="h3-tile ok"><b>{c.vitals}</b><span>Vitals taken</span></div>
+        <div className="h3-tile"><b>{c.prescribed}</b><span>Seen by the doctor</span></div>
+        <div className="h3-tile"><b>{c.attended}</b><span>Came to OPD (vitals taken or seen)</span></div>
+        <div className="h3-tile"><b>{Math.max(c.all - c.attended, 0)}</b><span>Appointed, not yet come</span></div>
+      </div>
+      {(opd.departments || []).length > 0 && <div className="sup-card"><div className="h3-tablewrap"><table className="h3-table">
+        <thead><tr><th>Department</th><th>Out-patients</th><th>Vitals taken</th><th>Seen by the doctor</th></tr></thead>
+        <tbody>{opd.departments.map((d) => <tr key={d.department}><td>{d.department}</td><td>{d.total}</td><td>{d.vitals}</td><td>{d.prescribed}</td></tr>)}</tbody>
+      </table></div></div>}
+      {(opd.rows || []).length > 0 && <div className="sup-card"><div className="h3-tablewrap"><table className="h3-table">
+        <thead><tr><th>#</th><th>Patient</th><th>Age</th><th>Gender</th><th>Department</th><th>Doctor</th><th>Serial</th><th>Status</th></tr></thead>
+        <tbody>{rows.map((row, i) => <tr key={i} className={row.vitals ? 'vit' : ''}><td>{i + 1}</td><td>{row.name}</td><td>{row.age}</td><td>{row.gender}</td><td>{row.department}</td><td>{row.doctor}</td><td>{row.serial}</td><td>{row.status}</td></tr>)}</tbody>
+      </table></div></div>}
+      {!(opd.rows || []).length && <div className="h3-muted">The app database holds the OPD counts only, not who the out-patients are (log sheet content only).</div>}
+    </React.Fragment>
+  );
+}
+
 // The collection as it runs: which step it is at, how far through the patients (in all
 // and station by station), pages read and time taken. Redrawn with every status check.
-const H3_STEPS = [['signin', 'Sign in'], ['lists', 'Patient lists'], ['register', 'IPD Admission list'], ['records', 'Patient records'], ['saving', 'Saving'], ['done', 'Done']];
+const H3_STEPS = [['signin', 'Sign in'], ['lists', 'Patient lists'], ['register', 'IPD Admission list'], ['opd', 'OPD list'], ['records', 'Patient records'], ['saving', 'Saving'], ['done', 'Done']];
 const H3_MODES = { quick: 'Quick update', full: 'Full collection', list: 'List-only refresh' };
 function h3Elapsed(from, to) {
   const s = Math.max(0, Math.round(((to ? new Date(to) : new Date()) - new Date(from)) / 1000));
@@ -222,7 +253,7 @@ function H3Progress({ status }) {
     <div className={'sup-card h3-live' + (running ? ' on' : failed ? ' fail' : '')}><div className="sup-card-b">
       <div className="h3-livehead">
         {running && <span className="h3-pulse" />}
-        <b>{name} {running ? 'is running' : failed ? 'stopped' : 'finished'}</b>
+        <b>{name} {running ? 'is running' : failed ? 'stopped' : p.stage === 'done' ? 'finished' : 'paused'}</b>
         <span className="h3-muted">{h3Elapsed(status.startedAt, running ? null : status.finishedAt)}</span>
         <span style={{ flex: 1 }} />
         <span className="h3-livenum"><b>{p.done}</b> of {p.patients} patients</span>
@@ -253,13 +284,17 @@ function H3Patients({ setRoute }) {
   const [open, setOpen] = useState(null);
   const [settings, setSettings] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [opd, setOpd] = useState(null);
+  // On the live site a collection is driven from this page, a few patients per request.
+  const [stepping, setStepping] = useState(false);
+  const going = useRef(false);
   const wasRunning = useRef(false);
   const logRef = useRef(null);
 
   const loadData = useCallback(async () => {
     try {
-      const [p, a] = await Promise.all([h3Api('/api/h360/patients'), h3Api('/api/h360/admissions').catch(() => null)]);
-      setSnapshot(p); setAdmissions(a); setError('');
+      const [p, a, o] = await Promise.all([h3Api('/api/h360/patients'), h3Api('/api/h360/admissions').catch(() => null), h3Api('/api/h360/opd').catch(() => null)]);
+      setSnapshot(p); setAdmissions(a); setOpd(o); setError('');
     } catch (e) { setError(e.message); }
     setLoaded(true);
   }, []);
@@ -272,7 +307,7 @@ function H3Patients({ setRoute }) {
       return s;
     } catch (e) { return null; }
   }, [loadData]);
-  useEffect(() => { loadStatus(); loadData(); }, []);
+  useEffect(() => { loadStatus(); loadData(); return () => { going.current = false; }; }, []);
   // While a collection runs the log is followed second by second; otherwise a slow check is enough.
   const running = !!(status && status.running);
   useEffect(() => {
@@ -281,10 +316,37 @@ function H3Patients({ setRoute }) {
   }, [running, loadStatus]);
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [status && status.log && status.log.length]);
 
+// The live site: one request per step, until every patient is read or it is stopped.
+  // A step that fails is tried again; after three in a row it waits for "Continue".
+  const runSteps = async (first) => {
+    going.current = true; setStepping(true);
+    let state = first;
+    let fails = 0;
+    while (state && state.resumable && going.current) {
+      try {
+        const r = await h3Api('/api/h360/collect/step', { method: 'POST', body: { id: state.id } });
+        state = r.state; fails = 0;
+        setStatus((prev) => Object.assign({}, prev, state));
+      } catch (e) {
+        if (e.status === 409 || e.status === 423 || ++fails >= 3) { setError(e.message + (e.status === 409 || e.status === 423 ? '' : ' Press Continue to carry on from where it stopped.')); break; }
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+      }
+    }
+    going.current = false; setStepping(false);
+    await loadStatus(); await loadData();
+    if (state && !state.resumable) h3Toast('Collection finished.');
+  };
   const collect = async (mode) => {
     setBusy(true); setError('');
     try {
       const result = await h3Api('/api/h360/collect', { method: 'POST', body: { mode } });
+      if (result.state) {
+        // The lists are in; the records follow step by step.
+        setStatus((prev) => Object.assign({}, prev, result.state));
+        await loadData();
+        setBusy(false);
+        return runSteps(result.state);
+      }
       wasRunning.current = true;
       const s = await loadStatus();
       // The live site refreshes while the request waits, so it is already over.
@@ -322,7 +384,8 @@ function H3Patients({ setRoute }) {
   }, [admissions, regCols, query]);
 
   const mayCollect = h3Can('add');
-  const canStart = !!status && status.hasLogin && !running && !busy && mayCollect;
+  const canStart = !!status && status.hasLogin && !running && !busy && !stepping && mayCollect;
+  const paused = !!status && !onPcSite(status) && status.resumable && !stepping && !busy;
   const onPc = !status || status.site === 'pc';
   const shape = admissions && admissions.shape;
   const sub = snapshot
@@ -333,25 +396,26 @@ function H3Patients({ setRoute }) {
       <H3Hero title="H360 Patients" sub={sub}>
         {status && status.canManage && <H3Btn onClick={() => setSettings((v) => !v)} title="H360 login and what is kept in the app database"><Ic d={I.gear} s={15} c="#fff" />{status.hasLogin ? 'H360 login: ' + status.user : 'H360 login'}</H3Btn>}
         {snapshot && <a className="sup-btn" href="/api/h360/export.xlsx"><Ic d={I.download} s={15} c="#fff" />Excel</a>}
-        {onPc && <H3Btn onClick={() => collect('list')} disabled={!canStart} title="Updates only the patient lists (admissions, beds, who has left) and the IPD Admission list. Takes a few seconds; no records are read.">List only</H3Btn>}
-        {onPc && <H3Btn onClick={() => collect('full')} disabled={!canStart} title="Reads every record of every patient again. Slow; use it once a day or when something looks out of date.">Full collection</H3Btn>}
-        {onPc
-          ? <H3Btn kind="pri" onClick={() => collect('quick')} disabled={!canStart} title="Reads notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old.">{running ? 'Collecting…' : 'Collect all patients'}</H3Btn>
-          : <H3Btn kind="pri" onClick={() => collect('list')} disabled={!canStart} title="Signs in to H360 and updates the patient lists: admissions, beds and who has left. Records are read by the hospital PC.">{busy || running ? 'Refreshing…' : 'Refresh patient lists'}</H3Btn>}
+        <H3Btn onClick={() => collect('list')} disabled={!canStart} title="Updates only the patient lists (admissions, beds, discharge requests, who has left). Takes a few seconds; no records are read.">List only</H3Btn>
+        <H3Btn onClick={() => collect('full')} disabled={!canStart} title="Reads every record of every patient again. Slow; use it once a day or when something looks out of date.">Full collection</H3Btn>
+        {stepping
+          ? <H3Btn kind="pri" onClick={() => { going.current = false; }} title="Stops after the patients being read now. What was read is kept; Continue carries on.">Stop</H3Btn>
+          : <H3Btn kind="pri" onClick={() => collect('quick')} disabled={!canStart} title={onPc ? 'Reads notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old.' : 'Updates the lists, then reads the records of every patient not read in the last two hours. Keep this page open while it runs.'}>{running || busy ? 'Collecting…' : 'Collect all patients'}</H3Btn>}
       </H3Hero>
 
       {settings && status && status.canManage && <H3Settings status={status} reload={loadStatus} onClose={() => setSettings(false)} />}
       {status && !status.hasLogin && <div className="sup-alert warn">{status.canManage
         ? (status.loginElsewhere ? 'The H360 login was saved from ' + (status.site === 'pc' ? 'the live site' : 'the hospital PC') + ', which keeps its own sealed copy. Enter it once here too: click "H360 login" above.' : 'No H360 login is saved yet. Click "H360 login" above and enter it once.')
         : 'No H360 login is saved for ' + (H3_SITE[status.site] || 'this server') + ' yet. Ask the administrator to enter it.'}</div>}
-      {status && !onPc && <div className="sup-alert info">On the live site only the patient lists are refreshed. Notes, diagnoses and every other record are read by the collection on the hospital PC{status.lastPcRun ? ' (last one: ' + h3When(status.lastPcRun) + ')' : ' (none has reached the app database yet)'}.</div>}
+      {status && !onPc && stepping && <div className="sup-alert info">Keep this page open while the collection runs. It reads a few patients at a time; if it is interrupted, what was read is kept and Continue carries on.</div>}
+      {paused && <div className="sup-alert warn"><span style={{ flex: 1 }}>A collection stopped part-way: {status.progress ? status.progress.done + ' of ' + status.progress.patients : 'some'} patients read.{status.error ? ' (' + status.error + ')' : ''}</span><H3Btn sm kind="pri" onClick={() => { setError(''); runSteps(status); }} disabled={!mayCollect}>Continue</H3Btn></div>}
       {status && status.localStore && status.localStore.ok === false && <div className="sup-alert critical">{status.localStore.error}</div>}
       {status && status.legacyReports > 0 && <div className="sup-alert info"><span style={{ flex: 1 }}>{status.legacyReports} report(s) written with the old collector are on this computer and not in the app yet.</span><H3Btn sm onClick={importOld} disabled={busy}>Bring them in</H3Btn></div>}
       {error && <div className="sup-alert critical">{error}</div>}
       {status && status.error && !running && <div className="sup-alert critical">{status.error}</div>}
       {snapshot && (snapshot.warnings || []).map((w, i) => <div key={i} className="sup-alert warn">{w}</div>)}
 
-      {status && <H3Progress status={status} />}
+      {status && <H3Progress status={stepping ? Object.assign({}, status, { running: true, error: null }) : status} />}
       {status && status.log && status.log.length > 0 && (
         <div className="sup-card"><ul className="h3-log" ref={logRef}>{status.log.map((line, i) => <li key={i}>{new Date(line.at).toLocaleTimeString()}  {line.message}</li>)}</ul></div>
       )}
@@ -362,10 +426,11 @@ function H3Patients({ setRoute }) {
         {snapshot.stations.map((item) => <button key={item.station} className={'h3-tile' + (station === item.station ? ' on' : '')} onClick={() => { setStation(item.station); setTab('patients'); }}><b>{item.count}</b><span>{item.station}</span></button>)}
       </div>}
 
-      {(snapshot || (admissions && admissions.rows.length > 0)) && <div className="sup-toolbar">
+      {(snapshot || (admissions && admissions.rows.length > 0) || opd) && <div className="sup-toolbar">
         <div className="sup-seg">
           <button className={tab === 'patients' ? 'on' : ''} onClick={() => setTab('patients')}>In-patients{snapshot ? ' (' + snapshot.rows.length + ')' : ''}</button>
           <button className={tab === 'admissions' ? 'on' : ''} onClick={() => setTab('admissions')}>IPD Admission list{admissions && admissions.rows.length ? ' (' + admissions.rows.length + ')' : ''}</button>
+          <button className={tab === 'opd' ? 'on' : ''} onClick={() => setTab('opd')}>OPD{opd && opd.counts ? ' (' + opd.counts.all + ')' : ''}</button>
         </div>
         <input className="h3-search" type="search" placeholder="Search name, UHID, bed, consultant…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <span className="h3-muted" style={{ flex: 1 }}>{tab === 'patients' && snapshot ? 'Showing ' + rows.length + ' of ' + snapshot.rows.length + ' patients. Click a patient to open the records.' : ''}</span>
@@ -388,6 +453,8 @@ function H3Patients({ setRoute }) {
           <tbody>{regRows.map((r, i) => <tr key={i}><td>{i + 1}</td>{regCols.names.map((name) => <td key={name}>{((regCols.raw ? r.raw : r.fields) || {})[name] || ''}</td>)}</tr>)}</tbody>
         </table></div></div>}
       </React.Fragment>}
+
+      {tab === 'opd' && <H3Opd opd={opd} onPc={onPc} query={query} />}
 
       {loaded && !snapshot && tab === 'patients' && <div className="sup-card"><div className="sup-card-b h3-muted" style={{ textAlign: 'center', padding: 36 }}>No patients collected yet. {onPc ? <span>Press <b>Collect all patients</b>.</span> : <span>Press <b>Refresh patient lists</b>, or run a collection on the hospital PC.</span>}</div></div>}
       {open && <H3PatientDrawer admissionNo={open} onClose={() => setOpen(null)} />}
@@ -549,6 +616,10 @@ a.sup-btn{text-decoration:none}
 .h3-tile.req b{color:#be123c}
 .h3-tile.req.on{border-color:#e11d48;box-shadow:inset 0 0 0 1px #e11d48}
 .h3-table tr.req td{background:#ffe4e6}
+.h3-table tr.vit td{background:#f0fdf4}
+.h3-tile.ok{background:#f0fdf4;border-color:#bbf7d0}
+.h3-tile.ok b{color:#15803d}
+div.h3-tile{cursor:default}
 .h3-table tbody tr.req:hover td{background:#fecdd3}
 .h3-tile b{display:block;font-size:22px;color:#1d4ed8;line-height:1.15}
 .h3-tile span{color:var(--muted,#64748b);font-size:11.5px}

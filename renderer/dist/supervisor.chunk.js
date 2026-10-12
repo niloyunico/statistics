@@ -2139,9 +2139,10 @@ function SupEditor({
         ...(cur.general || {}),
         ...got.general
       };
-      if (Array.isArray(j.census) && j.census.length) {
+      const opd = j.opd && j.opd.counts ? j.opd : null;
+      if (Array.isArray(j.census) && j.census.length || opd) {
         const sums = {};
-        j.census.forEach(u => {
+        (j.census || []).forEach(u => {
           const n = supH360Dept(u.unit, deptNames);
           sums[n] = (sums[n] || 0) + supNum(u.patients);
         });
@@ -2151,6 +2152,7 @@ function SupEditor({
         Object.keys(sums).forEach(n => {
           census[n] = String(sums[n]);
         });
+        if (opd && !String(census['OPD Total'] == null ? '' : census['OPD Total']).trim()) census['OPD Total'] = String(opd.counts.attended);
         patch.census = census;
       }
       edit(patch);
@@ -2166,6 +2168,7 @@ function SupEditor({
       const notes = [];
       if ((j.added || []).length) notes.push('Added ' + j.added.length + ' patient(s): ' + j.added.join(', ') + '.');
       notes.push('Filled in: diagnosis for ' + (c.diagnosis || 0) + ' patient(s), remarks for ' + (c.remarks || 0) + '; bed, age or consultant updated for ' + (c.details || 0) + '; ' + (c.sections || 0) + ' row(s) or number(s) added to the other sections.');
+      if (opd) notes.push('OPD: ' + opd.counts.all + ' out-patients, ' + opd.counts.vitals + ' with vitals taken, ' + opd.counts.prescribed + ' seen by the doctor. OPD Total in the census counts those who came: ' + opd.counts.attended + '.');
       if ((j.requested || []).length) notes.push('Discharge requested in H360, placed in Discharged: ' + j.requested.join(', ') + '.');
       if ((j.moved || []).length) notes.push('Placed by the IPD Admission list: ' + j.moved.join(', ') + '.');
       if ((j.died || []).length) notes.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + j.died.join(', ') + '.');
@@ -4675,6 +4678,7 @@ const h3Portal = node => {
   return node;
 };
 const H3_STATION = 'Nurse Station';
+const onPcSite = status => !status || status.site === 'pc';
 const h3Requested = row => /^yes/i.test(String((row || {})['Discharge Request'] || ''));
 const H3_SITE = {
   pc: 'the hospital PC',
@@ -4850,7 +4854,7 @@ function H3PatientDrawer({
     style: {
       marginTop: 12
     }
-  }, "The records of this patient (notes, vital signs, medicines) are kept on the hospital PC only. Open the app there to read them, or ask the administrator to keep everything in the app database."), patient.records !== 'pc-only' && !saved.length && React.createElement(React.Fragment, null, React.createElement("h4", null, "Records with saved data (0)"), React.createElement("div", {
+  }, "The records of this patient (notes, vital signs, medicines) are not kept in the app database, which holds the log sheet content only. Open the app on the hospital PC to read them, or ask the administrator to keep everything in the app database."), patient.records !== 'pc-only' && !saved.length && React.createElement(React.Fragment, null, React.createElement("h4", null, "Records with saved data (0)"), React.createElement("div", {
     className: "h3-muted"
   }, "None yet. Run a collection to read them.")), tabs.map(tab => {
     const inTab = saved.filter(r => (r.tab || "Nurse's Tab") === tab);
@@ -5009,7 +5013,55 @@ function H3Settings({
     disabled: busy || level === status.cloudData
   }, "Save choice")))));
 }
-const H3_STEPS = [['signin', 'Sign in'], ['lists', 'Patient lists'], ['register', 'IPD Admission list'], ['records', 'Patient records'], ['saving', 'Saving'], ['done', 'Done']];
+function H3Opd({
+  opd,
+  onPc,
+  query
+}) {
+  if (!opd || !opd.counts) return React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b h3-muted"
+  }, "The OPD list has not been read yet. ", onPc ? 'It is read with every collection.' : 'It is read by the collection on the hospital PC.'));
+  const c = opd.counts;
+  const q = String(query || '').trim().toLowerCase();
+  const rows = (opd.rows || []).filter(row => !q || [row.name, row.department, row.doctor, row.status, row.serial].some(value => String(value || '').toLowerCase().includes(q)));
+  return React.createElement(React.Fragment, null, React.createElement("div", {
+    className: "h3-muted"
+  }, "OPD Nurse Station list of ", h3ShowDate(opd.date), ", read ", h3When(opd.collectedAt), ". A report takes \"came to OPD\" as its OPD total."), React.createElement("div", {
+    className: "h3-tiles"
+  }, React.createElement("div", {
+    className: "h3-tile"
+  }, React.createElement("b", null, c.all), React.createElement("span", null, "Out-patients today")), React.createElement("div", {
+    className: "h3-tile ok"
+  }, React.createElement("b", null, c.vitals), React.createElement("span", null, "Vitals taken")), React.createElement("div", {
+    className: "h3-tile"
+  }, React.createElement("b", null, c.prescribed), React.createElement("span", null, "Seen by the doctor")), React.createElement("div", {
+    className: "h3-tile"
+  }, React.createElement("b", null, c.attended), React.createElement("span", null, "Came to OPD (vitals taken or seen)")), React.createElement("div", {
+    className: "h3-tile"
+  }, React.createElement("b", null, Math.max(c.all - c.attended, 0)), React.createElement("span", null, "Appointed, not yet come"))), (opd.departments || []).length > 0 && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "h3-tablewrap"
+  }, React.createElement("table", {
+    className: "h3-table"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Department"), React.createElement("th", null, "Out-patients"), React.createElement("th", null, "Vitals taken"), React.createElement("th", null, "Seen by the doctor"))), React.createElement("tbody", null, opd.departments.map(d => React.createElement("tr", {
+    key: d.department
+  }, React.createElement("td", null, d.department), React.createElement("td", null, d.total), React.createElement("td", null, d.vitals), React.createElement("td", null, d.prescribed))))))), (opd.rows || []).length > 0 && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "h3-tablewrap"
+  }, React.createElement("table", {
+    className: "h3-table"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "#"), React.createElement("th", null, "Patient"), React.createElement("th", null, "Age"), React.createElement("th", null, "Gender"), React.createElement("th", null, "Department"), React.createElement("th", null, "Doctor"), React.createElement("th", null, "Serial"), React.createElement("th", null, "Status"))), React.createElement("tbody", null, rows.map((row, i) => React.createElement("tr", {
+    key: i,
+    className: row.vitals ? 'vit' : ''
+  }, React.createElement("td", null, i + 1), React.createElement("td", null, row.name), React.createElement("td", null, row.age), React.createElement("td", null, row.gender), React.createElement("td", null, row.department), React.createElement("td", null, row.doctor), React.createElement("td", null, row.serial), React.createElement("td", null, row.status))))))), !(opd.rows || []).length && React.createElement("div", {
+    className: "h3-muted"
+  }, "The app database holds the OPD counts only, not who the out-patients are (log sheet content only)."));
+}
+const H3_STEPS = [['signin', 'Sign in'], ['lists', 'Patient lists'], ['register', 'IPD Admission list'], ['opd', 'OPD list'], ['records', 'Patient records'], ['saving', 'Saving'], ['done', 'Done']];
 const H3_MODES = {
   quick: 'Quick update',
   full: 'Full collection',
@@ -5039,7 +5091,7 @@ function H3Progress({
     className: "h3-livehead"
   }, running && React.createElement("span", {
     className: "h3-pulse"
-  }), React.createElement("b", null, name, " ", running ? 'is running' : failed ? 'stopped' : 'finished'), React.createElement("span", {
+  }), React.createElement("b", null, name, " ", running ? 'is running' : failed ? 'stopped' : p.stage === 'done' ? 'finished' : 'paused'), React.createElement("span", {
     className: "h3-muted"
   }, h3Elapsed(status.startedAt, running ? null : status.finishedAt)), React.createElement("span", {
     style: {
@@ -5095,13 +5147,17 @@ function H3Patients({
   const [open, setOpen] = useState(null);
   const [settings, setSettings] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [opd, setOpd] = useState(null);
+  const [stepping, setStepping] = useState(false);
+  const going = useRef(false);
   const wasRunning = useRef(false);
   const logRef = useRef(null);
   const loadData = useCallback(async () => {
     try {
-      const [p, a] = await Promise.all([h3Api('/api/h360/patients'), h3Api('/api/h360/admissions').catch(() => null)]);
+      const [p, a, o] = await Promise.all([h3Api('/api/h360/patients'), h3Api('/api/h360/admissions').catch(() => null), h3Api('/api/h360/opd').catch(() => null)]);
       setSnapshot(p);
       setAdmissions(a);
+      setOpd(o);
       setError('');
     } catch (e) {
       setError(e.message);
@@ -5122,6 +5178,9 @@ function H3Patients({
   useEffect(() => {
     loadStatus();
     loadData();
+    return () => {
+      going.current = false;
+    };
   }, []);
   const running = !!(status && status.running);
   useEffect(() => {
@@ -5131,6 +5190,36 @@ function H3Patients({
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [status && status.log && status.log.length]);
+  const runSteps = async first => {
+    going.current = true;
+    setStepping(true);
+    let state = first;
+    let fails = 0;
+    while (state && state.resumable && going.current) {
+      try {
+        const r = await h3Api('/api/h360/collect/step', {
+          method: 'POST',
+          body: {
+            id: state.id
+          }
+        });
+        state = r.state;
+        fails = 0;
+        setStatus(prev => Object.assign({}, prev, state));
+      } catch (e) {
+        if (e.status === 409 || e.status === 423 || ++fails >= 3) {
+          setError(e.message + (e.status === 409 || e.status === 423 ? '' : ' Press Continue to carry on from where it stopped.'));
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 2500));
+      }
+    }
+    going.current = false;
+    setStepping(false);
+    await loadStatus();
+    await loadData();
+    if (state && !state.resumable) h3Toast('Collection finished.');
+  };
   const collect = async mode => {
     setBusy(true);
     setError('');
@@ -5141,6 +5230,12 @@ function H3Patients({
           mode
         }
       });
+      if (result.state) {
+        setStatus(prev => Object.assign({}, prev, result.state));
+        await loadData();
+        setBusy(false);
+        return runSteps(result.state);
+      }
       wasRunning.current = true;
       const s = await loadStatus();
       if (s && !s.running) {
@@ -5193,7 +5288,8 @@ function H3Patients({
     return admissions.rows.filter(r => !q || regCols.names.some(name => String(of(r)[name] || '').toLowerCase().includes(q))).slice(0, 600);
   }, [admissions, regCols, query]);
   const mayCollect = h3Can('add');
-  const canStart = !!status && status.hasLogin && !running && !busy && mayCollect;
+  const canStart = !!status && status.hasLogin && !running && !busy && !stepping && mayCollect;
+  const paused = !!status && !onPcSite(status) && status.resumable && !stepping && !busy;
   const onPc = !status || status.site === 'pc';
   const shape = admissions && admissions.shape;
   const sub = snapshot ? snapshot.rows.length + ' in-patients in ' + snapshot.stations.length + ' stations · collected ' + h3When(snapshot.collectedAt) + (snapshot.site ? ' from ' + (H3_SITE[snapshot.site] || snapshot.site) : '') : 'Patients of every nurse station, read from H360';
@@ -5216,33 +5312,48 @@ function H3Patients({
     d: I.download,
     s: 15,
     c: "#fff"
-  }), "Excel"), onPc && React.createElement(H3Btn, {
+  }), "Excel"), React.createElement(H3Btn, {
     onClick: () => collect('list'),
     disabled: !canStart,
-    title: "Updates only the patient lists (admissions, beds, who has left) and the IPD Admission list. Takes a few seconds; no records are read."
-  }, "List only"), onPc && React.createElement(H3Btn, {
+    title: "Updates only the patient lists (admissions, beds, discharge requests, who has left). Takes a few seconds; no records are read."
+  }, "List only"), React.createElement(H3Btn, {
     onClick: () => collect('full'),
     disabled: !canStart,
     title: "Reads every record of every patient again. Slow; use it once a day or when something looks out of date."
-  }, "Full collection"), onPc ? React.createElement(H3Btn, {
+  }, "Full collection"), stepping ? React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: () => {
+      going.current = false;
+    },
+    title: "Stops after the patients being read now. What was read is kept; Continue carries on."
+  }, "Stop") : React.createElement(H3Btn, {
     kind: "pri",
     onClick: () => collect('quick'),
     disabled: !canStart,
-    title: "Reads notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old."
-  }, running ? 'Collecting…' : 'Collect all patients') : React.createElement(H3Btn, {
-    kind: "pri",
-    onClick: () => collect('list'),
-    disabled: !canStart,
-    title: "Signs in to H360 and updates the patient lists: admissions, beds and who has left. Records are read by the hospital PC."
-  }, busy || running ? 'Refreshing…' : 'Refresh patient lists')), settings && status && status.canManage && React.createElement(H3Settings, {
+    title: onPc ? 'Reads notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old.' : 'Updates the lists, then reads the records of every patient not read in the last two hours. Keep this page open while it runs.'
+  }, running || busy ? 'Collecting…' : 'Collect all patients')), settings && status && status.canManage && React.createElement(H3Settings, {
     status: status,
     reload: loadStatus,
     onClose: () => setSettings(false)
   }), status && !status.hasLogin && React.createElement("div", {
     className: "sup-alert warn"
-  }, status.canManage ? status.loginElsewhere ? 'The H360 login was saved from ' + (status.site === 'pc' ? 'the live site' : 'the hospital PC') + ', which keeps its own sealed copy. Enter it once here too: click "H360 login" above.' : 'No H360 login is saved yet. Click "H360 login" above and enter it once.' : 'No H360 login is saved for ' + (H3_SITE[status.site] || 'this server') + ' yet. Ask the administrator to enter it.'), status && !onPc && React.createElement("div", {
+  }, status.canManage ? status.loginElsewhere ? 'The H360 login was saved from ' + (status.site === 'pc' ? 'the live site' : 'the hospital PC') + ', which keeps its own sealed copy. Enter it once here too: click "H360 login" above.' : 'No H360 login is saved yet. Click "H360 login" above and enter it once.' : 'No H360 login is saved for ' + (H3_SITE[status.site] || 'this server') + ' yet. Ask the administrator to enter it.'), status && !onPc && stepping && React.createElement("div", {
     className: "sup-alert info"
-  }, "On the live site only the patient lists are refreshed. Notes, diagnoses and every other record are read by the collection on the hospital PC", status.lastPcRun ? ' (last one: ' + h3When(status.lastPcRun) + ')' : ' (none has reached the app database yet)', "."), status && status.localStore && status.localStore.ok === false && React.createElement("div", {
+  }, "Keep this page open while the collection runs. It reads a few patients at a time; if it is interrupted, what was read is kept and Continue carries on."), paused && React.createElement("div", {
+    className: "sup-alert warn"
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, "A collection stopped part-way: ", status.progress ? status.progress.done + ' of ' + status.progress.patients : 'some', " patients read.", status.error ? ' (' + status.error + ')' : ''), React.createElement(H3Btn, {
+    sm: true,
+    kind: "pri",
+    onClick: () => {
+      setError('');
+      runSteps(status);
+    },
+    disabled: !mayCollect
+  }, "Continue")), status && status.localStore && status.localStore.ok === false && React.createElement("div", {
     className: "sup-alert critical"
   }, status.localStore.error), status && status.legacyReports > 0 && React.createElement("div", {
     className: "sup-alert info"
@@ -5262,7 +5373,10 @@ function H3Patients({
     key: i,
     className: "sup-alert warn"
   }, w)), status && React.createElement(H3Progress, {
-    status: status
+    status: stepping ? Object.assign({}, status, {
+      running: true,
+      error: null
+    }) : status
   }), status && status.log && status.log.length > 0 && React.createElement("div", {
     className: "sup-card"
   }, React.createElement("ul", {
@@ -5292,7 +5406,7 @@ function H3Patients({
       setStation(item.station);
       setTab('patients');
     }
-  }, React.createElement("b", null, item.count), React.createElement("span", null, item.station)))), (snapshot || admissions && admissions.rows.length > 0) && React.createElement("div", {
+  }, React.createElement("b", null, item.count), React.createElement("span", null, item.station)))), (snapshot || admissions && admissions.rows.length > 0 || opd) && React.createElement("div", {
     className: "sup-toolbar"
   }, React.createElement("div", {
     className: "sup-seg"
@@ -5302,7 +5416,10 @@ function H3Patients({
   }, "In-patients", snapshot ? ' (' + snapshot.rows.length + ')' : ''), React.createElement("button", {
     className: tab === 'admissions' ? 'on' : '',
     onClick: () => setTab('admissions')
-  }, "IPD Admission list", admissions && admissions.rows.length ? ' (' + admissions.rows.length + ')' : '')), React.createElement("input", {
+  }, "IPD Admission list", admissions && admissions.rows.length ? ' (' + admissions.rows.length + ')' : ''), React.createElement("button", {
+    className: tab === 'opd' ? 'on' : '',
+    onClick: () => setTab('opd')
+  }, "OPD", opd && opd.counts ? ' (' + opd.counts.all + ')' : '')), React.createElement("input", {
     className: "h3-search",
     type: "search",
     placeholder: "Search name, UHID, bed, consultant\u2026",
@@ -5345,7 +5462,11 @@ function H3Patients({
     key: i
   }, React.createElement("td", null, i + 1), regCols.names.map(name => React.createElement("td", {
     key: name
-  }, ((regCols.raw ? r.raw : r.fields) || {})[name] || ''))))))))), loaded && !snapshot && tab === 'patients' && React.createElement("div", {
+  }, ((regCols.raw ? r.raw : r.fields) || {})[name] || ''))))))))), tab === 'opd' && React.createElement(H3Opd, {
+    opd: opd,
+    onPc: onPc,
+    query: query
+  }), loaded && !snapshot && tab === 'patients' && React.createElement("div", {
     className: "sup-card"
   }, React.createElement("div", {
     className: "sup-card-b h3-muted",
@@ -5615,6 +5736,10 @@ a.sup-btn{text-decoration:none}
 .h3-tile.req b{color:#be123c}
 .h3-tile.req.on{border-color:#e11d48;box-shadow:inset 0 0 0 1px #e11d48}
 .h3-table tr.req td{background:#ffe4e6}
+.h3-table tr.vit td{background:#f0fdf4}
+.h3-tile.ok{background:#f0fdf4;border-color:#bbf7d0}
+.h3-tile.ok b{color:#15803d}
+div.h3-tile{cursor:default}
 .h3-table tbody tr.req:hover td{background:#fecdd3}
 .h3-tile b{display:block;font-size:22px;color:#1d4ed8;line-height:1.15}
 .h3-tile span{color:var(--muted,#64748b);font-size:11.5px}

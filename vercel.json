@@ -9,6 +9,7 @@
       "src": "server/web.js",
       "use": "@vercel/node",
       "config": {
+        "maxDuration": 60,
         "includeFiles": [
           "renderer/index.html",
           "server/seed/**",

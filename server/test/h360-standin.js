@@ -86,6 +86,24 @@ function standIn() {
     res.json({ draw: Number(req.query.draw), recordsTotal: rows.length, recordsFiltered: rows.length, data: rows.slice(start, start + length) });
   });
 
+// The OPD Nurse Station Patient List: three lists side by side, one on show at a time.
+  state.opd = [
+    { id: 9001, name: 'OPD ANNA', age: '69 Y 0 M 12 D', gender: 'Male', department: 'General Surgery', doctor: 'Dr. Knife', serial: '24', status: 'Appointed (Vitals Taken)', list: 'appointed' },
+    { id: 9002, name: 'OPD BEN', age: '31 Y 8 M 16 D', gender: 'Male', department: 'Family medicine', doctor: 'Dr. Home', serial: '10', status: 'Appointed', list: 'appointed' },
+    { id: 9003, name: 'OPD CARA', age: '57 Y 0 M 1 D', gender: 'Female', department: 'Family medicine', doctor: 'Dr. Home', serial: '2', status: 'Prescribed', list: 'prescribed' },
+    { id: 9004, name: 'OPD DAN', age: '40 Y 1 M 1 D', gender: 'Male', department: 'General Surgery', doctor: 'Dr. Knife', serial: '', status: 'Prescribed (Vitals Taken)', list: 'prescribed' },
+  ];
+  app.get('/prescription/appointments/opd-nurse-station', needLogin, (req, res) => {
+    const [y, m, d] = TODAY.split('-');
+    const card = (p) => `<div class="col-md-3"><div class="card text-center"><img src="/photo/${p.id}.png"><h5>${p.name}</h5><p>Age: ${p.age}, Gender: ${p.gender}</p><p>Appointment Date: ${d}/${m}/${y}</p><p>${p.department}</p><p>${p.doctor}</p><p>Serial: ${p.serial}</p><span class="badge">${p.status}</span><div class="btn-group"><a class="btn" href="/emr/opd-emr/${p.id}">EMR</a><a class="btn" href="/prescription/vitals-entry/${p.id}">VITALS</a></div></div></div>`;
+    const pane = (id, list, shown) => `<div class="tab-pane" id="${id}" style="${shown ? '' : 'display:none'}"><div class="row">${list.map(card).join('')}</div></div>`;
+    res.send(page(`<h4>OPD Nurse Station Patient List</h4>
+      <form><input name="patient_code" placeholder="Patient Code."><input name="from_date" value="${d}-${m}-${y}"><input name="to_date" value="${d}-${m}-${y}"></form>
+      <ul class="nav"><li><a class="tabh" href="#appointed">APPOINTED PATIENT</a></li><li><a class="tabh" href="#prescribed">PRESCRIBED PATIENT</a></li><li><a class="tabh" href="#all_patient">ALL PATIENT</a></li></ul>
+      <div class="tab-content">${pane('appointed', state.opd.filter((p) => p.list === 'appointed'), true)}${pane('prescribed', state.opd.filter((p) => p.list === 'prescribed'))}${pane('all_patient', state.opd)}</div>
+      <script>document.querySelectorAll('.tabh').forEach(function (a) { a.onclick = function (e) { e.preventDefault(); document.querySelectorAll('.tab-pane').forEach(function (p) { p.style.display = p.id === a.getAttribute('href').slice(1) ? '' : 'none'; }); }; });</script>`));
+  });
+
   const header = (adm) => `<div class="row"><div><label>Age</label></div><div>: ${adm === '1002' ? '9 Y 2 M 0 D' : '35 Y 0 M 3 D'}</div><div><label>Gender</label></div><div>: Male</div><div><label>Contact No.</label></div><div>: 01711111111</div></div>`;
   app.get('/v2/ipd/nurse-note/nurses-tab/:adm', needLogin, (req, res) => {
     const adm = req.params.adm;

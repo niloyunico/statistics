@@ -5,6 +5,7 @@
 const crypto = require('crypto');
 const views = require('./views');
 const register = require('./register');
+const opd = require('./opd');
 
 const STATION_COLUMN = 'Nurse Station';
 const COLUMNS = [
@@ -341,6 +342,20 @@ async function collectAll(cfg, log = () => {}, memory = {}, openSession) {
       warnings.push('The IPD Admission list could not be read (' + admissions.shape.error + ').');
     }
 
+    // The OPD Nurse Station list: today's out-patients and how many have had their vitals taken.
+    tell({ stage: 'opd' });
+    let outPatients = { found: false };
+    try {
+      if (session.opd) outPatients = opd.parse(await session.opd());
+      if (outPatients.found) log(`OPD list: ${outPatients.counts.all} out-patients, ${outPatients.counts.vitals} with vitals taken, ${outPatients.counts.prescribed} seen by the doctor.`);
+      else log(session.kind === 'http'
+        ? 'OPD list: it is loaded by the page after opening, so it is read by the hospital PC collection.'
+        : 'OPD list: no patient cards were found on the page.');
+    } catch (err) {
+      outPatients = { found: false, error: err.message.split('\n')[0] };
+      warnings.push('The OPD list could not be read (' + outPatients.error + ').');
+    }
+
     log({
       list: 'List only: updating the patient lists; no records are read.',
       quick: 'Quick update: reading notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old.',
@@ -388,6 +403,7 @@ async function collectAll(cfg, log = () => {}, memory = {}, openSession) {
       skipped,
       warnings,
       register: admissions,
+      opd: outPatients,
     };
   } finally {
     if (memory.onNotes && session.notes && Object.keys(session.notes).length) await Promise.resolve(memory.onNotes(session.notes)).catch(() => {});
@@ -395,4 +411,4 @@ async function collectAll(cfg, log = () => {}, memory = {}, openSession) {
   }
 }
 
-module.exports = { collectAll, STATION_COLUMN, COLUMNS };
+module.exports = { collectAll, collectPatient, slotReader, dropTemplates, hasData, STATION_COLUMN, COLUMNS };

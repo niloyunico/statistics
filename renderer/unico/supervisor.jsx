@@ -815,11 +815,14 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
       }
       if (got.general && Object.keys(got.general).length) patch.general = { ...(cur.general || {}), ...got.general };
       // the in-patient census by unit, under the app's own department names where they match
-      if (Array.isArray(j.census) && j.census.length) {
+      const opd = j.opd && j.opd.counts ? j.opd : null;
+      if ((Array.isArray(j.census) && j.census.length) || opd) {
         const sums = {};
-        j.census.forEach((u) => { const n = supH360Dept(u.unit, deptNames); sums[n] = (sums[n] || 0) + supNum(u.patients); });
+        (j.census || []).forEach((u) => { const n = supH360Dept(u.unit, deptNames); sums[n] = (sums[n] || 0) + supNum(u.patients); });
         const census = { ...(cur.census || {}) };
         Object.keys(sums).forEach((n) => { census[n] = String(sums[n]); });
+        // OPD: those who came (vitals taken, or seen by the doctor), where nothing is typed yet
+        if (opd && !String(census['OPD Total'] == null ? '' : census['OPD Total']).trim()) census['OPD Total'] = String(opd.counts.attended);
         patch.census = census;
       }
       edit(patch);
@@ -828,6 +831,7 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
       const notes = [];
       if ((j.added || []).length) notes.push('Added ' + j.added.length + ' patient(s): ' + j.added.join(', ') + '.');
       notes.push('Filled in: diagnosis for ' + (c.diagnosis || 0) + ' patient(s), remarks for ' + (c.remarks || 0) + '; bed, age or consultant updated for ' + (c.details || 0) + '; ' + (c.sections || 0) + ' row(s) or number(s) added to the other sections.');
+      if (opd) notes.push('OPD: ' + opd.counts.all + ' out-patients, ' + opd.counts.vitals + ' with vitals taken, ' + opd.counts.prescribed + ' seen by the doctor. OPD Total in the census counts those who came: ' + opd.counts.attended + '.');
       if ((j.requested || []).length) notes.push('Discharge requested in H360, placed in Discharged: ' + j.requested.join(', ') + '.');
       if ((j.moved || []).length) notes.push('Placed by the IPD Admission list: ' + j.moved.join(', ') + '.');
       if ((j.died || []).length) notes.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + j.died.join(', ') + '.');

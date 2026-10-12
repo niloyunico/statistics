@@ -20,13 +20,21 @@ function cookieJar() {
     header() {
       return [...cookies].map(([name, value]) => `${name}=${value}`).join('; ');
     },
+    list() {
+      return [...cookies];
+    },
+    put(pairs) {
+      for (const [name, value] of pairs || []) cookies.set(name, value);
+    },
   };
 }
 
-async function open(cfg, { fetchImpl } = {}) {
+// cookies: the sign-in of an earlier session ([name, value] pairs), used while H360 still accepts it.
+async function open(cfg, { fetchImpl, cookies } = {}) {
   const doFetch = fetchImpl || fetch;
   const origin = new URL(cfg.baseUrl).origin;
   const jar = cookieJar();
+  jar.put(cookies);
   let csrf = '';
 
   // One request that stays on H360 and follows its redirects by hand, so the cookies are kept on the way.
@@ -78,6 +86,7 @@ async function open(cfg, { fetchImpl } = {}) {
   return {
     kind: 'http',
     notes,
+    cookies: () => jar.list(),
     async stations() {
       const page = await request(cfg.pageUrl, { headers: { Accept: 'text/html' } });
       if (isLoginUrl(page.url)) throw new Error('H360 sent us back to the login page after signing in.');
@@ -123,6 +132,26 @@ async function open(cfg, { fetchImpl } = {}) {
       if (page.status !== 200) throw new Error(`The IPD Admission page could not be opened (status ${page.status}).`);
       if (!views.plainTables(page.text).some((table) => table.rows.length)) notes.admissions = views.describePage(page.text, /ajax|admission|datatable/i);
       return { answers: [], html: page.text };
+    },
+    // The OPD Nurse Station Patient List as far as the page itself carries it; the lists it
+    // links to on the same page are opened too.
+    async opd() {
+      const opd = require('./opd');
+      const page = await request(cfg.baseUrl + opd.OPD_PATH, { headers: { Accept: 'text/html' } });
+      if (isLoginUrl(page.url)) throw new Error('H360 did not open the OPD Nurse Station page for this login.');
+      if (page.status !== 200) throw new Error(`The OPD Nurse Station page could not be opened (status ${page.status}).`);
+      const read = opd.viewsOf(page.text);
+      const links = opd.tabLinks(page.text, cfg.baseUrl);
+      if (links.length && read.views.every((view) => !view.tab)) {
+        const views = [];
+        for (const link of links) {
+          const other = await request(link.href, { headers: { Accept: 'text/html' } });
+          if (other.status === 200 && !isLoginUrl(other.url)) views.push({ tab: link.tab, cards: opd.viewsOf(other.text).views.flatMap((view) => view.cards) });
+        }
+        if (views.some((view) => view.cards.length)) return { views, date: read.date };
+      }
+      if (!read.views.some((view) => view.cards.length)) notes.opd = views.describePage(page.text, /appoint|ajax|vital/i);
+      return read;
     },
     close() {
       return Promise.resolve();

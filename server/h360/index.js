@@ -101,7 +101,7 @@ function createService(deps = {}) {
   }
 
   // One collection, start to finish. The live site only ever refreshes the lists.
-  async function collect(wanted, log = () => {}) {
+  async function collect(wanted, log = () => {}, extra = {}) {
     const mode = site() === 'cloud' ? 'list' : ['full', 'list'].includes(wanted) ? wanted : 'quick';
     const sharedStore = await shared();
     const level = await settings.level(sharedStore.db);
@@ -122,7 +122,7 @@ function createService(deps = {}) {
     memory.onStations = (list) => settings.saveStations(sharedStore.db, list, { site: site() });
     memory.onNotes = (notes) => settings.saveNotes(sharedStore.db, notes, site());
     // Loaded when a collection starts: the page readers are of no use to any other request.
-    const snapshot = await require('./collector').collectAll(cfg, log, { ...memory, mode }, openSession);
+    const snapshot = await require('./collector').collectAll(cfg, log, { ...memory, mode }, extra.opener || openSession);
 
     const tell = typeof log.progress === 'function' ? log.progress : () => {};
     tell({ stage: 'saving' });
@@ -133,6 +133,7 @@ function createService(deps = {}) {
       // What the records say about each patient goes with the patient; the records follow only under 'all'.
       records = await storeLib.loadRecords(localStore);
       suggestions = sheets.suggestionsFrom(records);
+      snapshot.knownTemplates = [...(await storeLib.loadMemory(localStore)).templates];
     }
     await storeLib.save(sharedStore, snapshot, { level, suggestions, records: level === 'all' ? records : null, site: site() });
     statusCache = null;
@@ -143,6 +144,140 @@ function createService(deps = {}) {
     log(`Done: ${snapshot.rows.length} patients from ${snapshot.stations.length} stations saved.`
       + (localStore ? (level === 'all' ? ' Every record was also saved to the app database.' : ' The records stay on this computer; the app database holds the log sheet content only.') : ''));
     return snapshot;
+  }
+
+/* ---- on the live site: the records, a few patients at a time ----
+     The live site has no process that outlives a request, so a collection there is a list
+     refresh followed by short steps, each asked for by the open page: a step signs in with
+     the sign-in the last one left, reads as many patients as fit in its time, saves them and
+     says how far it has got. Where it stands is kept in the database, so a closed tab or a
+     failed step loses nothing; the page (or another one) carries on from there.
+     Under 'log sheet content only' the records are read to work out diagnosis, remarks,
+     surgery and the rest, and are not stored. */
+  const STEP_MS = Number(process.env.H360_STEP_MS) || 18000;
+  const FRESH_MS = 2 * 60 * 60 * 1000;
+  const openPlain = deps.openStep || ((cfg, cookies) => require('./session-http').open(cfg, { cookies }));
+  const sealed = (session) => (session && session.cookies ? settings.seal(JSON.stringify(session.cookies())) : null);
+  const publicRun = (state) => (!state ? null : {
+    id: state.id, running: false, resumable: !state.finishedAt, startedAt: state.startedAt, finishedAt: state.finishedAt || null,
+    error: state.error || null, log: state.log || [], mode: state.mode, remaining: (state.queue || []).length,
+    progress: { stage: state.finishedAt ? 'done' : 'records', mode: state.mode, patients: state.total, done: state.done, pages: state.pages, stations: state.stations || [], last: state.last || '' },
+  });
+
+  async function cloudState() {
+    const db = await sharedDb();
+    return db ? publicRun(await settings.read(db, 'cloudRun')) : null;
+  }
+
+  async function cloudStart(wanted, by) {
+    const mode = wanted === 'full' ? 'full' : 'quick';
+    const lines = [];
+    const log = (message) => lines.push({ at: new Date().toISOString(), message });
+    let kept = null;
+    const opener = async (cfg) => { kept = await (deps.openSession ? deps.openSession(cfg) : require('./session-http').open(cfg)); return kept; };
+    await collect('list', log, { opener });
+    const sharedStore = await shared();
+    const latestRun = await storeLib.latestRun(sharedStore);
+    const docs = await sharedStore.col('patients').find({ lastRunId: latestRun._id }).sort({ seq: 1 }).project({ admissionNo: 1, station: 1, recordsAt: 1 }).toArray();
+    const old = Date.now() - FRESH_MS;
+    const todo = docs.filter((doc) => mode === 'full' || !doc.recordsAt || new Date(doc.recordsAt).getTime() < old);
+    const perStation = new Map();
+    for (const doc of todo) perStation.set(doc.station, (perStation.get(doc.station) || 0) + 1);
+    log(mode === 'full'
+      ? `Reading the records of all ${todo.length} patients.`
+      : `Reading the records of ${todo.length} patients${docs.length - todo.length ? '; ' + (docs.length - todo.length) + ' were read less than two hours ago' : ''}.`);
+    const now = new Date().toISOString();
+    const state = {
+      id: require('crypto').randomBytes(8).toString('hex'), mode, by: by || '', startedAt: lines.length ? lines[0].at : now, updatedAt: now,
+      finishedAt: todo.length ? null : now, error: null, total: todo.length, done: 0, pages: 0, queue: todo.map((doc) => doc.admissionNo),
+      stations: [...perStation].map(([station, total]) => ({ station, total, done: 0 })), last: '', log: lines, cookies: sealed(kept), lockedAt: null,
+    };
+    if (!todo.length) log('Done: every patient was read less than two hours ago. Use Full collection to read them all again.');
+    await settings.write(await sharedDb(), 'cloudRun', state);
+    statusCache = null;
+    return publicRun(state);
+  }
+
+  async function cloudStep(id) {
+    const db = await sharedDb();
+    const state = await settings.read(db, 'cloudRun');
+    if (!state || state.id !== id) throw fail(409, 'This collection was replaced by a newer one. Start it again.');
+    if (state.finishedAt) return publicRun(state);
+    if (state.lockedAt && Date.now() - new Date(state.lockedAt).getTime() < 75000) throw fail(423, 'This collection is being run from another window.');
+    await settings.write(db, 'cloudRun', { lockedAt: new Date() });
+    const lines = [];
+    const log = (message) => lines.push({ at: new Date().toISOString(), message });
+    const queue = (state.queue || []).slice();
+    const finished = [];
+    let pages = 0;
+    let cookies = state.cookies;
+    try {
+      const sharedStore = await shared();
+      const level = await settings.level(db);
+      const cfg = await config();
+      let earlier = null;
+      try { earlier = state.cookies ? JSON.parse(settings.unseal(state.cookies)) : null; } catch (err) { earlier = null; }
+      const session = await openPlain(cfg, earlier);
+      const collector = require('./collector');
+      const templates = new Set((await sharedStore.col('templates').find().project({ _id: 1 }).toArray()).map((doc) => doc._id));
+      const readPage = collector.slotReader(session, cfg);
+      const read = async (url) => { const result = await readPage(url); pages++; return result; };
+      const started = Date.now();
+      let begun = false;
+      const worker = async () => {
+        // A step always reads at least one patient, so a collection cannot stand still.
+        while (queue.length && (!begun || Date.now() - started < STEP_MS)) {
+          begun = true;
+          const admissionNo = queue.shift();
+          const doc = await sharedStore.col('patients').findOne({ admissionNo });
+          if (!doc || !doc.active) { finished.push({ station: doc ? doc.station : '', name: '' }); continue; }
+          const patient = { admissionNo, patientNo: doc.patientNo, station: doc.station, admission: doc.admission || {} };
+          const name = [(doc.admission || {}).patient_name, (doc.admission || {}).bed_name].filter(Boolean).join(' \u00b7 ');
+          try {
+            await collector.collectPatient(read, cfg, patient, { known: null, mode: 'full' });
+          } catch (err) {
+            if (/signed us out/.test(err.message)) { queue.unshift(admissionNo); throw err; }
+            patient.error = err.message.split('\n')[0];
+          }
+          if (patient.error && !(patient.modules || []).length) log('Warning: ' + ((doc.admission || {}).patient_name || admissionNo) + ': ' + patient.error);
+          else {
+            collector.dropTemplates([patient], templates);
+            const suggestion = sheets.suggestionsFrom(patient.modules.filter(collector.hasData).map((module) => ({ ...module, admissionNo }))).get(admissionNo) || null;
+            await storeLib.savePatientRecords(sharedStore, doc, patient, { level, suggestion });
+          }
+          finished.push({ station: doc.station, name });
+        }
+      };
+      try {
+        await Promise.all([worker(), worker(), worker()]);
+        cookies = sealed(session);
+      } catch (err) {
+        if (!/signed us out/.test(err.message)) throw err;
+        // The next step signs in afresh.
+        cookies = null;
+        log('H360 ended the sign-in; signing in again.');
+      }
+    } catch (err) {
+      // What was read is kept; the step is reported and the collection can be carried on.
+      log('Stopped: ' + err.message.split('\n')[0]);
+      state.error = err.message.split('\n')[0];
+      await settings.write(db, 'cloudRun', { lockedAt: null, error: state.error, queue, done: state.done + finished.length, pages: state.pages + pages, log: [...(state.log || []), ...lines].slice(-300), updatedAt: new Date().toISOString() });
+      statusCache = null;
+      throw fail(502, state.error);
+    }
+    const done = state.done + finished.length;
+    const over = queue.length === 0;
+    if (over) log(`Done: the records of ${done} patients were read (${state.pages + pages} pages).`);
+    const next = {
+      queue, done, pages: state.pages + pages, cookies, lockedAt: null, error: null, updatedAt: new Date().toISOString(),
+      finishedAt: over ? new Date().toISOString() : null,
+      last: (finished.filter((item) => item.name).pop() || {}).name || state.last || '',
+      stations: (state.stations || []).map((item) => ({ ...item, done: item.done + finished.filter((f) => f.station === item.station).length })),
+      log: [...(state.log || []), ...lines].slice(-300),
+    };
+    await settings.write(db, 'cloudRun', next);
+    statusCache = null;
+    return publicRun({ ...state, ...next });
   }
 
   async function run(wanted) {
@@ -181,7 +316,7 @@ function createService(deps = {}) {
     const login = await settings.login(db);
     const value = {
       site: site(),
-      modes: site() === 'cloud' ? ['list'] : ['quick', 'full', 'list'],
+      modes: ['quick', 'full', 'list'],
       // The user name is shown so it is clear whose login is in use; the password never leaves the server.
       hasLogin: Boolean(login.user && login.pass),
       user: login.user,
@@ -197,7 +332,7 @@ function createService(deps = {}) {
     if (db) {
       const sharedStore = storeLib.open(db, storeLib.SHARED);
       const lastRun = await storeLib.latestRun(sharedStore);
-      if (lastRun) value.lastRun = { collectedAt: lastRun.collectedAt, mode: lastRun.mode, total: lastRun.total, site: lastRun.site || '', level: lastRun.level || '', register: lastRun.register || null };
+      if (lastRun) value.lastRun = { collectedAt: lastRun.collectedAt, mode: lastRun.mode, total: lastRun.total, site: lastRun.site || '', level: lastRun.level || '', register: lastRun.register || null, opd: lastRun.opd || null };
       // The newest collection that read the records (only the hospital PC does).
       // Log sheets that have not been turned into supervisor reports yet.
       value.sheetsWaiting = await db.collection(sheets.SHEETS).countDocuments({ convertedTo: { $exists: false } });
@@ -243,7 +378,15 @@ function createService(deps = {}) {
     return own && own.shape ? own : storeLib.loadRegister(await shared());
   }
 
-  return { job, site, shared, local, localDb, sharedDb, collect, run, facts, latest, patient, admissions, forget: () => { statusCache = null; } };
+  // The OPD list as last read: with the patients where they are kept, the counts everywhere.
+  async function outPatients() {
+    const localStore = await local(false);
+    const own = localStore ? await storeLib.loadOpd(localStore) : null;
+    const kept = await storeLib.loadOpd(await shared());
+    return own && (!kept || own.collectedAt >= kept.collectedAt) ? own : kept;
+  }
+
+  return { job, site, shared, local, localDb, sharedDb, collect, run, facts, latest, patient, admissions, outPatients, cloudStart, cloudStep, cloudState, forget: () => { statusCache = null; } };
 }
 
 /* ---------------- route registration ---------------- */
@@ -262,20 +405,35 @@ function mount(app, opts = {}) {
         else res.end();
       });
 
-  app.get('/api/h360/status', guard, route(async (req, res) => {
-    res.json({ ...service.job, ...(await service.facts()), canManage: isAdmin(req) });
+app.get('/api/h360/status', guard, route(async (req, res) => {
+    const out = { ...service.job, ...(await service.facts()), canManage: isAdmin(req) };
+    // On the live site a collection lives in the database, not in this process.
+    if (service.site() === 'cloud') {
+      const kept = await service.cloudState();
+      if (kept && (!out.startedAt || kept.startedAt >= out.startedAt)) Object.assign(out, kept);
+    }
+    res.json(out);
   }));
 
   app.post('/api/h360/collect', guard, json, route(async (req, res) => {
     if (service.job.running) return res.status(409).json({ error: 'A collection is already running.' });
     const mode = (req.body || {}).mode;
-    if (service.site() === 'cloud') {
+if (service.site() === 'cloud') {
+      if (mode === 'quick' || mode === 'full') {
+        // The lists now, then the records in steps the page asks for one after another.
+        return res.json({ ok: true, state: await service.cloudStart(mode, who(req)) });
+      }
       // No background work on the live site: the lists are refreshed while the request waits.
       await service.run('list');
       return res.json({ ok: !service.job.error, error: service.job.error, log: service.job.log });
     }
     service.run(mode);
     res.json({ ok: true });
+  }));
+
+  // The next few patients of a collection running on the live site.
+  app.post('/api/h360/collect/step', guard, json, route(async (req, res) => {
+    res.json({ ok: true, state: await service.cloudStep(String((req.body || {}).id || '')) });
   }));
 
   app.post('/api/h360/login', guard, adminOnly, json, route(async (req, res) => {
@@ -320,6 +478,10 @@ function mount(app, opts = {}) {
     res.json(await service.admissions());
   }));
 
+  app.get('/api/h360/opd', guard, route(async (req, res) => {
+    res.json((await service.outPatients()) || null);
+  }));
+
   app.get('/api/h360/export.xlsx', guard, route(async (req, res) => {
     const { snapshot, store } = await service.latest();
     if (!snapshot) return res.status(404).send('Nothing collected yet.');
@@ -344,7 +506,7 @@ function mount(app, opts = {}) {
     const result = await sheets.fill(await service.shared(), bridge.toSheet(report), body.options || {}, bridge.carriedFrom(previous));
     res.json({
       report: bridge.fromSheet({ data: result.data }, before),
-      census: result.census, sourceCollectedAt: result.sourceCollectedAt,
+      census: result.census, opd: result.opd, sourceCollectedAt: result.sourceCollectedAt,
       added: result.added, gone: result.gone, moved: result.moved, died: result.died, requested: result.requested, changed: result.changed,
       updateDefaults: sheets.UPDATE_DEFAULTS,
     });

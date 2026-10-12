@@ -121,4 +121,4 @@ async function saveNotes(db, notes, site) {
   await write(db, 'diagnostics', { notes, site: site || '', at: new Date() });
 }
 
-module.exports = { login, saveLogin, forgetLogin, level, saveLevel, stations, saveStations, saveNotes, LEVELS };
+module.exports = { login, saveLogin, forgetLogin, level, saveLevel, stations, saveStations, saveNotes, seal, unseal, read, write, LEVELS };
