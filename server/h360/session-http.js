@@ -81,6 +81,24 @@ async function open(cfg, { fetchImpl, cookies } = {}) {
     if (after.status >= 400) throw new Error(`H360 did not accept the sign-in (status ${after.status}).`);
   }
 
+// H360 answers a page's address with an empty frame, and the frame's own script then asks
+  // for the same address again, marked as coming from a script, to get the page itself (see
+  // its custom.js: a[rel='tab'] and the loader at the top of every frame). A browser does
+  // both by itself; here both are asked for: the frame (it carries the form token) and the
+  // body (it carries the lists).
+  const FROM_SCRIPT = { 'X-Requested-With': 'XMLHttpRequest', Accept: 'text/html, */*; q=0.01' };
+  async function pageOf(url, what) {
+    const frame = await request(url, { headers: { Accept: 'text/html' } });
+    if (isLoginUrl(frame.url)) throw new Error(`H360 did not open the ${what} page for this login.`);
+    if (frame.status !== 200) throw new Error(`The ${what} page could not be opened (status ${frame.status}).`);
+    let body = '';
+    try {
+      const inner = await request(url, { headers: FROM_SCRIPT });
+      if (inner.status === 200 && !isLoginUrl(inner.url)) body = inner.text;
+    } catch (err) { /* the frame alone is looked at */ }
+    return { frame: frame.text, body };
+  }
+
   // What was learnt about pages that did not carry their list (see views.describePage).
   const notes = {};
   return {
@@ -88,12 +106,11 @@ async function open(cfg, { fetchImpl, cookies } = {}) {
     notes,
     cookies: () => jar.list(),
     async stations() {
-      const page = await request(cfg.pageUrl, { headers: { Accept: 'text/html' } });
-      if (isLoginUrl(page.url)) throw new Error('H360 sent us back to the login page after signing in.');
-      if (page.status !== 200) throw new Error(`The Nurse Station page could not be opened (status ${page.status}).`);
-      csrf = views.csrfToken(page.text);
-      const options = views.stationOptions(page.text);
-      if (!options.length) notes.stations = views.describePage(page.text, /station/i);
+      const page = await pageOf(cfg.pageUrl, 'Nurse Station');
+      csrf = views.csrfToken(page.frame) || views.csrfToken(page.body);
+      const inBody = views.stationOptions(page.body);
+      const options = inBody.length ? inBody : views.stationOptions(page.frame);
+      if (!options.length) notes.stations = views.describePage(page.body || page.frame, /station|ajax|url\s*:/i);
       return options;
     },
     lists(stations) {
@@ -127,30 +144,30 @@ async function open(cfg, { fetchImpl, cookies } = {}) {
     // Without a browser only a list drawn into the page itself can be read; a list the
     // page loads afterwards is read by the hospital PC's collection.
     async register() {
-      const page = await request(cfg.baseUrl + views.REGISTER_PATH, { headers: { Accept: 'text/html' } });
-      if (isLoginUrl(page.url)) throw new Error('H360 did not open the IPD Admission page for this login.');
-      if (page.status !== 200) throw new Error(`The IPD Admission page could not be opened (status ${page.status}).`);
-      if (!views.plainTables(page.text).some((table) => table.rows.length)) notes.admissions = views.describePage(page.text, /ajax|admission|datatable/i);
-      return { answers: [], html: page.text };
+      const page = await pageOf(cfg.baseUrl + views.REGISTER_PATH, 'IPD Admission');
+      const filled = (html) => views.plainTables(html).some((table) => table.rows.length);
+      const html = filled(page.body) ? page.body : page.frame;
+      if (!filled(html)) notes.admissions = views.describePage(page.body || page.frame, /ajax|url\s*:|datatable|admission/i);
+      return { answers: [], html };
     },
     // The OPD Nurse Station Patient List as far as the page itself carries it; the lists it
     // links to on the same page are opened too.
     async opd() {
       const opd = require('./opd');
-      const page = await request(cfg.baseUrl + opd.OPD_PATH, { headers: { Accept: 'text/html' } });
-      if (isLoginUrl(page.url)) throw new Error('H360 did not open the OPD Nurse Station page for this login.');
-      if (page.status !== 200) throw new Error(`The OPD Nurse Station page could not be opened (status ${page.status}).`);
+      const both = await pageOf(cfg.baseUrl + opd.OPD_PATH, 'OPD Nurse Station');
+      const hasCards = (html) => opd.viewsOf(html).views.some((view) => view.cards.length);
+      const page = { text: hasCards(both.body) ? both.body : both.frame };
       const read = opd.viewsOf(page.text);
-      const links = opd.tabLinks(page.text, cfg.baseUrl);
+      const links = opd.tabLinks(both.body + both.frame, cfg.baseUrl);
       if (links.length && read.views.every((view) => !view.tab)) {
         const views = [];
         for (const link of links) {
-          const other = await request(link.href, { headers: { Accept: 'text/html' } });
+          const other = await request(link.href, { headers: FROM_SCRIPT });
           if (other.status === 200 && !isLoginUrl(other.url)) views.push({ tab: link.tab, cards: opd.viewsOf(other.text).views.flatMap((view) => view.cards) });
         }
         if (views.some((view) => view.cards.length)) return { views, date: read.date };
       }
-      if (!read.views.some((view) => view.cards.length)) notes.opd = views.describePage(page.text, /appoint|ajax|vital/i);
+      if (!read.views.some((view) => view.cards.length)) notes.opd = views.describePage(both.body || both.frame, /appoint|ajax|url\s*:|vital|tab/i);
       return read;
     },
     close() {

@@ -254,7 +254,25 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     where = 'pc';
     ok('a Nurse Station page that fills its list by script: known stations are used, an empty answer changes nothing, and no address from a script is ever requested');
 
-/* the live site reads the records too: the lists first, then a few patients per step */
+/* H360 as it really answers: an empty frame first, the page itself to a second request */
+    mock.state.shell = true;
+    await sharedDb.collection('h360Settings').deleteOne({ _id: 'stations' });
+    await sharedDb.collection('h360Runs').updateMany({}, { $set: { stationList: [] } });
+    where = 'cloud';
+    const framed = [];
+    const viaFrame = await service.collect('list', (m) => framed.push(m));
+    assert.strictEqual(viaFrame.rows.length, 2);
+    assert.ok(!framed.some((m) => /already known/.test(m)), framed.join(' | '));
+    assert.ok(framed.some((m) => /IPD Admission list: 5 rows read/.test(m)), framed.join(' | '));
+    assert.ok(framed.some((m) => /OPD list: 4 out-patients, 2 with vitals taken/.test(m)), framed.join(' | '));
+    const readStations = await settings.stations(sharedDb);
+    assert.strictEqual(readStations.guessed, false);
+    assert.deepStrictEqual(readStations.map((item) => item.value), ['11', '12']);
+    mock.state.shell = false;
+    where = 'pc';
+    ok('a page that is an empty frame is read the way its own script reads it: stations, IPD Admission and OPD without a browser');
+
+    /* the live site reads the records too: the lists first, then a few patients per step */
     process.env.H360_STEP_MS = '1';
     const live = h360.createService({ sharedDb: async () => sharedDb, localDb: async () => localDb, site: () => 'cloud', openSession: (cfg) => httpSession.open(cfg) });
     delete process.env.H360_STEP_MS;
@@ -322,6 +340,10 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.strictEqual(JSON.parse((await get('/api/h360/admissions')).body).rows.length, 5);
     assert.strictEqual(JSON.parse((await get('/api/h360/schema')).body).sections.length, 18);
     assert.strictEqual(JSON.parse((await get('/api/h360/opd')).body).counts.vitals, 2);
+    const onBoard = JSON.parse((await get('/api/h360/board')).body);
+    assert.deepStrictEqual(onBoard.patients.map((p) => [p.name, p.dept, p.bed, p.critical, p.dischargeRequested, p.diagnosis]), [
+      ['TEST ALPHA', 'Level-10', '1018/B', false, true, 'Pneumonia\nDM'], ['TEST BRAVO', 'MICU', 'MICU-3', true, false, 'Pneumonia\nDM']]);
+    assert.ok(onBoard.collectedAt);
     assert.strictEqual(JSON.parse((await get('/api/h360/sheets')).body).length, 2);
     const word = await get(`/api/h360/sheets/${sheet.id}/docx`);
     assert.strictEqual(word.body.slice(0, 2).toString(), 'PK');
@@ -400,6 +422,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
 
     /* the same collection through a real browser, with a list the page loads by itself */
     mock.state.registerMode = 'xhr';
+    mock.state.shell = true;
     let viaBrowser = null;
     if (browserSession.available()) {
       try {
@@ -427,7 +450,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
       } finally {
         await viaBrowser.close();
       }
-      ok('through Chrome: sign-in, stations, lists, the whole IPD Admission list as the page loads it, and the three OPD lists');
+      ok('through Chrome, with pages that arrive as an empty frame: sign-in, stations, lists, the whole IPD Admission list as the page loads it, and the three OPD lists');
     }
     assert.ok(!mock.state.hits.some((hit) => /discharge|bill|vitals-entry|opd-emr/.test(hit)), 'an action page was opened');
   } finally {

@@ -49,6 +49,17 @@ function standIn() {
   });
   app.get('/dashboard', needLogin, (req, res) => res.send(page('<h1>Dashboard</h1>')));
 
+  // state.shell: a page's address gives an empty frame whose script asks for the page again,
+  // marked as coming from a script, and puts the answer into the frame (as H360 does).
+  app.get(['/v2/ipd/nurse-station-receive-request', '/ipd/ipd-admission', '/prescription/appointments/opd-nurse-station'], needLogin, (req, res, next) => {
+    if (!state.shell || req.headers['x-requested-with']) return next();
+    res.send(page(`<div id="page-content"></div><script>
+      const pageurl = location.href;
+      fetch(location.pathname, { headers: { 'X-Requested-With': 'XMLHttpRequest' } }).then(function (r) { return r.text(); }).then(function (html) {
+        var box = document.getElementById('page-content'); box.innerHTML = html;
+        box.querySelectorAll('script').forEach(function (old) { var s = document.createElement('script'); s.textContent = old.textContent; old.replaceWith(s); });
+      });</script>`));
+  });
   app.get('/v2/ipd/nurse-station-receive-request', needLogin, (req, res) => {
     if (state.stationsMode === 'script') {
       return res.send(page(`<select id="nurse_station_received"><option value="">Select</option></select>

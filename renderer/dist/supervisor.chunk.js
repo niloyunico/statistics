@@ -4106,6 +4106,8 @@ function SupBoard({
   const [dept, setDept] = useState('');
   const [mode, setMode] = useState('cards');
   const [editing, setEditing] = useState(null);
+  const [h360, setH360] = useState(null);
+  const [source, setSource] = useState('h360');
   const load = () => supApi.get('/api/supervisor-reports?limit=1000').then(j => {
     if (j.ok) {
       setList(j.reports);
@@ -4114,15 +4116,55 @@ function SupBoard({
   });
   useEffect(() => {
     load();
+    fetch('/api/h360/board', {
+      headers: {
+        accept: 'application/json'
+      }
+    }).then(r => r.ok ? r.json() : null).then(j => setH360(j && Array.isArray(j.patients) ? j : {
+      patients: []
+    })).catch(() => setH360({
+      patients: []
+    }));
   }, []);
-  if (!list) return React.createElement("div", {
+  if (!list || !h360) return React.createElement("div", {
     style: {
       padding: 40,
       textAlign: 'center',
       color: 'var(--muted,#64748b)'
     }
   }, "Loading patient board\u2026");
-  const active = supActivePatients(list);
+  const fromReports = supActivePatients(list);
+  const hasH360 = h360.patients.length > 0;
+  const useH360 = hasH360 && source === 'h360';
+  const collected = hasH360 ? supFmtDT(h360.collectedAt) : '';
+  const typed = {};
+  fromReports.forEach(p => {
+    typed[p.key] = p;
+  });
+  const active = !useH360 ? fromReports : h360.patients.map(p => {
+    const key = supPatKey(p) || 'h:' + p.name + p.bed;
+    const mine = typed[key] || {};
+    return {
+      key,
+      name: p.name,
+      uhid: p.uhid,
+      age: p.age,
+      bed: p.bed,
+      consultant: p.consultant,
+      doa: p.doa,
+      dept: supH360Dept(p.dept, deptNames),
+      critical: !!p.critical,
+      dischargeRequested: !!p.dischargeRequested,
+      diagnosis: mine.diagnosis || p.diagnosis || '',
+      remarks: mine.remarks || p.remarks || '',
+      lastSeen: {
+        date: collected,
+        shift: 'H360'
+      },
+      repId: mine.repId || null,
+      section: mine.section || ''
+    };
+  }).sort((a, b) => (a.dept || '').localeCompare(b.dept || '') || (a.bed || '').localeCompare(b.bed || ''));
   const depSet = [];
   active.forEach(p => {
     if (p.dept && depSet.indexOf(p.dept) < 0) depSet.push(p.dept);
@@ -4148,7 +4190,7 @@ function SupBoard({
   }, React.createElement(SupHero, {
     icon: I.layers,
     title: "Patient Board \u2014 At a Glance",
-    sub: active.length + ' patient(s) currently present · carried forward automatically across shifts',
+    sub: useH360 ? active.length + ' in-patients in H360 · collected ' + collected : active.length + ' patient(s) currently present · carried forward automatically across shifts',
     right: React.createElement(React.Fragment, null, React.createElement(SupBtn, {
       sm: true,
       onClick: () => setRoute({
@@ -4168,7 +4210,45 @@ function SupBoard({
       d: I.doc,
       s: 15
     }), "New Report"))
-  }), React.createElement("div", {
+  }), hasH360 && React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement("div", {
+    className: "sup-seg"
+  }, React.createElement("button", {
+    className: useH360 ? 'on' : '',
+    onClick: () => {
+      setSource('h360');
+      setDept('');
+    }
+  }, "In H360 now (", h360.patients.length, ")"), React.createElement("button", {
+    className: !useH360 ? 'on' : '',
+    onClick: () => {
+      setSource('reports');
+      setDept('');
+    }
+  }, "From reports (", fromReports.length, ")")), React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 12,
+      color: 'var(--muted,#64748b)'
+    }
+  }, useH360 ? 'Every patient in a bed at the last H360 collection. Diagnosis and notes typed in a report are shown where there are any.' : 'Patients typed into reports and not yet discharged in a later report.'), React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, "Collect again")), !hasH360 && React.createElement("div", {
+    className: "sup-alert info"
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, "This board is built from the reports. Collect the patients from H360 to see everyone who is in a bed now."), React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, "H360 Patients")), React.createElement("div", {
     className: "sup-kpis"
   }, React.createElement("div", {
     className: "sup-kpi"
@@ -4269,7 +4349,12 @@ function SupBoard({
       style: {
         marginLeft: 6
       }
-    }, "Crit")), React.createElement("td", {
+    }, "Crit"), p.dischargeRequested && React.createElement("span", {
+      className: "sup-tag req",
+      style: {
+        marginLeft: 6
+      }
+    }, "Discharge req.")), React.createElement("td", {
       "data-label": "Bed"
     }, p.bed || '—'), React.createElement("td", {
       "data-label": "Name"
@@ -4290,14 +4375,14 @@ function SupBoard({
       "data-label": "Last update"
     }, p.lastSeen.date, " \xB7 ", p.lastSeen.shift), React.createElement("td", {
       "data-label": "Edit"
-    }, React.createElement("button", {
+    }, p.repId ? React.createElement("button", {
       className: "sup-ib",
       title: "Edit patient",
       onClick: () => setEditing(p)
     }, React.createElement(Ic, {
       d: I.edit,
       s: 13
-    }))));
+    })) : null));
   })))))), mode === 'cards' && groups.map(g => React.createElement("div", {
     key: g
   }, React.createElement("div", {
@@ -4319,7 +4404,9 @@ function SupBoard({
       className: "sup-pcard-n"
     }, p.name || '—'), p.critical && React.createElement("span", {
       className: "sup-tag crit"
-    }, "Critical")), React.createElement("div", {
+    }, "Critical"), p.dischargeRequested && React.createElement("span", {
+      className: "sup-tag req"
+    }, "Discharge requested")), React.createElement("div", {
       className: "sup-pcard-meta"
     }, p.uhid && React.createElement("span", null, "UHID ", p.uhid), p.age && React.createElement("span", null, p.age), p.bed && React.createElement("span", null, "Bed ", p.bed), days != null && React.createElement("span", null, days, "d in hospital")), p.consultant && React.createElement("div", {
       className: "sup-pcard-row"
@@ -4331,14 +4418,14 @@ function SupBoard({
       className: "sup-pcard-foot"
     }, React.createElement("span", {
       className: "sup-pcard-f"
-    }, "Updated ", p.lastSeen.date, " \xB7 ", p.lastSeen.shift), React.createElement("button", {
+    }, p.lastSeen.shift === 'H360' ? 'H360 · ' + p.lastSeen.date : 'Updated ' + p.lastSeen.date + ' · ' + p.lastSeen.shift), p.repId ? React.createElement("button", {
       className: "sup-ib",
       title: "Edit patient",
       onClick: () => setEditing(p)
     }, React.createElement(Ic, {
       d: I.edit,
       s: 13
-    }))));
+    })) : null));
   })))), editing && React.createElement(BoardEditModal, {
     patient: editing,
     deptNames: deptNames,
@@ -4526,6 +4613,7 @@ const SUP_CSS = `
 .sup-pcard-n{font-size:14px;font-weight:800;color:#0f172a;line-height:1.2}
 .sup-tag{font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
 .sup-tag.crit{background:#fee2e2;color:#b91c1c}
+.sup-tag.req{background:#ffe4e6;color:#be123c}
 .sup-pcard-meta{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
 .sup-pcard-meta span{font-size:10.5px;font-weight:600;background:#f1f5f9;color:#475569;border-radius:6px;padding:2px 7px}
 .sup-pcard-row{font-size:11.5px;color:#334155;margin-bottom:3px;line-height:1.35}

@@ -1558,11 +1558,33 @@ function SupBoard({ depts, setRoute }) {
   const [dept, setDept] = useState('');
   const [mode, setMode] = useState('cards');
   const [editing, setEditing] = useState(null);
+  // Who H360 has in a bed now (server/h360). When a collection exists the board shows THOSE
+  // patients: it is the hospital as it is, where the reports only know who was typed into them.
+  const [h360, setH360] = useState(null);
+  const [source, setSource] = useState('h360');
   const load = () => supApi.get('/api/supervisor-reports?limit=1000').then((j) => { if (j.ok) { setList(j.reports); supRefreshAlertBadge(j.reports); } });
-  useEffect(() => { load(); }, []);
-  if (!list) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted,#64748b)' }}>Loading patient board…</div>;
+  useEffect(() => {
+    load();
+    fetch('/api/h360/board', { headers: { accept: 'application/json' } }).then((r) => (r.ok ? r.json() : null)).then((j) => setH360(j && Array.isArray(j.patients) ? j : { patients: [] })).catch(() => setH360({ patients: [] }));
+  }, []);
+  if (!list || !h360) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted,#64748b)' }}>Loading patient board…</div>;
 
-  const active = supActivePatients(list);
+  const fromReports = supActivePatients(list);
+  const hasH360 = h360.patients.length > 0;
+  const useH360 = hasH360 && source === 'h360';
+  const collected = hasH360 ? supFmtDT(h360.collectedAt) : '';
+  // An H360 patient keeps what a supervisor typed about them in a report (and the way to edit it).
+  const typed = {}; fromReports.forEach((p) => { typed[p.key] = p; });
+  const active = !useH360 ? fromReports : h360.patients.map((p) => {
+    const key = supPatKey(p) || ('h:' + p.name + p.bed);
+    const mine = typed[key] || {};
+    return {
+      key, name: p.name, uhid: p.uhid, age: p.age, bed: p.bed, consultant: p.consultant, doa: p.doa,
+      dept: supH360Dept(p.dept, deptNames), critical: !!p.critical, dischargeRequested: !!p.dischargeRequested,
+      diagnosis: mine.diagnosis || p.diagnosis || '', remarks: mine.remarks || p.remarks || '',
+      lastSeen: { date: collected, shift: 'H360' }, repId: mine.repId || null, section: mine.section || '',
+    };
+  }).sort((a, b) => (a.dept || '').localeCompare(b.dept || '') || (a.bed || '').localeCompare(b.bed || ''));
   const depSet = []; active.forEach((p) => { if (p.dept && depSet.indexOf(p.dept) < 0) depSet.push(p.dept); });
   depSet.sort();
   const ql = q.trim().toLowerCase();
@@ -1578,11 +1600,21 @@ function SupBoard({ depts, setRoute }) {
   return (
     <div className="sup-wrap">
       <SupHero icon={I.layers} title="Patient Board — At a Glance"
-        sub={active.length + ' patient(s) currently present · carried forward automatically across shifts'}
+        sub={useH360 ? active.length + ' in-patients in H360 · collected ' + collected : active.length + ' patient(s) currently present · carried forward automatically across shifts'}
         right={<React.Fragment>
           <SupBtn sm onClick={() => setRoute({ view: 'supNew', openAdd: true })}><Ic d={I.plus} s={15} />Add Patient</SupBtn>
           <SupBtn sm kind="pri" onClick={() => setRoute({ view: 'supNew' })}><Ic d={I.doc} s={15} />New Report</SupBtn>
         </React.Fragment>} />
+
+      {hasH360 && <div className="sup-toolbar">
+        <div className="sup-seg">
+          <button className={useH360 ? 'on' : ''} onClick={() => { setSource('h360'); setDept(''); }}>In H360 now ({h360.patients.length})</button>
+          <button className={!useH360 ? 'on' : ''} onClick={() => { setSource('reports'); setDept(''); }}>From reports ({fromReports.length})</button>
+        </div>
+        <span style={{ flex: 1, fontSize: 12, color: 'var(--muted,#64748b)' }}>{useH360 ? 'Every patient in a bed at the last H360 collection. Diagnosis and notes typed in a report are shown where there are any.' : 'Patients typed into reports and not yet discharged in a later report.'}</span>
+        <SupBtn sm onClick={() => setRoute({ view: 'supH360' })}>Collect again</SupBtn>
+      </div>}
+      {!hasH360 && <div className="sup-alert info"><span style={{ flex: 1 }}>This board is built from the reports. Collect the patients from H360 to see everyone who is in a bed now.</span><SupBtn sm onClick={() => setRoute({ view: 'supH360' })}>H360 Patients</SupBtn></div>}
 
       <div className="sup-kpis">
         <div className="sup-kpi"><div className="n">{active.length}</div><div className="l">Total patients present</div></div>
@@ -1612,7 +1644,7 @@ function SupBoard({ depts, setRoute }) {
             <tbody>{filtered.map((p, i) => { const d = supDaysSince(p.doa); return (
               <tr key={p.key}>
                 <td data-label="#">{i + 1}</td>
-                <td data-label="Department">{p.dept || '—'}{p.critical && <span className="sup-tag crit" style={{ marginLeft: 6 }}>Crit</span>}</td>
+                <td data-label="Department">{p.dept || '—'}{p.critical && <span className="sup-tag crit" style={{ marginLeft: 6 }}>Crit</span>}{p.dischargeRequested && <span className="sup-tag req" style={{ marginLeft: 6 }}>Discharge req.</span>}</td>
                 <td data-label="Bed">{p.bed || '—'}</td>
                 <td data-label="Name"><b>{p.name || '—'}</b></td>
                 <td data-label="UHID">{p.uhid || '—'}</td>
@@ -1621,7 +1653,7 @@ function SupBoard({ depts, setRoute }) {
                 <td data-label="Consultant">{p.consultant || '—'}</td>
                 <td data-label="Diagnosis" style={{ maxWidth: 240 }}>{p.diagnosis || '—'}</td>
                 <td data-label="Last update">{p.lastSeen.date} · {p.lastSeen.shift}</td>
-                <td data-label="Edit"><button className="sup-ib" title="Edit patient" onClick={() => setEditing(p)}><Ic d={I.edit} s={13} /></button></td>
+                <td data-label="Edit">{p.repId ? <button className="sup-ib" title="Edit patient" onClick={() => setEditing(p)}><Ic d={I.edit} s={13} /></button> : null}</td>
               </tr>
             ); })}</tbody>
           </table></div>
@@ -1639,6 +1671,7 @@ function SupBoard({ depts, setRoute }) {
                   <div className="sup-pcard-h">
                     <div className="sup-pcard-n">{p.name || '—'}</div>
                     {p.critical && <span className="sup-tag crit">Critical</span>}
+                    {p.dischargeRequested && <span className="sup-tag req">Discharge requested</span>}
                   </div>
                   <div className="sup-pcard-meta">
                     {p.uhid && <span>UHID {p.uhid}</span>}
@@ -1650,8 +1683,8 @@ function SupBoard({ depts, setRoute }) {
                   {p.diagnosis && <div className="sup-pcard-row"><b>Dx:</b> {p.diagnosis}</div>}
                   {p.remarks && <div className="sup-pcard-note">{p.remarks}</div>}
                   <div className="sup-pcard-foot">
-                    <span className="sup-pcard-f">Updated {p.lastSeen.date} · {p.lastSeen.shift}</span>
-                    <button className="sup-ib" title="Edit patient" onClick={() => setEditing(p)}><Ic d={I.edit} s={13} /></button>
+                    <span className="sup-pcard-f">{p.lastSeen.shift === 'H360' ? 'H360 · ' + p.lastSeen.date : 'Updated ' + p.lastSeen.date + ' · ' + p.lastSeen.shift}</span>
+                    {p.repId ? <button className="sup-ib" title="Edit patient" onClick={() => setEditing(p)}><Ic d={I.edit} s={13} /></button> : null}
                   </div>
                 </div>
               );
@@ -1818,6 +1851,7 @@ const SUP_CSS = `
 .sup-pcard-n{font-size:14px;font-weight:800;color:#0f172a;line-height:1.2}
 .sup-tag{font-size:9.5px;font-weight:800;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
 .sup-tag.crit{background:#fee2e2;color:#b91c1c}
+.sup-tag.req{background:#ffe4e6;color:#be123c}
 .sup-pcard-meta{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:7px}
 .sup-pcard-meta span{font-size:10.5px;font-weight:600;background:#f1f5f9;color:#475569;border-radius:6px;padding:2px 7px}
 .sup-pcard-row{font-size:11.5px;color:#334155;margin-bottom:3px;line-height:1.35}

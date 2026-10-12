@@ -483,7 +483,7 @@ function describePage(html, pattern) {
   $('script').each((_, el) => {
     for (const line of ($(el).html() || '').split('\n')) {
       const trimmed = line.trim();
-      if (trimmed && pattern.test(trimmed) && lines.length < 40) lines.push(trimmed.slice(0, 260));
+      if (trimmed && pattern.test(trimmed) && lines.length < 90) lines.push(trimmed.slice(0, 260));
     }
   });
   return {

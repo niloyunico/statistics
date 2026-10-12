@@ -836,6 +836,29 @@ async function legacyWaiting(store, localDb) {
   return ids.length - (await store.db.collection(SHEETS).countDocuments({ _id: { $in: ids } }));
 }
 
+// Everyone H360 has in a bed now, as the Patient Board shows a patient: who, where, under
+// whom, with what, and what the newest note says.
+async function board(store) {
+  await store.ready;
+  const run = await store.col('runs').find().sort({ collectedAt: -1 }).limit(1).next();
+  if (!run) return { collectedAt: null, site: '', patients: [] };
+  const patients = await store.col('patients').find({ lastRunId: run._id }).sort({ seq: 1 }).toArray();
+  const picture = { suggestions: new Map(patients.filter((patient) => patient.suggestion).map((patient) => [patient.admissionNo, patient.suggestion])) };
+  const options = updateOptions();
+  return {
+    collectedAt: run.collectedAt,
+    site: run.site || '',
+    patients: patients.map((patient) => {
+      const row = patientRow(patient, new Map(), picture, options);
+      return {
+        uhid: row.uhid, name: row.name, age: row.age, station: text(patient.station), bed: text((patient.admission || {}).bed_name),
+        consultant: row.consultant, diagnosis: row.diagnosis, remarks: row.remarks, doa: row.doa,
+        critical: CRITICAL_UNIT.test(patient.station), dischargeRequested: dischargeRequested(patient), recordsAt: patient.recordsAt || null,
+      };
+    }),
+  };
+}
+
 // The same update for a report that is kept somewhere else (the shift supervisor report,
 // see bridge.js): works on the copy it is given and hands it back, saving nothing.
 //   sheet    { date, shift, data } in the log sheet's shape
@@ -852,6 +875,6 @@ async function fill(store, sheet, sent, carried) {
 }
 
 module.exports = {
-  draft, create, get, list, update, remove, refresh, fill, importLegacy, legacyWaiting, suggestionsFrom, composeDiagnosis, hospitalPicture, leavers,
+  draft, create, get, list, update, remove, refresh, fill, board, importLegacy, legacyWaiting, suggestionsFrom, composeDiagnosis, hospitalPicture, leavers,
   UPDATE_DEFAULTS, SHEETS,
 };

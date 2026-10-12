@@ -478,6 +478,13 @@ if (service.site() === 'cloud') {
     res.json(await service.admissions());
   }));
 
+  // The in-patients for the Patient Board, each with the unit as H360 names it.
+  app.get('/api/h360/board', guard, route(async (req, res) => {
+    const bridge = require('./bridge');
+    const found = await sheets.board(await service.shared());
+    res.json({ ...found, patients: found.patients.map((patient) => ({ ...patient, dept: bridge.deptOf(patient.station) })) });
+  }));
+
   app.get('/api/h360/opd', guard, route(async (req, res) => {
     res.json((await service.outPatients()) || null);
   }));
