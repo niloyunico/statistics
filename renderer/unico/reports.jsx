@@ -1890,6 +1890,7 @@ const USER_MODS=[
   ['reports','Reports','Data',''],
   ['staff','Staff Management','Administer',''],
   ['perf','Performance','Administer','inside Staff Management'],
+  ['attrition','Attrition & Exits','Administer','inside Staff Management · discontinuing staff also needs only Staff edit'],
   ['roster','Duty Roster','Administer','inside Staff Management'],
   ['users','Access Control & Settings','Administer',''],
   // What the collection portal and the phone-only logins used to be, as modules.
@@ -2127,7 +2128,8 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     if(editing && initial.role==='Administrator') return FULL_PERMS();
     // A 'User' with no perms map holds NOTHING at runtime (unicoUserPerms() in ui.jsx maps
     // a missing map to {}), so starting from NONE_PERMS is the honest default here.
-    const src=(editing&&initial.perms)?{...NONE_PERMS(),...initial.perms}:NONE_PERMS();
+    const own=(editing&&initial.perms)||null;
+    const src=own?{...NONE_PERMS(),...own,...(Object.prototype.hasOwnProperty.call(own,'attrition')?{}:{attrition:own.perf})}:NONE_PERMS();
     return USER_MODS.reduce((m,[k])=>(m[k]=asActions(src[k]),m),{});
   });
   // Row-level staff access (enforced server-side by access.filterStaff — see

@@ -1567,6 +1567,8 @@ function SupBoard({ depts, setRoute }) {
 
 /* ================================================================= dispatcher */
 function SupervisorView({ view, id, shift, openAdd, depts, setRoute }) {
+  // The H360 link (patient collection + the log sheet filled from H360): supervisor-h360.jsx.
+  if ((view === 'supH360' || view === 'supSheet') && window.SupH360View) return <window.SupH360View view={view} id={id} setRoute={setRoute} />;
   if (view === 'supHistory') return <SupHistory setRoute={setRoute} />;
   if (view === 'supReport') return <SupReportView id={id} depts={depts} setRoute={setRoute} />;
   if (view === 'supBoard') return <SupBoard depts={depts} setRoute={setRoute} />;

@@ -37,7 +37,7 @@ const { getUsers } = require('./db');
 // 'datasubmit' (Data Submission) and 'staffapp' (the phone staff app) replace the old
 // PORTAL roles: submitting data for chosen departments, and signing in to the staff app,
 // are modules a normal account is given, not separate kinds of account.
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine', 'datasubmit', 'staffapp'];
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp'];
 
 // Escalating legacy level strings. The newer model stores an ARRAY of independently
 // granted actions (e.g. ['view','delete'] = delete without add); both are supported,
@@ -463,7 +463,11 @@ function can(access, mid, action) {
   if (!access) return false;
   if (access.unrestricted) return true;
   if (isPortal(access)) return false; // portal roles use their own scoped portal, not this map
-  const val = access.perms ? access.perms[mid] : undefined;
+  let val = access.perms ? access.perms[mid] : undefined;
+  // 'attrition' was part of Performance until 2026-10. A permission map saved before it became
+  // its own module (no 'attrition' key at all) keeps what Performance gave it; once an administrator
+  // sets it — even to nothing — that choice stands on its own.
+  if (mid === 'attrition' && access.perms && !Object.prototype.hasOwnProperty.call(access.perms, 'attrition')) val = access.perms.perf;
   const act = ACTIONS.indexOf(action) >= 0 ? action : 'view';
   if (Array.isArray(val)) {
     if (act === 'view') return val.length > 0; // any granted action implies "may open it"

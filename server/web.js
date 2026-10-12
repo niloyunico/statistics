@@ -917,6 +917,10 @@ qualityFormulas.mount(app, { requireApi: [session.requireApi, access.attach] });
 // Shift Supervisor Reports carry patient names and UHIDs — gated on the 'supervisor'
 // module (which, until now, could not be granted at all: see users-admin.js).
 require('./supervisor-reports').mount(app, { requireApi: [session.requireApi, access.requireModule('supervisor')] });
+// The H360 link of the same module: patients collected from H360 (nurse stations, records,
+// IPD Admission) and the log sheet filled in from them. Same gate; the H360 login and the
+// storage choice are administrator-only inside.
+require('./h360').mount(app, { requireApi: [session.requireApi, access.requireModule('supervisor')] });
 
 // Settings -> Database: browse and repair the Cloudflare D1 tables (admin only).
 require('./d1-admin').mount(app, { requireApi: [session.requireApi, access.attach] });
@@ -953,6 +957,9 @@ require('./bnmc-verify').mount(app, { requireApi: [session.requireApi, access.re
 // personal-file records, so the whole module is gated on 'perf' and the verb decides
 // the action needed; Part H is admin-only inside the module itself.
 require('./staff-performance').mount(app, { requireApi: [session.requireApi, access.requireModule('perf')] });
+// Attrition & Exits: its own permission (and a staff editor may file the exit of a person they
+// discontinue) — each route checks its own rule, see mountAttrition.
+require('./staff-performance').mountAttrition(app, { requireApi: [session.requireApi] });
 
 // Staff requests: a nurse in-charge asking for a new nurse or PCA. A portal account
 // may raise and correct its OWN request; only an administrator decides one. Guarded

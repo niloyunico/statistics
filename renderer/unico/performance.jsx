@@ -141,11 +141,19 @@ function takePrefetched() {
   prefetched = null;            // one use only — a second reader gets a fresh read
   return (p && Date.now() - p.at < PREFETCH_MAX_AGE) ? p.promise : null;
 }
-try { prefetchPerf(); } catch (e) { /* the store will ask for itself */ }
+try { if (perfCan('view')) prefetchPerf(); } catch (e) { /* the store will ask for itself */ }
 
 function usePerfStore() {
   const [state, setState] = useState({ appraisals: [], incidents: [], achievements: [], exits: [], caps: DEFAULT_CAPS, categories: null, loading: true, error: null });
   const load = React.useCallback((opts) => {
+    // An account with Attrition & Exits but not Performance reads the attrition register only
+    // (exits + the grade of each filed appraisal) — the appraisal file stays Performance's.
+    if (!perfCan('view')) {
+      return perfApi.get('/api/attrition').then((r) => {
+        if (r && r.ok) setState((s) => ({ ...s, appraisals: r.appraisals || [], exits: r.exits || [], loading: false, error: null }));
+        else setState((s) => ({ ...s, loading: false, error: (r && r.error) || 'Could not load the attrition register.' }));
+      }).catch(() => setState((s) => ({ ...s, loading: false, error: 'Could not reach the server.' })));
+    }
     // The very first load takes the in-flight prefetch; everything after asks fresh.
     const inflight = (opts && opts.fresh) ? null : takePrefetched();
     return (inflight || perfApi.get('/api/performance')).then((r) => {
@@ -202,8 +210,9 @@ function usePerfStore() {
     addIncident: (body) => wrap(perfApi.post('/api/performance/incidents', body), 'Incident recorded. The deduction now shows on the appraisal.'),
     delIncident: (id) => wrap(perfApi.del('/api/performance/incidents/' + id), 'Entry removed.', without('incidents', id)),
     addAchievement: (body) => wrap(perfApi.post('/api/performance/achievements', body), 'Achievement recorded. Bonus points are on the current appraisal.'),
-    addExit: (body) => wrap(perfApi.post('/api/performance/exits', body), 'Exit recorded. The attrition figures and the unit roll-up update immediately.'),
-    delExit: (id) => wrap(perfApi.del('/api/performance/exits/' + id), 'Exit record removed.', without('exits', id)),
+    // The attrition register's own routes: its own permission (or Staff edit, to file an exit).
+    addExit: (body) => wrap(perfApi.post('/api/attrition/exits', body), 'Exit recorded. The attrition figures and the unit roll-up update immediately.'),
+    delExit: (id) => wrap(perfApi.del('/api/attrition/exits/' + id), 'Exit record removed.', without('exits', id)),
     delAchievement: (id) => wrap(perfApi.del('/api/performance/achievements/' + id), 'Entry removed.', without('achievements', id)),
     saveCategories: (body) => wrap(perfApi.put('/api/performance/categories', body), 'Categories saved.'),
   };
@@ -516,8 +525,9 @@ function PerfDashboard({ roster, perf, setRoute, role }) {
           n={perf.achievements.length} onClick={() => setRoute({ view: 'perfAchievements' })} />
         <QuickCard icon={I.alert || I.pulse} title="Incidents" sub={'Deductions, capped at ' + A.PENALTY_CAP + ' per cycle'}
           n={perf.incidents.length} onClick={() => setRoute({ view: 'perfIncidents' })} />
-        <QuickCard icon={I.user} title="Attrition & exits" sub="who left, when and why"
-          n={(perf.exits || []).length} onClick={() => setRoute({ view: 'perfAttrition' })} />
+        {/* Attrition & Exits is its own permission: the tile only for accounts that may open it. */}
+        {(!window.unicoCan || window.unicoCan('attrition', 'view')) && <QuickCard icon={I.user} title="Attrition & exits" sub="who left, when and why"
+          n={(perf.exits || []).length} onClick={() => setRoute({ view: 'perfAttrition' })} />}
         <QuickCard icon={I.heart} title="Recognition board" sub="wall, leaderboard and awards"
           n={perf.achievements.length} onClick={() => setRoute({ view: 'perfBoard' })} />
         <QuickCard icon={I.pulse} title="Retention risk" sub="staff to speak with this month"

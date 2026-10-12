@@ -4178,6 +4178,11 @@ function SupervisorView({
   depts,
   setRoute
 }) {
+  if ((view === 'supH360' || view === 'supSheet') && window.SupH360View) return React.createElement(window.SupH360View, {
+    view: view,
+    id: id,
+    setRoute: setRoute
+  });
   if (view === 'supHistory') return React.createElement(SupHistory, {
     setRoute: setRoute
   });
@@ -4418,5 +4423,1533 @@ const SUP_CSS = `
 Object.assign(window, {
   SupervisorView,
   SupReports: SupervisorView
+});
+})();
+;
+/* ===== supervisor-h360.jsx ===== */
+(function(){
+const {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback
+} = React;
+const Ic = window.Ic,
+  I = window.I;
+const h3Toast = (m, t) => {
+  try {
+    window.UI && window.UI.toast && window.UI.toast(m, t || 'success');
+  } catch (e) {}
+};
+const h3Can = action => {
+  try {
+    return !window.unicoCan || window.unicoCan('supervisor', action);
+  } catch (e) {
+    return true;
+  }
+};
+async function h3Api(path, options) {
+  const o = options || {};
+  const response = await fetch(path, {
+    method: o.method || 'GET',
+    headers: o.body ? {
+      'content-type': 'application/json',
+      accept: 'application/json'
+    } : {
+      accept: 'application/json'
+    },
+    body: o.body ? JSON.stringify(o.body) : undefined
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const err = new Error(body && body.error || 'The request failed.');
+    err.status = response.status;
+    throw err;
+  }
+  return body;
+}
+const h3Pad = n => String(n).padStart(2, '0');
+const h3ShowDate = date => String(date || '').split('-').reverse().join('/');
+const h3When = value => {
+  try {
+    return value ? new Date(value).toLocaleString() : '';
+  } catch (e) {
+    return '';
+  }
+};
+const h3Today = () => {
+  const d = new Date();
+  return d.getFullYear() + '-' + h3Pad(d.getMonth() + 1) + '-' + h3Pad(d.getDate());
+};
+const h3Shift = () => {
+  const h = new Date().getHours();
+  return h < 14 ? 'Morning' : h < 21 ? 'Evening' : 'Night';
+};
+const h3Portal = node => {
+  try {
+    if (typeof document !== 'undefined' && typeof ReactDOM !== 'undefined' && ReactDOM.createPortal) return ReactDOM.createPortal(node, document.body);
+  } catch (e) {}
+  return node;
+};
+const H3_STATION = 'Nurse Station';
+const H3_SITE = {
+  pc: 'the hospital PC',
+  cloud: 'the live site'
+};
+function H3Hero({
+  title,
+  sub,
+  children
+}) {
+  return React.createElement("div", {
+    className: "sup-hero"
+  }, React.createElement("div", {
+    className: "sup-hero-ic"
+  }, React.createElement(Ic, {
+    d: I.pulse || I.doc,
+    s: 22,
+    c: "#fff"
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    className: "sup-hero-t"
+  }, title), sub && React.createElement("div", {
+    className: "sup-hero-s"
+  }, sub)), React.createElement("div", {
+    className: "sup-hero-r"
+  }, children));
+}
+function H3Btn({
+  kind,
+  sm,
+  onClick,
+  children,
+  title,
+  disabled,
+  type
+}) {
+  return React.createElement("button", {
+    type: type || 'button',
+    className: 'sup-btn' + (kind ? ' ' + kind : '') + (sm ? ' sm' : ''),
+    onClick: onClick,
+    title: title || '',
+    disabled: disabled
+  }, children);
+}
+function H3Pairs({
+  items
+}) {
+  const shown = items.filter(([, value]) => value !== null && value !== undefined && value !== '');
+  if (!shown.length) return null;
+  return React.createElement("div", {
+    className: "h3-pairs"
+  }, shown.map(([name, value], i) => React.createElement("div", {
+    key: i
+  }, React.createElement("span", null, name), String(value))));
+}
+function H3Record({
+  record
+}) {
+  const name = record.group ? record.group + ' - ' + record.label : record.label;
+  const rows = record.entries.reduce((n, entry) => n + entry.rows.length, 0);
+  const parts = [];
+  if (rows) parts.push(rows + (rows === 1 ? ' entry' : ' entries'));
+  if (record.values.length) parts.push(record.values.length + ' fields');
+  const sections = [];
+  record.values.forEach(value => {
+    let at = sections.find(s => s[0] === value.section);
+    if (!at) {
+      at = [value.section, []];
+      sections.push(at);
+    }
+    at[1].push([value.label, value.value]);
+  });
+  return React.createElement("details", {
+    className: "h3-rec",
+    open: true
+  }, React.createElement("summary", null, name, React.createElement("small", null, parts.join(', '))), React.createElement("div", {
+    className: "h3-rec-b"
+  }, sections.map(([section, items], i) => React.createElement("div", {
+    key: 's' + i
+  }, section ? React.createElement("h5", null, section) : null, React.createElement(H3Pairs, {
+    items: items
+  }))), record.entries.map((entry, i) => React.createElement("div", {
+    key: 'e' + i
+  }, entry.title ? React.createElement("h5", null, entry.title) : null, React.createElement("div", {
+    className: "h3-scroll"
+  }, React.createElement("table", {
+    className: "h3-rtbl"
+  }, entry.columns.length ? React.createElement("thead", null, React.createElement("tr", null, entry.columns.map((c, j) => React.createElement("th", {
+    key: j
+  }, c)))) : null, React.createElement("tbody", null, entry.rows.map((row, r) => React.createElement("tr", {
+    key: r
+  }, row.map((cell, j) => React.createElement("td", {
+    key: j
+  }, cell)))))))))));
+}
+function H3PatientDrawer({
+  admissionNo,
+  onClose
+}) {
+  const [patient, setPatient] = useState(null);
+  const [error, setError] = useState('');
+  useEffect(() => {
+    let live = true;
+    setPatient(null);
+    setError('');
+    h3Api('/api/h360/patient/' + encodeURIComponent(admissionNo)).then(p => {
+      if (live) setPatient(p);
+    }).catch(e => {
+      if (live) setError(e.message);
+    });
+    const esc = event => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', esc);
+    return () => {
+      live = false;
+      document.removeEventListener('keydown', esc);
+    };
+  }, [admissionNo]);
+  const row = patient && patient.row || {};
+  const has = record => record.entries.length > 0 || record.values.length > 0;
+  const recordName = record => record.group ? record.group + ' - ' + record.label : record.label;
+  const records = patient ? patient.modules.map(r => Object.assign({}, r, {
+    entries: r.entries || [],
+    values: r.values || []
+  })) : [];
+  const saved = records.filter(has);
+  const failed = records.filter(r => r.status !== 200);
+  const blank = records.filter(r => !has(r) && r.status === 200);
+  const tabs = Array.from(new Set(saved.map(r => r.tab || "Nurse's Tab"))).sort();
+  const admission = patient ? Object.entries(patient.admission || {}).filter(([key, value]) => value !== null && value !== '' && !/_(fk|pk)$/.test(key) && !(/_ind$/.test(key) && String(value) === '0')).map(([key, value]) => [key.replace(/_/g, ' ').replace(/^./, c => c.toUpperCase()), value]) : [];
+  return h3Portal(React.createElement("div", {
+    className: "h3-drawer-bg",
+    onClick: onClose
+  }, React.createElement("aside", {
+    className: "h3-drawer",
+    onClick: e => e.stopPropagation()
+  }, React.createElement("div", {
+    className: "h3-drawer-h"
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("b", null, row['Patient Name'] || 'Patient'), patient && React.createElement("small", null, [row[H3_STATION], 'Bed ' + (row['Bed No'] || '-'), 'UHID ' + (row.UHID || '-')].join(' | '))), React.createElement("button", {
+    className: "sup-modal-x",
+    onClick: onClose,
+    title: "Close"
+  }, React.createElement(Ic, {
+    d: I.x,
+    s: 16,
+    c: "#fff"
+  }))), React.createElement("div", {
+    className: "h3-drawer-b"
+  }, error && React.createElement("div", {
+    className: "sup-alert critical"
+  }, error), !patient && !error && React.createElement("div", {
+    className: "h3-muted"
+  }, "Loading\u2026"), patient && React.createElement(React.Fragment, null, React.createElement("h4", null, "Patient"), React.createElement(H3Pairs, {
+    items: Object.entries(row).filter(([name]) => name !== 'Records').concat(Object.entries(patient.alerts || {}))
+  }), admission.length > 0 && React.createElement("details", {
+    className: "h3-rec"
+  }, React.createElement("summary", null, "More admission details"), React.createElement("div", {
+    className: "h3-rec-b"
+  }, React.createElement(H3Pairs, {
+    items: admission
+  }))), patient.records === 'pc-only' && React.createElement("div", {
+    className: "sup-alert info",
+    style: {
+      marginTop: 12
+    }
+  }, "The records of this patient (notes, vital signs, medicines) are kept on the hospital PC only. Open the app there to read them, or ask the administrator to keep everything in the app database."), patient.records !== 'pc-only' && !saved.length && React.createElement(React.Fragment, null, React.createElement("h4", null, "Records with saved data (0)"), React.createElement("div", {
+    className: "h3-muted"
+  }, "None yet. Run a collection to read them.")), tabs.map(tab => {
+    const inTab = saved.filter(r => (r.tab || "Nurse's Tab") === tab);
+    return React.createElement(React.Fragment, {
+      key: tab
+    }, React.createElement("h4", null, tab, ": records with saved data (", inTab.length, ")"), inTab.map((r, i) => React.createElement(H3Record, {
+      key: r.key + i,
+      record: r
+    })));
+  }), blank.length > 0 && React.createElement(React.Fragment, null, React.createElement("h4", null, "Nothing recorded in"), React.createElement("div", {
+    className: "h3-muted"
+  }, blank.map(recordName).join(', '))), failed.length > 0 && React.createElement(React.Fragment, null, React.createElement("h4", null, "Could not be opened"), React.createElement("div", {
+    className: "h3-muted"
+  }, failed.map(recordName).join(', '))))))));
+}
+function H3Settings({
+  status,
+  reload,
+  onClose
+}) {
+  const [user, setUser] = useState('');
+  const [pass, setPass] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [level, setLevel] = useState(status.cloudData);
+  const act = async fn => {
+    setBusy(true);
+    setError('');
+    try {
+      await fn();
+      await reload();
+    } catch (e) {
+      setError(e.message);
+    }
+    setBusy(false);
+  };
+  const saveLogin = event => {
+    event.preventDefault();
+    act(async () => {
+      await h3Api('/api/h360/login', {
+        method: 'POST',
+        body: {
+          user,
+          pass
+        }
+      });
+      setUser('');
+      setPass('');
+      h3Toast('H360 login saved.');
+    });
+  };
+  const forget = () => {
+    if (!confirm('Remove the saved H360 login from ' + (H3_SITE[status.site] || 'this server') + '? Collections from here stop working until a login is entered again.')) return;
+    act(async () => {
+      await h3Api('/api/h360/login', {
+        method: 'DELETE'
+      });
+      h3Toast('H360 login removed.');
+    });
+  };
+  const saveLevel = () => {
+    let removeOnline = false;
+    if (level === 'sheet' && status.cloudData === 'all') {
+      removeOnline = confirm('Keep only the log sheet content in the app database?\n\nOK also removes the full patient records and contact details that are stored there now. They stay on the hospital PC.\nCancel keeps what is already stored and only applies the choice to new collections.');
+    }
+    if (level === 'all' && !confirm('Keep everything in the app database?\n\nEvery record the collector reads (notes, vital signs, medicines, assessments) of every in-patient will be stored online, so the patient viewer and Excel work on the live site too.')) return;
+    act(async () => {
+      await h3Api('/api/h360/options', {
+        method: 'POST',
+        body: {
+          cloudData: level,
+          removeOnline
+        }
+      });
+      h3Toast('Saved. It applies from the next collection.');
+    });
+  };
+  const fromEnv = status.loginSource === 'environment';
+  return React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    className: "h3-sethead"
+  }, React.createElement("b", null, "H360 settings"), React.createElement("span", {
+    className: "h3-muted"
+  }, "Administrators only"), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(H3Btn, {
+    sm: true,
+    onClick: onClose
+  }, "Close")), error && React.createElement("div", {
+    className: "sup-alert critical"
+  }, error), React.createElement("div", {
+    className: "h3-setgrid"
+  }, React.createElement("form", {
+    onSubmit: saveLogin,
+    autoComplete: "off"
+  }, React.createElement("div", {
+    className: "h3-settitle"
+  }, status.hasLogin ? 'H360 login in use: ' + status.user : 'Enter the H360 login'), React.createElement("div", {
+    className: "h3-muted"
+  }, "Collections from ", H3_SITE[status.site] || 'here', " sign in to H360 as this user. The password is sealed before it is saved and is never shown again.", status.site === 'pc' ? ' The live site keeps its own copy: enter it there once too, to use Refresh patient lists.' : ' The hospital PC keeps its own copy.'), fromEnv ? React.createElement("div", {
+    className: "sup-alert info",
+    style: {
+      marginTop: 10
+    }
+  }, "This server takes the login from its own settings (HIS_USER / HIS_PASS).") : React.createElement("div", {
+    className: "h3-loginrow"
+  }, React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "User ID"), React.createElement("input", {
+    value: user,
+    onChange: e => setUser(e.target.value),
+    autoComplete: "off",
+    required: true
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Password"), React.createElement("input", {
+    type: "password",
+    value: pass,
+    onChange: e => setPass(e.target.value),
+    autoComplete: "new-password",
+    required: true
+  })), React.createElement(H3Btn, {
+    kind: "pri",
+    type: "submit",
+    disabled: busy
+  }, "Save login"), status.hasLogin && React.createElement(H3Btn, {
+    kind: "dgr",
+    onClick: forget,
+    disabled: busy
+  }, "Remove saved login"))), React.createElement("div", null, React.createElement("div", {
+    className: "h3-settitle"
+  }, "What is kept in the app database"), React.createElement("div", {
+    className: "h3-muted"
+  }, "The hospital PC always keeps everything it reads. This decides how much of it is also stored online, where the live site can show it."), React.createElement("label", {
+    className: "h3-radio"
+  }, React.createElement("input", {
+    type: "radio",
+    name: "h3level",
+    checked: level === 'sheet',
+    onChange: () => setLevel('sheet')
+  }), React.createElement("span", null, React.createElement("b", null, "Log sheet content only"), React.createElement("br", null), "Name, UHID, bed, consultant, diagnosis, remarks, surgeries, procedures and counts. The full records stay on the hospital PC.")), React.createElement("label", {
+    className: "h3-radio"
+  }, React.createElement("input", {
+    type: "radio",
+    name: "h3level",
+    checked: level === 'all',
+    onChange: () => setLevel('all')
+  }), React.createElement("span", null, React.createElement("b", null, "Everything collected"), React.createElement("br", null), "Also every record of every in-patient, so the patient viewer and Excel work on the live site.")), React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: saveLevel,
+    disabled: busy || level === status.cloudData
+  }, "Save choice")))));
+}
+const H3_STEPS = [['signin', 'Sign in'], ['lists', 'Patient lists'], ['register', 'IPD Admission list'], ['records', 'Patient records'], ['saving', 'Saving'], ['done', 'Done']];
+const H3_MODES = {
+  quick: 'Quick update',
+  full: 'Full collection',
+  list: 'List-only refresh'
+};
+function h3Elapsed(from, to) {
+  const s = Math.max(0, Math.round(((to ? new Date(to) : new Date()) - new Date(from)) / 1000));
+  return (s >= 60 ? Math.floor(s / 60) + ' min ' : '') + s % 60 + ' s';
+}
+function H3Progress({
+  status
+}) {
+  const p = status.progress;
+  if (!p) return null;
+  const running = !!status.running;
+  const failed = !running && !!status.error;
+  const steps = H3_STEPS.filter(([id]) => p.mode !== 'list' || id !== 'records');
+  const at = steps.findIndex(([id]) => id === (failed ? p.failedAt || p.stage : p.stage));
+  const finished = !running && !failed && p.stage === 'done';
+  const pct = finished ? 100 : p.patients ? Math.min(100, Math.round(p.done / p.patients * 100)) : 0;
+  const name = H3_MODES[p.mode] || 'Collection';
+  return React.createElement("div", {
+    className: 'sup-card h3-live' + (running ? ' on' : failed ? ' fail' : '')
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    className: "h3-livehead"
+  }, running && React.createElement("span", {
+    className: "h3-pulse"
+  }), React.createElement("b", null, name, " ", running ? 'is running' : failed ? 'stopped' : 'finished'), React.createElement("span", {
+    className: "h3-muted"
+  }, h3Elapsed(status.startedAt, running ? null : status.finishedAt)), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("span", {
+    className: "h3-livenum"
+  }, React.createElement("b", null, p.done), " of ", p.patients, " patients"), p.mode !== 'list' && React.createElement("span", {
+    className: "h3-livenum"
+  }, React.createElement("b", null, Number(p.pages || 0).toLocaleString()), " pages read")), React.createElement("div", {
+    className: "h3-steps"
+  }, steps.map(([id, label], i) => React.createElement("span", {
+    key: id,
+    className: 'h3-step' + (finished || i < at ? ' done' : i === at ? failed ? ' fail' : ' now' : '')
+  }, label))), React.createElement("div", {
+    className: "h3-bar"
+  }, React.createElement("i", {
+    style: {
+      width: pct + '%'
+    }
+  })), running && p.last && React.createElement("div", {
+    className: "h3-muted",
+    style: {
+      marginTop: 6
+    }
+  }, "Last read: ", p.last), p.stations.length > 0 && React.createElement("div", {
+    className: "h3-stbars"
+  }, p.stations.map(s => React.createElement("div", {
+    key: s.station,
+    className: "h3-stbar"
+  }, React.createElement("span", {
+    title: s.station
+  }, s.station), React.createElement("div", {
+    className: "h3-bar sm"
+  }, React.createElement("i", {
+    style: {
+      width: (s.total ? Math.round(s.done / s.total * 100) : 100) + '%'
+    }
+  })), React.createElement("em", null, s.done, "/", s.total))))));
+}
+function H3Patients({
+  setRoute
+}) {
+  const [status, setStatus] = useState(null);
+  const [snapshot, setSnapshot] = useState(null);
+  const [admissions, setAdmissions] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
+  const [tab, setTab] = useState('patients');
+  const [station, setStation] = useState(null);
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(null);
+  const [settings, setSettings] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const wasRunning = useRef(false);
+  const logRef = useRef(null);
+  const loadData = useCallback(async () => {
+    try {
+      const [p, a] = await Promise.all([h3Api('/api/h360/patients'), h3Api('/api/h360/admissions').catch(() => null)]);
+      setSnapshot(p);
+      setAdmissions(a);
+      setError('');
+    } catch (e) {
+      setError(e.message);
+    }
+    setLoaded(true);
+  }, []);
+  const loadStatus = useCallback(async () => {
+    try {
+      const s = await h3Api('/api/h360/status');
+      setStatus(s);
+      if (wasRunning.current && !s.running) loadData();
+      wasRunning.current = s.running;
+      return s;
+    } catch (e) {
+      return null;
+    }
+  }, [loadData]);
+  useEffect(() => {
+    loadStatus();
+    loadData();
+  }, []);
+  const running = !!(status && status.running);
+  useEffect(() => {
+    const timer = setInterval(loadStatus, running ? 1000 : 20000);
+    return () => clearInterval(timer);
+  }, [running, loadStatus]);
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [status && status.log && status.log.length]);
+  const collect = async mode => {
+    setBusy(true);
+    setError('');
+    try {
+      const result = await h3Api('/api/h360/collect', {
+        method: 'POST',
+        body: {
+          mode
+        }
+      });
+      wasRunning.current = true;
+      const s = await loadStatus();
+      if (s && !s.running) {
+        await loadData();
+        if (result.error) setError(result.error);else h3Toast('Patient lists refreshed.');
+      }
+    } catch (e) {
+      setError(e.message);
+    }
+    setBusy(false);
+  };
+  const importOld = async () => {
+    setBusy(true);
+    try {
+      const r = await h3Api('/api/h360/sheets/import-local', {
+        method: 'POST'
+      });
+      h3Toast(r.copied + ' report(s) brought in.');
+      await loadStatus();
+      setRoute({
+        view: 'supSheet'
+      });
+    } catch (e) {
+      setError(e.message);
+    }
+    setBusy(false);
+  };
+  const rows = useMemo(() => {
+    if (!snapshot) return [];
+    const q = query.trim().toLowerCase();
+    return snapshot.rows.filter(row => (station === null || row[H3_STATION] === station) && (!q || snapshot.columns.some(name => String(row[name] || '').toLowerCase().includes(q))));
+  }, [snapshot, station, query]);
+  const regCols = useMemo(() => {
+    if (!admissions || !admissions.rows.length) return [];
+    const raw = admissions.rows.some(r => r.raw);
+    const names = [];
+    admissions.rows.forEach(r => Object.keys((raw ? r.raw : r.fields) || {}).forEach(k => {
+      if (names.indexOf(k) < 0) names.push(k);
+    }));
+    return {
+      raw,
+      names: names.slice(0, 40)
+    };
+  }, [admissions]);
+  const regRows = useMemo(() => {
+    if (!admissions || !regCols.names) return [];
+    const q = query.trim().toLowerCase();
+    const of = r => (regCols.raw ? r.raw : r.fields) || {};
+    return admissions.rows.filter(r => !q || regCols.names.some(name => String(of(r)[name] || '').toLowerCase().includes(q))).slice(0, 600);
+  }, [admissions, regCols, query]);
+  const mayCollect = h3Can('add');
+  const canStart = !!status && status.hasLogin && !running && !busy && mayCollect;
+  const onPc = !status || status.site === 'pc';
+  const shape = admissions && admissions.shape;
+  const sub = snapshot ? snapshot.rows.length + ' in-patients in ' + snapshot.stations.length + ' stations · collected ' + h3When(snapshot.collectedAt) + (snapshot.site ? ' from ' + (H3_SITE[snapshot.site] || snapshot.site) : '') : 'Patients of every nurse station, read from H360';
+  return React.createElement("div", {
+    className: "sup-wrap"
+  }, React.createElement(H3Hero, {
+    title: "H360 Patients",
+    sub: sub
+  }, status && status.canManage && React.createElement(H3Btn, {
+    onClick: () => setSettings(v => !v),
+    title: "H360 login and what is kept in the app database"
+  }, React.createElement(Ic, {
+    d: I.gear,
+    s: 15,
+    c: "#fff"
+  }), status.hasLogin ? 'H360 login: ' + status.user : 'H360 login'), snapshot && React.createElement("a", {
+    className: "sup-btn",
+    href: "/api/h360/export.xlsx"
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 15,
+    c: "#fff"
+  }), "Excel"), onPc && React.createElement(H3Btn, {
+    onClick: () => collect('list'),
+    disabled: !canStart,
+    title: "Updates only the patient lists (admissions, beds, who has left) and the IPD Admission list. Takes a few seconds; no records are read."
+  }, "List only"), onPc && React.createElement(H3Btn, {
+    onClick: () => collect('full'),
+    disabled: !canStart,
+    title: "Reads every record of every patient again. Slow; use it once a day or when something looks out of date."
+  }, "Full collection"), onPc ? React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: () => collect('quick'),
+    disabled: !canStart,
+    title: "Reads notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old."
+  }, running ? 'Collecting…' : 'Collect all patients') : React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: () => collect('list'),
+    disabled: !canStart,
+    title: "Signs in to H360 and updates the patient lists: admissions, beds and who has left. Records are read by the hospital PC."
+  }, busy || running ? 'Refreshing…' : 'Refresh patient lists')), settings && status && status.canManage && React.createElement(H3Settings, {
+    status: status,
+    reload: loadStatus,
+    onClose: () => setSettings(false)
+  }), status && !status.hasLogin && React.createElement("div", {
+    className: "sup-alert warn"
+  }, status.canManage ? status.loginElsewhere ? 'The H360 login was saved from ' + (status.site === 'pc' ? 'the live site' : 'the hospital PC') + ', which keeps its own sealed copy. Enter it once here too: click "H360 login" above.' : 'No H360 login is saved yet. Click "H360 login" above and enter it once.' : 'No H360 login is saved for ' + (H3_SITE[status.site] || 'this server') + ' yet. Ask the administrator to enter it.'), status && !onPc && React.createElement("div", {
+    className: "sup-alert info"
+  }, "On the live site only the patient lists are refreshed. Notes, diagnoses and every other record are read by the collection on the hospital PC", status.lastPcRun ? ' (last one: ' + h3When(status.lastPcRun) + ')' : ' (none has reached the app database yet)', "."), status && status.localStore && status.localStore.ok === false && React.createElement("div", {
+    className: "sup-alert critical"
+  }, status.localStore.error), status && status.legacyReports > 0 && React.createElement("div", {
+    className: "sup-alert info"
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, status.legacyReports, " report(s) written with the old collector are on this computer and not in the app yet."), React.createElement(H3Btn, {
+    sm: true,
+    onClick: importOld,
+    disabled: busy
+  }, "Bring them in")), error && React.createElement("div", {
+    className: "sup-alert critical"
+  }, error), status && status.error && !running && React.createElement("div", {
+    className: "sup-alert critical"
+  }, status.error), snapshot && (snapshot.warnings || []).map((w, i) => React.createElement("div", {
+    key: i,
+    className: "sup-alert warn"
+  }, w)), status && React.createElement(H3Progress, {
+    status: status
+  }), status && status.log && status.log.length > 0 && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("ul", {
+    className: "h3-log",
+    ref: logRef
+  }, status.log.map((line, i) => React.createElement("li", {
+    key: i
+  }, new Date(line.at).toLocaleTimeString(), "  ", line.message)))), snapshot && React.createElement("div", {
+    className: "h3-tiles"
+  }, React.createElement("button", {
+    className: 'h3-tile' + (station === null ? ' on' : ''),
+    onClick: () => setStation(null)
+  }, React.createElement("b", null, snapshot.rows.length), React.createElement("span", null, "All stations")), snapshot.stations.map(item => React.createElement("button", {
+    key: item.station,
+    className: 'h3-tile' + (station === item.station ? ' on' : ''),
+    onClick: () => {
+      setStation(item.station);
+      setTab('patients');
+    }
+  }, React.createElement("b", null, item.count), React.createElement("span", null, item.station)))), (snapshot || admissions && admissions.rows.length > 0) && React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement("div", {
+    className: "sup-seg"
+  }, React.createElement("button", {
+    className: tab === 'patients' ? 'on' : '',
+    onClick: () => setTab('patients')
+  }, "In-patients", snapshot ? ' (' + snapshot.rows.length + ')' : ''), React.createElement("button", {
+    className: tab === 'admissions' ? 'on' : '',
+    onClick: () => setTab('admissions')
+  }, "IPD Admission list", admissions && admissions.rows.length ? ' (' + admissions.rows.length + ')' : '')), React.createElement("input", {
+    className: "h3-search",
+    type: "search",
+    placeholder: "Search name, UHID, bed, consultant\u2026",
+    value: query,
+    onChange: e => setQuery(e.target.value)
+  }), React.createElement("span", {
+    className: "h3-muted",
+    style: {
+      flex: 1
+    }
+  }, tab === 'patients' && snapshot ? 'Showing ' + rows.length + ' of ' + snapshot.rows.length + ' patients. Click a patient to open the records.' : ''), React.createElement(H3Btn, {
+    onClick: () => setRoute({
+      view: 'supSheet'
+    })
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 15
+  }), "H360 Log Sheet")), tab === 'patients' && snapshot && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "h3-tablewrap"
+  }, React.createElement("table", {
+    className: "h3-table"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "#"), snapshot.columns.map(name => React.createElement("th", {
+    key: name
+  }, name)))), React.createElement("tbody", null, rows.map((row, i) => React.createElement("tr", {
+    key: row._adm || i,
+    className: row._adm ? 'open' : '',
+    onClick: () => row._adm && setOpen(row._adm)
+  }, React.createElement("td", null, i + 1), snapshot.columns.map(name => React.createElement("td", {
+    key: name
+  }, row[name] || '')))))))), tab === 'admissions' && React.createElement(React.Fragment, null, shape && shape.found && React.createElement("div", {
+    className: "h3-muted"
+  }, "Read ", h3When(admissions.collectedAt), " from the IPD Admission page of H360", shape.total > shape.read ? ' (' + shape.read + ' of ' + shape.total + ' rows)' : '', ". Used for: ", Object.keys(shape.recognised || {}).join(', ') || 'nothing yet', ".", (shape.missing || []).length ? ' Not found on the page: ' + shape.missing.join(', ') + '.' : ''), (!admissions || !admissions.rows.length) && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b h3-muted"
+  }, "The IPD Admission list has not been read yet. ", onPc ? 'It is read with every collection: click "Collect all patients" or "List only".' : 'It is read by the collection on the hospital PC.', status && status.lastRun && status.lastRun.register && status.lastRun.register.error ? ' Last attempt: ' + status.lastRun.register.error : '')), admissions && admissions.rows.length > 0 && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "h3-tablewrap"
+  }, React.createElement("table", {
+    className: "h3-table"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "#"), regCols.names.map(name => React.createElement("th", {
+    key: name
+  }, name)))), React.createElement("tbody", null, regRows.map((r, i) => React.createElement("tr", {
+    key: i
+  }, React.createElement("td", null, i + 1), regCols.names.map(name => React.createElement("td", {
+    key: name
+  }, ((regCols.raw ? r.raw : r.fields) || {})[name] || ''))))))))), loaded && !snapshot && tab === 'patients' && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b h3-muted",
+    style: {
+      textAlign: 'center',
+      padding: 36
+    }
+  }, "No patients collected yet. ", onPc ? React.createElement("span", null, "Press ", React.createElement("b", null, "Collect all patients"), ".") : React.createElement("span", null, "Press ", React.createElement("b", null, "Refresh patient lists"), ", or run a collection on the hospital PC."))), open && React.createElement(H3PatientDrawer, {
+    admissionNo: open,
+    onClose: () => setOpen(null)
+  }));
+}
+const h3Filled = row => Object.entries(row || {}).some(([key, value]) => key.charAt(0) !== '_' && String(value || '').trim());
+let h3RowSeq = 0;
+const h3Key = row => {
+  if (!row._k) Object.defineProperty(row, '_k', {
+    value: 'r' + ++h3RowSeq,
+    enumerable: false
+  });
+  return row._k;
+};
+function H3Area({
+  value,
+  onChange,
+  readOnly,
+  rows,
+  placeholder
+}) {
+  const [text, setText] = useState(value || '');
+  const ref = useRef(null);
+  useEffect(() => {
+    setText(value || '');
+  }, [value]);
+  useEffect(() => {
+    const el = ref.current;
+    if (el) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+  }, [text]);
+  return React.createElement("textarea", {
+    ref: ref,
+    rows: rows || 1,
+    value: text,
+    readOnly: !!readOnly,
+    placeholder: placeholder || '',
+    onChange: e => {
+      setText(e.target.value);
+      onChange(e.target.value);
+    }
+  });
+}
+const H3Section = React.memo(function H3Section({
+  section,
+  part,
+  schema,
+  count,
+  rev,
+  locked,
+  onTouched,
+  onStructure,
+  onMove
+}) {
+  const fixed = !!section.fixedRows;
+  const printed = (index, key) => (section.readOnly || []).indexOf(key) >= 0 && !!((section.defaults || [])[index] || {})[key];
+  const canEditRows = !fixed && !section.single && !locked;
+  if (section.single && !part.rows.length) part.rows.push({});
+  const pieces = section.title.split('{n}');
+  const total = (section.columns || []).reduce((n, column) => n + (column.width || column.valueWidth), 0);
+  const shared = 100 - (section.serial ? 3 : 0) - (canEditRows ? 9 : 0);
+  const swap = (a, b) => {
+    const t = part.rows[a];
+    part.rows[a] = part.rows[b];
+    part.rows[b] = t;
+    onStructure();
+  };
+  return React.createElement("div", {
+    className: "h3-section",
+    id: 'h3-section-' + section.id
+  }, React.createElement("h3", null, React.createElement("span", null, pieces[0], pieces.length > 1 ? React.createElement("b", null, count) : null, pieces[1] || '', section.inGeneral ? React.createElement("small", null, " (inside General Information on the sheet)") : null), section.columns && canEditRows && React.createElement(H3Btn, {
+    sm: true,
+    onClick: () => {
+      part.rows.push({});
+      onStructure();
+    }
+  }, "+ Add row")), section.columns && (part.rows.length || section.single ? React.createElement("div", {
+    className: "h3-gridwrap"
+  }, React.createElement("table", {
+    className: "h3-grid"
+  }, React.createElement("thead", null, React.createElement("tr", null, section.serial && React.createElement("th", {
+    className: "sn"
+  }, section.serial.label || '#'), section.columns.map(column => React.createElement("th", {
+    key: column.key,
+    style: {
+      width: shared * (column.width || column.valueWidth) / total + '%'
+    }
+  }, column.label)), canEditRows && React.createElement("th", {
+    className: "tools"
+  }))), React.createElement("tbody", null, part.rows.map((row, index) => React.createElement("tr", {
+    key: h3Key(row)
+  }, section.serial && React.createElement("td", {
+    className: "sn"
+  }, h3Pad(index + 1)), section.columns.map(column => React.createElement("td", {
+    key: column.key
+  }, React.createElement(H3Area, {
+    value: row[column.key],
+    readOnly: locked || fixed && (printed(index, column.key) || column.key === 'sub' && !row.sub),
+    onChange: v => {
+      row[column.key] = v;
+      onTouched();
+    }
+  }), column.key === 'remarks' && row._note && !row.remarks && !locked && React.createElement("div", {
+    className: "h3-hint"
+  }, React.createElement("button", {
+    type: "button",
+    title: row._note,
+    onClick: () => {
+      row.remarks = row._note;
+      onStructure();
+    }
+  }, "Use latest nursing note")))), canEditRows && React.createElement("td", {
+    className: "tools"
+  }, React.createElement("button", {
+    type: "button",
+    title: "Move up",
+    disabled: index === 0,
+    onClick: () => swap(index, index - 1)
+  }, "\u2191"), React.createElement("button", {
+    type: "button",
+    title: "Move down",
+    disabled: index === part.rows.length - 1,
+    onClick: () => swap(index, index + 1)
+  }, "\u2193"), React.createElement("button", {
+    type: "button",
+    title: "Remove this row",
+    onClick: () => {
+      part.rows.splice(index, 1);
+      onStructure();
+    }
+  }, "\u2715"), section.patients && React.createElement("select", {
+    value: "",
+    onChange: e => {
+      if (e.target.value) onMove(section.id, index, e.target.value);
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "Move to\u2026"), schema.patientSections.filter(id => id !== section.id).map(id => React.createElement("option", {
+    key: id,
+    value: id
+  }, schema.sections.find(s => s.id === id).title.split(/[:{]/)[0].trim()))))))))) : React.createElement("div", {
+    className: "h3-empty"
+  }, "No rows.", canEditRows ? ' Click "+ Add row" to add one.' : '')), section.fields && React.createElement("div", {
+    className: "h3-fields"
+  }, section.fields.map(field => React.createElement("div", {
+    className: "sup-fld",
+    key: field.key
+  }, React.createElement("label", null, field.label), field.long ? React.createElement(H3Area, {
+    rows: 3,
+    value: part.fields[field.key],
+    readOnly: locked,
+    placeholder: field.placeholder,
+    onChange: v => {
+      part.fields[field.key] = v;
+      onTouched();
+    }
+  }) : React.createElement("input", {
+    defaultValue: part.fields[field.key] || '',
+    key: rev,
+    readOnly: locked,
+    placeholder: field.placeholder || '',
+    onChange: e => {
+      part.fields[field.key] = e.target.value;
+      onTouched();
+    }
+  })))));
+});
+const H3_OPTIONS_KEY = 'unico_h360_update_options_v1';
+function H3UpdatePanel({
+  schema,
+  onRun,
+  onClose,
+  busy
+}) {
+  const [o, setO] = useState(() => {
+    let saved = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(H3_OPTIONS_KEY)) || {};
+    } catch (e) {
+      saved = {};
+    }
+    return Object.assign({}, schema.updateDefaults, saved);
+  });
+  const set = (key, value) => setO(prev => Object.assign({}, prev, {
+    [key]: value
+  }));
+  const check = (key, label) => React.createElement("label", {
+    className: "h3-check"
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!o[key],
+    onChange: e => set(key, e.target.checked)
+  }), " ", label);
+  const run = () => {
+    if (o.remarks === 'all' && !confirm('Replace every remark in this report with the newest note from H360? What you typed in Remarks will be lost.')) return;
+    if (o.diagnosis === 'all' && !confirm('Replace every diagnosis in this report with the one recorded in H360?')) return;
+    try {
+      localStorage.setItem(H3_OPTIONS_KEY, JSON.stringify(o));
+    } catch (e) {}
+    onRun(o);
+  };
+  return React.createElement("div", {
+    className: "sup-card h3-options"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("b", null, "Update this report from the latest H360 collection"), check('addNew', 'Add newly admitted patients'), check('updateDetails', 'Update bed, age and consultant of patients already in the report'), check('register', 'Use the IPD Admission list: move patients it shows as discharged or LAMA to those lists, and add admissions that are on no station list'), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Diagnosis"), React.createElement("select", {
+    value: o.diagnosis,
+    onChange: e => set('diagnosis', e.target.value)
+  }, React.createElement("option", {
+    value: "empty"
+  }, "Fill in only where it is empty"), React.createElement("option", {
+    value: "all"
+  }, "Replace every diagnosis with the one recorded in H360"), React.createElement("option", {
+    value: "none"
+  }, "Leave as it is"))), check('useComplaint', 'When no diagnosis is recorded, use the presenting complaint (written as "C/C: ...")'), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Remarks"), React.createElement("select", {
+    value: o.remarks,
+    onChange: e => set('remarks', e.target.value)
+  }, React.createElement("option", {
+    value: "empty"
+  }, "Fill in only where it is empty"), React.createElement("option", {
+    value: "all"
+  }, "Replace every remark with the newest note (overwrites what you typed)"), React.createElement("option", {
+    value: "none"
+  }, "Leave as it is"))), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Take remarks from"), React.createElement("select", {
+    value: o.remarksFrom,
+    onChange: e => set('remarksFrom', e.target.value)
+  }, React.createElement("option", {
+    value: "nursing"
+  }, "The newest nursing follow-up note"), React.createElement("option", {
+    value: "progress"
+  }, "The newest doctor progress note"), React.createElement("option", {
+    value: "both"
+  }, "Both: doctor progress note, then nursing note"), React.createElement("option", {
+    value: "handover"
+  }, "The doctors' handover: clinical summary and plan"))), check('sections', 'Fill the other sections H360 can answer: Surgery Details, Interventional Procedure, Pressure Sore, Ventilator Status and the counts in General Information'), React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: run,
+    disabled: busy
+  }, busy ? 'Updating…' : 'Update now'), React.createElement(H3Btn, {
+    onClick: onClose
+  }, "Close"))));
+}
+function H3SheetEditor({
+  id,
+  schema,
+  onBack
+}) {
+  const [report, setReport] = useState(null);
+  const [error, setError] = useState('');
+  const [saveState, setSaveState] = useState('');
+  const [notes, setNotes] = useState([]);
+  const [panel, setPanel] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [rev, setRev] = useState(0);
+  const [, setTick] = useState(0);
+  const live = useRef({
+    report: null,
+    timer: null,
+    saving: Promise.resolve(),
+    tickTimer: null,
+    dead: false
+  });
+  const locked = !h3Can('edit');
+  const save = useCallback(() => {
+    const s = live.current;
+    clearTimeout(s.timer);
+    s.timer = null;
+    if (!s.report || locked) return s.saving;
+    s.saving = s.saving.then(() => {
+      const r = s.report;
+      return h3Api('/api/h360/sheets/' + r.id, {
+        method: 'PUT',
+        body: {
+          title: r.title,
+          date: r.date,
+          shift: r.shift,
+          data: r.data,
+          preparedBy: r.preparedBy,
+          baseUpdatedAt: r.updatedAt
+        }
+      });
+    }).then(saved => {
+      if (s.report) s.report.updatedAt = saved.updatedAt;
+      if (!s.dead) setSaveState('Saved ' + new Date().toLocaleTimeString());
+    }).catch(e => {
+      if (s.dead) return;
+      setSaveState('Not saved');
+      setError(e.status === 409 ? e.message : 'Could not save: ' + e.message);
+    });
+    return s.saving;
+  }, [locked]);
+  const flush = useCallback(() => live.current.timer ? save() : live.current.saving, [save]);
+  const touched = useCallback(() => {
+    const s = live.current;
+    if (locked) return;
+    setSaveState('Saving…');
+    clearTimeout(s.timer);
+    s.timer = setTimeout(save, 700);
+    clearTimeout(s.tickTimer);
+    s.tickTimer = setTimeout(() => setTick(n => n + 1), 350);
+  }, [save, locked]);
+  const structure = useCallback(() => {
+    touched();
+    setRev(n => n + 1);
+  }, [touched]);
+  const move = useCallback((fromId, index, toId) => {
+    const r = live.current.report;
+    const row = r.data[fromId].rows.splice(index, 1)[0];
+    r.data[toId].rows.push(row);
+    structure();
+  }, [structure]);
+  const show = r => {
+    live.current.report = r;
+    setReport(r);
+    setRev(n => n + 1);
+  };
+  useEffect(() => {
+    const s = live.current;
+    s.dead = false;
+    h3Api('/api/h360/sheets/' + id).then(show).catch(e => setError(e.message));
+    const leaving = event => {
+      if (s.timer) {
+        save();
+        event.preventDefault();
+      }
+    };
+    window.addEventListener('beforeunload', leaving);
+    return () => {
+      window.removeEventListener('beforeunload', leaving);
+      if (s.timer) save();
+      s.dead = true;
+      clearTimeout(s.tickTimer);
+    };
+  }, [id]);
+  if (!report) return React.createElement("div", {
+    className: "sup-wrap"
+  }, error ? React.createElement("div", {
+    className: "sup-alert critical"
+  }, error) : React.createElement("div", {
+    className: "h3-muted"
+  }, "Loading\u2026"), React.createElement("div", null, React.createElement(H3Btn, {
+    onClick: onBack
+  }, "All reports")));
+  const countOf = section => {
+    if (section.count !== 'rows') return '';
+    const n = report.data[section.id].rows.filter(h3Filled).length;
+    return n ? h3Pad(n) : '0';
+  };
+  const meta = (key, value) => {
+    report[key] = value;
+    touched();
+  };
+  const update = async options => {
+    setBusy(true);
+    setError('');
+    try {
+      await flush();
+      const result = await h3Api('/api/h360/sheets/' + report.id + '/refresh', {
+        method: 'POST',
+        body: options
+      });
+      show(result.report);
+      setPanel(false);
+      const out = [];
+      if (options.addNew) out.push(result.added.length ? 'Added ' + result.added.length + ' new patient(s): ' + result.added.join(', ') + '.' : 'No new patients since this report was made.');
+      out.push('Filled in: diagnosis for ' + result.changed.diagnosis + ' patient(s), remarks for ' + result.changed.remarks + ' patient(s); bed, age or consultant updated for ' + result.changed.details + '; ' + result.changed.sections + ' row(s) or number(s) added to the other sections.');
+      if ((result.moved || []).length) out.push('Moved by the IPD Admission list: ' + result.moved.join(', ') + '.');
+      if ((result.died || []).length) out.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + result.died.join(', ') + '.');
+      if (result.gone.length) out.push('No longer on the H360 lists (move them to Discharged or LAMA if they left): ' + result.gone.join(', ') + '.');
+      setNotes(out);
+      setSaveState('H360 data from ' + h3When(result.report.sourceCollectedAt));
+      try {
+        window.scrollTo(0, 0);
+      } catch (e) {}
+    } catch (e) {
+      setError(e.message);
+    }
+    setBusy(false);
+  };
+  const remove = async () => {
+    if (!confirm('Delete the ' + report.shift + ' report of ' + h3ShowDate(report.date) + '? This cannot be undone.')) return;
+    const s = live.current;
+    clearTimeout(s.timer);
+    s.timer = null;
+    try {
+      await s.saving;
+      await h3Api('/api/h360/sheets/' + report.id, {
+        method: 'DELETE'
+      });
+      s.report = null;
+      h3Toast('Report deleted.');
+      onBack();
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+  const goto = sectionId => {
+    const el = document.getElementById('h3-section-' + sectionId);
+    if (el && el.scrollIntoView) el.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start'
+    });
+  };
+  return React.createElement("div", {
+    className: "sup-wrap"
+  }, React.createElement(H3Hero, {
+    title: report.title + ' - ' + h3ShowDate(report.date),
+    sub: saveState || (report.sourceCollectedAt ? 'H360 data from ' + h3When(report.sourceCollectedAt) : 'No H360 data collected yet')
+  }, !locked && React.createElement(H3Btn, {
+    onClick: () => setPanel(v => !v),
+    title: "Choose what to bring in from the latest H360 collection"
+  }, "Update from H360 \u25BE"), React.createElement(H3Btn, {
+    onClick: async () => {
+      await flush();
+      location.href = '/api/h360/sheets/' + report.id + '/docx';
+    }
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 15,
+    c: "#fff"
+  }), "Word"), React.createElement(H3Btn, {
+    onClick: async () => {
+      await flush();
+      window.open('/api/h360/sheets/' + report.id + '/print', '_blank');
+    }
+  }, "Print / PDF"), React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: async () => {
+      await flush();
+      onBack();
+    }
+  }, "All reports")), error && React.createElement("div", {
+    className: "sup-alert critical"
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, error), React.createElement(H3Btn, {
+    sm: true,
+    onClick: () => {
+      setError('');
+      h3Api('/api/h360/sheets/' + id).then(show).catch(e => setError(e.message));
+    }
+  }, "Reload")), locked && React.createElement("div", {
+    className: "sup-alert info"
+  }, "Your Supervisor Reports access is view-only, so this report cannot be changed."), notes.map((text, i) => React.createElement("div", {
+    key: i,
+    className: "sup-alert warn"
+  }, text)), panel && React.createElement(H3UpdatePanel, {
+    schema: schema,
+    busy: busy,
+    onRun: update,
+    onClose: () => setPanel(false)
+  }), React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    className: "h3-meta",
+    key: 'm' + rev
+  }, React.createElement("div", {
+    className: "sup-fld",
+    style: {
+      flex: 2,
+      minWidth: 240
+    }
+  }, React.createElement("label", null, "Title"), React.createElement("input", {
+    defaultValue: report.title,
+    readOnly: locked,
+    onChange: e => meta('title', e.target.value)
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Date"), React.createElement("input", {
+    type: "date",
+    defaultValue: report.date,
+    readOnly: locked,
+    onChange: e => {
+      if (e.target.value) meta('date', e.target.value);
+    }
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Shift"), React.createElement("select", {
+    defaultValue: report.shift,
+    disabled: locked,
+    onChange: e => meta('shift', e.target.value)
+  }, schema.shifts.map(s => React.createElement("option", {
+    key: s,
+    value: s
+  }, s)))), schema.signature.map(item => React.createElement("div", {
+    className: "sup-fld",
+    key: item.key,
+    style: {
+      flex: 1,
+      minWidth: 180
+    }
+  }, React.createElement("label", null, "Box beside the logo: ", item.label), React.createElement("input", {
+    defaultValue: (report.preparedBy || {})[item.key] || '',
+    placeholder: item.fallback || '',
+    readOnly: locked,
+    onChange: e => {
+      report.preparedBy = report.preparedBy || {};
+      report.preparedBy[item.key] = e.target.value;
+      touched();
+    }
+  }))), h3Can('delete') && React.createElement(H3Btn, {
+    kind: "dgr",
+    onClick: remove
+  }, "Delete report")))), React.createElement("div", {
+    className: "h3-muted"
+  }, "Tip: type ", React.createElement("b", null, "**text**"), " to make it bold and ", React.createElement("b", null, "==text=="), " to highlight it in yellow. Everything is saved automatically."), React.createElement("nav", {
+    className: "h3-nav"
+  }, schema.sections.map(section => React.createElement("button", {
+    key: section.id,
+    type: "button",
+    onClick: () => goto(section.id)
+  }, section.title.split(/[:{]/)[0].replace(/[-\s]+$/, ''), " ", section.count ? React.createElement("b", null, countOf(section)) : null))), schema.sections.map(section => React.createElement(H3Section, {
+    key: section.id,
+    section: section,
+    part: report.data[section.id],
+    schema: schema,
+    count: countOf(section),
+    rev: rev,
+    locked: locked,
+    onTouched: touched,
+    onStructure: structure,
+    onMove: move
+  })));
+}
+function H3Sheets({
+  id,
+  setRoute
+}) {
+  const [schema, setSchema] = useState(null);
+  const [list, setList] = useState(null);
+  const [error, setError] = useState('');
+  const [date, setDate] = useState(h3Today());
+  const [shift, setShift] = useState(h3Shift());
+  const [busy, setBusy] = useState(false);
+  const load = () => h3Api('/api/h360/sheets').then(setList).catch(e => setError(e.message));
+  useEffect(() => {
+    h3Api('/api/h360/schema').then(setSchema).catch(e => setError(e.message));
+  }, []);
+  useEffect(() => {
+    if (!id) load();
+  }, [id]);
+  const create = async event => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const created = await h3Api('/api/h360/sheets', {
+        method: 'POST',
+        body: {
+          date,
+          shift
+        }
+      });
+      setRoute({
+        view: 'supSheet',
+        id: created.id
+      });
+    } catch (e) {
+      setError(e.message);
+    }
+    setBusy(false);
+  };
+  if (id && schema) return React.createElement(H3SheetEditor, {
+    key: id,
+    id: id,
+    schema: schema,
+    onBack: () => setRoute({
+      view: 'supSheet'
+    })
+  });
+  const stop = event => event.stopPropagation();
+  return React.createElement("div", {
+    className: "sup-wrap"
+  }, React.createElement(H3Hero, {
+    title: "H360 Log Sheet",
+    sub: "The supervisor log sheet, filled in from H360 and from the previous report"
+  }, React.createElement(H3Btn, {
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, React.createElement(Ic, {
+    d: I.pulse || I.doc,
+    s: 15,
+    c: "#fff"
+  }), "H360 Patients")), error && React.createElement("div", {
+    className: "sup-alert critical"
+  }, error), h3Can('add') && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("form", {
+    className: "h3-meta",
+    onSubmit: create
+  }, React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Date"), React.createElement("input", {
+    type: "date",
+    value: date,
+    onChange: e => setDate(e.target.value),
+    required: true
+  })), React.createElement("div", {
+    className: "sup-fld"
+  }, React.createElement("label", null, "Shift"), React.createElement("select", {
+    value: shift,
+    onChange: e => setShift(e.target.value)
+  }, (schema && schema.shifts || ['Morning', 'Evening', 'Night']).map(s => React.createElement("option", {
+    key: s,
+    value: s
+  }, s)))), React.createElement(H3Btn, {
+    kind: "pri",
+    type: "submit",
+    disabled: busy
+  }, busy ? 'Creating…' : 'Create report'), React.createElement("span", {
+    className: "h3-muted",
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, "A new report is filled in from the latest H360 collection and keeps the diagnosis and remarks you wrote in the previous report.")))), React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "h3-tablewrap"
+  }, React.createElement("table", {
+    className: "h3-table"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Shift"), React.createElement("th", null, "Title"), React.createElement("th", null, "New"), React.createElement("th", null, "Critical"), React.createElement("th", null, "Ward"), React.createElement("th", null, "LAMA"), React.createElement("th", null, "Discharged"), React.createElement("th", null, "Prepared by"), React.createElement("th", null, "Last saved"), React.createElement("th", null))), React.createElement("tbody", null, (list || []).map(item => React.createElement("tr", {
+    key: item.id,
+    className: "open",
+    onClick: () => setRoute({
+      view: 'supSheet',
+      id: item.id
+    })
+  }, React.createElement("td", null, h3ShowDate(item.date)), React.createElement("td", null, item.shift), React.createElement("td", null, item.title), React.createElement("td", null, item.counts.newAdmissions), React.createElement("td", null, item.counts.critical), React.createElement("td", null, item.counts.ward), React.createElement("td", null, item.counts.lama), React.createElement("td", null, item.counts.discharged), React.createElement("td", null, item.preparedBy), React.createElement("td", null, h3When(item.updatedAt)), React.createElement("td", {
+    className: "tools",
+    onClick: stop
+  }, React.createElement("a", {
+    className: "sup-btn sm",
+    href: '/api/h360/sheets/' + item.id + '/docx'
+  }, "Word"), " ", React.createElement("a", {
+    className: "sup-btn sm",
+    href: '/api/h360/sheets/' + item.id + '/print',
+    target: "_blank",
+    rel: "noopener"
+  }, "Print"))))))), list && !list.length && React.createElement("div", {
+    className: "sup-card-b h3-muted",
+    style: {
+      textAlign: 'center'
+    }
+  }, "No reports yet. Choose a date and shift above and click Create report."), !list && !error && React.createElement("div", {
+    className: "sup-card-b h3-muted"
+  }, "Loading\u2026")));
+}
+function SupH360View({
+  view,
+  id,
+  setRoute
+}) {
+  if (view === 'supSheet') return React.createElement(H3Sheets, {
+    id: id,
+    setRoute: setRoute
+  });
+  return React.createElement(H3Patients, {
+    setRoute: setRoute
+  });
+}
+const H3_CSS = `
+.h3-muted{color:var(--muted,#64748b);font-size:12.5px;line-height:1.55}
+.sup-hero-r a.sup-btn{background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.28);color:#fff;text-decoration:none}
+a.sup-btn{text-decoration:none}
+.sup-alert .sup-btn{flex:0 0 auto}
+.h3-log{margin:0;padding:10px 14px;list-style:none;max-height:190px;overflow:auto;font-family:Consolas,ui-monospace,monospace;font-size:12.5px;color:#475569;white-space:pre-wrap}
+.h3-live.on{border-color:#93c5fd;box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.h3-live.fail{border-color:#fecaca}
+.h3-livehead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13.5px;color:#0f172a}
+.h3-livenum{font-size:12.5px;color:var(--muted,#64748b);margin-left:8px}
+.h3-livenum b{font-size:17px;color:#1d4ed8}
+.h3-pulse{width:10px;height:10px;border-radius:50%;background:#16a34a;box-shadow:0 0 0 0 rgba(22,163,74,.6);animation:h3Pulse 1.3s infinite}
+@keyframes h3Pulse{70%{box-shadow:0 0 0 9px rgba(22,163,74,0)}100%{box-shadow:0 0 0 0 rgba(22,163,74,0)}}
+.h3-steps{display:flex;gap:6px;flex-wrap:wrap;margin:11px 0 9px}
+.h3-step{font-size:11.5px;font-weight:700;padding:4px 11px;border-radius:999px;background:#f1f5f9;color:#94a3b8}
+.h3-step.done{background:#dcfce7;color:#15803d}
+.h3-step.now{background:#2563eb;color:#fff}
+.h3-step.fail{background:#fee2e2;color:#b91c1c}
+.h3-bar{height:9px;border-radius:999px;background:#e8eef5;overflow:hidden}
+.h3-bar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#2563eb,#27a8db);transition:width .5s ease}
+.h3-bar.sm{height:6px;flex:1}
+.h3-stbars{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:7px 22px;margin-top:12px}
+.h3-stbar{display:flex;align-items:center;gap:9px;font-size:11.5px;color:#475569}
+.h3-stbar span{flex:0 0 46%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.h3-stbar em{font-style:normal;font-weight:700;min-width:38px;text-align:right;color:#0f172a}
+.h3-tiles{display:flex;gap:10px;flex-wrap:wrap}
+.h3-tile{background:var(--panel,#fff);border:1px solid var(--line,#e5e7eb);border-radius:12px;padding:10px 14px;min-width:118px;cursor:pointer;text-align:left;font:inherit;color:var(--ink,#111827)}
+.h3-tile.on{border-color:#2563eb;box-shadow:inset 0 0 0 1px #2563eb}
+.h3-tile b{display:block;font-size:22px;color:#1d4ed8;line-height:1.15}
+.h3-tile span{color:var(--muted,#64748b);font-size:11.5px}
+.h3-search{font:inherit;padding:8px 11px;border:1px solid var(--line,#d1d5db);border-radius:9px;min-width:260px;background:#fff}
+.h3-tablewrap{overflow:auto;max-height:68vh;border-radius:12px}
+.h3-table{border-collapse:collapse;width:100%;font-size:12.5px}
+.h3-table th,.h3-table td{padding:8px 10px;border-bottom:1px solid var(--line,#e8edf3);text-align:left;white-space:nowrap}
+.h3-table th{position:sticky;top:0;background:#eef4fb;font-weight:700;color:#334155;z-index:1}
+.h3-table tr.open{cursor:pointer}
+.h3-table tbody tr:hover td{background:#f5f9ff}
+.h3-table td.tools{text-align:right}
+.h3-sethead{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.h3-setgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:22px}
+.h3-settitle{font-weight:800;font-size:13.5px;margin-bottom:3px;color:#0f172a}
+.h3-loginrow{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-top:10px}
+.h3-radio{display:flex;gap:9px;align-items:flex-start;margin:10px 0;font-size:12.5px;line-height:1.45;cursor:pointer}
+.h3-radio input{margin-top:3px}
+.h3-drawer-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9998}
+.h3-drawer{position:absolute;top:0;right:0;bottom:0;width:min(900px,96vw);background:#f3f6f9;box-shadow:-8px 0 24px rgba(0,0,0,.18);display:flex;flex-direction:column}
+.h3-drawer-h{display:flex;align-items:center;gap:12px;padding:13px 18px;color:#fff;background:linear-gradient(120deg,#0d1b2e,#0072a3)}
+.h3-drawer-h b{font-size:16px;display:block}
+.h3-drawer-h small{display:block;opacity:.88;font-size:12px;margin-top:2px}
+.h3-drawer-b{padding:14px 18px 40px;overflow:auto;flex:1}
+.h3-drawer-b h4{font-size:13.5px;margin:18px 0 8px;color:#0b6475}
+.h3-pairs{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 18px;background:#fff;border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:12px 14px;font-size:12.5px}
+.h3-pairs div{overflow-wrap:anywhere}
+.h3-pairs span{color:var(--muted,#64748b);font-size:11.5px;display:block}
+.h3-rec{background:#fff;border:1px solid var(--line,#e5e7eb);border-radius:10px;margin-bottom:6px}
+.h3-rec summary{padding:9px 14px;cursor:pointer;font-weight:700;font-size:13px}
+.h3-rec summary small{font-weight:400;color:var(--muted,#64748b);margin-left:8px}
+.h3-rec-b{padding:0 14px 12px}
+.h3-rec-b h5{margin:12px 0 6px;font-size:12.5px}
+.h3-rec-b .h3-pairs{border:0;padding:0}
+.h3-scroll{overflow:auto;max-height:420px;border:1px solid var(--line,#e5e7eb);border-radius:8px;margin:8px 0}
+.h3-rtbl{border-collapse:collapse;width:100%;font-size:12.5px}
+.h3-rtbl th,.h3-rtbl td{padding:5px 8px;border-bottom:1px solid var(--line,#eef2f7);text-align:left;min-width:70px;vertical-align:top}
+.h3-rtbl th{background:#f1f5f9;position:sticky;top:0}
+.h3-meta{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.h3-options .sup-card-b{display:grid;gap:10px;max-width:780px}
+.h3-options select{max-width:540px}
+.h3-check{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.45;cursor:pointer}
+.h3-check input{margin-top:2px}
+.h3-nav{position:sticky;top:0;z-index:5;display:flex;gap:6px;overflow-x:auto;padding:8px 0;background:var(--bg,#f4f7fb)}
+.h3-nav button{white-space:nowrap;font:inherit;font-size:11.5px;padding:5px 10px;border-radius:999px;background:#fff;border:1px solid var(--line,#e5e7eb);color:var(--ink,#111827);cursor:pointer}
+.h3-nav button:hover{border-color:#93c5fd}
+.h3-nav b{color:#1d4ed8}
+.h3-section{background:#fff;border:1px solid var(--line,#e5e7eb);border-radius:12px;overflow:hidden;scroll-margin-top:60px}
+.h3-section>h3{margin:0;padding:8px 14px;font-size:13.5px;background:#e9eef4;display:flex;align-items:center;gap:10px;color:#0f172a}
+.h3-section>h3 span{flex:1}
+.h3-section>h3 small{font-weight:400;color:var(--muted,#64748b)}
+.h3-gridwrap{overflow-x:auto}
+.h3-grid{table-layout:fixed;min-width:1400px;width:100%;border-collapse:collapse}
+.h3-grid th{font-size:11.5px;font-weight:700;padding:6px 4px;border:1px solid var(--line,#e5e7eb);background:#f7fafc}
+.h3-grid td{border:1px solid var(--line,#e5e7eb);padding:0;vertical-align:top}
+.h3-grid th.sn{width:3%}
+.h3-grid th.tools{width:9%}
+.h3-grid td.sn{text-align:center;padding-top:8px;color:var(--muted,#64748b);font-size:12px}
+.h3-grid td.tools{padding:4px;background:#fafcfd}
+.h3-grid td.tools button{padding:2px 7px;font-size:12px;border:1px solid var(--line,#e5e7eb);background:#fff;border-radius:6px;cursor:pointer;margin-right:3px}
+.h3-grid td.tools button:disabled{opacity:.45;cursor:default}
+.h3-grid td.tools select{padding:2px 4px;font-size:11.5px;width:100%;margin-top:4px}
+.h3-grid textarea,.h3-fields textarea{width:100%;border:0;border-radius:0;resize:none;overflow:hidden;min-height:34px;display:block;background:transparent;font:inherit;font-size:12.5px;line-height:1.35;padding:7px 8px;box-sizing:border-box;color:var(--ink,#111827)}
+.h3-grid textarea:focus{outline:2px solid #2563eb;outline-offset:-2px;background:#fff}
+.h3-grid textarea[readonly]{background:#f7fafc;color:var(--muted,#64748b)}
+.h3-hint{padding:3px 6px 5px}
+.h3-hint button{font-size:11px;padding:2px 7px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:#fff;color:var(--muted,#64748b);cursor:pointer}
+.h3-fields{padding:12px 14px;display:grid;gap:10px}
+.h3-fields textarea{border:1px solid var(--line,#d1d5db);border-radius:9px;min-height:70px}
+.h3-empty{padding:14px;color:var(--muted,#64748b);font-size:12.5px}
+`;
+(function injectH3Css() {
+  try {
+    if (typeof document === 'undefined' || document.getElementById('h3-css')) return;
+    const st = document.createElement('style');
+    st.id = 'h3-css';
+    st.textContent = H3_CSS;
+    document.head.appendChild(st);
+  } catch (e) {}
+})();
+Object.assign(window, {
+  SupH360View
 });
 })();

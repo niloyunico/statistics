@@ -19,7 +19,7 @@
     "test:med": "node test/medicines.test.js",
     "test:photos": "node test/photos.test.js && node test/imagekit.test.js && node test/blob.test.js && node test/private-media.test.js && node test/account-photo.test.js",
     "test:access": "node test/access.test.js",
-    "test:staff": "node test/staff-groups-experience.test.js && node test/staff-roster.test.js && node test/staff-sync.test.js && node test/staff-merge.test.js && node test/staff-updates.test.js",
+    "test:staff": "node test/staff-groups-experience.test.js && node test/staff-roster.test.js && node test/staff-sync.test.js && node test/staff-merge.test.js && node test/staff-updates.test.js && node test/attrition-access.test.js",
     "test:data": "node test/submissions.test.js && node test/approval-integrity.test.js && node test/submission-dashboard.test.js && node test/overlay-newest-wins.test.js && node test/field-requests.test.js && node test/user-scope.test.js",
     "test:cache": "node test/cache.test.js",
     "test:lb": "node test/loadbalancer.test.js",
@@ -28,20 +28,27 @@
     "keepalive": "node keepalive.js",
     "cache:flush": "node cache-flush.js",
     "test:d1": "node test/d1-store.test.js && node test/d1-admin.test.js",
-    "cloudinary:usage": "node cloudinary-usage.js"
+    "cloudinary:usage": "node cloudinary-usage.js",
+    "h360:collect": "node h360/cli.js",
+    "test:h360": "node test/h360.test.js"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.12.1",
     "@vercel/blob": "^2.8.0",
     "bcryptjs": "^2.4.3",
+    "cheerio": "^1.2.0",
     "cloudinary": "^2.11.0",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
     "docx": "^9.7.1",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.8.0",
     "sharp": "^0.35.5"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.49.1"
   }
 }

@@ -55,6 +55,8 @@ const UNICO_MODULES = [
   { id:'reports', label:'Reports',            short:'Reports',    icon:I.doc,   home:'reports' },
   { id:'users',   label:'Access Control',     short:'Access',     icon:I.shield,home:'users' },
   { id:'perf',    label:'Performance',        short:'Performance',icon:I.doc,   home:'perfHome' },
+  // Attrition & Exits — its own permission since 2026-10 (was part of Performance).
+  { id:'attrition',label:'Attrition & Exits',  short:'Attrition',  icon:I.doc,   home:'perfAttrition' },
   { id:'roster',  label:'Duty Roster',        short:'Roster',     icon:I.grid,  home:'rosterHome' },
   { id:'medicine',label:'Medicine & Rx',      short:'Medicine',   icon:I.heart, home:'medHome' },
   // Data Submission: reporting a unit's own figures — what the /collect portal used to be,
@@ -66,13 +68,14 @@ const UNICO_MODULE_VIEWS = {
   datacol:['dcReview','dcPatient','dcQuality','input','dcSettings','dcShare','dcFields','dcAnalytics'],
   staff:  ['staffHome','staffAll','staffNewEntries','staffRecentUpdates','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
-  supervisor:['supHome','supBoard','supNew','supHistory','supReport'],
+  supervisor:['supHome','supBoard','supNew','supHistory','supReport','supH360','supSheet'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
   // perfDirectory / perfStaff are GONE: the staff directory and the per-person record
   // belong to Nurse / PCA Management, which already owns the roster. app.jsx rewrites
   // the two old route names onto the staff module so old links still land somewhere.
-  perf:   ['perfHome','perfForm','perfPrint','perfAchievements','perfIncidents','perfCompare','perfAttrition','perfRisk','perfBoard'],
+  perf:   ['perfHome','perfForm','perfPrint','perfAchievements','perfIncidents','perfCompare','perfRisk','perfBoard'],
+  attrition:['perfAttrition'],
   roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
   datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
@@ -116,7 +119,7 @@ function unicoModuleOf(view){
    they are never gated here. `modules` null/absent = unrestricted (legacy accounts
    keep full access until an admin assigns modules). ---- */
 // 'staffapp' is grantable too, but it is the phone app only — it has no screen in here.
-const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','roster','medicine','datasubmit','staffapp'];
+const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp'];
 // The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
 // hub, so it is gated under 'users' rather than 'stats'.
 function unicoAccessModuleOf(view){
@@ -151,7 +154,9 @@ function unicoModuleLevel(mid){ const p=unicoUserPerms(); if(!p) return 'delete'
    why this must not be "fixed" by making a level imply print, is in server/access.js. */
 function unicoCan(mid, action){
   const p=unicoUserPerms(); if(!p) return true;   // admin / open local mode -> full
-  const val=p[mid];
+  // 'attrition' was part of Performance until 2026-10: a map saved before it existed keeps
+  // Performance's grant for it (same rule as server/access.js can()).
+  const val=(mid==='attrition'&&!Object.prototype.hasOwnProperty.call(p,'attrition'))?p.perf:p[mid];
   if(Array.isArray(val)){
     if(action==='view') return val.length>0;       // any granted action lets them open it
     return val.indexOf(action)>=0;
@@ -179,7 +184,7 @@ function unicoFirstAllowedHome(){
   // 'home' is not in this list on purpose: it is ungated, so unicoCanAccessView()
   // never sends anyone here looking for a fallback. This list answers a different
   // question — which WORKSPACE to open when a restricted account needs one.
-  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['roster','rosterHome'],['reports','reports'],['users','settings']];
+  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings']];
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return homes[i][1]; }
   return null;
 }
@@ -369,8 +374,8 @@ const UNICO_WS = [
        confidential and the server gates it; 'roster' likewise), it just no longer keeps
        its own destination: `mods` lists every module this one row can open, and the
        sub-items below carry the module each of them needs. */
-    { id:'staff',       label:'Staff Management', icon:I.steth, home:'staffHome', mods:['staff','perf','roster'],
-      on:v=>['staff','perf','roster'].indexOf(unicoModuleOf(v))>=0 },
+    { id:'staff',       label:'Staff Management', icon:I.steth, home:'staffHome', mods:['staff','perf','attrition','roster'],
+      on:v=>['staff','perf','attrition','roster'].indexOf(unicoModuleOf(v))>=0 },
     // Access Control — accounts and per-person access (access-control.jsx). Same 'users'
     // permission as Settings; it just has its own door now instead of a Settings tab.
     { id:'access',      label:'Access Control',  icon:I.shield, home:'users',       on:v=>unicoModuleOf(v)==='users' },
@@ -396,6 +401,12 @@ const UNICO_VIEW_TABS = [
     ['perfHome','Overview'], ['perfAchievements','Achievements'], ['perfIncidents','Incidents'],
     ['perfBoard','Recognition'], ['perfAttrition','Attrition & Exits'], ['perfCompare','By Department'],
   ]},
+  // The same strip on the Attrition page (its own permission now); ViewTabs drops the tabs this
+  // account may not open, and the strip itself when only one is left.
+  { mod:'attrition', tabs:[
+    ['perfHome','Overview'], ['perfAchievements','Achievements'], ['perfIncidents','Incidents'],
+    ['perfBoard','Recognition'], ['perfAttrition','Attrition & Exits'], ['perfCompare','By Department'],
+  ]},
   { mod:'roster', hide:['rosterPrint'], parent:{ rosterGrid:'rosterHome', rosterReview:'rosterHome' }, tabs:[
     ['rosterHome','Rosters'], ['manpower','Manpower'], ['rosterFullReview','Full Review'],
   ]},
@@ -413,9 +424,12 @@ function unicoViewTabs(view){
 function ViewTabs({ view, setRoute }){
   const g = unicoViewTabs(view);
   if(!g) return null;
+  // Only the tabs this account may open (Performance and Attrition are separate permissions).
+  const tabs=g.tabs.filter(([v])=>!window.unicoCanAccessView||window.unicoCanAccessView(v));
+  if(tabs.length<2) return null;
   return (
     <div className="seg" style={{alignSelf:'flex-start',maxWidth:'100%',flexWrap:'wrap',marginBottom:12}}>
-      {g.tabs.map(([v,label])=>(
+      {tabs.map(([v,label])=>(
         <button key={v} className={g.cur===v?'on':''} onClick={()=>{ if(g.cur!==v) setRoute({view:v}); }}>{label}</button>
       ))}
     </div>
@@ -460,6 +474,9 @@ function unicoWorkspaceSub(view){
     { label:'New Report',      view:'supNew' },
     { label:'History',         view:'supHistory' },
     { label:'Generate Report', view:'supReport' },
+    // The H360 link: patients collected from H360, and the log sheet filled in from them.
+    { label:'H360 Patients',   view:'supH360' },
+    { label:'H360 Log Sheet',  view:'supSheet' },
   ];
   /* STAFF MANAGEMENT — the roster and the appraisal work under one destination.
      There is no "Staff Directory" under Performance: there is ONE staff directory in
@@ -475,7 +492,7 @@ function unicoWorkspaceSub(view){
      switched, so they are one row — and the six Performance screens are tabs on the
      Performance page itself (PerfTabs in performance.jsx), the way Settings has always
      carried its own tabs. A sidebar you have to scroll is a menu, not a map. */
-  if(mod==='staff' || mod==='perf' || mod==='roster') return [
+  if(mod==='staff' || mod==='perf' || mod==='attrition' || mod==='roster') return [
     { label:'Dashboard',      view:'staffHome',       mod:'staff', match:['staffHome','nurseHome','pcaHome'] },
     { label:'Directory',      view:'staffAll',        mod:'staff', match:['staffAll','nurses','pca'] },
     { label:'New Entry Staff', view:'staffNewEntries', mod:'staff' },
@@ -486,6 +503,7 @@ function unicoWorkspaceSub(view){
     { label:'Nurse / PCA requests', view:'staffRequests', mod:'staff' },
     { label:'Performance',    view:'perfHome',        mod:'perf', divider:true,
       match:UNICO_MODULE_VIEWS.perf },
+    { label:'Attrition & Exits', view:'perfAttrition', mod:'attrition', match:UNICO_MODULE_VIEWS.attrition },
     { label:'Duty Roster',    view:'rosterHome',      mod:'roster',
       match:UNICO_MODULE_VIEWS.roster },
   ];

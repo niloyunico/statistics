@@ -4344,7 +4344,7 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
+const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
 const MOD_GROUPS = ['Clinical', 'Data', 'Administer', 'Phone'];
 const modsGrouped = list => MOD_GROUPS.map(g => [g, list.filter(m => m[2] === g)]).filter(([, ms]) => ms.length);
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
@@ -4717,9 +4717,13 @@ function UserModal({
   const [sec, setSec] = useState('account');
   const [perms, setPerms] = useState(() => {
     if (editing && initial.role === 'Administrator') return FULL_PERMS();
-    const src = editing && initial.perms ? {
+    const own = editing && initial.perms || null;
+    const src = own ? {
       ...NONE_PERMS(),
-      ...initial.perms
+      ...own,
+      ...(Object.prototype.hasOwnProperty.call(own, 'attrition') ? {} : {
+        attrition: own.perf
+      })
     } : NONE_PERMS();
     return USER_MODS.reduce((m, [k]) => (m[k] = asActions(src[k]), m), {});
   });

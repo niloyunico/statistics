@@ -144,7 +144,7 @@ function takePrefetched() {
   return p && Date.now() - p.at < PREFETCH_MAX_AGE ? p.promise : null;
 }
 try {
-  prefetchPerf();
+  if (perfCan('view')) prefetchPerf();
 } catch (e) {}
 function usePerfStore() {
   const [state, setState] = useState({
@@ -158,6 +158,25 @@ function usePerfStore() {
     error: null
   });
   const load = React.useCallback(opts => {
+    if (!perfCan('view')) {
+      return perfApi.get('/api/attrition').then(r => {
+        if (r && r.ok) setState(s => ({
+          ...s,
+          appraisals: r.appraisals || [],
+          exits: r.exits || [],
+          loading: false,
+          error: null
+        }));else setState(s => ({
+          ...s,
+          loading: false,
+          error: r && r.error || 'Could not load the attrition register.'
+        }));
+      }).catch(() => setState(s => ({
+        ...s,
+        loading: false,
+        error: 'Could not reach the server.'
+      })));
+    }
     const inflight = opts && opts.fresh ? null : takePrefetched();
     return (inflight || perfApi.get('/api/performance')).then(r => {
       if (r && r.ok) setState({
@@ -238,8 +257,8 @@ function usePerfStore() {
     addIncident: body => wrap(perfApi.post('/api/performance/incidents', body), 'Incident recorded. The deduction now shows on the appraisal.'),
     delIncident: id => wrap(perfApi.del('/api/performance/incidents/' + id), 'Entry removed.', without('incidents', id)),
     addAchievement: body => wrap(perfApi.post('/api/performance/achievements', body), 'Achievement recorded. Bonus points are on the current appraisal.'),
-    addExit: body => wrap(perfApi.post('/api/performance/exits', body), 'Exit recorded. The attrition figures and the unit roll-up update immediately.'),
-    delExit: id => wrap(perfApi.del('/api/performance/exits/' + id), 'Exit record removed.', without('exits', id)),
+    addExit: body => wrap(perfApi.post('/api/attrition/exits', body), 'Exit recorded. The attrition figures and the unit roll-up update immediately.'),
+    delExit: id => wrap(perfApi.del('/api/attrition/exits/' + id), 'Exit record removed.', without('exits', id)),
     delAchievement: id => wrap(perfApi.del('/api/performance/achievements/' + id), 'Entry removed.', without('achievements', id)),
     saveCategories: body => wrap(perfApi.put('/api/performance/categories', body), 'Categories saved.')
   };
@@ -968,7 +987,7 @@ function PerfDashboard({
     onClick: () => setRoute({
       view: 'perfIncidents'
     })
-  }), React.createElement(QuickCard, {
+  }), (!window.unicoCan || window.unicoCan('attrition', 'view')) && React.createElement(QuickCard, {
     icon: I.user,
     title: "Attrition & exits",
     sub: "who left, when and why",
@@ -6167,6 +6186,13 @@ const {
   todayISO,
   perfCan
 } = window.PerfUI;
+const attrCan = a => {
+  try {
+    return !window.unicoCan || window.unicoCan('attrition', a) || a === 'add' && window.unicoCan('staff', 'edit');
+  } catch (e) {
+    return true;
+  }
+};
 const HR_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const CLEARANCE_ITEMS = ['ID card returned', 'Locker / keys returned', 'Uniform returned', 'Library / manuals returned', 'Handover completed', 'Final duty roster settled', 'Dues cleared'];
 const hrMonthKey = d => d ? d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') : '';
@@ -6457,15 +6483,15 @@ function PerfAttrition({
       gap: 8,
       flexWrap: 'wrap'
     }
-  }, React.createElement("button", {
+  }, perfCan('view') && React.createElement("button", {
     className: "btn",
     onClick: () => setRoute({
       view: 'perfRisk'
     })
-  }, "Retention risk"), perfCan('print') && React.createElement("button", {
+  }, "Retention risk"), attrCan('print') && React.createElement("button", {
     className: "btn",
     onClick: () => window.print()
-  }, "PDF"), perfCan('add') && React.createElement("button", {
+  }, "PDF"), attrCan('add') && React.createElement("button", {
     className: "btn pri",
     onClick: () => setAdding(true)
   }, "+ Record an exit"))), React.createElement("div", {
@@ -6991,7 +7017,7 @@ function PerfAttrition({
     style: {
       textAlign: 'right'
     }
-  }, !l.documented && perfCan('add') ? React.createElement("button", {
+  }, !l.documented && attrCan('add') ? React.createElement("button", {
     className: "btn",
     onClick: () => setAdding(l)
   }, "Add exit record") : React.createElement("span", {

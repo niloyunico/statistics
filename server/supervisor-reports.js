@@ -9,13 +9,14 @@
  * A `status` field (draft | submitted | approved) provides a light digital sign-off:
  * approve locks further editing (enforced client-side; server keeps the audit fields).
  *
- * STORE: Cloudflare D1 when it is configured and `supervisor` is in D1_MODULES
- * (see d1-store.js). These reports are a large, steadily growing, self-contained
- * set that nothing else joins against, and the module is not on a hot path — so
- * it is the second-best candidate after the activity log for taking storage and
- * write load off the Atlas free tier. The free-form section rows and custom_*
- * sections live in a JSON `doc` column; only the fields actually filtered and
- * sorted on (date / shift / status) are real columns.
+ * STORE: MongoDB (`supervisorReports`), with the rest of the supervisor data (the
+ * H360 patients and log sheets of server/h360). The reports were on Cloudflare D1
+ * for a while; they were moved back in 2026-10 (server/supervisor-to-mongo.js
+ * copies them: newest copy wins, nothing is removed from D1). The D1 code path
+ * below is kept and is used only when SUPERVISOR_STORE=d1 is set on purpose. On
+ * D1 the free-form section rows and custom_* sections live in a JSON `doc`
+ * column; only the fields actually filtered and sorted on (date / shift /
+ * status) are real columns.
  *
  * Never both stores at once: whichever backend is selected is the ONLY one
  * written, so the copies cannot drift. A D1 failure is surfaced to the caller as
@@ -31,7 +32,7 @@ const d1store = require('./d1-store');
 
 const COLL = 'supervisorReports';
 const D1_MOD = 'supervisor';
-const d1On = () => d1store.enabled(D1_MOD);
+const d1On = () => String(process.env.SUPERVISOR_STORE || '').toLowerCase() === 'd1' && d1store.enabled(D1_MOD);
 const SHIFTS = ['Morning', 'Evening', 'Night'];
 const STATUSES = ['draft', 'submitted', 'approved'];
 
@@ -312,6 +313,18 @@ async function lookupByUhid(uhid) {
       }
     }
   }
+  // Not in any report yet: a patient the H360 collection knows (server/h360) fills the same boxes.
+  try {
+    const db = await getDbHandle();
+    const known = db ? await db.collection('h360Patients').findOne({ uhid: needle }, { sort: { lastSeenAt: -1 } }) : null;
+    if (known) {
+      const a = known.admission || {};
+      return {
+        name: a.patient_name || '', age: String((known.profile || {}).Age || '').replace(/(\d+)\s+([YMD])\b/gi, '$1$2'), dept: '',
+        consultant: a.primary_doctor_name || '', diagnosis: (known.suggestion || {}).diagnosis || '',
+      };
+    }
+  } catch (e) { /* the lookup is a convenience; without it the boxes are typed by hand */ }
   return null;
 }
 

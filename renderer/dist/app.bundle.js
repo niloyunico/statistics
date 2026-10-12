@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=9f20af3d17","reports":"/dist/reports.chunk.js?v=91b79edb37","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=2484d01352","supervisor":"/dist/supervisor.chunk.js?v=68e57a1aee","performance":"/dist/performance.chunk.js?v=35859a5969","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=25733426bc","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=2484d01352","supervisor":"/dist/supervisor.chunk.js?v=44940449ed","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -9886,6 +9886,12 @@ const UNICO_MODULES = [{
   icon: I.doc,
   home: 'perfHome'
 }, {
+  id: 'attrition',
+  label: 'Attrition & Exits',
+  short: 'Attrition',
+  icon: I.doc,
+  home: 'perfAttrition'
+}, {
   id: 'roster',
   label: 'Duty Roster',
   short: 'Roster',
@@ -9909,10 +9915,11 @@ const UNICO_MODULE_VIEWS = {
   datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
   staff: ['staffHome', 'staffAll', 'staffNewEntries', 'staffRecentUpdates', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
-  supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport'],
+  supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport', 'supH360', 'supSheet'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
   users: ['users'],
-  perf: ['perfHome', 'perfForm', 'perfPrint', 'perfAchievements', 'perfIncidents', 'perfCompare', 'perfAttrition', 'perfRisk', 'perfBoard'],
+  perf: ['perfHome', 'perfForm', 'perfPrint', 'perfAchievements', 'perfIncidents', 'perfCompare', 'perfRisk', 'perfBoard'],
+  attrition: ['perfAttrition'],
   roster: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint', 'rosterFullReview', 'manpower'],
   datasubmit: ['dsHome', 'dsMissing', 'dsStatus', 'dsQuality', 'dsPatient', 'dsHistory'],
   medicine: ['medHome', 'medInfo', 'medBrowse', 'medBrand', 'medGeneric', 'medRxNew', 'medRxList', 'medRxPrint', 'medTemplates', 'medCatalog', 'medInteractions', 'medCalc', 'medAnalytics']
@@ -9943,7 +9950,7 @@ function unicoModuleOf(view) {
   }
   return 'stats';
 }
-const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine', 'datasubmit', 'staffapp'];
+const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp'];
 function unicoAccessModuleOf(view) {
   if (view === 'settings') return 'users';
   return unicoModuleOf(view);
@@ -9970,7 +9977,7 @@ function unicoModuleLevel(mid) {
 function unicoCan(mid, action) {
   const p = unicoUserPerms();
   if (!p) return true;
-  const val = p[mid];
+  const val = mid === 'attrition' && !Object.prototype.hasOwnProperty.call(p, 'attrition') ? p.perf : p[mid];
   if (Array.isArray(val)) {
     if (action === 'view') return val.length > 0;
     return val.indexOf(action) >= 0;
@@ -9993,7 +10000,7 @@ function unicoAllowedModules() {
   return UNICO_ACCESS_MODULES.filter(m => unicoCan(m, 'view'));
 }
 function unicoFirstAllowedHome() {
-  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['datasubmit', 'dsHome'], ['perf', 'perfHome'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings']];
+  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['datasubmit', 'dsHome'], ['perf', 'perfHome'], ['attrition', 'perfAttrition'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings']];
   for (let i = 0; i < homes.length; i++) {
     if (unicoCanAccessModule(homes[i][0])) return homes[i][1];
   }
@@ -10369,8 +10376,8 @@ const UNICO_WS = [{
     label: 'Staff Management',
     icon: I.steth,
     home: 'staffHome',
-    mods: ['staff', 'perf', 'roster'],
-    on: v => ['staff', 'perf', 'roster'].indexOf(unicoModuleOf(v)) >= 0
+    mods: ['staff', 'perf', 'attrition', 'roster'],
+    on: v => ['staff', 'perf', 'attrition', 'roster'].indexOf(unicoModuleOf(v)) >= 0
   }, {
     id: 'access',
     label: 'Access Control',
@@ -10395,6 +10402,9 @@ const UNICO_VIEW_TABS = [{
   parent: {
     perfRisk: 'perfAttrition'
   },
+  tabs: [['perfHome', 'Overview'], ['perfAchievements', 'Achievements'], ['perfIncidents', 'Incidents'], ['perfBoard', 'Recognition'], ['perfAttrition', 'Attrition & Exits'], ['perfCompare', 'By Department']]
+}, {
+  mod: 'attrition',
   tabs: [['perfHome', 'Overview'], ['perfAchievements', 'Achievements'], ['perfIncidents', 'Incidents'], ['perfBoard', 'Recognition'], ['perfAttrition', 'Attrition & Exits'], ['perfCompare', 'By Department']]
 }, {
   mod: 'roster',
@@ -10424,6 +10434,8 @@ function ViewTabs({
 }) {
   const g = unicoViewTabs(view);
   if (!g) return null;
+  const tabs = g.tabs.filter(([v]) => !window.unicoCanAccessView || window.unicoCanAccessView(v));
+  if (tabs.length < 2) return null;
   return React.createElement("div", {
     className: "seg",
     style: {
@@ -10432,7 +10444,7 @@ function ViewTabs({
       flexWrap: 'wrap',
       marginBottom: 12
     }
-  }, g.tabs.map(([v, label]) => React.createElement("button", {
+  }, tabs.map(([v, label]) => React.createElement("button", {
     key: v,
     className: g.cur === v ? 'on' : '',
     onClick: () => {
@@ -10495,8 +10507,14 @@ function unicoWorkspaceSub(view) {
   }, {
     label: 'Generate Report',
     view: 'supReport'
+  }, {
+    label: 'H360 Patients',
+    view: 'supH360'
+  }, {
+    label: 'H360 Log Sheet',
+    view: 'supSheet'
   }];
-  if (mod === 'staff' || mod === 'perf' || mod === 'roster') return [{
+  if (mod === 'staff' || mod === 'perf' || mod === 'attrition' || mod === 'roster') return [{
     label: 'Dashboard',
     view: 'staffHome',
     mod: 'staff',
@@ -10538,6 +10556,11 @@ function unicoWorkspaceSub(view) {
     mod: 'perf',
     divider: true,
     match: UNICO_MODULE_VIEWS.perf
+  }, {
+    label: 'Attrition & Exits',
+    view: 'perfAttrition',
+    mod: 'attrition',
+    match: UNICO_MODULE_VIEWS.attrition
   }, {
     label: 'Duty Roster',
     view: 'rosterHome',
@@ -25578,7 +25601,9 @@ function App() {
       supBoard: 'Patient Board',
       supNew: 'New Report',
       supHistory: 'History',
-      supReport: 'Generate Report'
+      supReport: 'Generate Report',
+      supH360: 'H360 Patients',
+      supSheet: 'H360 Log Sheet'
     };
     crumbs = ['UNICO', 'Supervisor Reports', SV_TITLE[route.view] || 'Dashboard'];
     body = React.createElement(SupervisorView, {

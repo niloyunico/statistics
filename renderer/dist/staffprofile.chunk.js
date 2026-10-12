@@ -1164,7 +1164,7 @@ function DiscontinueDialog({
     setBusy(true);
     setErr('');
     try {
-      const r = await fetch('/api/performance/exits', {
+      const r = await fetch('/api/attrition/exits', {
         method: 'POST',
         headers: {
           'content-type': 'application/json'
@@ -1172,6 +1172,7 @@ function DiscontinueDialog({
         credentials: 'same-origin',
         body: JSON.stringify({
           empId: e.emp_id || String(e.id),
+          staffId: String(e.id),
           staffName: e.name,
           department: e.current_department || '',
           designation: e.designation || '',

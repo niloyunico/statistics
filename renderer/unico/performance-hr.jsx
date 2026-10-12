@@ -23,6 +23,9 @@ const MK = window.MK;
 const {
   Stat, AccentStat, Bar, Empty, Modal, GradePill, initials, todayISO, perfCan,
 } = window.PerfUI;
+// Attrition & Exits is its own permission (2026-10). Filing an exit is also open to a Staff
+// Management editor (the server allows it: discontinuing a person files their exit).
+const attrCan = (a) => { try { return !window.unicoCan || window.unicoCan('attrition', a) || (a === 'add' && window.unicoCan('staff', 'edit')); } catch (e) { return true; } };
 
 const HR_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const CLEARANCE_ITEMS = ['ID card returned', 'Locker / keys returned', 'Uniform returned', 'Library / manuals returned', 'Handover completed', 'Final duty roster settled', 'Dues cleared'];
@@ -185,9 +188,10 @@ function PerfAttrition({ roster, perf, staffStore, setRoute }) {
         </span>
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn" onClick={() => setRoute({ view: 'perfRisk' })}>Retention risk</button>
-          {perfCan('print') && <button className="btn" onClick={() => window.print()}>PDF</button>}
-          {perfCan('add') && <button className="btn pri" onClick={() => setAdding(true)}>+ Record an exit</button>}
+          {/* Retention risk reads appraisals and incidents: it stays a Performance screen. */}
+          {perfCan('view') && <button className="btn" onClick={() => setRoute({ view: 'perfRisk' })}>Retention risk</button>}
+          {attrCan('print') && <button className="btn" onClick={() => window.print()}>PDF</button>}
+          {attrCan('add') && <button className="btn pri" onClick={() => setAdding(true)}>+ Record an exit</button>}
         </div>
       </div>
 
@@ -367,7 +371,7 @@ function PerfAttrition({ roster, perf, staffStore, setRoute }) {
                     <td className="sub">{l.separation || '—'}</td>
                     <td className="sub">{l.reason || <span style={{ opacity: .5 }}>not recorded</span>}</td>
                     <td style={{ textAlign: 'right' }}>
-                      {!l.documented && perfCan('add')
+                      {!l.documented && attrCan('add')
                         ? <button className="btn" onClick={() => setAdding(l)}>Add exit record</button>
                         : <span style={MK.stChip('Actioned')}>documented</span>}
                     </td>

@@ -27,6 +27,8 @@ process.env.CLOUDFLARE_ACCOUNT_ID = 'test';
 process.env.CLOUDFLARE_D1_DATABASE_ID = 'test-db';
 process.env.CLOUDFLARE_API_TOKEN = 'test';
 process.env.D1_MODULES = 'activity,supervisor';
+// Supervisor reports live in MongoDB since 2026-10; the D1 path is opt-in and still covered here.
+process.env.SUPERVISOR_STORE = 'd1';
 
 const d1store = require('../d1-store');
 const activity = require('../activity-log');

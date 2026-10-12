@@ -524,7 +524,9 @@ function mount(app, opts) {
       };
       const follow = (list) => (keyOf ? list.map((x) => { const id = recordOf(x);
         return (id && keyOf.get(id) !== x.empId) ? Object.assign({}, x, { empId: keyOf.get(id) }) : x; }) : list);
-      res.json({ ok: true, appraisals: follow(settledList), incidents: follow(incidents), achievements: follow(achievements), exits: follow(exits), categories, caps: { bonus: BONUS_CAP, penalty: PENALTY_CAP }, separationTypes: SEPARATION_TYPES });
+      // The exit register is Attrition & Exits' own (2026-10): a Performance-only account gets none of it.
+      const seesExits = !req.access || req.access.unrestricted || require('./access').can(req.access, 'attrition', 'view');
+      res.json({ ok: true, appraisals: follow(settledList), incidents: follow(incidents), achievements: follow(achievements), exits: seesExits ? follow(exits) : [], categories, caps: { bonus: BONUS_CAP, penalty: PENALTY_CAP }, separationTypes: SEPARATION_TYPES });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load performance records.' }); }
   });
 
@@ -659,8 +661,12 @@ function mount(app, opts) {
       res.json({ ok, error: ok ? undefined : 'Entry not found.' });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not remove the entry.' }); }
   });
-  // --- exit / separation register ---
-  app.post('/api/performance/exits', guard, async (req, res) => {
+  // --- exit / separation register (also served under /api/attrition — see mountAttrition) ---
+  app.post('/api/performance/exits', guard, fileExit);
+  app.delete('/api/performance/exits/:id', guard, removeExit);
+}
+
+async function fileExit(req, res) {
     try {
       const doc = normExit(req.body);
       if (!doc.empId && !doc.staffId) return res.status(400).json({ ok: false, error: 'A staff member is required.' });
@@ -669,17 +675,58 @@ function mount(app, opts) {
       const saved = await upsert(EXITS, (await docFor(EXITS, 'exit-', doc, '')).id, doc);   // one exit record per person
       res.json({ ok: true, exit: saved });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not record the exit.' }); }
-  });
-  app.delete('/api/performance/exits/:id', guard, async (req, res) => {
+}
+async function removeExit(req, res) {
     try {
       const ok = await removeOne(EXITS, s(req.params.id, 80));
       res.json({ ok, error: ok ? undefined : 'Record not found.' });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not remove the record.' }); }
+}
+
+/* ATTRITION & EXITS — its own permission ('attrition'), no longer a part of Performance.
+   The separation register is HR's record of who left and why; the appraisal file stays
+   confidential to Performance. Reading needs Attrition (view). Filing an exit needs Attrition
+   (add) OR Staff Management (edit): discontinuing somebody on their staff record files their
+   exit, and a staff editor used to be refused half-way through because the register sat
+   behind Performance. Removing a record needs Attrition (delete).
+   GET hands back the exits plus, for each person, only the GRADE of a filed appraisal (the
+   leaver record shows it) — never the appraisal itself. */
+function mountAttrition(app, opts) {
+  const access = require('./access');
+  const base = [].concat((opts && opts.requireApi) || []);
+  const rosterOf = (opts && opts.roster) || (() => (process.env.MONGODB_URI ? require('./staff-roster').loadRoster({ cached: true }) : Promise.resolve([])));
+  const allow = (test, msg) => async (req, res, next) => {
+    try {
+      const a = req.access || await access.forRequest(req);
+      if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+      req.access = a;
+      if (a.unrestricted || test(a)) return next();
+      return res.status(403).json({ ok: false, error: msg });
+    } catch (e) { return res.status(500).json({ ok: false, error: 'Server error.' }); }
+  };
+  const mayView = allow((a) => access.can(a, 'attrition', 'view'), 'You do not have access to Attrition & Exits.');
+  const mayFile = allow((a) => access.can(a, 'attrition', 'add') || access.can(a, 'staff', 'edit'),
+    'Recording an exit needs Attrition & Exits (Add) or Staff Management (Edit) access.');
+  const mayRemove = allow((a) => access.can(a, 'attrition', 'delete'), 'Removing an exit record needs Attrition & Exits (Delete) access.');
+  app.get('/api/attrition', ...base, mayView, async (req, res) => {
+    try {
+      const exits = await listAll(EXITS);
+      const grades = (await listAll(APPRAISALS)).filter((a) => a.status === 'actioned')
+        .map((a) => ({ id: a.id, empId: a.empId, staffId: a.staffId || '', cycleId: a.cycleId, cycleStart: a.cycleStart, status: 'actioned', grade: (a.filed && a.filed.grade) || '' }));
+      let keyOf = null;
+      try { const roster = await rosterOf(); keyOf = new Map((roster || []).map((r) => [String(r.id), String(r.emp_id || '').trim() || String(r.id)])); } catch (e) { keyOf = null; }
+      const follow = (list) => (keyOf ? list.map((x) => (x.staffId && keyOf.has(String(x.staffId)) && keyOf.get(String(x.staffId)) !== x.empId
+        ? Object.assign({}, x, { empId: keyOf.get(String(x.staffId)) }) : x)) : list);
+      res.set('Cache-Control', 'no-store');
+      res.json({ ok: true, exits: follow(exits), appraisals: follow(grades), separationTypes: SEPARATION_TYPES });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the attrition register.' }); }
   });
+  app.post('/api/attrition/exits', ...base, mayFile, fileExit);
+  app.delete('/api/attrition/exits/:id', ...base, mayRemove, removeExit);
 }
 
 module.exports = {
-  mount, APPRAISALS, INCIDENTS, ACHIEVEMENTS, EXITS, SEPARATION_TYPES,
+  mount, mountAttrition, APPRAISALS, INCIDENTS, ACHIEVEMENTS, EXITS, SEPARATION_TYPES,
   tallyScores, settle, gradeFor, pointsFor,
   BONUS_CAP, PENALTY_CAP, TOTAL_MAX, STATUSES,
 };

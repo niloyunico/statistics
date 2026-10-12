@@ -13,6 +13,7 @@
           "renderer/index.html",
           "server/seed/**",
           "server/meds-index/**",
+          "server/h360/logo.png",
           "renderer/nurse-app.html",
           "renderer/admin-app.html"
         ]

@@ -95,6 +95,7 @@ const MANIFEST = [
   { file: 'search.jsx', jsx: true },
   { file: 'data-collection.jsx', jsx: true, chunk: 'datacollection' },
   { file: 'supervisor.jsx', jsx: true, chunk: 'supervisor' },
+  { file: 'supervisor-h360.jsx', jsx: true, chunk: 'supervisor' },   // H360 patients + H360 log sheet (window.SupH360View)
   { file: 'user-admin.jsx', jsx: true, chunk: 'reports' },
   // Access Control (route 'users') — per-person access. Rides the reports chunk because it
   // shares the account editor (window.UserModal) with reports.jsx.

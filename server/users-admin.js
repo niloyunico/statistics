@@ -61,7 +61,7 @@ const mirrorFailed = (e) => { try { console.error('[users] responsible mirror fa
 // cleanPerms() dropped the key. Kept in step with access.ACCESS_MODULES.
 // 'datasubmit' + 'staffapp': submitting data for chosen departments and signing in to the
 // phone staff app are MODULES on a normal account now, not portal roles (access.js).
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'roster', 'medicine', 'datasubmit', 'staffapp'];
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp'];
 // Does a perms map grant Data Submission? Such an account carries a data-collection scope
 // (departments / areas / indicators), mirrored into `responsibles` like a collector's was.
 const holdsSubmit = (perms) => { const v = perms && perms.datasubmit; return Array.isArray(v) ? v.length > 0 : (!!v && v !== 'none'); };
@@ -101,7 +101,7 @@ const BUILTIN_TIERS = [
     modules: ACCESS_MODULES.filter((m) => m !== 'users'), signoff: 'check' },
   { id: 'ward-incharge', name: 'Ward In-charge', rank: 30, fixed: false,
     description: 'Runs one unit: its roster, its submissions and its supervision.',
-    modules: ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'perf', 'roster'], signoff: 'prepare' },
+    modules: ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'perf', 'attrition', 'roster'], signoff: 'prepare' },
   { id: TIER_PORTAL, name: 'Portal account', rank: PORTAL_RANK, fixed: true,
     description: 'Signs in to the collection portal or the staff app. Created and scoped in Data Collection.' },
 ];
@@ -294,6 +294,10 @@ const nonePerms = () => ACCESS_MODULES.reduce((m, k) => (m[k] = 'none', m), {});
 function cleanPerms(v) {
   const out = nonePerms();
   if (v && typeof v === 'object' && !Array.isArray(v)) {
+    // 'attrition' was part of Performance until 2026-10. A permission map saved before it became
+  // its own module (no 'attrition' key at all) keeps what Performance gave it; once an administrator
+  // sets it — even to nothing — that choice stands on its own.
+    if (!Object.prototype.hasOwnProperty.call(v, 'attrition') && Object.prototype.hasOwnProperty.call(v, 'perf')) v = Object.assign({}, v, { attrition: v.perf });
     ACCESS_MODULES.forEach((k) => {
       const val = v[k];
       if (Array.isArray(val)) {

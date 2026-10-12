@@ -598,7 +598,7 @@ function useStaffPerf(perfId){
 
 /* DISCONTINUE — a proper exit, not a bare "mark inactive". Collects the separation
    type, last working day and the stated reason, files the exit in the Performance
-   module's Attrition & Exits register (POST /api/performance/exits — the attrition
+   Attrition & Exits register (POST /api/attrition/exits — the attrition
    rate is computed from it), THEN archives the person to Previous Staff with the
    same reason. Order matters: if the register write fails, nothing is archived, so
    the roster and the attrition figures can never disagree. */
@@ -620,8 +620,10 @@ function DiscontinueDialog({e,onClose,onDone}){
     if(!reason.trim()){setErr('Please state the discontinue reason.');return;}
     setBusy(true);setErr('');
     try{
-      const r=await fetch('/api/performance/exits',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',
-        body:JSON.stringify({empId:e.emp_id||String(e.id),staffName:e.name,department:e.current_department||'',designation:e.designation||'',
+      // The attrition register's own route: Staff Management (edit) is enough to file the exit of a
+      // person being discontinued — it used to need Performance, so staff editors were refused here.
+      const r=await fetch('/api/attrition/exits',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',
+        body:JSON.stringify({empId:e.emp_id||String(e.id),staffId:String(e.id),staffName:e.name,department:e.current_department||'',designation:e.designation||'',
           doj:e.doj||'',noticeDate,lastDay,separation:sep,reason:reason.trim(),rehire,note})});
       const j=await r.json().catch(()=>({ok:false}));
       if(!r.ok||!j.ok) throw new Error((j&&j.error)||'Could not record the exit.');
