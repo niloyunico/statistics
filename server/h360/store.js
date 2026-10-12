@@ -325,6 +325,18 @@ async function trimToSheet(store) {
   return { records: removed.deletedCount, patients: operations.length };
 }
 
+// The stations of the patients in a store, by the number H360 gives each station.
+// Used when no station list has been read yet; a station without patients is not in it.
+async function stationsOfPatients(store) {
+  await store.ready;
+  const found = await store.col('patients').aggregate([
+    { $match: { 'admission.ns_no_fk': { $nin: [null, ''] }, station: { $nin: [null, ''] } } },
+    { $group: { _id: { value: '$admission.ns_no_fk', text: '$station' }, last: { $max: '$lastSeenAt' } } },
+    { $sort: { '_id.text': 1 } },
+  ]).toArray();
+  return found.map((item) => ({ value: String(item._id.value), text: String(item._id.text) }));
+}
+
 const pad = (n) => String(n).padStart(2, '0');
 
 function excelName(snapshot) {
@@ -433,6 +445,6 @@ function addRecordSheets(workbook, snapshot, records) {
 }
 
 module.exports = {
-  LOCAL, SHARED, SHEET_COLUMNS, open, save, latestRun, loadMemory, loadLatest, loadPatient, loadRecords, loadRegister, trimToSheet,
+  LOCAL, SHARED, SHEET_COLUMNS, open, save, latestRun, loadMemory, loadLatest, loadPatient, loadRecords, loadRegister, trimToSheet, stationsOfPatients,
   buildWorkbook, excelName,
 };

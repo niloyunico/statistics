@@ -473,9 +473,35 @@ function plainTables(html) {
   }).get().filter((table) => table.headers.length > 1);
 }
 
+// What a page is made of, for working out how it loads something that was not in it:
+// its select boxes, the addresses and script files it names, and the script lines
+// that mention the wanted thing. Page structure only; no patient is on these pages
+// before their lists load.
+function describePage(html, pattern) {
+  const $ = cheerio.load(html);
+  const lines = [];
+  $('script').each((_, el) => {
+    for (const line of ($(el).html() || '').split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && pattern.test(trimmed) && lines.length < 40) lines.push(trimmed.slice(0, 260));
+    }
+  });
+  return {
+    title: clean($('title').text()).slice(0, 120),
+    length: html.length,
+    selects: $('select').map((_, el) => ({
+      id: $(el).attr('id') || '', name: $(el).attr('name') || '', options: $(el).find('option').length,
+      data: Object.keys(el.attribs || {}).filter((key) => key.startsWith('data-')).map((key) => key + '=' + String(el.attribs[key]).slice(0, 120)),
+    })).get().slice(0, 30),
+    addresses: scriptAddresses(html).slice(0, 40),
+    scripts: $('script[src]').map((_, el) => $(el).attr('src')).get().filter((src) => !/jquery|bootstrap|select2|datatables|moment|popper|sweetalert|toastr|cdn/i.test(src)).slice(0, 30),
+    lines,
+  };
+}
+
 const plainText = (value) => (/[<&]/.test(String(value)) ? clean(cheerio.load('<i>' + String(value) + '</i>')('i').text()) : clean(String(value)));
 
 module.exports = {
   LIST_PATH, REGISTER_PATH, PATIENT_PAGES, MENU_PAGES, listButtons, assertReadOnly, subPage, parseMenu, parseSubPages, parseAlerts, extract, scriptAddresses,
-  loginForm, loginMessage, csrfToken, stationOptions, plainTables, plainText,
+  loginForm, loginMessage, csrfToken, stationOptions, plainTables, plainText, describePage,
 };

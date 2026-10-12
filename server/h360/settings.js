@@ -95,4 +95,30 @@ async function saveLevel(db, value, by) {
   await write(db, 'options', { cloudData: value, updatedAt: new Date(), updatedBy: by || '' });
 }
 
-module.exports = { login, saveLogin, forgetLogin, level, saveLevel, LEVELS };
+// The nurse stations ({ value, text }) as last read from the Nurse Station page by a
+// browser. The live site cannot see them on the page, so it asks for these.
+// guessed: worked out from the patients the old collector stored, until a real list is read.
+async function stations(db) {
+  const doc = await read(db, 'stations');
+  const list = doc && Array.isArray(doc.list) ? doc.list.filter((item) => item && item.value && item.text) : [];
+  list.guessed = Boolean(doc && doc.guessed);
+  return list;
+}
+
+async function saveStations(db, list, { guessed = false, site = '' } = {}) {
+  const clean = (list || []).filter((item) => item && item.value && item.text).map((item) => ({ value: String(item.value), text: String(item.text) }));
+  if (!clean.length) return;
+  if (guessed) {
+    // A guess never replaces a list that was really read.
+    const doc = await read(db, 'stations');
+    if (doc && Array.isArray(doc.list) && doc.list.length && !doc.guessed) return;
+  }
+  await write(db, 'stations', { list: clean, guessed: Boolean(guessed), site, savedAt: new Date() });
+}
+
+// What a page looked like when it did not carry its list (structure only), newest kept.
+async function saveNotes(db, notes, site) {
+  await write(db, 'diagnostics', { notes, site: site || '', at: new Date() });
+}
+
+module.exports = { login, saveLogin, forgetLogin, level, saveLevel, stations, saveStations, saveNotes, LEVELS };

@@ -111,6 +111,16 @@ function createService(deps = {}) {
 
     const memory = await storeLib.loadMemory(localStore || sharedStore);
     if (!memory.stationList.length && localStore) memory.stationList = (await storeLib.loadMemory(sharedStore)).stationList;
+    // The stations, when the page does not carry them: the list last read by a browser,
+    // then what an earlier run asked for, then the stations of the patients already held.
+    const kept = await settings.stations(sharedStore.db);
+    if (kept.length && (!kept.guessed || !memory.stationList.length)) memory.stationList = kept;
+    if (!memory.stationList.length && localStore) {
+      memory.stationList = await storeLib.stationsOfPatients(localStore);
+      await settings.saveStations(sharedStore.db, memory.stationList, { guessed: true, site: site() });
+    }
+    memory.onStations = (list) => settings.saveStations(sharedStore.db, list, { site: site() });
+    memory.onNotes = (notes) => settings.saveNotes(sharedStore.db, notes, site());
     // Loaded when a collection starts: the page readers are of no use to any other request.
     const snapshot = await require('./collector').collectAll(cfg, log, { ...memory, mode }, openSession);
 

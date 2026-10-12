@@ -73,14 +73,19 @@ async function open(cfg, { fetchImpl } = {}) {
     if (after.status >= 400) throw new Error(`H360 did not accept the sign-in (status ${after.status}).`);
   }
 
+  // What was learnt about pages that did not carry their list (see views.describePage).
+  const notes = {};
   return {
     kind: 'http',
+    notes,
     async stations() {
       const page = await request(cfg.pageUrl, { headers: { Accept: 'text/html' } });
       if (isLoginUrl(page.url)) throw new Error('H360 sent us back to the login page after signing in.');
       if (page.status !== 200) throw new Error(`The Nurse Station page could not be opened (status ${page.status}).`);
       csrf = views.csrfToken(page.text);
-      return views.stationOptions(page.text);
+      const options = views.stationOptions(page.text);
+      if (!options.length) notes.stations = views.describePage(page.text, /station/i);
+      return options;
     },
     lists(stations) {
       return Promise.all(
@@ -116,6 +121,7 @@ async function open(cfg, { fetchImpl } = {}) {
       const page = await request(cfg.baseUrl + views.REGISTER_PATH, { headers: { Accept: 'text/html' } });
       if (isLoginUrl(page.url)) throw new Error('H360 did not open the IPD Admission page for this login.');
       if (page.status !== 200) throw new Error(`The IPD Admission page could not be opened (status ${page.status}).`);
+      if (!views.plainTables(page.text).some((table) => table.rows.length)) notes.admissions = views.describePage(page.text, /ajax|admission|datatable/i);
       return { answers: [], html: page.text };
     },
     close() {

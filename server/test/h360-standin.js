@@ -50,12 +50,18 @@ function standIn() {
   app.get('/dashboard', needLogin, (req, res) => res.send(page('<h1>Dashboard</h1>')));
 
   app.get('/v2/ipd/nurse-station-receive-request', needLogin, (req, res) => {
+    if (state.stationsMode === 'script') {
+      return res.send(page(`<select id="nurse_station_received"><option value="">Select</option></select>
+        <script>
+        $.ajax({ url: "/v2/ipd/get-nurse-station-list", success: function (d) { $('#nurse_station_received').html(d); } });
+        </script>`));
+    }
     res.send(page(`<select id="nurse_station_received"><option value="">Select</option>
       <option value="11">Nurse Station L-10</option><option value="12">Nursing Services - MICU</option></select>`));
   });
   app.post('/v2/ipd/nurse-station-received-patient', (req, res) => {
     if (!signedIn(req) || req.headers['x-csrf-token'] !== 'csrf-123') return res.status(419).json({ message: 'CSRF token mismatch.' });
-    res.json({ data: state.patients.filter((p) => p.station === req.body.nurse_station).map(({ station, ...admission }) => admission) });
+    res.json({ data: state.patients.filter((p) => p.station === req.body.nurse_station).map(({ station, ...admission }) => ({ ...admission, ns_no_fk: station })) });
   });
 
   const registerRows = () => [

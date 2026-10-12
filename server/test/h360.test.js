@@ -199,6 +199,43 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     where = 'pc';
     ok('"everything" puts the records in the app database; going back to "log sheet only" takes them out again');
 
+/* the real Nurse Station page fills its station list in by script: without a browser it is not there */
+    mock.state.stationsMode = 'script';
+    assert.strictEqual((await settings.stations(sharedDb)).guessed, false);
+    await sharedDb.collection('h360Settings').deleteOne({ _id: 'stations' });
+    await sharedDb.collection('h360Runs').updateMany({}, { $set: { stationList: [] } });
+    await localDb.collection('runs').updateMany({}, { $set: { stationList: [] } });
+    where = 'cloud';
+    await assert.rejects(service.collect('list'), /No nurse stations were found.*hospital PC first/);
+    const noted = await sharedDb.collection('h360Settings').findOne({ _id: 'diagnostics' });
+    assert.strictEqual(noted.notes.stations.selects[0].id, 'nurse_station_received');
+    assert.ok(noted.notes.stations.addresses.includes('/v2/ipd/get-nurse-station-list'));
+    assert.ok(!mock.state.hits.includes('GET /v2/ipd/get-nurse-station-list'), 'an address found in a script was requested');
+    // on the PC the stations of the patients it already holds are used, and passed on to the live site
+    where = 'pc';
+    const lines2 = [];
+    await service.collect('list', (m) => lines2.push(m));
+    assert.ok(lines2.some((m) => /using the 2 stations already known/.test(m)), lines2.join(' | '));
+    const guessed = await settings.stations(sharedDb);
+    assert.strictEqual(guessed.guessed, true);
+    assert.deepStrictEqual(guessed.map((item) => item.value).sort(), ['11', '12']);
+    where = 'cloud';
+    assert.strictEqual((await service.collect('list')).rows.length, 2);
+    // station numbers that H360 does not know give no patients: nothing is saved, nobody is marked as gone
+    await sharedDb.collection('h360Settings').updateOne({ _id: 'stations' }, { $set: { list: [{ value: '98', text: 'Wrong' }] } });
+    await sharedDb.collection('h360Runs').updateMany({}, { $set: { stationList: [] } });
+    const activeBefore = await sharedDb.collection('h360Patients').countDocuments({ active: true });
+    await assert.rejects(service.collect('list'), /no patients for any nurse station, so nothing was changed/);
+    assert.strictEqual(await sharedDb.collection('h360Patients').countDocuments({ active: true }), activeBefore);
+    // a list really read by a browser replaces the guess, and a later guess does not replace it
+    await settings.saveStations(sharedDb, [{ value: '11', text: 'Nurse Station L-10' }, { value: '12', text: 'Nursing Services - MICU' }], { site: 'pc' });
+    await settings.saveStations(sharedDb, [{ value: '98', text: 'Wrong' }], { guessed: true });
+    assert.strictEqual((await settings.stations(sharedDb)).length, 2);
+    assert.strictEqual((await service.collect('list')).rows.length, 2);
+    mock.state.stationsMode = '';
+    where = 'pc';
+    ok('a Nurse Station page that fills its list by script: known stations are used, an empty answer changes nothing, and no address from a script is ever requested');
+
     /* reports of the stand-alone collector */
     const { ObjectId } = require('mongodb');
     const oldId = new ObjectId();

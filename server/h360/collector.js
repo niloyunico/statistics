@@ -283,12 +283,15 @@ async function collectAll(cfg, log = () => {}, memory = {}, openSession) {
     tell({ stage: 'lists' });
     log('Opening the Nurse Station page...');
     let stations = await session.stations();
-    if (!stations.length && (memory.stationList || []).length) {
-      // The station list did not come with the page this time: the stations of the last collection are asked for.
+    if (stations.length) {
+      if (memory.onStations) await Promise.resolve(memory.onStations(stations)).catch(() => {});
+    } else if ((memory.stationList || []).length) {
+      // The page fills its station list in after opening, which only a browser sees:
+      // the stations already known are asked for.
       stations = memory.stationList;
-      log('The station list was not on the page; using the stations of the last collection.');
+      log(`The station list is filled in by the page after it opens; using the ${stations.length} stations already known.`);
     }
-    if (!stations.length) throw new Error('No nurse stations were found on the Nurse Station page.');
+    if (!stations.length) throw new Error('No nurse stations were found on the Nurse Station page, and none are known from an earlier collection. Run one collection on the hospital PC first.');
 
     const warnings = [];
     const lists = await session.lists(stations);
@@ -317,6 +320,9 @@ async function collectAll(cfg, log = () => {}, memory = {}, openSession) {
       summary.push({ station: station.text, count });
     });
     if (failedStations.length === stations.length) throw new Error('None of the nurse station lists could be read. ' + warnings[0]);
+    // A hospital without a single in-patient means the lists were not really answered:
+    // saving that would mark every patient as having left.
+    if (!patients.length) throw new Error('H360 returned no patients for any nurse station, so nothing was changed.');
     log(`Found ${patients.length} patients in ${stations.length} stations (${seconds()} seconds).`);
 
     tell({ stage: 'register', patients: patients.length, stations: summary.map((item) => ({ station: item.station, total: item.count, done: 0 })) });
@@ -382,6 +388,7 @@ async function collectAll(cfg, log = () => {}, memory = {}, openSession) {
       register: admissions,
     };
   } finally {
+    if (memory.onNotes && session.notes && Object.keys(session.notes).length) await Promise.resolve(memory.onNotes(session.notes)).catch(() => {});
     await session.close();
   }
 }
