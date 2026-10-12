@@ -4,8 +4,8 @@
      supH360  — H360 Patients: start a collection, the patients of every nurse station,
                 each patient's records, the IPD Admission list, Excel, and (administrators)
                 the H360 login and what is kept in the app database.
-     supSheet — H360 Log Sheet: the supervisor log sheet filled in from H360 — list,
-                editor (saved as you type), "Update from H360", Word and print.
+     (New Report) — "Import from H360" in the report editor uses SupH360Update below; the
+                separate H360 log sheet screen is gone, the report itself prints as the Word log sheet.
 
    Data: server/h360 (/api/h360/*). Both screens sit beside the existing Supervisor
    Reports screens and share their styles (.sup-*); what is new is prefixed .h3-. */
@@ -33,6 +33,8 @@ const h3Today = () => { const d = new Date(); return d.getFullYear() + '-' + h3P
 const h3Shift = () => { const h = new Date().getHours(); return h < 14 ? 'Morning' : h < 21 ? 'Evening' : 'Night'; };
 const h3Portal = (node) => { try { if (typeof document !== 'undefined' && typeof ReactDOM !== 'undefined' && ReactDOM.createPortal) return ReactDOM.createPortal(node, document.body); } catch (e) {} return node; };
 const H3_STATION = 'Nurse Station';
+// A patient whose discharge has been requested in H360 (the rows it shows in pink).
+const h3Requested = (row) => /^yes/i.test(String((row || {})['Discharge Request'] || ''));
 const H3_SITE = { pc: 'the hospital PC', cloud: 'the live site' };
 
 function H3Hero({ title, sub, children }) {
@@ -246,6 +248,7 @@ function H3Patients({ setRoute }) {
   const [error, setError] = useState('');
   const [tab, setTab] = useState('patients');
   const [station, setStation] = useState(null);
+  const [onlyRequested, setOnlyRequested] = useState(false);
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(null);
   const [settings, setSettings] = useState(false);
@@ -291,7 +294,7 @@ function H3Patients({ setRoute }) {
   };
   const importOld = async () => {
     setBusy(true);
-    try { const r = await h3Api('/api/h360/sheets/import-local', { method: 'POST' }); h3Toast(r.copied + ' report(s) brought in.'); await loadStatus(); setRoute({ view: 'supSheet' }); }
+    try { const r = await h3Api('/api/h360/sheets/convert', { method: 'POST' }); h3Toast(r.converted + ' report(s) brought in as drafts.'); await loadStatus(); setRoute({ view: 'supHistory' }); }
     catch (e) { setError(e.message); }
     setBusy(false);
   };
@@ -300,8 +303,10 @@ function H3Patients({ setRoute }) {
     if (!snapshot) return [];
     const q = query.trim().toLowerCase();
     return snapshot.rows.filter((row) => (station === null || row[H3_STATION] === station)
+      && (!onlyRequested || h3Requested(row))
       && (!q || snapshot.columns.some((name) => String(row[name] || '').toLowerCase().includes(q))));
-  }, [snapshot, station, query]);
+  }, [snapshot, station, query, onlyRequested]);
+  const requestedCount = useMemo(() => (snapshot ? snapshot.rows.filter(h3Requested).length : 0), [snapshot]);
   const regCols = useMemo(() => {
     if (!admissions || !admissions.rows.length) return [];
     const raw = admissions.rows.some((r) => r.raw);
@@ -352,7 +357,8 @@ function H3Patients({ setRoute }) {
       )}
 
       {snapshot && <div className="h3-tiles">
-        <button className={'h3-tile' + (station === null ? ' on' : '')} onClick={() => setStation(null)}><b>{snapshot.rows.length}</b><span>All stations</span></button>
+        <button className={'h3-tile' + (station === null && !onlyRequested ? ' on' : '')} onClick={() => { setStation(null); setOnlyRequested(false); }}><b>{snapshot.rows.length}</b><span>All stations</span></button>
+        {requestedCount > 0 && <button className={'h3-tile req' + (onlyRequested ? ' on' : '')} title="Patients whose discharge has been requested in H360 (shown in pink there). A report imports them into Discharged." onClick={() => { setOnlyRequested((v) => !v); setTab('patients'); }}><b>{requestedCount}</b><span>Discharge requested</span></button>}
         {snapshot.stations.map((item) => <button key={item.station} className={'h3-tile' + (station === item.station ? ' on' : '')} onClick={() => { setStation(item.station); setTab('patients'); }}><b>{item.count}</b><span>{item.station}</span></button>)}
       </div>}
 
@@ -363,13 +369,12 @@ function H3Patients({ setRoute }) {
         </div>
         <input className="h3-search" type="search" placeholder="Search name, UHID, bed, consultant…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <span className="h3-muted" style={{ flex: 1 }}>{tab === 'patients' && snapshot ? 'Showing ' + rows.length + ' of ' + snapshot.rows.length + ' patients. Click a patient to open the records.' : ''}</span>
-        <H3Btn onClick={() => setRoute({ view: 'supSheet' })}><Ic d={I.doc} s={15} />H360 Log Sheet</H3Btn>
       </div>}
 
       {tab === 'patients' && snapshot && <div className="sup-card"><div className="h3-tablewrap"><table className="h3-table">
         <thead><tr><th>#</th>{snapshot.columns.map((name) => <th key={name}>{name}</th>)}</tr></thead>
         <tbody>{rows.map((row, i) => (
-          <tr key={row._adm || i} className={row._adm ? 'open' : ''} onClick={() => row._adm && setOpen(row._adm)}>
+          <tr key={row._adm || i} className={(row._adm ? 'open' : '') + (h3Requested(row) ? ' req' : '')} onClick={() => row._adm && setOpen(row._adm)}>
             <td>{i + 1}</td>{snapshot.columns.map((name) => <td key={name}>{row[name] || ''}</td>)}
           </tr>
         ))}</tbody>
@@ -390,93 +395,23 @@ function H3Patients({ setRoute }) {
   );
 }
 
-/* ================= H360 Log Sheet ================= */
+/* ================= H360 inside the shift report (New Report) ================= */
 
-const h3Filled = (row) => Object.entries(row || {}).some(([key, value]) => key.charAt(0) !== '_' && String(value || '').trim());
-let h3RowSeq = 0;
-const h3Key = (row) => { if (!row._k) Object.defineProperty(row, '_k', { value: 'r' + (++h3RowSeq), enumerable: false }); return row._k; };
-
-// One cell of the sheet: a text box that grows with what is written in it. It keeps its
-// own text while typing, so a keystroke redraws this box and not the whole sheet.
-function H3Area({ value, onChange, readOnly, rows, placeholder }) {
-  const [text, setText] = useState(value || '');
-  const ref = useRef(null);
-  useEffect(() => { setText(value || ''); }, [value]);
-  useEffect(() => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }, [text]);
-  return <textarea ref={ref} rows={rows || 1} value={text} readOnly={!!readOnly} placeholder={placeholder || ''}
-    onChange={(e) => { setText(e.target.value); onChange(e.target.value); }} />;
-}
-
-const H3Section = React.memo(function H3Section({ section, part, schema, count, rev, locked, onTouched, onStructure, onMove }) {
-  const fixed = !!section.fixedRows;
-  // In a fixed list the printed wording cannot be changed; the spare line can be written on.
-  const printed = (index, key) => (section.readOnly || []).indexOf(key) >= 0 && !!(((section.defaults || [])[index] || {})[key]);
-  const canEditRows = !fixed && !section.single && !locked;
-  if (section.single && !part.rows.length) part.rows.push({});
-  const pieces = section.title.split('{n}');
-  const total = (section.columns || []).reduce((n, column) => n + (column.width || column.valueWidth), 0);
-  // The serial and row-tool columns take a fixed share; the rest split what is left by their weights.
-  const shared = 100 - (section.serial ? 3 : 0) - (canEditRows ? 9 : 0);
-  const swap = (a, b) => { const t = part.rows[a]; part.rows[a] = part.rows[b]; part.rows[b] = t; onStructure(); };
-  return (
-    <div className="h3-section" id={'h3-section-' + section.id}>
-      <h3>
-        <span>{pieces[0]}{pieces.length > 1 ? <b>{count}</b> : null}{pieces[1] || ''}{section.inGeneral ? <small> (inside General Information on the sheet)</small> : null}</span>
-        {section.columns && canEditRows && <H3Btn sm onClick={() => { part.rows.push({}); onStructure(); }}>+ Add row</H3Btn>}
-      </h3>
-      {section.columns && (part.rows.length || section.single ? (
-        <div className="h3-gridwrap"><table className="h3-grid">
-          <thead><tr>
-            {section.serial && <th className="sn">{section.serial.label || '#'}</th>}
-            {section.columns.map((column) => <th key={column.key} style={{ width: (shared * (column.width || column.valueWidth) / total) + '%' }}>{column.label}</th>)}
-            {canEditRows && <th className="tools"></th>}
-          </tr></thead>
-          <tbody>{part.rows.map((row, index) => (
-            <tr key={h3Key(row)}>
-              {section.serial && <td className="sn">{h3Pad(index + 1)}</td>}
-              {section.columns.map((column) => (
-                <td key={column.key}>
-                  <H3Area value={row[column.key]} readOnly={locked || (fixed && (printed(index, column.key) || (column.key === 'sub' && !row.sub)))}
-                    onChange={(v) => { row[column.key] = v; onTouched(); }} />
-                  {/* The newest H360 follow-up note, offered while Remarks is still empty. */}
-                  {column.key === 'remarks' && row._note && !row.remarks && !locked && (
-                    <div className="h3-hint"><button type="button" title={row._note} onClick={() => { row.remarks = row._note; onStructure(); }}>Use latest nursing note</button></div>
-                  )}
-                </td>
-              ))}
-              {canEditRows && <td className="tools">
-                <button type="button" title="Move up" disabled={index === 0} onClick={() => swap(index, index - 1)}>↑</button>
-                <button type="button" title="Move down" disabled={index === part.rows.length - 1} onClick={() => swap(index, index + 1)}>↓</button>
-                <button type="button" title="Remove this row" onClick={() => { part.rows.splice(index, 1); onStructure(); }}>✕</button>
-                {section.patients && (
-                  <select value="" onChange={(e) => { if (e.target.value) onMove(section.id, index, e.target.value); }}>
-                    <option value="">Move to…</option>
-                    {schema.patientSections.filter((id) => id !== section.id).map((id) => <option key={id} value={id}>{schema.sections.find((s) => s.id === id).title.split(/[:{]/)[0].trim()}</option>)}
-                  </select>
-                )}
-              </td>}
-            </tr>
-          ))}</tbody>
-        </table></div>
-      ) : <div className="h3-empty">No rows.{canEditRows ? ' Click "+ Add row" to add one.' : ''}</div>)}
-      {section.fields && <div className="h3-fields">{section.fields.map((field) => (
-        <div className="sup-fld" key={field.key}><label>{field.label}</label>
-          {field.long
-            ? <H3Area rows={3} value={part.fields[field.key]} readOnly={locked} placeholder={field.placeholder} onChange={(v) => { part.fields[field.key] = v; onTouched(); }} />
-            : <input defaultValue={part.fields[field.key] || ''} key={rev} readOnly={locked} placeholder={field.placeholder || ''} onChange={(e) => { part.fields[field.key] = e.target.value; onTouched(); }} />}
-        </div>
-      ))}</div>}
-    </div>
-  );
-});
-
+// What "Import from H360" may do to the report on screen (server/h360/sheets.js UPDATE_DEFAULTS).
+const H3_UPDATE_DEFAULTS = { addNew: true, updateDetails: true, diagnosis: 'empty', remarks: 'empty', remarksFrom: 'nursing', useComplaint: false, sections: true, register: true, dischargeRequests: true };
 const H3_OPTIONS_KEY = 'unico_h360_update_options_v1';
-function H3UpdatePanel({ schema, onRun, onClose, busy }) {
+
+// The import panel of the report editor: how fresh the H360 collection is, the choices,
+// and the button. The editor does the import itself (supervisor.jsx runH360).
+function SupH360Update({ hasPatients, busy, onRun, onClose, setRoute }) {
   const [o, setO] = useState(() => {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(H3_OPTIONS_KEY)) || {}; } catch (e) { saved = {}; }
-    return Object.assign({}, schema.updateDefaults, saved);
+    return Object.assign({}, H3_UPDATE_DEFAULTS, saved);
   });
+  const [status, setStatus] = useState(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => { let live = true; h3Api('/api/h360/status').then((s) => { if (live) setStatus(s); }).catch(() => {}); return () => { live = false; }; }, []);
   const set = (key, value) => setO((prev) => Object.assign({}, prev, { [key]: value }));
   const check = (key, label) => <label className="h3-check"><input type="checkbox" checked={!!o[key]} onChange={(e) => set(key, e.target.checked)} /> {label}</label>;
   const run = () => {
@@ -485,217 +420,99 @@ function H3UpdatePanel({ schema, onRun, onClose, busy }) {
     try { localStorage.setItem(H3_OPTIONS_KEY, JSON.stringify(o)); } catch (e) {}
     onRun(o);
   };
+  const last = status && status.lastRun;
   return (
     <div className="sup-card h3-options"><div className="sup-card-b">
-      <b>Update this report from the latest H360 collection</b>
-      {check('addNew', 'Add newly admitted patients')}
-      {check('updateDetails', 'Update bed, age and consultant of patients already in the report')}
-      {check('register', 'Use the IPD Admission list: move patients it shows as discharged or LAMA to those lists, and add admissions that are on no station list')}
-      <div className="sup-fld"><label>Diagnosis</label>
-        <select value={o.diagnosis} onChange={(e) => set('diagnosis', e.target.value)}>
-          <option value="empty">Fill in only where it is empty</option>
-          <option value="all">Replace every diagnosis with the one recorded in H360</option>
-          <option value="none">Leave as it is</option>
-        </select></div>
-      {check('useComplaint', 'When no diagnosis is recorded, use the presenting complaint (written as "C/C: ...")')}
-      <div className="sup-fld"><label>Remarks</label>
-        <select value={o.remarks} onChange={(e) => set('remarks', e.target.value)}>
-          <option value="empty">Fill in only where it is empty</option>
-          <option value="all">Replace every remark with the newest note (overwrites what you typed)</option>
-          <option value="none">Leave as it is</option>
-        </select></div>
-      <div className="sup-fld"><label>Take remarks from</label>
-        <select value={o.remarksFrom} onChange={(e) => set('remarksFrom', e.target.value)}>
-          <option value="nursing">The newest nursing follow-up note</option>
-          <option value="progress">The newest doctor progress note</option>
-          <option value="both">Both: doctor progress note, then nursing note</option>
-          <option value="handover">The doctors' handover: clinical summary and plan</option>
-        </select></div>
-      {check('sections', 'Fill the other sections H360 can answer: Surgery Details, Interventional Procedure, Pressure Sore, Ventilator Status and the counts in General Information')}
-      <div className="sup-toolbar"><H3Btn kind="pri" onClick={run} disabled={busy}>{busy ? 'Updating…' : 'Update now'}</H3Btn><H3Btn onClick={onClose}>Close</H3Btn></div>
+      <div className="h3-sethead">
+        <b>{hasPatients ? 'Update this report from H360' : 'Import patients from H360'}</b>
+        <span style={{ flex: 1 }} />
+        <H3Btn sm onClick={onClose}>Close</H3Btn>
+      </div>
+      <div className={'sup-alert ' + (last ? 'info' : 'warn')} style={{ marginBottom: 0 }}>
+        <span style={{ flex: 1 }}>{!status ? 'Checking the H360 collection…' : last
+          ? 'H360 collection: ' + last.total + ' in-patients, collected ' + h3When(last.collectedAt) + '.'
+          : 'Nothing has been collected from H360 yet.'}</span>
+        <H3Btn sm onClick={() => setRoute({ view: 'supH360' })}>{last ? 'Collect again' : 'Collect patients'}</H3Btn>
+      </div>
+      <div className="h3-muted">New admissions, critical-area and cabin patients go to their lists with bed, age, consultant, diagnosis and remarks. A patient with a discharge request in H360 goes to Discharged; LAMA and completed discharges follow the IPD Admission list. Surgery, procedures, pressure sore, ventilator and the counts are filled where H360 has them. Nothing you typed is overwritten unless you choose so below.</div>
+      <div className="sup-toolbar">
+        <H3Btn kind="pri" onClick={run} disabled={busy || !last}>{busy ? 'Importing…' : hasPatients ? 'Update now' : 'Import now'}</H3Btn>
+        <H3Btn onClick={() => setMore((v) => !v)}>{more ? 'Hide options' : 'Options'}</H3Btn>
+      </div>
+      {more && <React.Fragment>
+        {check('addNew', 'Add newly admitted patients')}
+        {check('updateDetails', 'Update bed, age and consultant of patients already in the report')}
+        {check('dischargeRequests', 'Put patients with a discharge request in H360 (the pink rows) in Discharged')}
+        {check('register', 'Use the IPD Admission list: move patients it shows as discharged or LAMA to those lists, and add admissions that are on no station list')}
+        <div className="sup-fld"><label>Diagnosis</label>
+          <select value={o.diagnosis} onChange={(e) => set('diagnosis', e.target.value)}>
+            <option value="empty">Fill in only where it is empty</option>
+            <option value="all">Replace every diagnosis with the one recorded in H360</option>
+            <option value="none">Leave as it is</option>
+          </select></div>
+        {check('useComplaint', 'When no diagnosis is recorded, use the presenting complaint (written as "C/C: ...")')}
+        <div className="sup-fld"><label>Remarks</label>
+          <select value={o.remarks} onChange={(e) => set('remarks', e.target.value)}>
+            <option value="empty">Fill in only where it is empty</option>
+            <option value="all">Replace every remark with the newest note (overwrites what you typed)</option>
+            <option value="none">Leave as it is</option>
+          </select></div>
+        <div className="sup-fld"><label>Take remarks from</label>
+          <select value={o.remarksFrom} onChange={(e) => set('remarksFrom', e.target.value)}>
+            <option value="nursing">The newest nursing follow-up note</option>
+            <option value="progress">The newest doctor progress note</option>
+            <option value="both">Both: doctor progress note, then nursing note</option>
+            <option value="handover">The doctors' handover: clinical summary and plan</option>
+          </select></div>
+        {check('sections', 'Fill the other sections H360 can answer: Surgery Details, Interventional Procedure, Pressure Sore, Ventilator Status and the counts in General Information')}
+      </React.Fragment>}
     </div></div>
   );
 }
 
-function H3SheetEditor({ id, schema, onBack }) {
-  const [report, setReport] = useState(null);
-  const [error, setError] = useState('');
-  const [saveState, setSaveState] = useState('');
-  const [notes, setNotes] = useState([]);
-  const [panel, setPanel] = useState(false);
+// On All Reports: the log sheets written before the two reports became one (and the old
+// collector's reports on the hospital PC) are offered once, to become draft reports.
+function SupH360Convert({ onDone }) {
+  const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [rev, setRev] = useState(0);           // rows added, removed or moved: the sections are drawn again
-  const [, setTick] = useState(0);             // something was typed: only the counts are drawn again
-  const live = useRef({ report: null, timer: null, saving: Promise.resolve(), tickTimer: null, dead: false });
-  const locked = !h3Can('edit');
-
-  const save = useCallback(() => {
-    const s = live.current;
-    clearTimeout(s.timer); s.timer = null;
-    if (!s.report || locked) return s.saving;
-    s.saving = s.saving.then(() => {
-      const r = s.report;
-      return h3Api('/api/h360/sheets/' + r.id, { method: 'PUT', body: { title: r.title, date: r.date, shift: r.shift, data: r.data, preparedBy: r.preparedBy, baseUpdatedAt: r.updatedAt } });
-    }).then((saved) => {
-      // Only the time of the save is taken back: what is on screen may already be newer.
-      if (s.report) s.report.updatedAt = saved.updatedAt;
-      if (!s.dead) setSaveState('Saved ' + new Date().toLocaleTimeString());
-    }).catch((e) => {
-      if (s.dead) return;
-      setSaveState('Not saved');
-      setError(e.status === 409 ? e.message : 'Could not save: ' + e.message);
-    });
-    return s.saving;
-  }, [locked]);
-  const flush = useCallback(() => (live.current.timer ? save() : live.current.saving), [save]);
-  const touched = useCallback(() => {
-    const s = live.current;
-    if (locked) return;
-    setSaveState('Saving…');
-    clearTimeout(s.timer); s.timer = setTimeout(save, 700);
-    clearTimeout(s.tickTimer); s.tickTimer = setTimeout(() => setTick((n) => n + 1), 350);
-  }, [save, locked]);
-  const structure = useCallback(() => { touched(); setRev((n) => n + 1); }, [touched]);
-  const move = useCallback((fromId, index, toId) => {
-    const r = live.current.report;
-    const row = r.data[fromId].rows.splice(index, 1)[0];
-    r.data[toId].rows.push(row);
-    structure();
-  }, [structure]);
-
-  const show = (r) => { live.current.report = r; setReport(r); setRev((n) => n + 1); };
-  useEffect(() => {
-    const s = live.current;
-    s.dead = false;
-    h3Api('/api/h360/sheets/' + id).then(show).catch((e) => setError(e.message));
-    const leaving = (event) => { if (s.timer) { save(); event.preventDefault(); } };
-    window.addEventListener('beforeunload', leaving);
-    return () => { window.removeEventListener('beforeunload', leaving); if (s.timer) save(); s.dead = true; clearTimeout(s.tickTimer); };
-  }, [id]);
-
-  if (!report) return <div className="sup-wrap">{error ? <div className="sup-alert critical">{error}</div> : <div className="h3-muted">Loading…</div>}<div><H3Btn onClick={onBack}>All reports</H3Btn></div></div>;
-
-  const countOf = (section) => {
-    if (section.count !== 'rows') return '';
-    const n = report.data[section.id].rows.filter(h3Filled).length;
-    return n ? h3Pad(n) : '0';
-  };
-  const meta = (key, value) => { report[key] = value; touched(); };
-  const update = async (options) => {
-    setBusy(true); setError('');
-    try {
-      await flush();
-      const result = await h3Api('/api/h360/sheets/' + report.id + '/refresh', { method: 'POST', body: options });
-      show(result.report);
-      setPanel(false);
-      const out = [];
-      if (options.addNew) out.push(result.added.length ? 'Added ' + result.added.length + ' new patient(s): ' + result.added.join(', ') + '.' : 'No new patients since this report was made.');
-      out.push('Filled in: diagnosis for ' + result.changed.diagnosis + ' patient(s), remarks for ' + result.changed.remarks + ' patient(s); bed, age or consultant updated for ' + result.changed.details + '; ' + result.changed.sections + ' row(s) or number(s) added to the other sections.');
-      if ((result.moved || []).length) out.push('Moved by the IPD Admission list: ' + result.moved.join(', ') + '.');
-      if ((result.died || []).length) out.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + result.died.join(', ') + '.');
-      if (result.gone.length) out.push('No longer on the H360 lists (move them to Discharged or LAMA if they left): ' + result.gone.join(', ') + '.');
-      setNotes(out);
-      setSaveState('H360 data from ' + h3When(result.report.sourceCollectedAt));
-      try { window.scrollTo(0, 0); } catch (e) {}
-    } catch (e) { setError(e.message); }
+  const load = () => h3Api('/api/h360/status').then(setStatus).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const waiting = status ? (status.sheetsWaiting || 0) + (status.legacyReports || 0) : 0;
+  if (!waiting || !h3Can('add')) return null;
+  const run = async () => {
+    setBusy(true);
+    try { const r = await h3Api('/api/h360/sheets/convert', { method: 'POST' }); h3Toast(r.converted + ' log sheet(s) are now draft reports.'); await load(); if (onDone) onDone(); }
+    catch (e) { h3Toast(e.message, 'error'); }
     setBusy(false);
   };
-  const remove = async () => {
-    if (!confirm('Delete the ' + report.shift + ' report of ' + h3ShowDate(report.date) + '? This cannot be undone.')) return;
-    const s = live.current;
-    clearTimeout(s.timer); s.timer = null;
-    try { await s.saving; await h3Api('/api/h360/sheets/' + report.id, { method: 'DELETE' }); s.report = null; h3Toast('Report deleted.'); onBack(); }
-    catch (e) { setError(e.message); }
-  };
-  const goto = (sectionId) => { const el = document.getElementById('h3-section-' + sectionId); if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
-
-  return (
-    <div className="sup-wrap">
-      <H3Hero title={report.title + ' - ' + h3ShowDate(report.date)} sub={saveState || (report.sourceCollectedAt ? 'H360 data from ' + h3When(report.sourceCollectedAt) : 'No H360 data collected yet')}>
-        {!locked && <H3Btn onClick={() => setPanel((v) => !v)} title="Choose what to bring in from the latest H360 collection">Update from H360 ▾</H3Btn>}
-        <H3Btn onClick={async () => { await flush(); location.href = '/api/h360/sheets/' + report.id + '/docx'; }}><Ic d={I.download} s={15} c="#fff" />Word</H3Btn>
-        <H3Btn onClick={async () => { await flush(); window.open('/api/h360/sheets/' + report.id + '/print', '_blank'); }}>Print / PDF</H3Btn>
-        <H3Btn kind="pri" onClick={async () => { await flush(); onBack(); }}>All reports</H3Btn>
-      </H3Hero>
-      {error && <div className="sup-alert critical"><span style={{ flex: 1 }}>{error}</span><H3Btn sm onClick={() => { setError(''); h3Api('/api/h360/sheets/' + id).then(show).catch((e) => setError(e.message)); }}>Reload</H3Btn></div>}
-      {locked && <div className="sup-alert info">Your Supervisor Reports access is view-only, so this report cannot be changed.</div>}
-      {notes.map((text, i) => <div key={i} className="sup-alert warn">{text}</div>)}
-      {panel && <H3UpdatePanel schema={schema} busy={busy} onRun={update} onClose={() => setPanel(false)} />}
-
-      <div className="sup-card"><div className="sup-card-b"><div className="h3-meta" key={'m' + rev}>
-        <div className="sup-fld" style={{ flex: 2, minWidth: 240 }}><label>Title</label><input defaultValue={report.title} readOnly={locked} onChange={(e) => meta('title', e.target.value)} /></div>
-        <div className="sup-fld"><label>Date</label><input type="date" defaultValue={report.date} readOnly={locked} onChange={(e) => { if (e.target.value) meta('date', e.target.value); }} /></div>
-        <div className="sup-fld"><label>Shift</label><select defaultValue={report.shift} disabled={locked} onChange={(e) => meta('shift', e.target.value)}>{schema.shifts.map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
-        {schema.signature.map((item) => (
-          <div className="sup-fld" key={item.key} style={{ flex: 1, minWidth: 180 }}><label>Box beside the logo: {item.label}</label>
-            <input defaultValue={(report.preparedBy || {})[item.key] || ''} placeholder={item.fallback || ''} readOnly={locked} onChange={(e) => { report.preparedBy = report.preparedBy || {}; report.preparedBy[item.key] = e.target.value; touched(); }} /></div>
-        ))}
-        {h3Can('delete') && <H3Btn kind="dgr" onClick={remove}>Delete report</H3Btn>}
-      </div></div></div>
-
-      <div className="h3-muted">Tip: type <b>**text**</b> to make it bold and <b>==text==</b> to highlight it in yellow. Everything is saved automatically.</div>
-      <nav className="h3-nav">{schema.sections.map((section) => (
-        <button key={section.id} type="button" onClick={() => goto(section.id)}>{section.title.split(/[:{]/)[0].replace(/[-\s]+$/, '')} {section.count ? <b>{countOf(section)}</b> : null}</button>
-      ))}</nav>
-      {schema.sections.map((section) => (
-        <H3Section key={section.id} section={section} part={report.data[section.id]} schema={schema} count={countOf(section)} rev={rev} locked={locked}
-          onTouched={touched} onStructure={structure} onMove={move} />
-      ))}
-    </div>
-  );
+  return <div className="sup-alert info"><span style={{ flex: 1 }}>{waiting} H360 log sheet(s) were written before the log sheet became part of the report. Bring them in as draft reports to keep working on them here.</span><H3Btn sm kind="pri" onClick={run} disabled={busy}>{busy ? 'Bringing in…' : 'Bring them in'}</H3Btn></div>;
 }
 
-function H3Sheets({ id, setRoute }) {
-  const [schema, setSchema] = useState(null);
-  const [list, setList] = useState(null);
-  const [error, setError] = useState('');
-  const [date, setDate] = useState(h3Today());
-  const [shift, setShift] = useState(h3Shift());
-  const [busy, setBusy] = useState(false);
-  const load = () => h3Api('/api/h360/sheets').then(setList).catch((e) => setError(e.message));
-  useEffect(() => { h3Api('/api/h360/schema').then(setSchema).catch((e) => setError(e.message)); }, []);
-  useEffect(() => { if (!id) load(); }, [id]);
-  const create = async (event) => {
-    event.preventDefault();
-    setBusy(true); setError('');
-    try { const created = await h3Api('/api/h360/sheets', { method: 'POST', body: { date, shift } }); setRoute({ view: 'supSheet', id: created.id }); }
-    catch (e) { setError(e.message); }
-    setBusy(false);
-  };
-  if (id && schema) return <H3SheetEditor key={id} id={id} schema={schema} onBack={() => setRoute({ view: 'supSheet' })} />;
-  const stop = (event) => event.stopPropagation();
+// The H360 half of the module on the Supervisor Dashboard: how fresh the collection is, and the way in.
+function SupH360Card({ setRoute }) {
+  const [status, setStatus] = useState(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { let live = true; h3Api('/api/h360/status').then((s) => { if (live) setStatus(s); }).catch(() => { if (live) setFailed(true); }); return () => { live = false; }; }, []);
+  const run = status && status.lastRun;
+  const line = failed ? 'H360 status is not available right now'
+    : !status ? 'Checking…'
+    : status.running ? 'A collection is running now'
+    : run ? run.total + ' in-patients · collected ' + h3When(run.collectedAt) + (run.site ? ' from ' + (H3_SITE[run.site] || run.site) : '')
+    : status.hasLogin ? 'Nothing collected yet' : 'The H360 login has not been entered yet';
   return (
-    <div className="sup-wrap">
-      <H3Hero title="H360 Log Sheet" sub="The supervisor log sheet, filled in from H360 and from the previous report">
-        <H3Btn onClick={() => setRoute({ view: 'supH360' })}><Ic d={I.pulse || I.doc} s={15} c="#fff" />H360 Patients</H3Btn>
-      </H3Hero>
-      {error && <div className="sup-alert critical">{error}</div>}
-      {h3Can('add') && <div className="sup-card"><div className="sup-card-b"><form className="h3-meta" onSubmit={create}>
-        <div className="sup-fld"><label>Date</label><input type="date" value={date} onChange={(e) => setDate(e.target.value)} required /></div>
-        <div className="sup-fld"><label>Shift</label><select value={shift} onChange={(e) => setShift(e.target.value)}>{((schema && schema.shifts) || ['Morning', 'Evening', 'Night']).map((s) => <option key={s} value={s}>{s}</option>)}</select></div>
-        <H3Btn kind="pri" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create report'}</H3Btn>
-        <span className="h3-muted" style={{ flex: 1, minWidth: 220 }}>A new report is filled in from the latest H360 collection and keeps the diagnosis and remarks you wrote in the previous report.</span>
-      </form></div></div>}
-      <div className="sup-card"><div className="h3-tablewrap"><table className="h3-table">
-        <thead><tr><th>Date</th><th>Shift</th><th>Title</th><th>New</th><th>Critical</th><th>Ward</th><th>LAMA</th><th>Discharged</th><th>Prepared by</th><th>Last saved</th><th></th></tr></thead>
-        <tbody>{(list || []).map((item) => (
-          <tr key={item.id} className="open" onClick={() => setRoute({ view: 'supSheet', id: item.id })}>
-            <td>{h3ShowDate(item.date)}</td><td>{item.shift}</td><td>{item.title}</td>
-            <td>{item.counts.newAdmissions}</td><td>{item.counts.critical}</td><td>{item.counts.ward}</td><td>{item.counts.lama}</td><td>{item.counts.discharged}</td>
-            <td>{item.preparedBy}</td><td>{h3When(item.updatedAt)}</td>
-            <td className="tools" onClick={stop}><a className="sup-btn sm" href={'/api/h360/sheets/' + item.id + '/docx'}>Word</a> <a className="sup-btn sm" href={'/api/h360/sheets/' + item.id + '/print'} target="_blank" rel="noopener">Print</a></td>
-          </tr>
-        ))}</tbody>
-      </table></div>
-      {list && !list.length && <div className="sup-card-b h3-muted" style={{ textAlign: 'center' }}>No reports yet. Choose a date and shift above and click Create report.</div>}
-      {!list && !error && <div className="sup-card-b h3-muted">Loading…</div>}
+    <div className="sup-hubcard">
+      <div className="sup-hub-t"><Ic d={I.pulse || I.doc} s={16} />H360</div>
+      <div className="sup-hub-s">{line}</div>
+      <div className="h3-muted">Patients read from H360. A new report imports them with one click.</div>
+      <div className="sup-hub-row">
+        <H3Btn sm kind="pri" onClick={() => setRoute({ view: 'supH360' })}>{run || (status && status.running) ? 'H360 Patients' : 'Collect patients'}</H3Btn>
+        {run && h3Can('add') && <H3Btn sm onClick={() => setRoute({ view: 'supNew', h360: true })}><Ic d={I.plus} s={14} />New report from H360</H3Btn>}
       </div>
     </div>
   );
 }
 
-function SupH360View({ view, id, setRoute }) {
-  if (view === 'supSheet') return <H3Sheets id={id} setRoute={setRoute} />;
+function SupH360View({ setRoute }) {
   return <H3Patients setRoute={setRoute} />;
 }
 
@@ -728,6 +545,11 @@ a.sup-btn{text-decoration:none}
 .h3-tiles{display:flex;gap:10px;flex-wrap:wrap}
 .h3-tile{background:var(--panel,#fff);border:1px solid var(--line,#e5e7eb);border-radius:12px;padding:10px 14px;min-width:118px;cursor:pointer;text-align:left;font:inherit;color:var(--ink,#111827)}
 .h3-tile.on{border-color:#2563eb;box-shadow:inset 0 0 0 1px #2563eb}
+.h3-tile.req{background:#fff1f2;border-color:#fecdd3}
+.h3-tile.req b{color:#be123c}
+.h3-tile.req.on{border-color:#e11d48;box-shadow:inset 0 0 0 1px #e11d48}
+.h3-table tr.req td{background:#ffe4e6}
+.h3-table tbody tr.req:hover td{background:#fecdd3}
 .h3-tile b{display:block;font-size:22px;color:#1d4ed8;line-height:1.15}
 .h3-tile span{color:var(--muted,#64748b);font-size:11.5px}
 .h3-search{font:inherit;padding:8px 11px;border:1px solid var(--line,#d1d5db);border-radius:9px;min-width:260px;background:#fff}
@@ -764,39 +586,11 @@ a.sup-btn{text-decoration:none}
 .h3-rtbl{border-collapse:collapse;width:100%;font-size:12.5px}
 .h3-rtbl th,.h3-rtbl td{padding:5px 8px;border-bottom:1px solid var(--line,#eef2f7);text-align:left;min-width:70px;vertical-align:top}
 .h3-rtbl th{background:#f1f5f9;position:sticky;top:0}
-.h3-meta{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
 .h3-options .sup-card-b{display:grid;gap:10px;max-width:780px}
 .h3-options select{max-width:540px}
 .h3-check{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.45;cursor:pointer}
 .h3-check input{margin-top:2px}
-.h3-nav{position:sticky;top:0;z-index:5;display:flex;gap:6px;overflow-x:auto;padding:8px 0;background:var(--bg,#f4f7fb)}
-.h3-nav button{white-space:nowrap;font:inherit;font-size:11.5px;padding:5px 10px;border-radius:999px;background:#fff;border:1px solid var(--line,#e5e7eb);color:var(--ink,#111827);cursor:pointer}
-.h3-nav button:hover{border-color:#93c5fd}
-.h3-nav b{color:#1d4ed8}
-.h3-section{background:#fff;border:1px solid var(--line,#e5e7eb);border-radius:12px;overflow:hidden;scroll-margin-top:60px}
-.h3-section>h3{margin:0;padding:8px 14px;font-size:13.5px;background:#e9eef4;display:flex;align-items:center;gap:10px;color:#0f172a}
-.h3-section>h3 span{flex:1}
-.h3-section>h3 small{font-weight:400;color:var(--muted,#64748b)}
-.h3-gridwrap{overflow-x:auto}
-.h3-grid{table-layout:fixed;min-width:1400px;width:100%;border-collapse:collapse}
-.h3-grid th{font-size:11.5px;font-weight:700;padding:6px 4px;border:1px solid var(--line,#e5e7eb);background:#f7fafc}
-.h3-grid td{border:1px solid var(--line,#e5e7eb);padding:0;vertical-align:top}
-.h3-grid th.sn{width:3%}
-.h3-grid th.tools{width:9%}
-.h3-grid td.sn{text-align:center;padding-top:8px;color:var(--muted,#64748b);font-size:12px}
-.h3-grid td.tools{padding:4px;background:#fafcfd}
-.h3-grid td.tools button{padding:2px 7px;font-size:12px;border:1px solid var(--line,#e5e7eb);background:#fff;border-radius:6px;cursor:pointer;margin-right:3px}
-.h3-grid td.tools button:disabled{opacity:.45;cursor:default}
-.h3-grid td.tools select{padding:2px 4px;font-size:11.5px;width:100%;margin-top:4px}
-.h3-grid textarea,.h3-fields textarea{width:100%;border:0;border-radius:0;resize:none;overflow:hidden;min-height:34px;display:block;background:transparent;font:inherit;font-size:12.5px;line-height:1.35;padding:7px 8px;box-sizing:border-box;color:var(--ink,#111827)}
-.h3-grid textarea:focus{outline:2px solid #2563eb;outline-offset:-2px;background:#fff}
-.h3-grid textarea[readonly]{background:#f7fafc;color:var(--muted,#64748b)}
-.h3-hint{padding:3px 6px 5px}
-.h3-hint button{font-size:11px;padding:2px 7px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:#fff;color:var(--muted,#64748b);cursor:pointer}
-.h3-fields{padding:12px 14px;display:grid;gap:10px}
-.h3-fields textarea{border:1px solid var(--line,#d1d5db);border-radius:9px;min-height:70px}
-.h3-empty{padding:14px;color:var(--muted,#64748b);font-size:12.5px}
 `;
 (function injectH3Css() { try { if (typeof document === 'undefined' || document.getElementById('h3-css')) return; const st = document.createElement('style'); st.id = 'h3-css'; st.textContent = H3_CSS; document.head.appendChild(st); } catch (e) {} })();
 
-Object.assign(window, { SupH360View });
+Object.assign(window, { SupH360View, SupH360Card, SupH360Update, SupH360Convert });

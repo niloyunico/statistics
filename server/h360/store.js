@@ -14,10 +14,10 @@ const SHARED = { patients: 'h360Patients', modules: 'h360Modules', runs: 'h360Ru
 
 // What the log sheet needs of a patient; the rest (contact numbers, address,
 // attendants, alerts) stays on the hospital PC under 'sheet'.
-const SHEET_COLUMNS = [STATION_COLUMN, 'Bed No', 'Patient Name', 'UHID', 'IP No', 'IP Date', 'Age', 'Gender', 'Consultant', 'Department', 'Bed Category', 'Records'];
+const SHEET_COLUMNS = [STATION_COLUMN, 'Bed No', 'Patient Name', 'UHID', 'IP No', 'IP Date', 'Discharge Request', 'Age', 'Gender', 'Consultant', 'Department', 'Bed Category', 'Records'];
 const SHEET_ADMISSION = [
   'admission_no_pk', 'admission_uid', 'admission_date', 'bed_name', 'ward_name', 'nurse_station', 'patient_name', 'patient_code',
-  'primary_doctor_name', 'doc_department', 'dis_req_ind', 'dis_ind', 'dis_datetime', 'dis_reason', 'death_ind', 'death_declared_time',
+  'primary_doctor_name', 'doc_department', 'dis_req_ind', 'dis_req_time', 'dis_ind', 'dis_datetime', 'dis_reason', 'death_ind', 'death_declared_time',
   'status', 'emergency_ind', 'baby_born_ind',
 ];
 const SHEET_PROFILE = ['Age', 'Gender'];

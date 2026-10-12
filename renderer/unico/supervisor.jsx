@@ -236,10 +236,30 @@ function supComputeTotals(r) {
   const death = supNum(g.death) || supNum(er.death);
   return { newAdmission: (r.newAdmissions || []).length, discharge: (r.discharged || []).length, death };
 }
+// Every unit a census holds: the app's departments, then any other it was given (a floor
+// or unit that H360 has and the Statistics list does not).
+function supCensusNames(census, deptNames) {
+  const names = (deptNames || []).slice();
+  Object.keys(census || {}).forEach((k) => { if (k !== 'OPD Total' && k !== 'TOTAL' && names.indexOf(k) < 0 && String(census[k] == null ? '' : census[k]).trim() !== '') names.push(k); });
+  return names;
+}
 function supComputeCensusTotal(census, deptNames) {
   let t = supNum((census || {})['OPD Total']);
-  (deptNames || []).forEach((n) => { t += supNum((census || {})[n]); });
+  supCensusNames(census, deptNames).forEach((n) => { t += supNum((census || {})[n]); });
   return t;
+}
+// A unit as H360 names it ("Level-10", "MICU", "Level-10 (Birthing Suite)") -> the matching
+// department of the app's own list, or the H360 name when there is none.
+function supH360Dept(label, deptNames) {
+  const l = String(label || '').trim();
+  if (!l || (deptNames || []).indexOf(l) >= 0) return l;
+  const find = (re) => (deptNames || []).find((n) => re.test(n));
+  const rules = [[/nicu/i, /neonatal/i], [/sicu/i, /surgical\s*icu/i], [/micu/i, /medical\s*icu/i], [/ccu/i, /coronary/i], [/ctvs/i, /ctvs\s*icu/i],
+    [/birthing/i, /labou?r|delivery/i], [/day\s*care/i, /day\s*care/i], [/dialysis/i, /dialysis/i], [/cath/i, /cath/i]];
+  for (let i = 0; i < rules.length; i++) if (rules[i][0].test(l)) return find(rules[i][1]) || l;
+  const lvl = l.match(/level[\s-]*0?(\d+)/i);
+  if (lvl) return find(new RegExp('level\\s*-?\\s*0?' + lvl[1] + '\\b', 'i')) || l;
+  return l;
 }
 function supComputeAlerts(r) {
   const out = [];
@@ -455,7 +475,7 @@ function CensusFields({ deptNames, val, onChange, readOnly }) {
       <div style={{ fontSize: 11.5, color: 'var(--muted,#64748b)', marginBottom: 8 }}>Department-wise patient census (departments pulled from Statistics).</div>
       <div className="sup-scalar">
         <div className="sup-fld"><label>OPD Total</label><input type="number" value={val['OPD Total'] || ''} onChange={(e) => setK('OPD Total', e.target.value)} disabled={readOnly} /></div>
-        {deptNames.map((n) => <div className="sup-fld" key={n}><label>{n}</label><input type="number" value={val[n] || ''} onChange={(e) => setK(n, e.target.value)} disabled={readOnly} /></div>)}
+        {supCensusNames(val, deptNames).map((n) => <div className="sup-fld" key={n}><label>{n}</label><input type="number" value={val[n] || ''} onChange={(e) => setK(n, e.target.value)} disabled={readOnly} /></div>)}
       </div>
       <div style={{ marginTop: 10, fontWeight: 800, fontSize: 13 }}>TOTAL: {total}</div>
     </div>
@@ -624,7 +644,7 @@ function blankReport(shift) {
   };
 }
 
-function SupEditor({ id, shift, openAdd, depts, setRoute }) {
+function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
   const deptNames = useMemo(() => supDeptNames(depts), [depts]);
   const cfg = useFields();
   const [rep, setRep] = useState(() => blankReport(shift));
@@ -637,6 +657,8 @@ function SupEditor({ id, shift, openAdd, depts, setRoute }) {
   const [addSec, setAddSec] = useState(false);
   const [secName, setSecName] = useState('');
   const [carryOpen, setCarryOpen] = useState(false);
+  // Import from H360 (server/h360): the panel, and what the last import did.
+  const [h3, setH3] = useState({ open: !!h360, busy: false, notes: [] });
   const admin = supIsAdmin();
   const readOnly = rep.status === 'approved' && !admin;
 
@@ -762,6 +784,63 @@ function SupEditor({ id, shift, openAdd, depts, setRoute }) {
     } catch (e) { supToast('Could not update status.', 'error'); }
   };
 
+  // Import from H360: the report as it is on screen goes to the server, which works in what
+  // H360 knows (patients to their lists, discharges and LAMA, surgery, procedures, counts) and
+  // hands the lists back. Typed text and custom columns stay; it is saved like any other edit.
+  const runH360 = async (options) => {
+    setH3((s) => ({ ...s, busy: true }));
+    try {
+      const cur = repRef.current;
+      const res = await fetch('/api/h360/fill', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ report: cur, options }) });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || 'The import failed.');
+      const got = j.report || {};
+      const patch = {};
+      SUP_SECTIONS.forEach((sec) => {
+        if (!Array.isArray(got[sec.key])) return;
+        patch[sec.key] = got[sec.key].map((row) => {
+          if (!row.h360Dept) return row;
+          const { h360Dept, ...rest } = row;
+          return { ...rest, dept: supH360Dept(rest.dept, deptNames) };
+        });
+      });
+      // ventilator lines: only the cells H360 answered, laid over the line of the same type
+      if (Array.isArray(got.ventilators) && got.ventilators.length) {
+        const lines = (cur.ventilators || []).slice();
+        got.ventilators.forEach((v) => {
+          const at = lines.findIndex((r) => String(r.type || '').toLowerCase() === String(v.type || '').toLowerCase());
+          if (at >= 0) lines[at] = { ...lines[at], ...v }; else lines.push(v);
+        });
+        patch.ventilators = lines;
+      }
+      if (got.general && Object.keys(got.general).length) patch.general = { ...(cur.general || {}), ...got.general };
+      // the in-patient census by unit, under the app's own department names where they match
+      if (Array.isArray(j.census) && j.census.length) {
+        const sums = {};
+        j.census.forEach((u) => { const n = supH360Dept(u.unit, deptNames); sums[n] = (sums[n] || 0) + supNum(u.patients); });
+        const census = { ...(cur.census || {}) };
+        Object.keys(sums).forEach((n) => { census[n] = String(sums[n]); });
+        patch.census = census;
+      }
+      edit(patch);
+      setOpen((o) => ({ ...o, newAdmissions: true, criticalArea: true, cabinArea: true, discharged: true, allPatients: true }));
+      const c = j.changed || {};
+      const notes = [];
+      if ((j.added || []).length) notes.push('Added ' + j.added.length + ' patient(s): ' + j.added.join(', ') + '.');
+      notes.push('Filled in: diagnosis for ' + (c.diagnosis || 0) + ' patient(s), remarks for ' + (c.remarks || 0) + '; bed, age or consultant updated for ' + (c.details || 0) + '; ' + (c.sections || 0) + ' row(s) or number(s) added to the other sections.');
+      if ((j.requested || []).length) notes.push('Discharge requested in H360, placed in Discharged: ' + j.requested.join(', ') + '.');
+      if ((j.moved || []).length) notes.push('Placed by the IPD Admission list: ' + j.moved.join(', ') + '.');
+      if ((j.died || []).length) notes.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + j.died.join(', ') + '.');
+      if ((j.gone || []).length) notes.push('No longer on the H360 lists (move them to Discharged or LAMA if they left): ' + j.gone.join(', ') + '.');
+      setH3({ open: false, busy: false, notes });
+      supToast((j.added || []).length ? j.added.length + ' patient(s) imported from H360.' : 'Report updated from H360.', 'success');
+      if (!String(cur.supervisorName || '').trim()) supToast('Type the supervisor name to save this report.', 'info');
+    } catch (e) {
+      setH3((s) => ({ ...s, busy: false }));
+      supToast(e.message || 'The import failed.', 'error');
+    }
+  };
+
   const saveSig = (sig) => { if (window.unicoSig) window.unicoSig.save(sig); edit({ sign: sig }); };
   const addPatient = (target, row) => { edit({ [target]: [...(rep[target] || []), { ...row }] }); setOpen((o) => ({ ...o, [target]: true })); };
   const createCustomSection = (title) => {
@@ -819,14 +898,18 @@ function SupEditor({ id, shift, openAdd, depts, setRoute }) {
         <StatusBadge status={rep.status} />
         <span className={'sup-saved' + (saved === 'Saved' ? ' ok' : '')}>{saved}</span>
         <span style={{ flex: 1 }} />
-        {!readOnly && <SupBtn sm kind="pri" onClick={() => setQuickAdd(true)}><Ic d={I.plus} s={14} />Add Patient</SupBtn>}
-        {!id ? null : <SupBtn sm onClick={() => setRoute({ view: 'supReport', id: rep.id })}><Ic d={I.print} s={14} />Generate / Export</SupBtn>}
+        {!readOnly && window.SupH360Update && <SupBtn sm kind="pri" onClick={() => setH3((s) => ({ ...s, open: !s.open }))} title="Bring the patients of every nurse station, discharges, surgeries and counts in from H360"><Ic d={I.download} s={14} />{allPatients.length ? 'Update from H360' : 'Import from H360'}</SupBtn>}
+        {!readOnly && <SupBtn sm onClick={() => setQuickAdd(true)}><Ic d={I.plus} s={14} />Add Patient</SupBtn>}
+        {rep.id && <a className="sup-btn sm" href={'/api/h360/report/' + encodeURIComponent(rep.id) + '/docx'} title="This report as the Word log sheet (save first: it prints what is saved)"><Ic d={I.doc} s={14} />Word log sheet</a>}
+        {!rep.id ? null : <SupBtn sm onClick={() => setRoute({ view: 'supReport', id: rep.id })}><Ic d={I.print} s={14} />Print &amp; Export</SupBtn>}
         {!readOnly && rep.status === 'draft' && <SupBtn sm kind="pri" onClick={() => setStatus('submitted')}><Ic d={I.check} s={14} />Submit</SupBtn>}
         {admin && rep.status === 'submitted' && <SupBtn sm kind="pri" onClick={() => setStatus('approved')}><Ic d={I.check} s={14} />Approve</SupBtn>}
         {admin && rep.status === 'approved' && <SupBtn sm onClick={() => setStatus('draft')}><Ic d={I.edit} s={14} />Reopen</SupBtn>}
       </div>
 
       {readOnly && <div className="sup-alert info"><Ic d={I.check} s={15} />This report is approved and locked. An administrator can reopen it for edits.</div>}
+      {h3.open && !readOnly && window.SupH360Update && <window.SupH360Update hasPatients={allPatients.length > 0} busy={h3.busy} onRun={runH360} onClose={() => setH3((s) => ({ ...s, open: false }))} setRoute={setRoute} />}
+      {h3.notes.length > 0 && <div>{h3.notes.map((t, i) => <div key={'h' + i} className="sup-alert info">{t}</div>)}</div>}
       {alerts.length > 0 && <div>{alerts.map((a, i) => <div key={i} className={'sup-alert ' + a.level}><Ic d={I.bell} s={15} />{a.text}</div>)}</div>}
 
       {/* header identity */}
@@ -1055,8 +1138,9 @@ function SupHistory({ setRoute }) {
 
   return (
     <div className="sup-wrap">
-      <SupHero icon={I.doc} title="Report History" sub={list.length + ' report(s) · search, compare, duplicate & export'}
+      <SupHero icon={I.doc} title="All Reports" sub={list.length + ' report(s) · search, compare, duplicate & export'}
         right={<SupBtn sm kind="pri" onClick={() => setRoute({ view: 'supNew' })}><Ic d={I.plus} s={15} />New Report</SupBtn>} />
+      {window.SupH360Convert ? <window.SupH360Convert onDone={load} /> : null}
 
       <div className="sup-card"><div className="sup-card-b">
         <div className="sup-scalar">
@@ -1099,6 +1183,7 @@ function SupHistory({ setRoute }) {
                 <td data-label="Actions" style={{ whiteSpace: 'nowrap' }}>
                   <SupBtn sm onClick={() => setRoute({ view: 'supNew', id: r.id })}>Open</SupBtn>{' '}
                   <SupBtn sm onClick={() => setRoute({ view: 'supReport', id: r.id })}><Ic d={I.print} s={13} />Export</SupBtn>{' '}
+                  <a className="sup-btn sm" href={'/api/h360/report/' + encodeURIComponent(r.id) + '/docx'} title="The Word log sheet">Word</a>{' '}
                   <SupBtn sm onClick={() => duplicate(r)}>Duplicate</SupBtn>{' '}
                   {r.status === 'draft' && <SupBtn sm onClick={() => setStatus(r, 'submitted')}>Submit</SupBtn>}
                   {admin && r.status === 'submitted' && <SupBtn sm onClick={() => setStatus(r, 'approved')}>Approve</SupBtn>}
@@ -1134,14 +1219,24 @@ function SupHome({ setRoute }) {
 
   return (
     <div className="sup-wrap">
-      <SupHero icon={I.grid} title="Supervisor Dashboard" sub={'Shift overview · ' + supTodayISO() + ' · current shift: ' + supCurrentShift()}
-        right={<React.Fragment>
-          <SupBtn sm onClick={() => setRoute({ view: 'supBoard' })}><Ic d={I.layers} s={14} />Patient Board</SupBtn>
-          <SupBtn sm onClick={() => setRoute({ view: 'supHistory' })}>History</SupBtn>
-        </React.Fragment>} />
-      <div className="sup-startbar">
-        <span className="sup-startbar-l">Start a report:</span>
-        {SUP_SHIFTS.map((s) => <SupBtn key={s} sm kind={s === supCurrentShift() ? 'pri' : ''} onClick={() => setRoute({ view: 'supNew', shift: s })}><Ic d={I.plus} s={14} />{s}</SupBtn>)}
+      <SupHero icon={I.grid} title="Supervisor Dashboard" sub={'Shift overview · ' + supTodayISO() + ' · current shift: ' + supCurrentShift()} />
+      {/* The two halves of the module, each with its way in: the supervisor's own shift
+          report, and what is read from H360 (window.SupH360Card, supervisor-h360.jsx). */}
+      <div className="sup-hub">
+        <div className="sup-hubcard">
+          <div className="sup-hub-t"><Ic d={I.doc} s={16} />Shift Reports</div>
+          <div className="sup-hub-s">{todays.length ? todays.length + ' of 3 shifts reported today' : 'No report yet today'} · {list.length} in all</div>
+          <div className="sup-hub-row">
+            <span className="sup-startbar-l">Start a report:</span>
+            {SUP_SHIFTS.map((s) => <SupBtn key={s} sm kind={s === supCurrentShift() ? 'pri' : ''} onClick={() => setRoute({ view: 'supNew', shift: s })}><Ic d={I.plus} s={14} />{s}</SupBtn>)}
+          </div>
+          <div className="sup-hub-row">
+            <SupBtn sm onClick={() => setRoute({ view: 'supHistory' })}>All Reports</SupBtn>
+            <SupBtn sm onClick={() => setRoute({ view: 'supBoard' })}><Ic d={I.layers} s={14} />Patient Board</SupBtn>
+            <SupBtn sm onClick={() => setRoute({ view: 'supReport' })}>Print &amp; Export</SupBtn>
+          </div>
+        </div>
+        {window.SupH360Card ? <window.SupH360Card setRoute={setRoute} /> : null}
       </div>
 
       {(missing.length > 0 || critical.length > 0) && (
@@ -1309,7 +1404,7 @@ function SupReportView({ id, depts, setRoute }) {
         }
         if (s.kind === 'census') {
           const cen = rep.census || {};
-          const keys = ['OPD Total'].concat(deptNames);
+          const keys = ['OPD Total'].concat(supCensusNames(cen, deptNames));
           return <div key={s.key}><div className="sup-sec-h">{s.title}</div>
             <table className="sup-rpt-tbl"><thead><tr>{keys.map((k) => <th key={k}>{k}</th>)}<th>TOTAL</th></tr></thead>
               <tbody><tr>{keys.map((k) => <td key={k}>{cen[k] || ''}</td>)}<td><b>{cen.TOTAL != null ? cen.TOTAL : supComputeCensusTotal(cen, deptNames)}</b></td></tr></tbody></table></div>;
@@ -1328,7 +1423,7 @@ function SupReportView({ id, depts, setRoute }) {
 
   return (
     <div className="sup-wrap">
-      <SupHero icon={I.print} title="Generate Report" sub="One-click board-ready PDF · quick templates · custom sections" />
+      <SupHero icon={I.print} title="Print &amp; Export" sub="One-click board-ready PDF · quick templates · custom sections" />
       <div className="sup-toolbar sup-sticky">
         <SupBtn sm onClick={() => setRoute({ view: 'supHistory' })}><Ic d={I.chevR} s={14} style={{ transform: 'rotate(180deg)' }} />Back</SupBtn>
         <span style={{ flex: 1 }} />
@@ -1566,13 +1661,15 @@ function SupBoard({ depts, setRoute }) {
 }
 
 /* ================================================================= dispatcher */
-function SupervisorView({ view, id, shift, openAdd, depts, setRoute }) {
-  // The H360 link (patient collection + the log sheet filled from H360): supervisor-h360.jsx.
-  if ((view === 'supH360' || view === 'supSheet') && window.SupH360View) return <window.SupH360View view={view} id={id} setRoute={setRoute} />;
+function SupervisorView({ view, id, shift, openAdd, h360, depts, setRoute }) {
+  // The H360 link (patient collection): supervisor-h360.jsx. The H360 log sheet is part of the
+  // report now, so its old address opens the list of reports.
+  if (view === 'supH360' && window.SupH360View) return <window.SupH360View setRoute={setRoute} />;
+  if (view === 'supSheet') return <SupHistory setRoute={setRoute} />;
   if (view === 'supHistory') return <SupHistory setRoute={setRoute} />;
   if (view === 'supReport') return <SupReportView id={id} depts={depts} setRoute={setRoute} />;
   if (view === 'supBoard') return <SupBoard depts={depts} setRoute={setRoute} />;
-  if (view === 'supNew') return <SupEditor id={id} shift={shift} openAdd={openAdd} depts={depts} setRoute={setRoute} />;
+  if (view === 'supNew') return <SupEditor id={id} shift={shift} openAdd={openAdd} h360={h360} depts={depts} setRoute={setRoute} />;
   return <SupHome setRoute={setRoute} />;
 }
 
@@ -1597,6 +1694,11 @@ const SUP_CSS = `
 .sup-sticky{padding:10px 12px;background:linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46));backdrop-filter:blur(26px) saturate(1.75);-webkit-backdrop-filter:blur(26px) saturate(1.75);border:1px solid rgba(255,255,255,.92);box-shadow:0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95);border-radius:12px}
 .sup-startbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46));backdrop-filter:blur(26px) saturate(1.75);-webkit-backdrop-filter:blur(26px) saturate(1.75);border:1px solid rgba(255,255,255,.92);box-shadow:0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95);border-radius:12px;padding:12px 14px}
 .sup-startbar-l{font-size:12.5px;font-weight:700;color:var(--muted,#64748b)}
+.sup-hub{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px}
+.sup-hubcard{display:flex;flex-direction:column;gap:9px;background:linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46));backdrop-filter:blur(26px) saturate(1.75);-webkit-backdrop-filter:blur(26px) saturate(1.75);border:1px solid rgba(255,255,255,.92);box-shadow:0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95);border-radius:14px;padding:15px 16px}
+.sup-hub-t{display:flex;align-items:center;gap:8px;font-size:14.5px;font-weight:800;color:#0f172a}
+.sup-hub-s{font-size:12px;color:var(--muted,#64748b);font-weight:600;margin-top:-4px}
+.sup-hub-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .sup-saved{font-size:11.5px;font-weight:700;color:var(--muted,#94a3b8)}
 .sup-saved.ok{color:#15803d}
 /* cards */

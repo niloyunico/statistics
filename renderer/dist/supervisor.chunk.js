@@ -748,12 +748,29 @@ function supComputeTotals(r) {
     death
   };
 }
+function supCensusNames(census, deptNames) {
+  const names = (deptNames || []).slice();
+  Object.keys(census || {}).forEach(k => {
+    if (k !== 'OPD Total' && k !== 'TOTAL' && names.indexOf(k) < 0 && String(census[k] == null ? '' : census[k]).trim() !== '') names.push(k);
+  });
+  return names;
+}
 function supComputeCensusTotal(census, deptNames) {
   let t = supNum((census || {})['OPD Total']);
-  (deptNames || []).forEach(n => {
+  supCensusNames(census, deptNames).forEach(n => {
     t += supNum((census || {})[n]);
   });
   return t;
+}
+function supH360Dept(label, deptNames) {
+  const l = String(label || '').trim();
+  if (!l || (deptNames || []).indexOf(l) >= 0) return l;
+  const find = re => (deptNames || []).find(n => re.test(n));
+  const rules = [[/nicu/i, /neonatal/i], [/sicu/i, /surgical\s*icu/i], [/micu/i, /medical\s*icu/i], [/ccu/i, /coronary/i], [/ctvs/i, /ctvs\s*icu/i], [/birthing/i, /labou?r|delivery/i], [/day\s*care/i, /day\s*care/i], [/dialysis/i, /dialysis/i], [/cath/i, /cath/i]];
+  for (let i = 0; i < rules.length; i++) if (rules[i][0].test(l)) return find(rules[i][1]) || l;
+  const lvl = l.match(/level[\s-]*0?(\d+)/i);
+  if (lvl) return find(new RegExp('level\\s*-?\\s*0?' + lvl[1] + '\\b', 'i')) || l;
+  return l;
 }
 function supComputeAlerts(r) {
   const out = [];
@@ -1295,7 +1312,7 @@ function CensusFields({
     value: val['OPD Total'] || '',
     onChange: e => setK('OPD Total', e.target.value),
     disabled: readOnly
-  })), deptNames.map(n => React.createElement("div", {
+  })), supCensusNames(val, deptNames).map(n => React.createElement("div", {
     className: "sup-fld",
     key: n
   }, React.createElement("label", null, n), React.createElement("input", {
@@ -1833,6 +1850,7 @@ function SupEditor({
   id,
   shift,
   openAdd,
+  h360,
   depts,
   setRoute
 }) {
@@ -1851,6 +1869,11 @@ function SupEditor({
   const [addSec, setAddSec] = useState(false);
   const [secName, setSecName] = useState('');
   const [carryOpen, setCarryOpen] = useState(false);
+  const [h3, setH3] = useState({
+    open: !!h360,
+    busy: false,
+    notes: []
+  });
   const admin = supIsAdmin();
   const readOnly = rep.status === 'approved' && !admin;
   const draftKey = rid => 'unico_sup_draft_' + (rid || 'new');
@@ -2065,6 +2088,103 @@ function SupEditor({
       supToast('Could not update status.', 'error');
     }
   };
+  const runH360 = async options => {
+    setH3(s => ({
+      ...s,
+      busy: true
+    }));
+    try {
+      const cur = repRef.current;
+      const res = await fetch('/api/h360/fill', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json'
+        },
+        body: JSON.stringify({
+          report: cur,
+          options
+        })
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error || 'The import failed.');
+      const got = j.report || {};
+      const patch = {};
+      SUP_SECTIONS.forEach(sec => {
+        if (!Array.isArray(got[sec.key])) return;
+        patch[sec.key] = got[sec.key].map(row => {
+          if (!row.h360Dept) return row;
+          const {
+            h360Dept,
+            ...rest
+          } = row;
+          return {
+            ...rest,
+            dept: supH360Dept(rest.dept, deptNames)
+          };
+        });
+      });
+      if (Array.isArray(got.ventilators) && got.ventilators.length) {
+        const lines = (cur.ventilators || []).slice();
+        got.ventilators.forEach(v => {
+          const at = lines.findIndex(r => String(r.type || '').toLowerCase() === String(v.type || '').toLowerCase());
+          if (at >= 0) lines[at] = {
+            ...lines[at],
+            ...v
+          };else lines.push(v);
+        });
+        patch.ventilators = lines;
+      }
+      if (got.general && Object.keys(got.general).length) patch.general = {
+        ...(cur.general || {}),
+        ...got.general
+      };
+      if (Array.isArray(j.census) && j.census.length) {
+        const sums = {};
+        j.census.forEach(u => {
+          const n = supH360Dept(u.unit, deptNames);
+          sums[n] = (sums[n] || 0) + supNum(u.patients);
+        });
+        const census = {
+          ...(cur.census || {})
+        };
+        Object.keys(sums).forEach(n => {
+          census[n] = String(sums[n]);
+        });
+        patch.census = census;
+      }
+      edit(patch);
+      setOpen(o => ({
+        ...o,
+        newAdmissions: true,
+        criticalArea: true,
+        cabinArea: true,
+        discharged: true,
+        allPatients: true
+      }));
+      const c = j.changed || {};
+      const notes = [];
+      if ((j.added || []).length) notes.push('Added ' + j.added.length + ' patient(s): ' + j.added.join(', ') + '.');
+      notes.push('Filled in: diagnosis for ' + (c.diagnosis || 0) + ' patient(s), remarks for ' + (c.remarks || 0) + '; bed, age or consultant updated for ' + (c.details || 0) + '; ' + (c.sections || 0) + ' row(s) or number(s) added to the other sections.');
+      if ((j.requested || []).length) notes.push('Discharge requested in H360, placed in Discharged: ' + j.requested.join(', ') + '.');
+      if ((j.moved || []).length) notes.push('Placed by the IPD Admission list: ' + j.moved.join(', ') + '.');
+      if ((j.died || []).length) notes.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + j.died.join(', ') + '.');
+      if ((j.gone || []).length) notes.push('No longer on the H360 lists (move them to Discharged or LAMA if they left): ' + j.gone.join(', ') + '.');
+      setH3({
+        open: false,
+        busy: false,
+        notes
+      });
+      supToast((j.added || []).length ? j.added.length + ' patient(s) imported from H360.' : 'Report updated from H360.', 'success');
+      if (!String(cur.supervisorName || '').trim()) supToast('Type the supervisor name to save this report.', 'info');
+    } catch (e) {
+      setH3(s => ({
+        ...s,
+        busy: false
+      }));
+      supToast(e.message || 'The import failed.', 'error');
+    }
+  };
   const saveSig = sig => {
     if (window.unicoSig) window.unicoSig.save(sig);
     edit({
@@ -2220,14 +2340,31 @@ function SupEditor({
     style: {
       flex: 1
     }
-  }), !readOnly && React.createElement(SupBtn, {
+  }), !readOnly && window.SupH360Update && React.createElement(SupBtn, {
     sm: true,
     kind: "pri",
+    onClick: () => setH3(s => ({
+      ...s,
+      open: !s.open
+    })),
+    title: "Bring the patients of every nurse station, discharges, surgeries and counts in from H360"
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 14
+  }), allPatients.length ? 'Update from H360' : 'Import from H360'), !readOnly && React.createElement(SupBtn, {
+    sm: true,
     onClick: () => setQuickAdd(true)
   }, React.createElement(Ic, {
     d: I.plus,
     s: 14
-  }), "Add Patient"), !id ? null : React.createElement(SupBtn, {
+  }), "Add Patient"), rep.id && React.createElement("a", {
+    className: "sup-btn sm",
+    href: '/api/h360/report/' + encodeURIComponent(rep.id) + '/docx',
+    title: "This report as the Word log sheet (save first: it prints what is saved)"
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 14
+  }), "Word log sheet"), !rep.id ? null : React.createElement(SupBtn, {
     sm: true,
     onClick: () => setRoute({
       view: 'supReport',
@@ -2236,7 +2373,7 @@ function SupEditor({
   }, React.createElement(Ic, {
     d: I.print,
     s: 14
-  }), "Generate / Export"), !readOnly && rep.status === 'draft' && React.createElement(SupBtn, {
+  }), "Print & Export"), !readOnly && rep.status === 'draft' && React.createElement(SupBtn, {
     sm: true,
     kind: "pri",
     onClick: () => setStatus('submitted')
@@ -2261,7 +2398,19 @@ function SupEditor({
   }, React.createElement(Ic, {
     d: I.check,
     s: 15
-  }), "This report is approved and locked. An administrator can reopen it for edits."), alerts.length > 0 && React.createElement("div", null, alerts.map((a, i) => React.createElement("div", {
+  }), "This report is approved and locked. An administrator can reopen it for edits."), h3.open && !readOnly && window.SupH360Update && React.createElement(window.SupH360Update, {
+    hasPatients: allPatients.length > 0,
+    busy: h3.busy,
+    onRun: runH360,
+    onClose: () => setH3(s => ({
+      ...s,
+      open: false
+    })),
+    setRoute: setRoute
+  }), h3.notes.length > 0 && React.createElement("div", null, h3.notes.map((t, i) => React.createElement("div", {
+    key: 'h' + i,
+    className: "sup-alert info"
+  }, t))), alerts.length > 0 && React.createElement("div", null, alerts.map((a, i) => React.createElement("div", {
     key: i,
     className: 'sup-alert ' + a.level
   }, React.createElement(Ic, {
@@ -2883,7 +3032,7 @@ function SupHistory({
     className: "sup-wrap"
   }, React.createElement(SupHero, {
     icon: I.doc,
-    title: "Report History",
+    title: "All Reports",
     sub: list.length + ' report(s) · search, compare, duplicate & export',
     right: React.createElement(SupBtn, {
       sm: true,
@@ -2895,7 +3044,9 @@ function SupHistory({
       d: I.plus,
       s: 15
     }), "New Report")
-  }), React.createElement("div", {
+  }), window.SupH360Convert ? React.createElement(window.SupH360Convert, {
+    onDone: load
+  }) : null, React.createElement("div", {
     className: "sup-card"
   }, React.createElement("div", {
     className: "sup-card-b"
@@ -3050,7 +3201,11 @@ function SupHistory({
   }, React.createElement(Ic, {
     d: I.print,
     s: 13
-  }), "Export"), ' ', React.createElement(SupBtn, {
+  }), "Export"), ' ', React.createElement("a", {
+    className: "sup-btn sm",
+    href: '/api/h360/report/' + encodeURIComponent(r.id) + '/docx',
+    title: "The Word log sheet"
+  }, "Word"), ' ', React.createElement(SupBtn, {
     sm: true,
     onClick: () => duplicate(r)
   }, "Duplicate"), ' ', r.status === 'draft' && React.createElement(SupBtn, {
@@ -3104,23 +3259,20 @@ function SupHome({
   }, React.createElement(SupHero, {
     icon: I.grid,
     title: "Supervisor Dashboard",
-    sub: 'Shift overview · ' + supTodayISO() + ' · current shift: ' + supCurrentShift(),
-    right: React.createElement(React.Fragment, null, React.createElement(SupBtn, {
-      sm: true,
-      onClick: () => setRoute({
-        view: 'supBoard'
-      })
-    }, React.createElement(Ic, {
-      d: I.layers,
-      s: 14
-    }), "Patient Board"), React.createElement(SupBtn, {
-      sm: true,
-      onClick: () => setRoute({
-        view: 'supHistory'
-      })
-    }, "History"))
+    sub: 'Shift overview · ' + supTodayISO() + ' · current shift: ' + supCurrentShift()
   }), React.createElement("div", {
-    className: "sup-startbar"
+    className: "sup-hub"
+  }, React.createElement("div", {
+    className: "sup-hubcard"
+  }, React.createElement("div", {
+    className: "sup-hub-t"
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 16
+  }), "Shift Reports"), React.createElement("div", {
+    className: "sup-hub-s"
+  }, todays.length ? todays.length + ' of 3 shifts reported today' : 'No report yet today', " \xB7 ", list.length, " in all"), React.createElement("div", {
+    className: "sup-hub-row"
   }, React.createElement("span", {
     className: "sup-startbar-l"
   }, "Start a report:"), SUP_SHIFTS.map(s => React.createElement(SupBtn, {
@@ -3134,7 +3286,29 @@ function SupHome({
   }, React.createElement(Ic, {
     d: I.plus,
     s: 14
-  }), s))), (missing.length > 0 || critical.length > 0) && React.createElement("div", null, critical.map((c, i) => React.createElement("div", {
+  }), s))), React.createElement("div", {
+    className: "sup-hub-row"
+  }, React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supHistory'
+    })
+  }, "All Reports"), React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supBoard'
+    })
+  }, React.createElement(Ic, {
+    d: I.layers,
+    s: 14
+  }), "Patient Board"), React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supReport'
+    })
+  }, "Print & Export"))), window.SupH360Card ? React.createElement(window.SupH360Card, {
+    setRoute: setRoute
+  }) : null), (missing.length > 0 || critical.length > 0) && React.createElement("div", null, critical.map((c, i) => React.createElement("div", {
     key: 'c' + i,
     className: "sup-alert critical"
   }, React.createElement(Ic, {
@@ -3519,7 +3693,7 @@ function SupReportView({
     }
     if (s.kind === 'census') {
       const cen = rep.census || {};
-      const keys = ['OPD Total'].concat(deptNames);
+      const keys = ['OPD Total'].concat(supCensusNames(cen, deptNames));
       return React.createElement("div", {
         key: s.key
       }, React.createElement("div", {
@@ -3558,7 +3732,7 @@ function SupReportView({
     className: "sup-wrap"
   }, React.createElement(SupHero, {
     icon: I.print,
-    title: "Generate Report",
+    title: "Print & Export",
     sub: "One-click board-ready PDF \xB7 quick templates \xB7 custom sections"
   }), React.createElement("div", {
     className: "sup-toolbar sup-sticky"
@@ -4175,12 +4349,14 @@ function SupervisorView({
   id,
   shift,
   openAdd,
+  h360,
   depts,
   setRoute
 }) {
-  if ((view === 'supH360' || view === 'supSheet') && window.SupH360View) return React.createElement(window.SupH360View, {
-    view: view,
-    id: id,
+  if (view === 'supH360' && window.SupH360View) return React.createElement(window.SupH360View, {
+    setRoute: setRoute
+  });
+  if (view === 'supSheet') return React.createElement(SupHistory, {
     setRoute: setRoute
   });
   if (view === 'supHistory') return React.createElement(SupHistory, {
@@ -4199,6 +4375,7 @@ function SupervisorView({
     id: id,
     shift: shift,
     openAdd: openAdd,
+    h360: h360,
     depts: depts,
     setRoute: setRoute
   });
@@ -4226,6 +4403,11 @@ const SUP_CSS = `
 .sup-sticky{padding:10px 12px;background:linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46));backdrop-filter:blur(26px) saturate(1.75);-webkit-backdrop-filter:blur(26px) saturate(1.75);border:1px solid rgba(255,255,255,.92);box-shadow:0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95);border-radius:12px}
 .sup-startbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46));backdrop-filter:blur(26px) saturate(1.75);-webkit-backdrop-filter:blur(26px) saturate(1.75);border:1px solid rgba(255,255,255,.92);box-shadow:0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95);border-radius:12px;padding:12px 14px}
 .sup-startbar-l{font-size:12.5px;font-weight:700;color:var(--muted,#64748b)}
+.sup-hub{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px}
+.sup-hubcard{display:flex;flex-direction:column;gap:9px;background:linear-gradient(152deg,rgba(255,255,255,.76),rgba(236,247,255,.46));backdrop-filter:blur(26px) saturate(1.75);-webkit-backdrop-filter:blur(26px) saturate(1.75);border:1px solid rgba(255,255,255,.92);box-shadow:0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09),inset 0 1px 0 rgba(255,255,255,.95);border-radius:14px;padding:15px 16px}
+.sup-hub-t{display:flex;align-items:center;gap:8px;font-size:14.5px;font-weight:800;color:#0f172a}
+.sup-hub-s{font-size:12px;color:var(--muted,#64748b);font-weight:600;margin-top:-4px}
+.sup-hub-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .sup-saved{font-size:11.5px;font-weight:700;color:var(--muted,#94a3b8)}
 .sup-saved.ok{color:#15803d}
 /* cards */
@@ -4493,6 +4675,7 @@ const h3Portal = node => {
   return node;
 };
 const H3_STATION = 'Nurse Station';
+const h3Requested = row => /^yes/i.test(String((row || {})['Discharge Request'] || ''));
 const H3_SITE = {
   pc: 'the hospital PC',
   cloud: 'the live site'
@@ -4907,6 +5090,7 @@ function H3Patients({
   const [error, setError] = useState('');
   const [tab, setTab] = useState('patients');
   const [station, setStation] = useState(null);
+  const [onlyRequested, setOnlyRequested] = useState(false);
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(null);
   const [settings, setSettings] = useState(false);
@@ -4971,13 +5155,13 @@ function H3Patients({
   const importOld = async () => {
     setBusy(true);
     try {
-      const r = await h3Api('/api/h360/sheets/import-local', {
+      const r = await h3Api('/api/h360/sheets/convert', {
         method: 'POST'
       });
-      h3Toast(r.copied + ' report(s) brought in.');
+      h3Toast(r.converted + ' report(s) brought in as drafts.');
       await loadStatus();
       setRoute({
-        view: 'supSheet'
+        view: 'supHistory'
       });
     } catch (e) {
       setError(e.message);
@@ -4987,8 +5171,9 @@ function H3Patients({
   const rows = useMemo(() => {
     if (!snapshot) return [];
     const q = query.trim().toLowerCase();
-    return snapshot.rows.filter(row => (station === null || row[H3_STATION] === station) && (!q || snapshot.columns.some(name => String(row[name] || '').toLowerCase().includes(q))));
-  }, [snapshot, station, query]);
+    return snapshot.rows.filter(row => (station === null || row[H3_STATION] === station) && (!onlyRequested || h3Requested(row)) && (!q || snapshot.columns.some(name => String(row[name] || '').toLowerCase().includes(q))));
+  }, [snapshot, station, query, onlyRequested]);
+  const requestedCount = useMemo(() => snapshot ? snapshot.rows.filter(h3Requested).length : 0, [snapshot]);
   const regCols = useMemo(() => {
     if (!admissions || !admissions.rows.length) return [];
     const raw = admissions.rows.some(r => r.raw);
@@ -5088,9 +5273,19 @@ function H3Patients({
   }, new Date(line.at).toLocaleTimeString(), "  ", line.message)))), snapshot && React.createElement("div", {
     className: "h3-tiles"
   }, React.createElement("button", {
-    className: 'h3-tile' + (station === null ? ' on' : ''),
-    onClick: () => setStation(null)
-  }, React.createElement("b", null, snapshot.rows.length), React.createElement("span", null, "All stations")), snapshot.stations.map(item => React.createElement("button", {
+    className: 'h3-tile' + (station === null && !onlyRequested ? ' on' : ''),
+    onClick: () => {
+      setStation(null);
+      setOnlyRequested(false);
+    }
+  }, React.createElement("b", null, snapshot.rows.length), React.createElement("span", null, "All stations")), requestedCount > 0 && React.createElement("button", {
+    className: 'h3-tile req' + (onlyRequested ? ' on' : ''),
+    title: "Patients whose discharge has been requested in H360 (shown in pink there). A report imports them into Discharged.",
+    onClick: () => {
+      setOnlyRequested(v => !v);
+      setTab('patients');
+    }
+  }, React.createElement("b", null, requestedCount), React.createElement("span", null, "Discharge requested")), snapshot.stations.map(item => React.createElement("button", {
     key: item.station,
     className: 'h3-tile' + (station === item.station ? ' on' : ''),
     onClick: () => {
@@ -5118,14 +5313,7 @@ function H3Patients({
     style: {
       flex: 1
     }
-  }, tab === 'patients' && snapshot ? 'Showing ' + rows.length + ' of ' + snapshot.rows.length + ' patients. Click a patient to open the records.' : ''), React.createElement(H3Btn, {
-    onClick: () => setRoute({
-      view: 'supSheet'
-    })
-  }, React.createElement(Ic, {
-    d: I.doc,
-    s: 15
-  }), "H360 Log Sheet")), tab === 'patients' && snapshot && React.createElement("div", {
+  }, tab === 'patients' && snapshot ? 'Showing ' + rows.length + ' of ' + snapshot.rows.length + ' patients. Click a patient to open the records.' : '')), tab === 'patients' && snapshot && React.createElement("div", {
     className: "sup-card"
   }, React.createElement("div", {
     className: "h3-tablewrap"
@@ -5135,7 +5323,7 @@ function H3Patients({
     key: name
   }, name)))), React.createElement("tbody", null, rows.map((row, i) => React.createElement("tr", {
     key: row._adm || i,
-    className: row._adm ? 'open' : '',
+    className: (row._adm ? 'open' : '') + (h3Requested(row) ? ' req' : ''),
     onClick: () => row._adm && setOpen(row._adm)
   }, React.createElement("td", null, i + 1), snapshot.columns.map(name => React.createElement("td", {
     key: name
@@ -5170,176 +5358,24 @@ function H3Patients({
     onClose: () => setOpen(null)
   }));
 }
-const h3Filled = row => Object.entries(row || {}).some(([key, value]) => key.charAt(0) !== '_' && String(value || '').trim());
-let h3RowSeq = 0;
-const h3Key = row => {
-  if (!row._k) Object.defineProperty(row, '_k', {
-    value: 'r' + ++h3RowSeq,
-    enumerable: false
-  });
-  return row._k;
+const H3_UPDATE_DEFAULTS = {
+  addNew: true,
+  updateDetails: true,
+  diagnosis: 'empty',
+  remarks: 'empty',
+  remarksFrom: 'nursing',
+  useComplaint: false,
+  sections: true,
+  register: true,
+  dischargeRequests: true
 };
-function H3Area({
-  value,
-  onChange,
-  readOnly,
-  rows,
-  placeholder
-}) {
-  const [text, setText] = useState(value || '');
-  const ref = useRef(null);
-  useEffect(() => {
-    setText(value || '');
-  }, [value]);
-  useEffect(() => {
-    const el = ref.current;
-    if (el) {
-      el.style.height = 'auto';
-      el.style.height = el.scrollHeight + 'px';
-    }
-  }, [text]);
-  return React.createElement("textarea", {
-    ref: ref,
-    rows: rows || 1,
-    value: text,
-    readOnly: !!readOnly,
-    placeholder: placeholder || '',
-    onChange: e => {
-      setText(e.target.value);
-      onChange(e.target.value);
-    }
-  });
-}
-const H3Section = React.memo(function H3Section({
-  section,
-  part,
-  schema,
-  count,
-  rev,
-  locked,
-  onTouched,
-  onStructure,
-  onMove
-}) {
-  const fixed = !!section.fixedRows;
-  const printed = (index, key) => (section.readOnly || []).indexOf(key) >= 0 && !!((section.defaults || [])[index] || {})[key];
-  const canEditRows = !fixed && !section.single && !locked;
-  if (section.single && !part.rows.length) part.rows.push({});
-  const pieces = section.title.split('{n}');
-  const total = (section.columns || []).reduce((n, column) => n + (column.width || column.valueWidth), 0);
-  const shared = 100 - (section.serial ? 3 : 0) - (canEditRows ? 9 : 0);
-  const swap = (a, b) => {
-    const t = part.rows[a];
-    part.rows[a] = part.rows[b];
-    part.rows[b] = t;
-    onStructure();
-  };
-  return React.createElement("div", {
-    className: "h3-section",
-    id: 'h3-section-' + section.id
-  }, React.createElement("h3", null, React.createElement("span", null, pieces[0], pieces.length > 1 ? React.createElement("b", null, count) : null, pieces[1] || '', section.inGeneral ? React.createElement("small", null, " (inside General Information on the sheet)") : null), section.columns && canEditRows && React.createElement(H3Btn, {
-    sm: true,
-    onClick: () => {
-      part.rows.push({});
-      onStructure();
-    }
-  }, "+ Add row")), section.columns && (part.rows.length || section.single ? React.createElement("div", {
-    className: "h3-gridwrap"
-  }, React.createElement("table", {
-    className: "h3-grid"
-  }, React.createElement("thead", null, React.createElement("tr", null, section.serial && React.createElement("th", {
-    className: "sn"
-  }, section.serial.label || '#'), section.columns.map(column => React.createElement("th", {
-    key: column.key,
-    style: {
-      width: shared * (column.width || column.valueWidth) / total + '%'
-    }
-  }, column.label)), canEditRows && React.createElement("th", {
-    className: "tools"
-  }))), React.createElement("tbody", null, part.rows.map((row, index) => React.createElement("tr", {
-    key: h3Key(row)
-  }, section.serial && React.createElement("td", {
-    className: "sn"
-  }, h3Pad(index + 1)), section.columns.map(column => React.createElement("td", {
-    key: column.key
-  }, React.createElement(H3Area, {
-    value: row[column.key],
-    readOnly: locked || fixed && (printed(index, column.key) || column.key === 'sub' && !row.sub),
-    onChange: v => {
-      row[column.key] = v;
-      onTouched();
-    }
-  }), column.key === 'remarks' && row._note && !row.remarks && !locked && React.createElement("div", {
-    className: "h3-hint"
-  }, React.createElement("button", {
-    type: "button",
-    title: row._note,
-    onClick: () => {
-      row.remarks = row._note;
-      onStructure();
-    }
-  }, "Use latest nursing note")))), canEditRows && React.createElement("td", {
-    className: "tools"
-  }, React.createElement("button", {
-    type: "button",
-    title: "Move up",
-    disabled: index === 0,
-    onClick: () => swap(index, index - 1)
-  }, "\u2191"), React.createElement("button", {
-    type: "button",
-    title: "Move down",
-    disabled: index === part.rows.length - 1,
-    onClick: () => swap(index, index + 1)
-  }, "\u2193"), React.createElement("button", {
-    type: "button",
-    title: "Remove this row",
-    onClick: () => {
-      part.rows.splice(index, 1);
-      onStructure();
-    }
-  }, "\u2715"), section.patients && React.createElement("select", {
-    value: "",
-    onChange: e => {
-      if (e.target.value) onMove(section.id, index, e.target.value);
-    }
-  }, React.createElement("option", {
-    value: ""
-  }, "Move to\u2026"), schema.patientSections.filter(id => id !== section.id).map(id => React.createElement("option", {
-    key: id,
-    value: id
-  }, schema.sections.find(s => s.id === id).title.split(/[:{]/)[0].trim()))))))))) : React.createElement("div", {
-    className: "h3-empty"
-  }, "No rows.", canEditRows ? ' Click "+ Add row" to add one.' : '')), section.fields && React.createElement("div", {
-    className: "h3-fields"
-  }, section.fields.map(field => React.createElement("div", {
-    className: "sup-fld",
-    key: field.key
-  }, React.createElement("label", null, field.label), field.long ? React.createElement(H3Area, {
-    rows: 3,
-    value: part.fields[field.key],
-    readOnly: locked,
-    placeholder: field.placeholder,
-    onChange: v => {
-      part.fields[field.key] = v;
-      onTouched();
-    }
-  }) : React.createElement("input", {
-    defaultValue: part.fields[field.key] || '',
-    key: rev,
-    readOnly: locked,
-    placeholder: field.placeholder || '',
-    onChange: e => {
-      part.fields[field.key] = e.target.value;
-      onTouched();
-    }
-  })))));
-});
 const H3_OPTIONS_KEY = 'unico_h360_update_options_v1';
-function H3UpdatePanel({
-  schema,
+function SupH360Update({
+  hasPatients,
+  busy,
   onRun,
   onClose,
-  busy
+  setRoute
 }) {
   const [o, setO] = useState(() => {
     let saved = {};
@@ -5348,8 +5384,19 @@ function H3UpdatePanel({
     } catch (e) {
       saved = {};
     }
-    return Object.assign({}, schema.updateDefaults, saved);
+    return Object.assign({}, H3_UPDATE_DEFAULTS, saved);
   });
+  const [status, setStatus] = useState(null);
+  const [more, setMore] = useState(false);
+  useEffect(() => {
+    let live = true;
+    h3Api('/api/h360/status').then(s => {
+      if (live) setStatus(s);
+    }).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   const set = (key, value) => setO(prev => Object.assign({}, prev, {
     [key]: value
   }));
@@ -5368,11 +5415,45 @@ function H3UpdatePanel({
     } catch (e) {}
     onRun(o);
   };
+  const last = status && status.lastRun;
   return React.createElement("div", {
     className: "sup-card h3-options"
   }, React.createElement("div", {
     className: "sup-card-b"
-  }, React.createElement("b", null, "Update this report from the latest H360 collection"), check('addNew', 'Add newly admitted patients'), check('updateDetails', 'Update bed, age and consultant of patients already in the report'), check('register', 'Use the IPD Admission list: move patients it shows as discharged or LAMA to those lists, and add admissions that are on no station list'), React.createElement("div", {
+  }, React.createElement("div", {
+    className: "h3-sethead"
+  }, React.createElement("b", null, hasPatients ? 'Update this report from H360' : 'Import patients from H360'), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement(H3Btn, {
+    sm: true,
+    onClick: onClose
+  }, "Close")), React.createElement("div", {
+    className: 'sup-alert ' + (last ? 'info' : 'warn'),
+    style: {
+      marginBottom: 0
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, !status ? 'Checking the H360 collection…' : last ? 'H360 collection: ' + last.total + ' in-patients, collected ' + h3When(last.collectedAt) + '.' : 'Nothing has been collected from H360 yet.'), React.createElement(H3Btn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, last ? 'Collect again' : 'Collect patients')), React.createElement("div", {
+    className: "h3-muted"
+  }, "New admissions, critical-area and cabin patients go to their lists with bed, age, consultant, diagnosis and remarks. A patient with a discharge request in H360 goes to Discharged; LAMA and completed discharges follow the IPD Admission list. Surgery, procedures, pressure sore, ventilator and the counts are filled where H360 has them. Nothing you typed is overwritten unless you choose so below."), React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: run,
+    disabled: busy || !last
+  }, busy ? 'Importing…' : hasPatients ? 'Update now' : 'Import now'), React.createElement(H3Btn, {
+    onClick: () => setMore(v => !v)
+  }, more ? 'Hide options' : 'Options')), more && React.createElement(React.Fragment, null, check('addNew', 'Add newly admitted patients'), check('updateDetails', 'Update bed, age and consultant of patients already in the report'), check('dischargeRequests', 'Put patients with a discharge request in H360 (the pink rows) in Discharged'), check('register', 'Use the IPD Admission list: move patients it shows as discharged or LAMA to those lists, and add admissions that are on no station list'), React.createElement("div", {
     className: "sup-fld"
   }, React.createElement("label", null, "Diagnosis"), React.createElement("select", {
     value: o.diagnosis,
@@ -5407,438 +5488,97 @@ function H3UpdatePanel({
     value: "both"
   }, "Both: doctor progress note, then nursing note"), React.createElement("option", {
     value: "handover"
-  }, "The doctors' handover: clinical summary and plan"))), check('sections', 'Fill the other sections H360 can answer: Surgery Details, Interventional Procedure, Pressure Sore, Ventilator Status and the counts in General Information'), React.createElement("div", {
-    className: "sup-toolbar"
-  }, React.createElement(H3Btn, {
-    kind: "pri",
-    onClick: run,
-    disabled: busy
-  }, busy ? 'Updating…' : 'Update now'), React.createElement(H3Btn, {
-    onClick: onClose
-  }, "Close"))));
+  }, "The doctors' handover: clinical summary and plan"))), check('sections', 'Fill the other sections H360 can answer: Surgery Details, Interventional Procedure, Pressure Sore, Ventilator Status and the counts in General Information'))));
 }
-function H3SheetEditor({
-  id,
-  schema,
-  onBack
+function SupH360Convert({
+  onDone
 }) {
-  const [report, setReport] = useState(null);
-  const [error, setError] = useState('');
-  const [saveState, setSaveState] = useState('');
-  const [notes, setNotes] = useState([]);
-  const [panel, setPanel] = useState(false);
+  const [status, setStatus] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [rev, setRev] = useState(0);
-  const [, setTick] = useState(0);
-  const live = useRef({
-    report: null,
-    timer: null,
-    saving: Promise.resolve(),
-    tickTimer: null,
-    dead: false
-  });
-  const locked = !h3Can('edit');
-  const save = useCallback(() => {
-    const s = live.current;
-    clearTimeout(s.timer);
-    s.timer = null;
-    if (!s.report || locked) return s.saving;
-    s.saving = s.saving.then(() => {
-      const r = s.report;
-      return h3Api('/api/h360/sheets/' + r.id, {
-        method: 'PUT',
-        body: {
-          title: r.title,
-          date: r.date,
-          shift: r.shift,
-          data: r.data,
-          preparedBy: r.preparedBy,
-          baseUpdatedAt: r.updatedAt
-        }
-      });
-    }).then(saved => {
-      if (s.report) s.report.updatedAt = saved.updatedAt;
-      if (!s.dead) setSaveState('Saved ' + new Date().toLocaleTimeString());
-    }).catch(e => {
-      if (s.dead) return;
-      setSaveState('Not saved');
-      setError(e.status === 409 ? e.message : 'Could not save: ' + e.message);
-    });
-    return s.saving;
-  }, [locked]);
-  const flush = useCallback(() => live.current.timer ? save() : live.current.saving, [save]);
-  const touched = useCallback(() => {
-    const s = live.current;
-    if (locked) return;
-    setSaveState('Saving…');
-    clearTimeout(s.timer);
-    s.timer = setTimeout(save, 700);
-    clearTimeout(s.tickTimer);
-    s.tickTimer = setTimeout(() => setTick(n => n + 1), 350);
-  }, [save, locked]);
-  const structure = useCallback(() => {
-    touched();
-    setRev(n => n + 1);
-  }, [touched]);
-  const move = useCallback((fromId, index, toId) => {
-    const r = live.current.report;
-    const row = r.data[fromId].rows.splice(index, 1)[0];
-    r.data[toId].rows.push(row);
-    structure();
-  }, [structure]);
-  const show = r => {
-    live.current.report = r;
-    setReport(r);
-    setRev(n => n + 1);
-  };
+  const load = () => h3Api('/api/h360/status').then(setStatus).catch(() => {});
   useEffect(() => {
-    const s = live.current;
-    s.dead = false;
-    h3Api('/api/h360/sheets/' + id).then(show).catch(e => setError(e.message));
-    const leaving = event => {
-      if (s.timer) {
-        save();
-        event.preventDefault();
-      }
-    };
-    window.addEventListener('beforeunload', leaving);
-    return () => {
-      window.removeEventListener('beforeunload', leaving);
-      if (s.timer) save();
-      s.dead = true;
-      clearTimeout(s.tickTimer);
-    };
-  }, [id]);
-  if (!report) return React.createElement("div", {
-    className: "sup-wrap"
-  }, error ? React.createElement("div", {
-    className: "sup-alert critical"
-  }, error) : React.createElement("div", {
-    className: "h3-muted"
-  }, "Loading\u2026"), React.createElement("div", null, React.createElement(H3Btn, {
-    onClick: onBack
-  }, "All reports")));
-  const countOf = section => {
-    if (section.count !== 'rows') return '';
-    const n = report.data[section.id].rows.filter(h3Filled).length;
-    return n ? h3Pad(n) : '0';
-  };
-  const meta = (key, value) => {
-    report[key] = value;
-    touched();
-  };
-  const update = async options => {
+    load();
+  }, []);
+  const waiting = status ? (status.sheetsWaiting || 0) + (status.legacyReports || 0) : 0;
+  if (!waiting || !h3Can('add')) return null;
+  const run = async () => {
     setBusy(true);
-    setError('');
     try {
-      await flush();
-      const result = await h3Api('/api/h360/sheets/' + report.id + '/refresh', {
-        method: 'POST',
-        body: options
+      const r = await h3Api('/api/h360/sheets/convert', {
+        method: 'POST'
       });
-      show(result.report);
-      setPanel(false);
-      const out = [];
-      if (options.addNew) out.push(result.added.length ? 'Added ' + result.added.length + ' new patient(s): ' + result.added.join(', ') + '.' : 'No new patients since this report was made.');
-      out.push('Filled in: diagnosis for ' + result.changed.diagnosis + ' patient(s), remarks for ' + result.changed.remarks + ' patient(s); bed, age or consultant updated for ' + result.changed.details + '; ' + result.changed.sections + ' row(s) or number(s) added to the other sections.');
-      if ((result.moved || []).length) out.push('Moved by the IPD Admission list: ' + result.moved.join(', ') + '.');
-      if ((result.died || []).length) out.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + result.died.join(', ') + '.');
-      if (result.gone.length) out.push('No longer on the H360 lists (move them to Discharged or LAMA if they left): ' + result.gone.join(', ') + '.');
-      setNotes(out);
-      setSaveState('H360 data from ' + h3When(result.report.sourceCollectedAt));
-      try {
-        window.scrollTo(0, 0);
-      } catch (e) {}
+      h3Toast(r.converted + ' log sheet(s) are now draft reports.');
+      await load();
+      if (onDone) onDone();
     } catch (e) {
-      setError(e.message);
+      h3Toast(e.message, 'error');
     }
     setBusy(false);
   };
-  const remove = async () => {
-    if (!confirm('Delete the ' + report.shift + ' report of ' + h3ShowDate(report.date) + '? This cannot be undone.')) return;
-    const s = live.current;
-    clearTimeout(s.timer);
-    s.timer = null;
-    try {
-      await s.saving;
-      await h3Api('/api/h360/sheets/' + report.id, {
-        method: 'DELETE'
-      });
-      s.report = null;
-      h3Toast('Report deleted.');
-      onBack();
-    } catch (e) {
-      setError(e.message);
-    }
-  };
-  const goto = sectionId => {
-    const el = document.getElementById('h3-section-' + sectionId);
-    if (el && el.scrollIntoView) el.scrollIntoView({
-      behavior: 'smooth',
-      block: 'start'
-    });
-  };
   return React.createElement("div", {
-    className: "sup-wrap"
-  }, React.createElement(H3Hero, {
-    title: report.title + ' - ' + h3ShowDate(report.date),
-    sub: saveState || (report.sourceCollectedAt ? 'H360 data from ' + h3When(report.sourceCollectedAt) : 'No H360 data collected yet')
-  }, !locked && React.createElement(H3Btn, {
-    onClick: () => setPanel(v => !v),
-    title: "Choose what to bring in from the latest H360 collection"
-  }, "Update from H360 \u25BE"), React.createElement(H3Btn, {
-    onClick: async () => {
-      await flush();
-      location.href = '/api/h360/sheets/' + report.id + '/docx';
-    }
-  }, React.createElement(Ic, {
-    d: I.download,
-    s: 15,
-    c: "#fff"
-  }), "Word"), React.createElement(H3Btn, {
-    onClick: async () => {
-      await flush();
-      window.open('/api/h360/sheets/' + report.id + '/print', '_blank');
-    }
-  }, "Print / PDF"), React.createElement(H3Btn, {
-    kind: "pri",
-    onClick: async () => {
-      await flush();
-      onBack();
-    }
-  }, "All reports")), error && React.createElement("div", {
-    className: "sup-alert critical"
+    className: "sup-alert info"
   }, React.createElement("span", {
     style: {
       flex: 1
     }
-  }, error), React.createElement(H3Btn, {
+  }, waiting, " H360 log sheet(s) were written before the log sheet became part of the report. Bring them in as draft reports to keep working on them here."), React.createElement(H3Btn, {
     sm: true,
-    onClick: () => {
-      setError('');
-      h3Api('/api/h360/sheets/' + id).then(show).catch(e => setError(e.message));
-    }
-  }, "Reload")), locked && React.createElement("div", {
-    className: "sup-alert info"
-  }, "Your Supervisor Reports access is view-only, so this report cannot be changed."), notes.map((text, i) => React.createElement("div", {
-    key: i,
-    className: "sup-alert warn"
-  }, text)), panel && React.createElement(H3UpdatePanel, {
-    schema: schema,
-    busy: busy,
-    onRun: update,
-    onClose: () => setPanel(false)
-  }), React.createElement("div", {
-    className: "sup-card"
-  }, React.createElement("div", {
-    className: "sup-card-b"
-  }, React.createElement("div", {
-    className: "h3-meta",
-    key: 'm' + rev
-  }, React.createElement("div", {
-    className: "sup-fld",
-    style: {
-      flex: 2,
-      minWidth: 240
-    }
-  }, React.createElement("label", null, "Title"), React.createElement("input", {
-    defaultValue: report.title,
-    readOnly: locked,
-    onChange: e => meta('title', e.target.value)
-  })), React.createElement("div", {
-    className: "sup-fld"
-  }, React.createElement("label", null, "Date"), React.createElement("input", {
-    type: "date",
-    defaultValue: report.date,
-    readOnly: locked,
-    onChange: e => {
-      if (e.target.value) meta('date', e.target.value);
-    }
-  })), React.createElement("div", {
-    className: "sup-fld"
-  }, React.createElement("label", null, "Shift"), React.createElement("select", {
-    defaultValue: report.shift,
-    disabled: locked,
-    onChange: e => meta('shift', e.target.value)
-  }, schema.shifts.map(s => React.createElement("option", {
-    key: s,
-    value: s
-  }, s)))), schema.signature.map(item => React.createElement("div", {
-    className: "sup-fld",
-    key: item.key,
-    style: {
-      flex: 1,
-      minWidth: 180
-    }
-  }, React.createElement("label", null, "Box beside the logo: ", item.label), React.createElement("input", {
-    defaultValue: (report.preparedBy || {})[item.key] || '',
-    placeholder: item.fallback || '',
-    readOnly: locked,
-    onChange: e => {
-      report.preparedBy = report.preparedBy || {};
-      report.preparedBy[item.key] = e.target.value;
-      touched();
-    }
-  }))), h3Can('delete') && React.createElement(H3Btn, {
-    kind: "dgr",
-    onClick: remove
-  }, "Delete report")))), React.createElement("div", {
-    className: "h3-muted"
-  }, "Tip: type ", React.createElement("b", null, "**text**"), " to make it bold and ", React.createElement("b", null, "==text=="), " to highlight it in yellow. Everything is saved automatically."), React.createElement("nav", {
-    className: "h3-nav"
-  }, schema.sections.map(section => React.createElement("button", {
-    key: section.id,
-    type: "button",
-    onClick: () => goto(section.id)
-  }, section.title.split(/[:{]/)[0].replace(/[-\s]+$/, ''), " ", section.count ? React.createElement("b", null, countOf(section)) : null))), schema.sections.map(section => React.createElement(H3Section, {
-    key: section.id,
-    section: section,
-    part: report.data[section.id],
-    schema: schema,
-    count: countOf(section),
-    rev: rev,
-    locked: locked,
-    onTouched: touched,
-    onStructure: structure,
-    onMove: move
-  })));
+    kind: "pri",
+    onClick: run,
+    disabled: busy
+  }, busy ? 'Bringing in…' : 'Bring them in'));
 }
-function H3Sheets({
-  id,
+function SupH360Card({
   setRoute
 }) {
-  const [schema, setSchema] = useState(null);
-  const [list, setList] = useState(null);
-  const [error, setError] = useState('');
-  const [date, setDate] = useState(h3Today());
-  const [shift, setShift] = useState(h3Shift());
-  const [busy, setBusy] = useState(false);
-  const load = () => h3Api('/api/h360/sheets').then(setList).catch(e => setError(e.message));
+  const [status, setStatus] = useState(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
-    h3Api('/api/h360/schema').then(setSchema).catch(e => setError(e.message));
+    let live = true;
+    h3Api('/api/h360/status').then(s => {
+      if (live) setStatus(s);
+    }).catch(() => {
+      if (live) setFailed(true);
+    });
+    return () => {
+      live = false;
+    };
   }, []);
-  useEffect(() => {
-    if (!id) load();
-  }, [id]);
-  const create = async event => {
-    event.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const created = await h3Api('/api/h360/sheets', {
-        method: 'POST',
-        body: {
-          date,
-          shift
-        }
-      });
-      setRoute({
-        view: 'supSheet',
-        id: created.id
-      });
-    } catch (e) {
-      setError(e.message);
-    }
-    setBusy(false);
-  };
-  if (id && schema) return React.createElement(H3SheetEditor, {
-    key: id,
-    id: id,
-    schema: schema,
-    onBack: () => setRoute({
-      view: 'supSheet'
-    })
-  });
-  const stop = event => event.stopPropagation();
+  const run = status && status.lastRun;
+  const line = failed ? 'H360 status is not available right now' : !status ? 'Checking…' : status.running ? 'A collection is running now' : run ? run.total + ' in-patients · collected ' + h3When(run.collectedAt) + (run.site ? ' from ' + (H3_SITE[run.site] || run.site) : '') : status.hasLogin ? 'Nothing collected yet' : 'The H360 login has not been entered yet';
   return React.createElement("div", {
-    className: "sup-wrap"
-  }, React.createElement(H3Hero, {
-    title: "H360 Log Sheet",
-    sub: "The supervisor log sheet, filled in from H360 and from the previous report"
+    className: "sup-hubcard"
+  }, React.createElement("div", {
+    className: "sup-hub-t"
+  }, React.createElement(Ic, {
+    d: I.pulse || I.doc,
+    s: 16
+  }), "H360"), React.createElement("div", {
+    className: "sup-hub-s"
+  }, line), React.createElement("div", {
+    className: "h3-muted"
+  }, "Patients read from H360. A new report imports them with one click."), React.createElement("div", {
+    className: "sup-hub-row"
   }, React.createElement(H3Btn, {
+    sm: true,
+    kind: "pri",
     onClick: () => setRoute({
       view: 'supH360'
     })
-  }, React.createElement(Ic, {
-    d: I.pulse || I.doc,
-    s: 15,
-    c: "#fff"
-  }), "H360 Patients")), error && React.createElement("div", {
-    className: "sup-alert critical"
-  }, error), h3Can('add') && React.createElement("div", {
-    className: "sup-card"
-  }, React.createElement("div", {
-    className: "sup-card-b"
-  }, React.createElement("form", {
-    className: "h3-meta",
-    onSubmit: create
-  }, React.createElement("div", {
-    className: "sup-fld"
-  }, React.createElement("label", null, "Date"), React.createElement("input", {
-    type: "date",
-    value: date,
-    onChange: e => setDate(e.target.value),
-    required: true
-  })), React.createElement("div", {
-    className: "sup-fld"
-  }, React.createElement("label", null, "Shift"), React.createElement("select", {
-    value: shift,
-    onChange: e => setShift(e.target.value)
-  }, (schema && schema.shifts || ['Morning', 'Evening', 'Night']).map(s => React.createElement("option", {
-    key: s,
-    value: s
-  }, s)))), React.createElement(H3Btn, {
-    kind: "pri",
-    type: "submit",
-    disabled: busy
-  }, busy ? 'Creating…' : 'Create report'), React.createElement("span", {
-    className: "h3-muted",
-    style: {
-      flex: 1,
-      minWidth: 220
-    }
-  }, "A new report is filled in from the latest H360 collection and keeps the diagnosis and remarks you wrote in the previous report.")))), React.createElement("div", {
-    className: "sup-card"
-  }, React.createElement("div", {
-    className: "h3-tablewrap"
-  }, React.createElement("table", {
-    className: "h3-table"
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Shift"), React.createElement("th", null, "Title"), React.createElement("th", null, "New"), React.createElement("th", null, "Critical"), React.createElement("th", null, "Ward"), React.createElement("th", null, "LAMA"), React.createElement("th", null, "Discharged"), React.createElement("th", null, "Prepared by"), React.createElement("th", null, "Last saved"), React.createElement("th", null))), React.createElement("tbody", null, (list || []).map(item => React.createElement("tr", {
-    key: item.id,
-    className: "open",
+  }, run || status && status.running ? 'H360 Patients' : 'Collect patients'), run && h3Can('add') && React.createElement(H3Btn, {
+    sm: true,
     onClick: () => setRoute({
-      view: 'supSheet',
-      id: item.id
+      view: 'supNew',
+      h360: true
     })
-  }, React.createElement("td", null, h3ShowDate(item.date)), React.createElement("td", null, item.shift), React.createElement("td", null, item.title), React.createElement("td", null, item.counts.newAdmissions), React.createElement("td", null, item.counts.critical), React.createElement("td", null, item.counts.ward), React.createElement("td", null, item.counts.lama), React.createElement("td", null, item.counts.discharged), React.createElement("td", null, item.preparedBy), React.createElement("td", null, h3When(item.updatedAt)), React.createElement("td", {
-    className: "tools",
-    onClick: stop
-  }, React.createElement("a", {
-    className: "sup-btn sm",
-    href: '/api/h360/sheets/' + item.id + '/docx'
-  }, "Word"), " ", React.createElement("a", {
-    className: "sup-btn sm",
-    href: '/api/h360/sheets/' + item.id + '/print',
-    target: "_blank",
-    rel: "noopener"
-  }, "Print"))))))), list && !list.length && React.createElement("div", {
-    className: "sup-card-b h3-muted",
-    style: {
-      textAlign: 'center'
-    }
-  }, "No reports yet. Choose a date and shift above and click Create report."), !list && !error && React.createElement("div", {
-    className: "sup-card-b h3-muted"
-  }, "Loading\u2026")));
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "New report from H360")));
 }
 function SupH360View({
-  view,
-  id,
   setRoute
 }) {
-  if (view === 'supSheet') return React.createElement(H3Sheets, {
-    id: id,
-    setRoute: setRoute
-  });
   return React.createElement(H3Patients, {
     setRoute: setRoute
   });
@@ -5871,6 +5611,11 @@ a.sup-btn{text-decoration:none}
 .h3-tiles{display:flex;gap:10px;flex-wrap:wrap}
 .h3-tile{background:var(--panel,#fff);border:1px solid var(--line,#e5e7eb);border-radius:12px;padding:10px 14px;min-width:118px;cursor:pointer;text-align:left;font:inherit;color:var(--ink,#111827)}
 .h3-tile.on{border-color:#2563eb;box-shadow:inset 0 0 0 1px #2563eb}
+.h3-tile.req{background:#fff1f2;border-color:#fecdd3}
+.h3-tile.req b{color:#be123c}
+.h3-tile.req.on{border-color:#e11d48;box-shadow:inset 0 0 0 1px #e11d48}
+.h3-table tr.req td{background:#ffe4e6}
+.h3-table tbody tr.req:hover td{background:#fecdd3}
 .h3-tile b{display:block;font-size:22px;color:#1d4ed8;line-height:1.15}
 .h3-tile span{color:var(--muted,#64748b);font-size:11.5px}
 .h3-search{font:inherit;padding:8px 11px;border:1px solid var(--line,#d1d5db);border-radius:9px;min-width:260px;background:#fff}
@@ -5907,38 +5652,10 @@ a.sup-btn{text-decoration:none}
 .h3-rtbl{border-collapse:collapse;width:100%;font-size:12.5px}
 .h3-rtbl th,.h3-rtbl td{padding:5px 8px;border-bottom:1px solid var(--line,#eef2f7);text-align:left;min-width:70px;vertical-align:top}
 .h3-rtbl th{background:#f1f5f9;position:sticky;top:0}
-.h3-meta{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
 .h3-options .sup-card-b{display:grid;gap:10px;max-width:780px}
 .h3-options select{max-width:540px}
 .h3-check{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;line-height:1.45;cursor:pointer}
 .h3-check input{margin-top:2px}
-.h3-nav{position:sticky;top:0;z-index:5;display:flex;gap:6px;overflow-x:auto;padding:8px 0;background:var(--bg,#f4f7fb)}
-.h3-nav button{white-space:nowrap;font:inherit;font-size:11.5px;padding:5px 10px;border-radius:999px;background:#fff;border:1px solid var(--line,#e5e7eb);color:var(--ink,#111827);cursor:pointer}
-.h3-nav button:hover{border-color:#93c5fd}
-.h3-nav b{color:#1d4ed8}
-.h3-section{background:#fff;border:1px solid var(--line,#e5e7eb);border-radius:12px;overflow:hidden;scroll-margin-top:60px}
-.h3-section>h3{margin:0;padding:8px 14px;font-size:13.5px;background:#e9eef4;display:flex;align-items:center;gap:10px;color:#0f172a}
-.h3-section>h3 span{flex:1}
-.h3-section>h3 small{font-weight:400;color:var(--muted,#64748b)}
-.h3-gridwrap{overflow-x:auto}
-.h3-grid{table-layout:fixed;min-width:1400px;width:100%;border-collapse:collapse}
-.h3-grid th{font-size:11.5px;font-weight:700;padding:6px 4px;border:1px solid var(--line,#e5e7eb);background:#f7fafc}
-.h3-grid td{border:1px solid var(--line,#e5e7eb);padding:0;vertical-align:top}
-.h3-grid th.sn{width:3%}
-.h3-grid th.tools{width:9%}
-.h3-grid td.sn{text-align:center;padding-top:8px;color:var(--muted,#64748b);font-size:12px}
-.h3-grid td.tools{padding:4px;background:#fafcfd}
-.h3-grid td.tools button{padding:2px 7px;font-size:12px;border:1px solid var(--line,#e5e7eb);background:#fff;border-radius:6px;cursor:pointer;margin-right:3px}
-.h3-grid td.tools button:disabled{opacity:.45;cursor:default}
-.h3-grid td.tools select{padding:2px 4px;font-size:11.5px;width:100%;margin-top:4px}
-.h3-grid textarea,.h3-fields textarea{width:100%;border:0;border-radius:0;resize:none;overflow:hidden;min-height:34px;display:block;background:transparent;font:inherit;font-size:12.5px;line-height:1.35;padding:7px 8px;box-sizing:border-box;color:var(--ink,#111827)}
-.h3-grid textarea:focus{outline:2px solid #2563eb;outline-offset:-2px;background:#fff}
-.h3-grid textarea[readonly]{background:#f7fafc;color:var(--muted,#64748b)}
-.h3-hint{padding:3px 6px 5px}
-.h3-hint button{font-size:11px;padding:2px 7px;border:1px solid var(--line,#e5e7eb);border-radius:6px;background:#fff;color:var(--muted,#64748b);cursor:pointer}
-.h3-fields{padding:12px 14px;display:grid;gap:10px}
-.h3-fields textarea{border:1px solid var(--line,#d1d5db);border-radius:9px;min-height:70px}
-.h3-empty{padding:14px;color:var(--muted,#64748b);font-size:12.5px}
 `;
 (function injectH3Css() {
   try {
@@ -5950,6 +5667,9 @@ a.sup-btn{text-decoration:none}
   } catch (e) {}
 })();
 Object.assign(window, {
-  SupH360View
+  SupH360View,
+  SupH360Card,
+  SupH360Update,
+  SupH360Convert
 });
 })();

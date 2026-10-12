@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=25733426bc","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=2484d01352","supervisor":"/dist/supervisor.chunk.js?v=44940449ed","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=25733426bc","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=2484d01352","supervisor":"/dist/supervisor.chunk.js?v=abed1a968a","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -10393,6 +10393,13 @@ const UNICO_WS = [{
   }]
 }];
 const UNICO_VIEW_TABS = [{
+  mod: 'supervisor',
+  only: ['supHistory', 'supNew', 'supBoard', 'supReport', 'supSheet'],
+  parent: {
+    supSheet: 'supHistory'
+  },
+  tabs: [['supHistory', 'All Reports'], ['supNew', 'New Report'], ['supBoard', 'Patient Board'], ['supReport', 'Print & Export']]
+}, {
   mod: 'staff',
   only: ['traineeHome', 'trainees'],
   tabs: [['traineeHome', 'Trainee Dashboard'], ['trainees', 'Trainee Directory']]
@@ -10496,23 +10503,12 @@ function unicoWorkspaceSub(view) {
     label: 'Dashboard',
     view: 'supHome'
   }, {
-    label: 'Patient Board',
-    view: 'supBoard'
-  }, {
-    label: 'New Report',
-    view: 'supNew'
-  }, {
-    label: 'History',
-    view: 'supHistory'
-  }, {
-    label: 'Generate Report',
-    view: 'supReport'
+    label: 'Shift Reports',
+    view: 'supHistory',
+    match: ['supHistory', 'supNew', 'supBoard', 'supReport']
   }, {
     label: 'H360 Patients',
     view: 'supH360'
-  }, {
-    label: 'H360 Log Sheet',
-    view: 'supSheet'
   }];
   if (mod === 'staff' || mod === 'perf' || mod === 'attrition' || mod === 'roster') return [{
     label: 'Dashboard',
@@ -25600,10 +25596,10 @@ function App() {
       supHome: 'Dashboard',
       supBoard: 'Patient Board',
       supNew: 'New Report',
-      supHistory: 'History',
-      supReport: 'Generate Report',
+      supHistory: 'All Reports',
+      supReport: 'Print & Export',
       supH360: 'H360 Patients',
-      supSheet: 'H360 Log Sheet'
+      supSheet: 'All Reports'
     };
     crumbs = ['UNICO', 'Supervisor Reports', SV_TITLE[route.view] || 'Dashboard'];
     body = React.createElement(SupervisorView, {
@@ -25611,6 +25607,7 @@ function App() {
       id: route.id,
       shift: route.shift,
       openAdd: route.openAdd,
+      h360: route.h360,
       depts: depts,
       setRoute: setRoute
     });

@@ -29,6 +29,8 @@ const UPDATE_DEFAULTS = {
   sections: true,
   // The IPD Admission list: who was discharged, left against advice or died, and admissions not on a station list yet.
   register: true,
+  // A patient whose discharge has been requested in H360 (the pink rows) goes to Discharged.
+  dischargeRequests: true,
 };
 
 function updateOptions(sent = {}) {
@@ -42,6 +44,7 @@ function updateOptions(sent = {}) {
     useComplaint: Boolean(sent.useComplaint),
     sections: sent.sections === undefined ? UPDATE_DEFAULTS.sections : Boolean(sent.sections),
     register: sent.register === undefined ? UPDATE_DEFAULTS.register : Boolean(sent.register),
+    dischargeRequests: sent.dischargeRequests === undefined ? UPDATE_DEFAULTS.dischargeRequests : Boolean(sent.dischargeRequests),
   };
 }
 
@@ -313,6 +316,8 @@ function patientRow(patient, carried, picture, options) {
   };
   // Shown in the editor as a suggestion; never printed.
   if (suggestion && suggestion.nursing) row._note = suggestion.nursing;
+  // The station as H360 names it, for a report that keeps its department apart from the bed.
+  if (patient.station) row._station = text(patient.station);
   return row;
 }
 
@@ -479,7 +484,16 @@ function importSections(report, picture, options) {
   return written;
 }
 
-function listFor(patient, date, shift) {
+const dischargeRequested = (patient) => String((patient.admission || {}).dis_req_ind) === '1';
+
+// The row of a patient who is leaving: Discharged has no Remarks column.
+function leavingRow(row) {
+  const { remarks, _note, ...kept } = row;
+  return kept;
+}
+
+function listFor(patient, date, shift, options) {
+  if (options && options.dischargeRequests && dischargeRequested(patient)) return 'discharged';
   const admitted = text((patient.admission || {}).admission_date);
   const { from, to } = period(date, shift);
   if (admitted >= from && admitted <= to) return 'newAdmissions';
@@ -568,7 +582,11 @@ async function draft(store, { date, shift }) {
   const options = updateOptions();
 
   const data = blankData();
-  for (const patient of picture.patients) data[listFor(patient, date, shift)].rows.push(patientRow(patient, carried, picture, options));
+  for (const patient of picture.patients) {
+    const to = listFor(patient, date, shift, options);
+    const row = patientRow(patient, carried, picture, options);
+    data[to].rows.push(to === 'discharged' ? leavingRow(row) : row);
+  }
   for (const patient of unlistedAdmissions(picture, date, shift)) data.newAdmissions.rows.push(patientRow(patient, carried, picture, options));
   for (const leaver of leavers(picture, date, shift)) {
     // A death is counted in General Information; it is neither a discharge nor a LAMA.
@@ -675,23 +693,17 @@ async function remove(store, id) {
   if (!result.deletedCount) throw fail(404, 'Report not found.');
 }
 
-// Brings a report up to date with the latest collection, as far as the chosen
-// options allow. Patients who have left H360's lists are only reported back,
-// so they can be moved to Discharged or LAMA by hand.
-async function refresh(store, id, sent, by) {
-  const options = updateOptions(sent);
-  const db = store.db;
-  const report = await db.collection(SHEETS).findOne({ _id: objectId(id) });
-  if (!report) throw fail(404, 'Report not found.');
-  upgrade(report);
-  const { carried } = await carriedText(db, report.date, report._id);
-  const picture = await hospitalPicture(store, report.date, report.shift);
-  if (!picture.collectedAt) throw fail(409, 'Nothing has been collected from H360 yet. Collect the patients first.');
-
+// Brings a report (in the log sheet's shape) up to date with what H360 knows, as
+// far as the chosen options allow, and says what it did. Nothing is saved here.
+// Patients who have left H360's lists and are not accounted for are only
+// reported back, so they can be moved to Discharged or LAMA by hand.
+function applyPicture(report, picture, carried, options) {
   const known = new Map();
   for (const sectionId of PATIENT_SECTIONS) for (const row of report.data[sectionId].rows) if (row.uhid) known.set(row.uhid, row);
 
   const added = [];
+  // Moved to Discharged because H360 now shows a discharge request for them.
+  const requested = [];
   const changed = { diagnosis: 0, remarks: 0, details: 0, sections: 0 };
   const write = (row, key, value, mode) => {
     if (!value || mode === 'none' || value === row[key] || (mode === 'empty' && text(row[key]))) return;
@@ -703,15 +715,28 @@ async function refresh(store, id, sent, by) {
     const row = known.get(fresh.uhid);
     if (!row) {
       if (options.addNew) {
-        report.data[listFor(patient, report.date, report.shift)].rows.push(patientRow(patient, carried, picture, options));
+        const to = listFor(patient, report.date, report.shift, options);
+        const made = patientRow(patient, carried, picture, options);
+        report.data[to].rows.push(to === 'discharged' ? leavingRow(made) : made);
         added.push(fresh.name);
+        if (to === 'discharged') requested.push(fresh.name);
       }
       continue;
+    }
+    if (options.dischargeRequests && dischargeRequested(patient)) {
+      // Still in a bed, but on the way out: the row goes from its list to Discharged as it is.
+      const from = ACTIVE_LISTS.find((sectionId) => report.data[sectionId].rows.includes(row));
+      if (from) {
+        report.data[from].rows.splice(report.data[from].rows.indexOf(row), 1);
+        report.data.discharged.rows.push(row);
+        requested.push(fresh.name);
+      }
     }
     if (fresh._note) row._note = fresh._note;
     if (options.updateDetails) {
       const before = `${row.dept}|${row.age}|${row.consultant}`;
       for (const key of ['dept', 'age', 'consultant']) if (fresh[key]) row[key] = fresh[key];
+      if (fresh._station) row._station = fresh._station;
       if (before !== `${row.dept}|${row.age}|${row.consultant}`) changed.details++;
     }
     write(row, 'diagnosis', fresh.diagnosis, options.diagnosis);
@@ -761,13 +786,30 @@ async function refresh(store, id, sent, by) {
   report.data.census.rows = censusRows(picture.patients);
   report.data.census.fields.ipd = String(picture.patients.length);
   if (options.sections) changed.sections = importSections(report, picture, options);
+  return { added, gone, moved, died, requested, changed };
+}
+
+// Brings a report up to date with the latest collection, as far as the chosen
+// options allow. Patients who have left H360's lists are only reported back,
+// so they can be moved to Discharged or LAMA by hand.
+async function refresh(store, id, sent, by) {
+  const options = updateOptions(sent);
+  const db = store.db;
+  const report = await db.collection(SHEETS).findOne({ _id: objectId(id) });
+  if (!report) throw fail(404, 'Report not found.');
+  upgrade(report);
+  const { carried } = await carriedText(db, report.date, report._id);
+  const picture = await hospitalPicture(store, report.date, report.shift);
+  if (!picture.collectedAt) throw fail(409, 'Nothing has been collected from H360 yet. Collect the patients first.');
+
+  const { added, gone, moved, died, requested, changed } = applyPicture(report, picture, carried, options);
 
   const updatedAt = new Date();
   await db.collection(SHEETS).updateOne(
     { _id: report._id },
     { $set: { data: report.data, sourceCollectedAt: picture.collectedAt, updatedAt, updatedBy: by || '' } }
   );
-  return { report: clean({ ...report, sourceCollectedAt: picture.collectedAt, updatedAt }), added, gone, moved, died, changed };
+  return { report: clean({ ...report, sourceCollectedAt: picture.collectedAt, updatedAt }), added, gone, moved, died, requested, changed };
 }
 
 // The reports written with the stand-alone collector on this computer, copied
@@ -789,7 +831,21 @@ async function legacyWaiting(store, localDb) {
   return ids.length - (await store.db.collection(SHEETS).countDocuments({ _id: { $in: ids } }));
 }
 
+// The same update for a report that is kept somewhere else (the shift supervisor report,
+// see bridge.js): works on the copy it is given and hands it back, saving nothing.
+//   sheet    { date, shift, data } in the log sheet's shape
+//   carried  diagnosis and remarks typed in the previous report, by UHID
+async function fill(store, sheet, sent, carried) {
+  const options = updateOptions(sent);
+  checkDateAndShift(sheet.date, sheet.shift);
+  const picture = await hospitalPicture(store, sheet.date, sheet.shift);
+  if (!picture.collectedAt) throw fail(409, 'Nothing has been collected from H360 yet. Collect the patients first (H360 Patients).');
+  const report = upgrade({ date: sheet.date, shift: sheet.shift, data: { ...blankData(), ...(sheet.data || {}) } });
+  const result = applyPicture(report, picture, carried || new Map(), options);
+  return { data: report.data, sourceCollectedAt: picture.collectedAt, census: report.data.census.rows, ...result };
+}
+
 module.exports = {
-  draft, create, get, list, update, remove, refresh, importLegacy, legacyWaiting, suggestionsFrom, composeDiagnosis, hospitalPicture, leavers,
+  draft, create, get, list, update, remove, refresh, fill, importLegacy, legacyWaiting, suggestionsFrom, composeDiagnosis, hospitalPicture, leavers,
   UPDATE_DEFAULTS, SHEETS,
 };

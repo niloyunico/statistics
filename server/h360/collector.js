@@ -8,7 +8,7 @@ const register = require('./register');
 
 const STATION_COLUMN = 'Nurse Station';
 const COLUMNS = [
-  STATION_COLUMN, 'Bed No', 'Patient Name', 'UHID', 'IP No', 'IP Date', 'Age', 'Gender', 'Patient Type',
+  STATION_COLUMN, 'Bed No', 'Patient Name', 'UHID', 'IP No', 'IP Date', 'Discharge Request', 'Age', 'Gender', 'Patient Type',
   'Blood Group', 'Consultant', 'Department', 'Bed Category', 'Allergies Alert', 'Vulnerability Alert',
   'Clinical Alert', 'Contact No', 'Address', 'Accompanied By', 'Relation', 'Attendant Mobile', 'Records',
 ];
@@ -242,6 +242,8 @@ function toRow(patient) {
     UHID: text(a.patient_code),
     'IP No': text(a.admission_uid),
     'IP Date': displayDate(a.admission_date),
+    // The rows H360 shows in pink: a doctor has asked for this patient's discharge.
+    'Discharge Request': String(a.dis_req_ind) === '1' ? ['Yes', displayDate(a.dis_req_time)].filter(Boolean).join(' \u00b7 ') : 'No',
     Age: text(p.Age),
     Gender: text(p.Gender),
     'Patient Type': text(p['Patient Type']),

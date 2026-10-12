@@ -190,6 +190,7 @@ function createService(deps = {}) {
       cloudData: await settings.level(db),
       lastRun: null,
       lastPcRun: null,
+      sheetsWaiting: 0,
       localStore: null,
       legacyReports: 0,
     };
@@ -198,6 +199,8 @@ function createService(deps = {}) {
       const lastRun = await storeLib.latestRun(sharedStore);
       if (lastRun) value.lastRun = { collectedAt: lastRun.collectedAt, mode: lastRun.mode, total: lastRun.total, site: lastRun.site || '', level: lastRun.level || '', register: lastRun.register || null };
       // The newest collection that read the records (only the hospital PC does).
+      // Log sheets that have not been turned into supervisor reports yet.
+      value.sheetsWaiting = await db.collection(sheets.SHEETS).countDocuments({ convertedTo: { $exists: false } });
       const pcRun = await sharedStore.col('runs').find({ site: 'pc' }).sort({ collectedAt: -1 }).limit(1).next();
       value.lastPcRun = pcRun ? pcRun.collectedAt : null;
       if (site() === 'pc') {
@@ -327,7 +330,64 @@ function mount(app, opts = {}) {
     res.end();
   }));
 
-  /* ---- the H360 log sheets ---- */
+  /* ---- the shift supervisor report, filled in from H360 ---- */
+
+  // The report as it is on the screen comes in; the same report with what H360 knows worked
+  // in goes back. Nothing is saved here: the editor saves it the way it saves everything else.
+  app.post('/api/h360/fill', guard, json, route(async (req, res) => {
+    const bridge = require('./bridge');
+    const supervisor = require('../supervisor-reports');
+    const body = req.body || {};
+    const report = body.report || {};
+    const before = bridge.toSheet(report);
+    const previous = await supervisor.getPreviousReport(report.date, report.shift).catch(() => null);
+    const result = await sheets.fill(await service.shared(), bridge.toSheet(report), body.options || {}, bridge.carriedFrom(previous));
+    res.json({
+      report: bridge.fromSheet({ data: result.data }, before),
+      census: result.census, sourceCollectedAt: result.sourceCollectedAt,
+      added: result.added, gone: result.gone, moved: result.moved, died: result.died, requested: result.requested, changed: result.changed,
+      updateDefaults: sheets.UPDATE_DEFAULTS,
+    });
+  }));
+
+  // A saved supervisor report as the Word log sheet, and as its print page.
+  const asSheet = async (id) => {
+    const report = await require('../supervisor-reports').getReportById(String(id));
+    if (!report) throw fail(404, 'Report not found.');
+    return require('./bridge').toSheet(report);
+  };
+  app.get('/api/h360/report/:id/docx', guard, route(async (req, res) => {
+    const render = require('./render');
+    const sheet = await asSheet(req.params.id);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${render.fileName(sheet, 'docx')}"`);
+    res.end(await render.toDocx(sheet));
+  }));
+  app.get('/api/h360/report/:id/print', guard, route(async (req, res) => {
+    res.type('html').send(require('./render').toHtml(await asSheet(req.params.id)));
+  }));
+
+  // The log sheets written before the two reports became one (and, on the hospital PC, the
+  // ones of the old collector): each becomes a draft supervisor report, once.
+  app.post('/api/h360/sheets/convert', guard, route(async (req, res) => {
+    const bridge = require('./bridge');
+    const supervisor = require('../supervisor-reports');
+    const store = await service.shared();
+    const own = service.site() === 'pc' ? await service.localDb().catch(() => null) : null;
+    if (own) await sheets.importLegacy(store, own);
+    const waiting = await store.db.collection(sheets.SHEETS).find({ convertedTo: { $exists: false } }).sort({ date: 1, updatedAt: 1 }).toArray();
+    let made = 0;
+    for (const sheet of waiting) {
+      const fields = bridge.fromSheet({ ...sheet, data: sheet.data || {} }, null);
+      const saved = await supervisor.saveReport({ ...fields, supervisorName: fields.supervisorName || who(req), status: 'draft', createdBy: who(req) });
+      await store.db.collection(sheets.SHEETS).updateOne({ _id: sheet._id }, { $set: { convertedTo: saved.id, convertedAt: new Date() } });
+      made++;
+    }
+    service.forget();
+    res.json({ ok: true, converted: made });
+  }));
+
+  /* ---- the H360 log sheets (kept for the sheets already written; new work is done in the report above) ---- */
 
   app.get('/api/h360/schema', guard, (req, res) => {
     res.json({

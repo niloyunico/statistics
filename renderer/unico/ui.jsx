@@ -396,6 +396,10 @@ const UNICO_WS = [
    SEVERAL components: the roster's three tabs are RosterView, window.ManpowerOverview
    and window.RosterReviewFull, so no single component could host the strip. */
 const UNICO_VIEW_TABS = [
+  // Supervisor Reports: the screens of "Shift Reports" (see unicoWorkspaceSub).
+  { mod:'supervisor', only:['supHistory','supNew','supBoard','supReport','supSheet'], parent:{ supSheet:'supHistory' }, tabs:[
+    ['supHistory','All Reports'], ['supNew','New Report'], ['supBoard','Patient Board'], ['supReport','Print & Export'],
+  ]},
   { mod:'staff', only:['traineeHome','trainees'], tabs:[['traineeHome','Trainee Dashboard'],['trainees','Trainee Directory']] },
   { mod:'perf', hide:['perfForm','perfPrint'], parent:{ perfRisk:'perfAttrition' }, tabs:[
     ['perfHome','Overview'], ['perfAchievements','Achievements'], ['perfIncidents','Incidents'],
@@ -468,15 +472,16 @@ function unicoWorkspaceSub(view){
     { label:'Quality Data Entry',       view:'qualityDataEntry' },
     { label:'Action Plans',             view:'qualityCapa' },
   ];
+/* SUPERVISOR REPORTS — three places, not seven screens. The sidebar names where the work
+     is; the screens of each place are tabs on it (UNICO_VIEW_TABS), the way Staff Management
+     and the Duty Roster already work:
+       Dashboard      what happened, what is missing, where to go
+       Shift Reports  the report: the list, the editor (which imports from H360), the patient board, print
+       H360 Patients  what is read from H360: the collection and the patients of every nurse station */
   if(mod==='supervisor') return [
-    { label:'Dashboard',       view:'supHome' },
-    { label:'Patient Board',   view:'supBoard' },
-    { label:'New Report',      view:'supNew' },
-    { label:'History',         view:'supHistory' },
-    { label:'Generate Report', view:'supReport' },
-    // The H360 link: patients collected from H360, and the log sheet filled in from them.
-    { label:'H360 Patients',   view:'supH360' },
-    { label:'H360 Log Sheet',  view:'supSheet' },
+    { label:'Dashboard',     view:'supHome' },
+    { label:'Shift Reports', view:'supHistory', match:['supHistory','supNew','supBoard','supReport'] },
+    { label:'H360 Patients', view:'supH360' },
   ];
   /* STAFF MANAGEMENT — the roster and the appraisal work under one destination.
      There is no "Staff Directory" under Performance: there is ONE staff directory in

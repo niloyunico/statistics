@@ -137,18 +137,21 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     /* the log sheet */
     const sheet = await sheets.create(sharedStore, { date: TODAY, shift: 'Morning' }, 'tester');
     const names = (id) => sheet.data[id].rows.map((row) => row.name);
-    assert.deepStrictEqual(names('newAdmissions'), ['TEST ALPHA', 'TEST DELTA']);
+    assert.deepStrictEqual(names('newAdmissions'), ['TEST DELTA']);
     assert.deepStrictEqual(names('critical'), ['TEST BRAVO']);
     assert.deepStrictEqual(names('ward'), ['TEST CHARLIE']);
-    assert.deepStrictEqual(names('discharged'), ['TEST ECHO']);
-    assert.strictEqual(sheet.data.discharged.rows[0].billing, 'Cleared');
-    assert.strictEqual(sheet.data.newAdmissions.rows[0].dept, 'Level-10\n1018/B');
-    assert.strictEqual(sheet.data.newAdmissions.rows[0].diagnosis, 'Pneumonia\nDM');
+    // ALPHA has a discharge request in H360 (a pink row there): Discharged, not New Admission
+    assert.deepStrictEqual(names('discharged'), ['TEST ALPHA', 'TEST ECHO']);
+    assert.strictEqual(sheet.data.discharged.rows[1].billing, 'Cleared');
+    assert.strictEqual(sheet.data.discharged.rows[0].dept, 'Level-10\n1018/B');
+    assert.strictEqual(sheet.data.discharged.rows[0].diagnosis, 'Pneumonia\nDM');
+    assert.strictEqual(sheet.data.discharged.rows[0].remarks, undefined);
+    assert.ok(/^Yes/.test(first.rows[0]['Discharge Request']) && first.rows[1]['Discharge Request'] === 'No');
     assert.strictEqual(sheet.data.surgeries.rows[0].surgery, 'Appendectomy');
     assert.strictEqual(sheet.data.pressureSores.rows[0].name, 'TEST BRAVO');
     assert.strictEqual(sheet.data.general.rows.find((row) => row.item === 'Planned Discharges').value, '01');
     assert.strictEqual(sheet.data.census.fields.ipd, '3');
-    ok('a new log sheet is filled from the collection, with the IPD Admission list adding an unlisted admission and a discharge');
+    ok('a new log sheet is filled from the collection: a discharge request goes to Discharged, and the IPD Admission list adds an unlisted admission and a discharge');
 
     /* a list-only refresh from the live site */
     const gone = mock.state.patients.splice(2, 1)[0];
@@ -174,7 +177,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.strictEqual(result.report.data.ward.rows.length, 0);
     assert.strictEqual(result.report.data.lama.rows[0].diagnosis, 'Typed by the supervisor');
     assert.strictEqual(result.report.data.lama.rows[0].reason, 'LAMA');
-    assert.deepStrictEqual(result.report.data.discharged.rows.map((row) => row.name), ['TEST ECHO']);
+    assert.deepStrictEqual(result.report.data.discharged.rows.map((row) => row.name), ['TEST ALPHA', 'TEST ECHO']);
     assert.ok(saved.updatedAt);
     ok('Update from H360 moves a patient who left against advice to LAMA and keeps what was typed; an older copy cannot overwrite a newer save');
 
@@ -271,6 +274,65 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.strictEqual(excel.status, 200);
     assert.strictEqual(excel.body.slice(0, 2).toString(), 'PK');
     assert.strictEqual((await get('/api/h360/patient/9999')).status, 404);
+/* the shift supervisor report, filled in from H360 (New Report) */
+    const post = async (path, body) => { const r = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }); return { status: r.status, body: await r.json() }; };
+    const mine = {
+      date: TODAY, shift: 'Morning', supervisorName: 'Test Supervisor', shiftTime: '7:00 AM - 3:00 PM',
+      cabinArea: [{ dept: 'IPD Cabin Level 10', bed: '1020/A', name: 'TEST CHARLIE', uhid: 'U0003', diagnosis: 'Typed by hand', remarks: 'Keep me', c_custom: 'a custom column' }],
+      criticalArea: [{ dept: 'Medical ICU', bed: 'MICU-9', name: 'TEST BRAVO', uhid: 'U0002', diagnosis: '', remarks: '' }],
+      newAdmissions: [{ dept: 'IPD Cabin Level 10', bed: '1018/B', name: 'TEST ALPHA', uhid: 'U0001', diagnosis: 'Fever', remarks: 'typed' }],
+      general: { codeBlue: '2' }, census: { 'OPD Total': '40' },
+    };
+    const filledIn = await post('/api/h360/fill', { report: mine, options: {} });
+    assert.strictEqual(filledIn.status, 200, JSON.stringify(filledIn.body));
+    const got = filledIn.body.report;
+    assert.deepStrictEqual(got.cabinArea, []);
+    assert.strictEqual(got.lama.length, 1);
+    assert.deepStrictEqual((({ dept, bed, name, diagnosis, remarks, c_custom, reasonDama }) => ({ dept, bed, name, diagnosis, remarks, c_custom, reasonDama }))(got.lama[0]),
+      { dept: 'IPD Cabin Level 10', bed: '1020/A', name: 'TEST CHARLIE', diagnosis: 'Typed by hand', remarks: 'Keep me', c_custom: 'a custom column', reasonDama: 'LAMA' });
+    const bravo = got.criticalArea[0];
+    assert.strictEqual(bravo.diagnosis, 'Pneumonia\nDM');
+    assert.strictEqual(bravo.bed, 'MICU-3');
+    assert.strictEqual(bravo.dept, 'MICU');
+    assert.strictEqual(bravo.h360Dept, true);
+    assert.deepStrictEqual(got.newAdmissions.map((row) => [row.name, row.dept, row.bed]), [['TEST DELTA', 'Level-11', '1101/A']]);
+    assert.strictEqual(got.newAdmissions[0].h360, true);
+    // ALPHA was typed under New Admission; H360 now shows a discharge request, so the row moves as it is
+    assert.deepStrictEqual(got.discharged.map((row) => [row.name, row.dept, row.diagnosis, row.billing || '']), [['TEST ALPHA', 'IPD Cabin Level 10', 'Fever', ''], ['TEST ECHO', 'Level-9', '', 'Cleared']]);
+    assert.deepStrictEqual(filledIn.body.requested, ['TEST ALPHA']);
+    assert.deepStrictEqual((({ name, surgery, anaesthetist, anaesthesia }) => ({ name, surgery, anaesthetist, anaesthesia }))(got.surgeries[0]), { name: 'TEST BRAVO', surgery: 'Appendectomy', anaesthetist: 'Dr. Sleep', anaesthesia: 'GA' });
+    assert.strictEqual(got.pressureSore[0].name, 'TEST BRAVO');
+    assert.deepStrictEqual(got.general, { plannedDischarge: '01' });
+    assert.deepStrictEqual(filledIn.body.census, [{ unit: 'Level-10', patients: '01' }, { unit: 'MICU', patients: '01' }]);
+    assert.deepStrictEqual(filledIn.body.moved, ['TEST CHARLIE (LAMA)', 'TEST ECHO (Discharged)']);
+    // filling the same report again adds nothing twice
+    const again = await post('/api/h360/fill', { report: { ...mine, ...got, general: { ...mine.general, ...got.general } }, options: {} });
+    assert.strictEqual(again.body.report.newAdmissions.length, 1);
+    assert.strictEqual(again.body.report.discharged.length, 2);
+    assert.deepStrictEqual(again.body.requested, []);
+    assert.strictEqual(again.body.report.lama.length, 1);
+    assert.strictEqual(again.body.report.surgeries.length, 1);
+    assert.deepStrictEqual(again.body.added, []);
+    ok('New Report is filled in from H360: patients go to their lists, a discharge request moves the row to Discharged, typed text and custom columns are kept, and a second fill adds nothing twice');
+
+    const supervisor = require('../supervisor-reports');
+    const kept = await supervisor.saveReport({ ...mine, ...got, general: { ...mine.general, ...got.general }, createdBy: 'tester' });
+    const logSheet = await get('/api/h360/report/' + kept.id + '/docx');
+    assert.strictEqual(logSheet.body.slice(0, 2).toString(), 'PK');
+    const page = (await get('/api/h360/report/' + kept.id + '/print')).body.toString();
+    assert.ok(page.includes('Log Sheet for Morning Supervisor') && page.includes('TEST CHARLIE') && page.includes('Level-10<br>1018/B') && page.includes('Test Supervisor'), 'the print page of a supervisor report');
+    assert.strictEqual((await get('/api/h360/report/nope/docx')).status, 404);
+    const waitingBefore = JSON.parse((await get('/api/h360/status')).body).sheetsWaiting;
+    assert.strictEqual(waitingBefore, 2);
+    const converted = await post('/api/h360/sheets/convert');
+    assert.strictEqual(converted.body.converted, 2);
+    assert.strictEqual((await post('/api/h360/sheets/convert')).body.converted, 0);
+    const all = await supervisor.getReports({});
+    const fromSheet = all.find((r) => r.date === TODAY && r.id !== kept.id);
+    assert.ok(fromSheet && fromSheet.status === 'draft' && fromSheet.lama.some((row) => row.name === 'TEST CHARLIE' && row.dept === 'Level-10' && row.bed === '1020/A'));
+    assert.strictEqual(all.length, 3);
+    ok('a supervisor report prints as the Word log sheet, and the log sheets written before become draft reports once');
+
     const started = await fetch(base + '/api/h360/collect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode: 'list' }) });
     assert.strictEqual((await started.json()).ok, true);
     for (let i = 0; i < 100 && service.job.running; i++) await new Promise((r) => setTimeout(r, 100));
