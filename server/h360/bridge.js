@@ -44,6 +44,12 @@ function deptOf(station) {
     .replace(/\(/g, ' (').replace(/\s+/g, ' ').trim();
 }
 
+// The short name the sheet writes for a unit, whichever way it was named.
+const SHORT = [[/neonatal|\bnicu\b/i, 'NICU'], [/surgical\s*icu|\bsicu\b/i, 'SICU'], [/medical\s*icu|\bmicu\b/i, 'MICU'], [/coronary|\bccu\b/i, 'CCU'], [/ctvs/i, 'CTVS']];
+const unitOf = (name) => { const known = SHORT.find(([pattern]) => pattern.test(text(name))); return known ? known[1] : floorOf(name); };
+// A name as H360 gives it ("NICU", "Level-10"), not one of the app's department names.
+const isPlainUnit = (name) => /^(level-\d+|nicu|sicu|micu|ccu|ctvs)$/i.test(text(name));
+
 // "IPD Cabin Level 10" -> "Level-10", as the sheet writes a floor.
 const floorOf = (dept) => { const m = text(dept).match(/level[\s-]*(\d+)/i); return m ? 'Level-' + pad2(m[1]) : text(dept); };
 
@@ -97,10 +103,19 @@ function toSheet(report) {
   ];
   data.round.fields = { observation: text(report.roundObservation), time: text(report.shiftTime) };
 
+  // One box per unit: a number kept under H360's own name for a unit ("NICU", "Level-10")
+  // and one under the app's department for it ("Neonatal ICU", "IPD Cabin Level 10") are the
+  // same unit; the department's number stands.
   const census = report.census || {};
-  const units = Object.keys(census).filter((name) => name !== 'OPD Total' && name !== 'TOTAL' && text(census[name]) && text(census[name]) !== '0');
-  data.census.rows = units.map((name) => ({ unit: floorOf(name), patients: text(census[name]) }));
-  const inPatients = units.reduce((n, name) => n + (Number(census[name]) || 0), 0);
+  const boxes = new Map();
+  for (const name of Object.keys(census)) {
+    if (name === 'OPD Total' || name === 'TOTAL' || !text(census[name]) || text(census[name]) === '0') continue;
+    const unit = unitOf(name);
+    if (boxes.has(unit) && unit === unitOf(name) && isPlainUnit(name)) continue;
+    boxes.set(unit, text(census[name]));
+  }
+  data.census.rows = [...boxes].map(([unit, patients]) => ({ unit, patients }));
+  const inPatients = data.census.rows.reduce((n, row) => n + (Number(row.patients) || 0), 0);
   data.census.fields = { ipd: inPatients ? String(inPatients) : '', opd: text(census['OPD Total']), newAdmission: '', discharge: '', death: '' };
 
   return {

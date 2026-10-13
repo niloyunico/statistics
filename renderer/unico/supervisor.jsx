@@ -243,9 +243,28 @@ function supCensusNames(census, deptNames) {
   Object.keys(census || {}).forEach((k) => { if (k !== 'OPD Total' && k !== 'TOTAL' && names.indexOf(k) < 0 && String(census[k] == null ? '' : census[k]).trim() !== '') names.push(k); });
   return names;
 }
+// A census with ONE entry per unit. A number kept under H360's name for a unit ("NICU",
+// "Level-10") belongs to the app's department of that unit ("Neonatal ICU", "IPD Cabin
+// Level 10"): it moves there when the department has no number, and is dropped when it has
+// one, so no unit is shown or counted twice. The stored TOTAL is left out; it is worked out.
+function supCensusTidy(census, deptNames) {
+  const src = census || {};
+  const names = deptNames || [];
+  const has = (v) => String(v == null ? '' : v).trim() !== '';
+  const out = {};
+  Object.keys(src).forEach((k) => { if (k === 'OPD Total' || names.indexOf(k) >= 0) out[k] = src[k]; });
+  Object.keys(src).forEach((k) => {
+    if (k === 'TOTAL' || k === 'OPD Total' || names.indexOf(k) >= 0) return;
+    const to = supH360Dept(k, names);
+    if (to === k) out[k] = src[k];
+    else if (!has(out[to])) out[to] = src[k];
+  });
+  return out;
+}
 function supComputeCensusTotal(census, deptNames) {
-  let t = supNum((census || {})['OPD Total']);
-  supCensusNames(census, deptNames).forEach((n) => { t += supNum((census || {})[n]); });
+  const tidy = supCensusTidy(census, deptNames);
+  let t = supNum(tidy['OPD Total']);
+  supCensusNames(tidy, deptNames).forEach((n) => { t += supNum(tidy[n]); });
   return t;
 }
 // A unit as H360 names it ("Level-10", "MICU", "Level-10 (Birthing Suite)") -> the matching
@@ -467,7 +486,7 @@ function ScalarFields({ fields, val, onChange, readOnly, sectionKey }) {
 }
 
 function CensusFields({ deptNames, val, onChange, readOnly }) {
-  val = val || {};
+  val = supCensusTidy(val, deptNames);
   const total = supComputeCensusTotal(val, deptNames);
   const setK = (k, v) => onChange({ ...val, [k]: v });
   return (
@@ -713,7 +732,7 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(async () => {
       setSaved('Saving…');
-      const payload = { ...rep, totals: supComputeTotals(rep), census: { ...rep.census, TOTAL: supComputeCensusTotal(rep.census, deptNames) }, baseUpdatedAt: baseAt.current || undefined };
+      const payload = { ...rep, totals: supComputeTotals(rep), census: { ...supCensusTidy(rep.census, deptNames), TOTAL: supComputeCensusTotal(rep.census, deptNames) }, baseUpdatedAt: baseAt.current || undefined };
       try {
         const j = await supApi.post('/api/supervisor-reports', payload);
         if (j.ok) {
@@ -819,7 +838,7 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
       if ((Array.isArray(j.census) && j.census.length) || opd) {
         const sums = {};
         (j.census || []).forEach((u) => { const n = supH360Dept(u.unit, deptNames); sums[n] = (sums[n] || 0) + supNum(u.patients); });
-        const census = { ...(cur.census || {}) };
+        const census = supCensusTidy(cur.census, deptNames);
         Object.keys(sums).forEach((n) => { census[n] = String(sums[n]); });
         // OPD: those who came (vitals taken, or seen by the doctor), where nothing is typed yet
         if (opd && !String(census['OPD Total'] == null ? '' : census['OPD Total']).trim()) census['OPD Total'] = String(opd.counts.attended);
@@ -1322,12 +1341,48 @@ function RptRows({ section, rows }) {
       <tbody>{rows.map((r, i) => <tr key={i}>{sn && <td>{i + 1}</td>}{cols.map((c) => <td key={c.id}>{disp(c, r[c.id])}</td>)}</tr>)}</tbody></table>
   );
 }
+// A list of names and numbers laid ACROSS the page, as the paper sheet has them: a line of
+// names with the line of their numbers under it, `per` to a line, as many lines as needed.
+function RptAcross({ items, per }) {
+  per = per || 10;
+  const lines = [];
+  for (let i = 0; i < items.length; i += per) lines.push(items.slice(i, i + per));
+  // every line has the same number of boxes, so the columns stand under each other
+  const width = lines.length > 1 ? per : (lines[0] || []).length;
+  const fill = (line) => line.concat(Array.from({ length: Math.max(width - line.length, 0) }, () => null));
+  return (
+    <table className="sup-rpt-tbl sup-rpt-across"><tbody>
+      {lines.map((line, r) => [
+        <tr key={'h' + r}>{fill(line).map((it, c) => (it ? <th key={c} className={it[2] ? 'tot' : ''}>{it[0]}</th> : <th key={c} className="none"></th>))}</tr>,
+        <tr key={'v' + r}>{fill(line).map((it, c) => (it ? <td key={c} className={it[2] ? 'tot' : ''}>{it[1] === '' || it[1] == null ? '\u00a0' : it[1]}</td> : <td key={c} className="none"></td>))}</tr>,
+      ])}
+    </tbody></table>
+  );
+}
+// A long list (General Information): name and value side by side, four to a line.
+function RptPairs({ items, per }) {
+  per = per || 4;
+  const lines = [];
+  for (let i = 0; i < items.length; i += per) lines.push(items.slice(i, i + per));
+  return (
+    <table className="sup-rpt-tbl sup-rpt-pairs"><tbody>
+      {lines.map((line, r) => (
+        <tr key={r}>{Array.from({ length: per }).map((_, c) => {
+          const it = line[c];
+          return it ? [<th key={'n' + c}>{it[0]}</th>, <td key={'v' + c}>{it[1]}</td>] : [<th key={'n' + c} className="none"></th>, <td key={'v' + c} className="none"></td>];
+        })}</tr>
+      ))}
+    </tbody></table>
+  );
+}
 function RptCounts({ fields, val, sectionKey }) {
   val = val || {};
   const custom = (sectionKey && supLoadFields().cols[sectionKey]) || [];
   const all = fields.concat(custom.map((c) => [c.id, c.label, c.type]));
   const disp = (id, type) => (type === 'check' ? (val[id] ? '✓' : '') : (val[id] == null ? '' : val[id]));
-  return <table className="sup-rpt-tbl"><tbody>{all.map((f) => <tr key={f[0]}><th style={{ width: '55%' }}>{f[1]}</th><td>{disp(f[0], f[2])}</td></tr>)}</tbody></table>;
+  const items = all.map((f) => [f[1], disp(f[0], f[2])]);
+  // A short list goes on one line across the page; a long one four pairs to a line.
+  return items.length <= 10 ? <RptAcross items={items} per={10} /> : <RptPairs items={items} per={4} />;
 }
 
 function SupReportView({ id, depts, setRoute }) {
@@ -1407,11 +1462,12 @@ function SupReportView({ id, depts, setRoute }) {
             </tbody></table></div>;
         }
         if (s.kind === 'census') {
-          const cen = rep.census || {};
-          const keys = ['OPD Total'].concat(supCensusNames(cen, deptNames));
-          return <div key={s.key}><div className="sup-sec-h">{s.title}</div>
-            <table className="sup-rpt-tbl"><thead><tr>{keys.map((k) => <th key={k}>{k}</th>)}<th>TOTAL</th></tr></thead>
-              <tbody><tr>{keys.map((k) => <td key={k}>{cen[k] || ''}</td>)}<td><b>{cen.TOTAL != null ? cen.TOTAL : supComputeCensusTotal(cen, deptNames)}</b></td></tr></tbody></table></div>;
+          // Only the units that have a number, one entry per unit, ten to a line: it fits the page.
+          const cen = supCensusTidy(rep.census, deptNames);
+          const has = (k) => String(cen[k] == null ? '' : cen[k]).trim() !== '';
+          const units = supCensusNames(cen, deptNames).filter(has);
+          const items = [['OPD Total', has('OPD Total') ? cen['OPD Total'] : '']].concat(units.map((k) => [k, cen[k]]), [['TOTAL', supComputeCensusTotal(cen, deptNames), true]]);
+          return <div key={s.key}><div className="sup-sec-h">{s.title}</div><RptAcross items={items} per={10} /></div>;
         }
         return null;
       })}
@@ -1435,6 +1491,8 @@ function SupReportView({ id, depts, setRoute }) {
           {list.map((r) => <option key={r.id} value={r.id}>{r.date} · {r.shift} · {r.supervisorName || '—'}</option>)}
         </select>
         <SupBtn sm onClick={doPrint}><Ic d={I.print} s={14} />Print</SupBtn>
+        {/* The whole report as the Word log sheet (server/h360 render): an editable .docx file. */}
+        {rep && rep.id && <a className="sup-btn sm" href={'/api/h360/report/' + encodeURIComponent(rep.id) + '/docx'} title="Download this report as a Word file in the log sheet layout"><Ic d={I.doc} s={14} />Export Word</a>}
         <SupBtn sm kind="pri" onClick={doExport} disabled={exporting || !rep}><Ic d={I.download} s={14} />{exporting ? 'Exporting…' : 'Export PDF'}</SupBtn>
       </div>
 
@@ -1862,11 +1920,20 @@ const SUP_CSS = `
 /* report preview */
 .sup-paper{background:#e9edf2;padding:22px;border-radius:14px;overflow:auto}
 .sup-paper .pdf-page{background:#fff;max-width:900px;margin:0 auto;box-shadow:0 8px 30px -8px rgba(0,0,0,.28);padding:28px 32px;box-sizing:border-box}
-.sup-rpt-tbl{width:100%;border-collapse:collapse;font-size:10.5px;margin:3px 0 12px}
-.sup-rpt-tbl th,.sup-rpt-tbl td{border:1px solid #cbd5e1;padding:3px 5px;text-align:left;vertical-align:top}
+.sup-rpt-tbl{width:100%;border-collapse:collapse;font-size:10.5px;margin:2px 0 7px}
+.sup-rpt-tbl th,.sup-rpt-tbl td{border:1px solid #cbd5e1;padding:2px 5px;text-align:left;vertical-align:top}
+.sup-rpt-across{table-layout:fixed}
+.sup-rpt-across th,.sup-rpt-across td{text-align:center;vertical-align:middle;overflow-wrap:anywhere}
+.sup-rpt-across th{font-size:9.5px;line-height:1.2}
+.sup-rpt-across td{font-weight:600}
+.sup-rpt-across .tot{background:#dbeafe;font-weight:800}
+.sup-rpt-pairs{table-layout:fixed}
+.sup-rpt-pairs th{width:16%;font-size:9.5px;line-height:1.2;vertical-align:middle}
+.sup-rpt-pairs td{width:9%;vertical-align:middle;overflow-wrap:anywhere}
+.sup-rpt-tbl .none{border-color:transparent;background:transparent}
 .sup-rpt-tbl th{background:#eef2f7;font-weight:700}
 .sup-rpt-tbl tbody tr:nth-child(even) td{background:#fbfdff}
-.sup-sec-h{font-size:12.5px;font-weight:800;margin:15px 0 5px;color:#0f172a;border-left:3px solid #2563eb;padding-left:8px}
+.sup-sec-h{font-size:12px;font-weight:800;margin:9px 0 3px;color:#0f172a;border-left:3px solid #2563eb;padding-left:8px}
 /* drag handle + drop indicator */
 .sup-grip{cursor:grab;color:#94a3b8;text-align:center;vertical-align:middle;width:26px}
 .sup-grip:active{cursor:grabbing}

@@ -755,10 +755,26 @@ function supCensusNames(census, deptNames) {
   });
   return names;
 }
+function supCensusTidy(census, deptNames) {
+  const src = census || {};
+  const names = deptNames || [];
+  const has = v => String(v == null ? '' : v).trim() !== '';
+  const out = {};
+  Object.keys(src).forEach(k => {
+    if (k === 'OPD Total' || names.indexOf(k) >= 0) out[k] = src[k];
+  });
+  Object.keys(src).forEach(k => {
+    if (k === 'TOTAL' || k === 'OPD Total' || names.indexOf(k) >= 0) return;
+    const to = supH360Dept(k, names);
+    if (to === k) out[k] = src[k];else if (!has(out[to])) out[to] = src[k];
+  });
+  return out;
+}
 function supComputeCensusTotal(census, deptNames) {
-  let t = supNum((census || {})['OPD Total']);
-  supCensusNames(census, deptNames).forEach(n => {
-    t += supNum((census || {})[n]);
+  const tidy = supCensusTidy(census, deptNames);
+  let t = supNum(tidy['OPD Total']);
+  supCensusNames(tidy, deptNames).forEach(n => {
+    t += supNum(tidy[n]);
   });
   return t;
 }
@@ -1291,7 +1307,7 @@ function CensusFields({
   onChange,
   readOnly
 }) {
-  val = val || {};
+  val = supCensusTidy(val, deptNames);
   const total = supComputeCensusTotal(val, deptNames);
   const setK = (k, v) => onChange({
     ...val,
@@ -1953,7 +1969,7 @@ function SupEditor({
         ...rep,
         totals: supComputeTotals(rep),
         census: {
-          ...rep.census,
+          ...supCensusTidy(rep.census, deptNames),
           TOTAL: supComputeCensusTotal(rep.census, deptNames)
         },
         baseUpdatedAt: baseAt.current || undefined
@@ -2146,9 +2162,7 @@ function SupEditor({
           const n = supH360Dept(u.unit, deptNames);
           sums[n] = (sums[n] || 0) + supNum(u.patients);
         });
-        const census = {
-          ...(cur.census || {})
-        };
+        const census = supCensusTidy(cur.census, deptNames);
         Object.keys(sums).forEach(n => {
           census[n] = String(sums[n]);
         });
@@ -3518,6 +3532,65 @@ function RptRows({
     key: c.id
   }, disp(c, r[c.id])))))));
 }
+function RptAcross({
+  items,
+  per
+}) {
+  per = per || 10;
+  const lines = [];
+  for (let i = 0; i < items.length; i += per) lines.push(items.slice(i, i + per));
+  const width = lines.length > 1 ? per : (lines[0] || []).length;
+  const fill = line => line.concat(Array.from({
+    length: Math.max(width - line.length, 0)
+  }, () => null));
+  return React.createElement("table", {
+    className: "sup-rpt-tbl sup-rpt-across"
+  }, React.createElement("tbody", null, lines.map((line, r) => [React.createElement("tr", {
+    key: 'h' + r
+  }, fill(line).map((it, c) => it ? React.createElement("th", {
+    key: c,
+    className: it[2] ? 'tot' : ''
+  }, it[0]) : React.createElement("th", {
+    key: c,
+    className: "none"
+  }))), React.createElement("tr", {
+    key: 'v' + r
+  }, fill(line).map((it, c) => it ? React.createElement("td", {
+    key: c,
+    className: it[2] ? 'tot' : ''
+  }, it[1] === '' || it[1] == null ? '\u00a0' : it[1]) : React.createElement("td", {
+    key: c,
+    className: "none"
+  })))])));
+}
+function RptPairs({
+  items,
+  per
+}) {
+  per = per || 4;
+  const lines = [];
+  for (let i = 0; i < items.length; i += per) lines.push(items.slice(i, i + per));
+  return React.createElement("table", {
+    className: "sup-rpt-tbl sup-rpt-pairs"
+  }, React.createElement("tbody", null, lines.map((line, r) => React.createElement("tr", {
+    key: r
+  }, Array.from({
+    length: per
+  }).map((_, c) => {
+    const it = line[c];
+    return it ? [React.createElement("th", {
+      key: 'n' + c
+    }, it[0]), React.createElement("td", {
+      key: 'v' + c
+    }, it[1])] : [React.createElement("th", {
+      key: 'n' + c,
+      className: "none"
+    }), React.createElement("td", {
+      key: 'v' + c,
+      className: "none"
+    })];
+  })))));
+}
 function RptCounts({
   fields,
   val,
@@ -3527,15 +3600,14 @@ function RptCounts({
   const custom = sectionKey && supLoadFields().cols[sectionKey] || [];
   const all = fields.concat(custom.map(c => [c.id, c.label, c.type]));
   const disp = (id, type) => type === 'check' ? val[id] ? '✓' : '' : val[id] == null ? '' : val[id];
-  return React.createElement("table", {
-    className: "sup-rpt-tbl"
-  }, React.createElement("tbody", null, all.map(f => React.createElement("tr", {
-    key: f[0]
-  }, React.createElement("th", {
-    style: {
-      width: '55%'
-    }
-  }, f[1]), React.createElement("td", null, disp(f[0], f[2]))))));
+  const items = all.map(f => [f[1], disp(f[0], f[2])]);
+  return items.length <= 10 ? React.createElement(RptAcross, {
+    items: items,
+    per: 10
+  }) : React.createElement(RptPairs, {
+    items: items,
+    per: 4
+  });
 }
 function SupReportView({
   id,
@@ -3695,19 +3767,18 @@ function SupReportView({
       }, "Absenteeism"), React.createElement("td", null, rep.absenteeism || '—')), React.createElement("tr", null, React.createElement("th", null, "Sick Leave"), React.createElement("td", null, rep.sickLeave || '—')), React.createElement("tr", null, React.createElement("th", null, "Observation During Round"), React.createElement("td", null, rep.roundObservation || '—')))));
     }
     if (s.kind === 'census') {
-      const cen = rep.census || {};
-      const keys = ['OPD Total'].concat(supCensusNames(cen, deptNames));
+      const cen = supCensusTidy(rep.census, deptNames);
+      const has = k => String(cen[k] == null ? '' : cen[k]).trim() !== '';
+      const units = supCensusNames(cen, deptNames).filter(has);
+      const items = [['OPD Total', has('OPD Total') ? cen['OPD Total'] : '']].concat(units.map(k => [k, cen[k]]), [['TOTAL', supComputeCensusTotal(cen, deptNames), true]]);
       return React.createElement("div", {
         key: s.key
       }, React.createElement("div", {
         className: "sup-sec-h"
-      }, s.title), React.createElement("table", {
-        className: "sup-rpt-tbl"
-      }, React.createElement("thead", null, React.createElement("tr", null, keys.map(k => React.createElement("th", {
-        key: k
-      }, k)), React.createElement("th", null, "TOTAL"))), React.createElement("tbody", null, React.createElement("tr", null, keys.map(k => React.createElement("td", {
-        key: k
-      }, cen[k] || '')), React.createElement("td", null, React.createElement("b", null, cen.TOTAL != null ? cen.TOTAL : supComputeCensusTotal(cen, deptNames)))))));
+      }, s.title), React.createElement(RptAcross, {
+        items: items,
+        per: 10
+      }));
     }
     return null;
   }), React.createElement("table", {
@@ -3774,7 +3845,14 @@ function SupReportView({
   }, React.createElement(Ic, {
     d: I.print,
     s: 14
-  }), "Print"), React.createElement(SupBtn, {
+  }), "Print"), rep && rep.id && React.createElement("a", {
+    className: "sup-btn sm",
+    href: '/api/h360/report/' + encodeURIComponent(rep.id) + '/docx',
+    title: "Download this report as a Word file in the log sheet layout"
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 14
+  }), "Export Word"), React.createElement(SupBtn, {
     sm: true,
     kind: "pri",
     onClick: doExport,
@@ -4624,11 +4702,20 @@ const SUP_CSS = `
 /* report preview */
 .sup-paper{background:#e9edf2;padding:22px;border-radius:14px;overflow:auto}
 .sup-paper .pdf-page{background:#fff;max-width:900px;margin:0 auto;box-shadow:0 8px 30px -8px rgba(0,0,0,.28);padding:28px 32px;box-sizing:border-box}
-.sup-rpt-tbl{width:100%;border-collapse:collapse;font-size:10.5px;margin:3px 0 12px}
-.sup-rpt-tbl th,.sup-rpt-tbl td{border:1px solid #cbd5e1;padding:3px 5px;text-align:left;vertical-align:top}
+.sup-rpt-tbl{width:100%;border-collapse:collapse;font-size:10.5px;margin:2px 0 7px}
+.sup-rpt-tbl th,.sup-rpt-tbl td{border:1px solid #cbd5e1;padding:2px 5px;text-align:left;vertical-align:top}
+.sup-rpt-across{table-layout:fixed}
+.sup-rpt-across th,.sup-rpt-across td{text-align:center;vertical-align:middle;overflow-wrap:anywhere}
+.sup-rpt-across th{font-size:9.5px;line-height:1.2}
+.sup-rpt-across td{font-weight:600}
+.sup-rpt-across .tot{background:#dbeafe;font-weight:800}
+.sup-rpt-pairs{table-layout:fixed}
+.sup-rpt-pairs th{width:16%;font-size:9.5px;line-height:1.2;vertical-align:middle}
+.sup-rpt-pairs td{width:9%;vertical-align:middle;overflow-wrap:anywhere}
+.sup-rpt-tbl .none{border-color:transparent;background:transparent}
 .sup-rpt-tbl th{background:#eef2f7;font-weight:700}
 .sup-rpt-tbl tbody tr:nth-child(even) td{background:#fbfdff}
-.sup-sec-h{font-size:12.5px;font-weight:800;margin:15px 0 5px;color:#0f172a;border-left:3px solid #2563eb;padding-left:8px}
+.sup-sec-h{font-size:12px;font-weight:800;margin:9px 0 3px;color:#0f172a;border-left:3px solid #2563eb;padding-left:8px}
 /* drag handle + drop indicator */
 .sup-grip{cursor:grab;color:#94a3b8;text-align:center;vertical-align:middle;width:26px}
 .sup-grip:active{cursor:grabbing}
