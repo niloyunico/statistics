@@ -402,6 +402,16 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     const page = (await get('/api/h360/report/' + kept.id + '/print')).body.toString();
     assert.ok(page.includes('Log Sheet for Morning Supervisor') && page.includes('TEST CHARLIE') && page.includes('Level-10<br>1018/B') && page.includes('Test Supervisor'), 'the print page of a supervisor report');
     assert.strictEqual((await get('/api/h360/report/nope/docx')).status, 404);
+    // Print & Export sends the headings and tables it is showing: its Word file is that page, not the log sheet
+    const shown = {
+      header: { hospital: 'Test Hospital', title: 'Log Sheet For Morning Supervisor', lines: [['Supervisor:', 'Test Supervisor']] },
+      blocks: [{ type: 'heading', text: 'New Admission : 1' }, { type: 'table', kind: 'rows', head: 1, widths: [0.2, 0.8], rows: [[{ t: 'S/N', h: 1 }, { t: 'Name of Patient', h: 1 }], [{ t: '1' }, { t: 'TEST DELTA' }]] }],
+      footer: ['Test Hospital', 'Generated today'],
+    };
+    const asShown = await fetch(base + '/api/h360/report/word', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(shown) });
+    assert.strictEqual(asShown.status, 200);
+    assert.strictEqual(Buffer.from(await asShown.arrayBuffer()).slice(0, 2).toString(), 'PK');
+    assert.strictEqual((await post('/api/h360/report/word', { blocks: [] })).status, 400);
     const waitingBefore = JSON.parse((await get('/api/h360/status')).body).sheetsWaiting;
     assert.strictEqual(waitingBefore, 2);
     const converted = await post('/api/h360/sheets/convert');

@@ -535,6 +535,13 @@ if (service.site() === 'cloud') {
     res.setHeader('Content-Disposition', `attachment; filename="${render.fileName(sheet, 'docx')}"`);
     res.end(file);
   }));
+  // The report as Print & Export shows it, as a Word file: the page posts its headings and
+  // tables (report-docx.js). Not the log sheet above, which is the hospital's paper form.
+  app.post('/api/h360/report/word', guard, json, route(async (req, res) => {
+    const file = await require('./report-docx').toDocx(req.body || {});
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.end(file);
+  }));
   app.get('/api/h360/report/:id/print', guard, route(async (req, res) => {
     res.type('html').send(require('./render').toHtml(await asSheet(req.params.id)));
   }));

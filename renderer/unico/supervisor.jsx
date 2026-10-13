@@ -1206,7 +1206,7 @@ function SupHistory({ setRoute }) {
                 <td data-label="Actions" style={{ whiteSpace: 'nowrap' }}>
                   <SupBtn sm onClick={() => setRoute({ view: 'supNew', id: r.id })}>Open</SupBtn>{' '}
                   <SupBtn sm onClick={() => setRoute({ view: 'supReport', id: r.id })}><Ic d={I.print} s={13} />Export</SupBtn>{' '}
-                  <a className="sup-btn sm" href={'/api/h360/report/' + encodeURIComponent(r.id) + '/docx'} title="The Word log sheet">Word</a>{' '}
+                  <a className="sup-btn sm" href={'/api/h360/report/' + encodeURIComponent(r.id) + '/docx'} title="The hospital's paper log sheet, as a Word file">Word log sheet</a>{' '}
                   <SupBtn sm onClick={() => duplicate(r)}>Duplicate</SupBtn>{' '}
                   {r.status === 'draft' && <SupBtn sm onClick={() => setStatus(r, 'submitted')}>Submit</SupBtn>}
                   {admin && r.status === 'submitted' && <SupBtn sm onClick={() => setStatus(r, 'approved')}>Approve</SupBtn>}
@@ -1385,6 +1385,29 @@ function RptCounts({ fields, val, sectionKey }) {
   return items.length <= 10 ? <RptAcross items={items} per={10} /> : <RptPairs items={items} per={4} />;
 }
 
+// The report as the preview shows it, as plain headings and tables for the Word file
+// (server/h360/report-docx.js). Read off the page itself, so the template, the sections
+// switched off and the custom columns are in the file exactly as they are on the page.
+function supPageBlocks(root) {
+  const said = (el) => String(el.textContent || '').replace(/ /g, ' ').trim();
+  const blocks = [];
+  root.querySelectorAll('.sup-sec-h, table.sup-rpt-tbl').forEach((el) => {
+    if (el.tagName !== 'TABLE') { blocks.push({ type: 'heading', text: said(el) }); return; }
+    const first = el.rows[0];
+    if (!first) return;
+    const across = first.getBoundingClientRect().width || 1;
+    blocks.push({
+      type: 'table',
+      kind: ['across', 'pairs', 'sign'].find((k) => el.classList.contains('sup-rpt-' + k)) || 'rows',
+      head: el.tHead ? el.tHead.rows.length : 0,
+      // the columns as wide as the page drew them
+      widths: Array.from(first.children).map((c) => c.getBoundingClientRect().width / across),
+      rows: Array.from(el.rows).map((tr) => Array.from(tr.children).map((c) => ({ t: said(c), h: c.tagName === 'TH' ? 1 : 0, c: c.classList.contains('tot') ? 'tot' : c.classList.contains('none') ? 'none' : '' }))),
+    });
+  });
+  return blocks;
+}
+
 function SupReportView({ id, depts, setRoute }) {
   const deptNames = useMemo(() => supDeptNames(depts), [depts]);
   const cfg = useFields();
@@ -1394,6 +1417,8 @@ function SupReportView({ id, depts, setRoute }) {
   const [customize, setCustomize] = useState(false);
   const [disabled, setDisabled] = useState({});   // sections OFF; undefined => shown
   const [exporting, setExporting] = useState(false);
+  const [wording, setWording] = useState(false);
+  const paper = useRef(null);
   const pdfRoot = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
 
   useEffect(() => { supApi.get('/api/supervisor-reports?limit=1000').then((j) => { if (j.ok) setList(j.reports); }); }, []);
@@ -1421,6 +1446,30 @@ function SupReportView({ id, depts, setRoute }) {
       if (window.unicoHtmlServerPDF) ok = await window.unicoHtmlServerPDF('A4', 'portrait', fn);
       if (!ok) doPrint();
     } catch (e) { doPrint(); } finally { setExporting(false); }
+  };
+
+  // This report, as it stands on the page, as a Word file.
+  const doWord = async () => {
+    if (!rep || !paper.current) return;
+    setWording(true);
+    try {
+      const foot = Array.from(paper.current.querySelectorAll('.pdf-foot span')).map((el) => el.textContent || '');
+      const r = await fetch('/api/h360/report/word', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+        header: {
+          hospital: (window.UNICO && window.UNICO.HOSPITAL && window.UNICO.HOSPITAL.name) || 'UNICO Hospitals PLC',
+          title: 'Log Sheet For ' + (rep.shift || '') + ' Supervisor',
+          lines: [['Supervisor:', rep.supervisorName || '—'], ['Date:', (rep.date || '') + '   Shift: ' + (rep.shift || '')]].concat(rep.shiftTime ? [['Time:', rep.shiftTime]] : []),
+        },
+        blocks: supPageBlocks(paper.current),
+        footer: foot,
+      }) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'The Word file could not be made.'); }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = 'Supervisor-Report-' + (rep.date || '') + '-' + (rep.shift || '') + '.docx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) { supToast((e && e.message) || 'The Word file could not be made.', 'error'); } finally { setWording(false); }
   };
 
   if (!list) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted,#64748b)' }}>Loading…</div>;
@@ -1473,7 +1522,7 @@ function SupReportView({ id, depts, setRoute }) {
       })}
 
       {/* signatures */}
-      <table className="sup-rpt-tbl" style={{ marginTop: 16 }}><thead><tr><th>Prepared by</th><th>Checked by</th><th>Recommended by</th><th>Approved by</th></tr></thead>
+      <table className="sup-rpt-tbl sup-rpt-sign" style={{ marginTop: 16 }}><thead><tr><th>Prepared by</th><th>Checked by</th><th>Recommended by</th><th>Approved by</th></tr></thead>
         <tbody><tr style={{ height: 46 }}><td>{sig.prepared || ''}</td><td>{sig.reviewed || ''}</td><td>{sig.recommended || ''}</td><td>{sig.approved || ''}</td></tr></tbody></table>
       <div className="pdf-foot" style={{ borderTop: '1px solid #cbd5e1', marginTop: 12, paddingTop: 6, fontSize: 9, color: '#64748b', display: 'flex', justifyContent: 'space-between' }}>
         <span>{HOSP} — Supervisor Log Sheet</span><span>Generated {supTodayISO()}</span>
@@ -1491,8 +1540,9 @@ function SupReportView({ id, depts, setRoute }) {
           {list.map((r) => <option key={r.id} value={r.id}>{r.date} · {r.shift} · {r.supervisorName || '—'}</option>)}
         </select>
         <SupBtn sm onClick={doPrint}><Ic d={I.print} s={14} />Print</SupBtn>
-        {/* The whole report as the Word log sheet (server/h360 render): an editable .docx file. */}
-        {rep && rep.id && <a className="sup-btn sm" href={'/api/h360/report/' + encodeURIComponent(rep.id) + '/docx'} title="Download this report as a Word file in the log sheet layout"><Ic d={I.doc} s={14} />Export Word</a>}
+        {/* This report, as the page shows it, as an editable .docx file. (The hospital's paper
+            log sheet is a different Word file: "Word log sheet" in the report and in All Reports.) */}
+        <SupBtn sm onClick={doWord} disabled={wording || !rep} title="Download this report, as shown below, as a Word file"><Ic d={I.doc} s={14} />{wording ? 'Exporting…' : 'Export Word'}</SupBtn>
         <SupBtn sm kind="pri" onClick={doExport} disabled={exporting || !rep}><Ic d={I.download} s={14} />{exporting ? 'Exporting…' : 'Export PDF'}</SupBtn>
       </div>
 
@@ -1515,7 +1565,7 @@ function SupReportView({ id, depts, setRoute }) {
       )}
 
       {/* on-screen preview */}
-      <div className="sup-paper">{rep ? <div className="pdf-page">{PageInner}</div> : <div style={{ padding: 30, textAlign: 'center', color: '#94a3b8' }}>Select a report to preview.</div>}</div>
+      <div className="sup-paper">{rep ? <div className="pdf-page" ref={paper}>{PageInner}</div> : <div style={{ padding: 30, textAlign: 'center', color: '#94a3b8' }}>Select a report to preview.</div>}</div>
 
       {/* hidden export copy into #pdf-root */}
       {pdfRoot && rep && ReactDOM.createPortal(<div className="pdf-doc portrait"><section className="pdf-page">{PageInner}</section></div>, pdfRoot)}

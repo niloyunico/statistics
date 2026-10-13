@@ -3221,8 +3221,8 @@ function SupHistory({
   }), "Export"), ' ', React.createElement("a", {
     className: "sup-btn sm",
     href: '/api/h360/report/' + encodeURIComponent(r.id) + '/docx',
-    title: "The Word log sheet"
-  }, "Word"), ' ', React.createElement(SupBtn, {
+    title: "The hospital's paper log sheet, as a Word file"
+  }, "Word log sheet"), ' ', React.createElement(SupBtn, {
     sm: true,
     onClick: () => duplicate(r)
   }, "Duplicate"), ' ', r.status === 'draft' && React.createElement(SupBtn, {
@@ -3609,6 +3609,34 @@ function RptCounts({
     per: 4
   });
 }
+function supPageBlocks(root) {
+  const said = el => String(el.textContent || '').replace(/ /g, ' ').trim();
+  const blocks = [];
+  root.querySelectorAll('.sup-sec-h, table.sup-rpt-tbl').forEach(el => {
+    if (el.tagName !== 'TABLE') {
+      blocks.push({
+        type: 'heading',
+        text: said(el)
+      });
+      return;
+    }
+    const first = el.rows[0];
+    if (!first) return;
+    const across = first.getBoundingClientRect().width || 1;
+    blocks.push({
+      type: 'table',
+      kind: ['across', 'pairs', 'sign'].find(k => el.classList.contains('sup-rpt-' + k)) || 'rows',
+      head: el.tHead ? el.tHead.rows.length : 0,
+      widths: Array.from(first.children).map(c => c.getBoundingClientRect().width / across),
+      rows: Array.from(el.rows).map(tr => Array.from(tr.children).map(c => ({
+        t: said(c),
+        h: c.tagName === 'TH' ? 1 : 0,
+        c: c.classList.contains('tot') ? 'tot' : c.classList.contains('none') ? 'none' : ''
+      })))
+    });
+  });
+  return blocks;
+}
 function SupReportView({
   id,
   depts,
@@ -3626,6 +3654,8 @@ function SupReportView({
   const [customize, setCustomize] = useState(false);
   const [disabled, setDisabled] = useState({});
   const [exporting, setExporting] = useState(false);
+  const [wording, setWording] = useState(false);
+  const paper = useRef(null);
   const pdfRoot = typeof document !== 'undefined' ? document.getElementById('pdf-root') : null;
   useEffect(() => {
     supApi.get('/api/supervisor-reports?limit=1000').then(j => {
@@ -3677,6 +3707,44 @@ function SupReportView({
       doPrint();
     } finally {
       setExporting(false);
+    }
+  };
+  const doWord = async () => {
+    if (!rep || !paper.current) return;
+    setWording(true);
+    try {
+      const foot = Array.from(paper.current.querySelectorAll('.pdf-foot span')).map(el => el.textContent || '');
+      const r = await fetch('/api/h360/report/word', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          header: {
+            hospital: window.UNICO && window.UNICO.HOSPITAL && window.UNICO.HOSPITAL.name || 'UNICO Hospitals PLC',
+            title: 'Log Sheet For ' + (rep.shift || '') + ' Supervisor',
+            lines: [['Supervisor:', rep.supervisorName || '—'], ['Date:', (rep.date || '') + '   Shift: ' + (rep.shift || '')]].concat(rep.shiftTime ? [['Time:', rep.shiftTime]] : [])
+          },
+          blocks: supPageBlocks(paper.current),
+          footer: foot
+        })
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || 'The Word file could not be made.');
+      }
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Supervisor-Report-' + (rep.date || '') + '-' + (rep.shift || '') + '.docx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) {
+      supToast(e && e.message || 'The Word file could not be made.', 'error');
+    } finally {
+      setWording(false);
     }
   };
   if (!list) return React.createElement("div", {
@@ -3782,7 +3850,7 @@ function SupReportView({
     }
     return null;
   }), React.createElement("table", {
-    className: "sup-rpt-tbl",
+    className: "sup-rpt-tbl sup-rpt-sign",
     style: {
       marginTop: 16
     }
@@ -3845,14 +3913,15 @@ function SupReportView({
   }, React.createElement(Ic, {
     d: I.print,
     s: 14
-  }), "Print"), rep && rep.id && React.createElement("a", {
-    className: "sup-btn sm",
-    href: '/api/h360/report/' + encodeURIComponent(rep.id) + '/docx',
-    title: "Download this report as a Word file in the log sheet layout"
+  }), "Print"), React.createElement(SupBtn, {
+    sm: true,
+    onClick: doWord,
+    disabled: wording || !rep,
+    title: "Download this report, as shown below, as a Word file"
   }, React.createElement(Ic, {
     d: I.doc,
     s: 14
-  }), "Export Word"), React.createElement(SupBtn, {
+  }), wording ? 'Exporting…' : 'Export Word'), React.createElement(SupBtn, {
     sm: true,
     kind: "pri",
     onClick: doExport,
@@ -3905,7 +3974,8 @@ function SupReportView({
   }), s.title))))), React.createElement("div", {
     className: "sup-paper"
   }, rep ? React.createElement("div", {
-    className: "pdf-page"
+    className: "pdf-page",
+    ref: paper
   }, PageInner) : React.createElement("div", {
     style: {
       padding: 30,
