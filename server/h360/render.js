@@ -13,6 +13,9 @@ const GRID = 120;
 const SHADE = 'BFBFBF';
 const LOGO = path.join(__dirname, 'logo.png');
 const BY_ID = Object.fromEntries(SECTIONS.map((section) => [section.id, section]));
+// A sheet without its logo is still the sheet. The live site once shipped without the
+// picture (.vercelignore dropped every png outside renderer/) and every export failed.
+const logoBytes = () => { try { return fs.readFileSync(LOGO); } catch (e) { return null; } };
 
 const text = (value) => (value === null || value === undefined ? '' : String(value));
 const isFilled = (row) => Object.entries(row).some(([key, value]) => !key.startsWith('_') && key !== 'item' && key !== 'sub' && key !== 'type' && text(value).trim());
@@ -235,9 +238,10 @@ function wordBox(report, width) {
 async function toDocx(report) {
   const full = GRID * UNIT;
   const boxWidth = 3300;
+  const picture = logoBytes();
   const logo = new Paragraph({
     spacing: { before: 500, after: 0 },
-    children: [new ImageRun({ type: 'png', data: fs.readFileSync(LOGO), transformation: { width: 150, height: 55 } })],
+    children: picture ? [new ImageRun({ type: 'png', data: picture, transformation: { width: 150, height: 55 } })] : [],
   });
   // Logo on the left, the manager's box on the right, as on the first page of the sheet.
   const top = new Table({
@@ -325,6 +329,8 @@ function htmlRows(rows) {
 
 function toHtml(report) {
   const box = boxLines(report).map((line, i) => `<div${i ? ' class="mid"' : ''}>${escape(line)}</div>`).join('');
+  const picture = logoBytes();
+  const logo = picture ? `<img class="logo" src="data:image/png;base64,${picture.toString('base64')}" alt="Unico Hospitals">` : '<span></span>';
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>${escape(fileName(report, 'pdf').replace(/\.pdf$/, ''))}</title>
 <style>
@@ -345,7 +351,7 @@ function toHtml(report) {
 </style></head>
 <body>
 <div class="bar"><button onclick="window.print()">Print / Save as PDF</button></div>
-<div class="top"><img class="logo" src="data:image/png;base64,${fs.readFileSync(LOGO).toString('base64')}" alt="Unico Hospitals"><div class="box">${box}</div></div>
+<div class="top">${logo}<div class="box">${box}</div></div>
 <table class="sheet"><colgroup>${'<col>'.repeat(GRID)}</colgroup>
 ${htmlRows(layout(report))}
 </table>

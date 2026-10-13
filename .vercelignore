@@ -24,6 +24,8 @@ __pycache__/
 *.pyc
 *.png
 !renderer/**/*.png
+# The logo on the Word log sheet and its print page (server/h360/render.js reads it at run time).
+!server/h360/logo.png
 .claude/
 .env
 .env.*

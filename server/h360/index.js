@@ -528,9 +528,12 @@ if (service.site() === 'cloud') {
   app.get('/api/h360/report/:id/docx', guard, route(async (req, res) => {
     const render = require('./render');
     const sheet = await asSheet(req.params.id);
+    // Built BEFORE the download headers: an error answered as an attachment is shown by the
+    // browser as "This site can't be reached", with nothing to say what went wrong.
+    const file = await render.toDocx(sheet);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${render.fileName(sheet, 'docx')}"`);
-    res.end(await render.toDocx(sheet));
+    res.end(file);
   }));
   app.get('/api/h360/report/:id/print', guard, route(async (req, res) => {
     res.type('html').send(require('./render').toHtml(await asSheet(req.params.id)));
@@ -605,9 +608,10 @@ if (service.site() === 'cloud') {
   app.get('/api/h360/sheets/:id/docx', guard, route(async (req, res) => {
     const render = require('./render');
     const report = await sheets.get(await service.shared(), req.params.id);
+    const file = await render.toDocx(report);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename="${render.fileName(report, 'docx')}"`);
-    res.end(await render.toDocx(report));
+    res.end(file);
   }));
 
   app.get('/api/h360/sheets/:id/print', guard, route(async (req, res) => {
