@@ -68,7 +68,7 @@ const UNICO_MODULE_VIEWS = {
   datacol:['dcReview','dcPatient','dcQuality','input','dcSettings','dcShare','dcFields','dcAnalytics'],
   staff:  ['staffHome','staffAll','staffNewEntries','staffRecentUpdates','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
-  supervisor:['supHome','supBoard','supNew','supHistory','supReport','supH360','supSheet'],
+  supervisor:['supHome','supBoard','supNew','supHistory','supReport','supH360Scan','supH360','supSheet'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
   users:  ['users'],
   // perfDirectory / perfStaff are GONE: the staff directory and the per-person record
@@ -477,10 +477,12 @@ function unicoWorkspaceSub(view){
      and the Duty Roster already work:
        Dashboard      what happened, what is missing, where to go
        Shift Reports  the report: the list, the editor (which imports from H360), the patient board, print
-       H360 Patients  what is read from H360: the collection and the patients of every nurse station */
+       H360 Scan      reading H360: start a collection, watch it run, the login
+       H360 Patients  what the last scan read: the patients of every nurse station, the IPD Admission list, OPD */
   if(mod==='supervisor') return [
     { label:'Dashboard',     view:'supHome' },
     { label:'Shift Reports', view:'supHistory', match:['supHistory','supNew','supBoard','supReport'] },
+    { label:'H360 Scan',     view:'supH360Scan' },
     { label:'H360 Patients', view:'supH360' },
   ];
   /* STAFF MANAGEMENT — the roster and the appraisal work under one destination.

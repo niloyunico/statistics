@@ -501,6 +501,23 @@ if (service.site() === 'cloud') {
 
   /* ---- the shift supervisor report, filled in from H360 ---- */
 
+  // The patient lists are brought up to date before a report is filled, when the last
+  // collection is older than a few minutes. Who has left is only known once a collection
+  // has looked, and a leaver is placed in the shift in which the lists were seen to change:
+  // filled from yesterday's lists, a whole day's discharges landed in one shift's report.
+  // On the live site this is a few seconds; on the hospital PC the browser takes longer.
+  const REFRESH_AFTER_MS = Number(process.env.H360_REFRESH_AFTER_MS) || 5 * 60 * 1000;
+  async function freshenLists() {
+    if (service.job.running) return { skipped: 'A collection is running.' };
+    const known = await service.facts();
+    if (!known.hasLogin) return { skipped: 'No H360 login is saved here.' };
+    const last = known.lastRun && known.lastRun.collectedAt ? new Date(known.lastRun.collectedAt).getTime() : 0;
+    if (Date.now() - last < REFRESH_AFTER_MS) return { at: known.lastRun.collectedAt, fresh: true };
+    await service.run('list');
+    service.forget();
+    return service.job.error ? { error: service.job.error, at: known.lastRun ? known.lastRun.collectedAt : null } : { at: service.job.finishedAt };
+  }
+
   // The report as it is on the screen comes in; the same report with what H360 knows worked
   // in goes back. Nothing is saved here: the editor saves it the way it saves everything else.
   app.post('/api/h360/fill', guard, json, route(async (req, res) => {
@@ -508,15 +525,31 @@ if (service.site() === 'cloud') {
     const supervisor = require('../supervisor-reports');
     const body = req.body || {};
     const report = body.report || {};
+    const refreshed = await freshenLists().catch((err) => ({ error: err.message }));
     const before = bridge.toSheet(report);
     const previous = await supervisor.getPreviousReport(report.date, report.shift).catch(() => null);
     const result = await sheets.fill(await service.shared(), bridge.toSheet(report), body.options || {}, bridge.carriedFrom(previous));
+    // A leaver whose shift nobody can tell is offered with the row they would get, in the report's own columns.
+    const unsure = (result.unsure || []).map((item) => ({ ...item, row: bridge.fromSheet({ data: { [item.outcome === 'lama' ? 'lama' : 'discharged']: { rows: [item.row] } } }, null)[item.outcome === 'lama' ? 'lama' : 'discharged'][0] }));
     res.json({
       report: bridge.fromSheet({ data: result.data }, before),
-      census: result.census, opd: result.opd, sourceCollectedAt: result.sourceCollectedAt,
-      added: result.added, gone: result.gone, moved: result.moved, died: result.died, requested: result.requested, changed: result.changed,
+      census: result.census, opd: result.opd, sourceCollectedAt: result.sourceCollectedAt, refreshed, span: result.span,
+      added: result.added, gone: result.gone, moved: result.moved, died: result.died, requested: result.requested, unsure, duplicates: result.duplicates, changed: result.changed,
       updateDefaults: sheets.UPDATE_DEFAULTS,
     });
+  }));
+
+  // The report on the screen, saved or not, as the Word log sheet: what the editor shows is
+  // what is printed, so a report that has not reached the database yet prints the same.
+  app.post('/api/h360/report/docx', guard, json, route(async (req, res) => {
+    const render = require('./render');
+    const sheet = require('./bridge').toSheet((req.body || {}).report || {});
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sheet.date) || !schema.SHIFTS.includes(sheet.shift)) throw fail(400, 'The report needs a date and a shift before it can be printed.');
+    for (const id of Object.keys(sheet.data)) sheet.data[id].rows = (sheet.data[id].rows || []).slice(0, 500);
+    const file = await render.toDocx(sheet);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${render.fileName(sheet, 'docx')}"`);
+    res.end(file);
   }));
 
   // A saved supervisor report as the Word log sheet, and as its print page.

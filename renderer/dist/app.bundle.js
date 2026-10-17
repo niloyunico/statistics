@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=25733426bc","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=2484d01352","supervisor":"/dist/supervisor.chunk.js?v=b1ae217dfc","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=d50a7373c6","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=25733426bc","quality":"/dist/quality.chunk.js?v=fddba4a900","datacollection":"/dist/datacollection.chunk.js?v=2484d01352","supervisor":"/dist/supervisor.chunk.js?v=55d7b505bb","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -9915,7 +9915,7 @@ const UNICO_MODULE_VIEWS = {
   datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
   staff: ['staffHome', 'staffAll', 'staffNewEntries', 'staffRecentUpdates', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
-  supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport', 'supH360', 'supSheet'],
+  supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport', 'supH360Scan', 'supH360', 'supSheet'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
   users: ['users'],
   perf: ['perfHome', 'perfForm', 'perfPrint', 'perfAchievements', 'perfIncidents', 'perfCompare', 'perfRisk', 'perfBoard'],
@@ -10506,6 +10506,9 @@ function unicoWorkspaceSub(view) {
     label: 'Shift Reports',
     view: 'supHistory',
     match: ['supHistory', 'supNew', 'supBoard', 'supReport']
+  }, {
+    label: 'H360 Scan',
+    view: 'supH360Scan'
   }, {
     label: 'H360 Patients',
     view: 'supH360'
@@ -25598,6 +25601,7 @@ function App() {
       supNew: 'New Report',
       supHistory: 'All Reports',
       supReport: 'Print & Export',
+      supH360Scan: 'H360 Scan',
       supH360: 'H360 Patients',
       supSheet: 'All Reports'
     };

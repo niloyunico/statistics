@@ -1,9 +1,10 @@
 /* UNICO — H360 link for Supervisor Reports (renderer).
    What used to be the stand-alone "Unico Patient Collector", inside the app:
 
-     supH360  — H360 Patients: start a collection, the patients of every nurse station,
-                each patient's records, the IPD Admission list, Excel, and (administrators)
+     supH360Scan — H360 Scan: start a collection and watch it run, and (administrators)
                 the H360 login and what is kept in the app database.
+     supH360  — H360 Patients: what the last scan read: the patients of every nurse station,
+                each patient's records, the IPD Admission list, OPD, Excel.
      (New Report) — "Import from H360" in the report editor uses SupH360Update below; the
                 separate H360 log sheet screen is gone, the report itself prints as the Word log sheet.
 
@@ -271,7 +272,7 @@ function H3Progress({ status }) {
   );
 }
 
-function H3Patients({ setRoute }) {
+function H3Patients({ setRoute, mode }) {
   const [status, setStatus] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
   const [admissions, setAdmissions] = useState(null);
@@ -391,42 +392,71 @@ function H3Patients({ setRoute }) {
   const sub = snapshot
     ? snapshot.rows.length + ' in-patients in ' + snapshot.stations.length + ' stations · collected ' + h3When(snapshot.collectedAt) + (snapshot.site ? ' from ' + (H3_SITE[snapshot.site] || snapshot.site) : '')
     : 'Patients of every nurse station, read from H360';
+  const scan = mode === 'scan';
+  const last = status && status.lastRun;
+  const scanSub = status && status.running ? 'A scan is running now'
+    : last ? last.total + ' in-patients at the last scan · ' + h3When(last.collectedAt) + (last.site ? ' from ' + (H3_SITE[last.site] || last.site) : '')
+    : 'Nothing has been read from H360 yet';
   return (
     <div className="sup-wrap">
-      <H3Hero title="H360 Patients" sub={sub}>
-        {status && status.canManage && <H3Btn onClick={() => setSettings((v) => !v)} title="H360 login and what is kept in the app database"><Ic d={I.gear} s={15} c="#fff" />{status.hasLogin ? 'H360 login: ' + status.user : 'H360 login'}</H3Btn>}
-        {snapshot && <a className="sup-btn" href="/api/h360/export.xlsx"><Ic d={I.download} s={15} c="#fff" />Excel</a>}
-        <H3Btn onClick={() => collect('list')} disabled={!canStart} title="Updates only the patient lists (admissions, beds, discharge requests, who has left). Takes a few seconds; no records are read.">List only</H3Btn>
-        <H3Btn onClick={() => collect('full')} disabled={!canStart} title="Reads every record of every patient again. Slow; use it once a day or when something looks out of date.">Full collection</H3Btn>
-        {stepping
-          ? <H3Btn kind="pri" onClick={() => { going.current = false; }} title="Stops after the patients being read now. What was read is kept; Continue carries on.">Stop</H3Btn>
-          : <H3Btn kind="pri" onClick={() => collect('quick')} disabled={!canStart} title={onPc ? 'Reads notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old.' : 'Updates the lists, then reads the records of every patient not read in the last two hours. Keep this page open while it runs.'}>{running || busy ? 'Collecting…' : 'Collect all patients'}</H3Btn>}
-      </H3Hero>
+      {scan ? (
+        <H3Hero title="H360 Scan" sub={scanSub}>
+          {status && status.canManage && <H3Btn onClick={() => setSettings((v) => !v)} title="H360 login and what is kept in the app database"><Ic d={I.gear} s={15} c="#fff" />{status.hasLogin ? 'H360 login: ' + status.user : 'H360 login'}</H3Btn>}
+          <H3Btn onClick={() => collect('list')} disabled={!canStart} title="Updates only the patient lists (admissions, beds, discharge requests, who has left). Takes a few seconds; no records are read.">List only</H3Btn>
+          <H3Btn onClick={() => collect('full')} disabled={!canStart} title="Reads every record of every patient again. Slow; use it once a day or when something looks out of date.">Full collection</H3Btn>
+          {stepping
+            ? <H3Btn kind="pri" onClick={() => { going.current = false; }} title="Stops after the patients being read now. What was read is kept; Continue carries on.">Stop</H3Btn>
+            : <H3Btn kind="pri" onClick={() => collect('quick')} disabled={!canStart} title={onPc ? 'Reads notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old.' : 'Updates the lists, then reads the records of every patient not read in the last two hours. Keep this page open while it runs.'}>{running || busy ? 'Scanning…' : 'Scan all patients'}</H3Btn>}
+        </H3Hero>
+      ) : (
+        <H3Hero title="H360 Patients" sub={sub}>
+          {snapshot && <a className="sup-btn" href="/api/h360/export.xlsx"><Ic d={I.download} s={15} c="#fff" />Excel</a>}
+          <H3Btn kind="pri" onClick={() => setRoute({ view: 'supH360Scan' })} title="Read H360 again: H360 Scan"><Ic d={I.pulse || I.doc} s={15} />{running || stepping ? 'Scan running…' : 'Scan H360'}</H3Btn>
+        </H3Hero>
+      )}
 
-      {settings && status && status.canManage && <H3Settings status={status} reload={loadStatus} onClose={() => setSettings(false)} />}
+      {scan && settings && status && status.canManage && <H3Settings status={status} reload={loadStatus} onClose={() => setSettings(false)} />}
       {status && !status.hasLogin && <div className="sup-alert warn">{status.canManage
         ? (status.loginElsewhere ? 'The H360 login was saved from ' + (status.site === 'pc' ? 'the live site' : 'the hospital PC') + ', which keeps its own sealed copy. Enter it once here too: click "H360 login" above.' : 'No H360 login is saved yet. Click "H360 login" above and enter it once.')
         : 'No H360 login is saved for ' + (H3_SITE[status.site] || 'this server') + ' yet. Ask the administrator to enter it.'}</div>}
-      {status && !onPc && stepping && <div className="sup-alert info">Keep this page open while the collection runs. It reads a few patients at a time; if it is interrupted, what was read is kept and Continue carries on.</div>}
-      {paused && <div className="sup-alert warn"><span style={{ flex: 1 }}>A collection stopped part-way: {status.progress ? status.progress.done + ' of ' + status.progress.patients : 'some'} patients read.{status.error ? ' (' + status.error + ')' : ''}</span><H3Btn sm kind="pri" onClick={() => { setError(''); runSteps(status); }} disabled={!mayCollect}>Continue</H3Btn></div>}
-      {status && status.localStore && status.localStore.ok === false && <div className="sup-alert critical">{status.localStore.error}</div>}
-      {status && status.legacyReports > 0 && <div className="sup-alert info"><span style={{ flex: 1 }}>{status.legacyReports} report(s) written with the old collector are on this computer and not in the app yet.</span><H3Btn sm onClick={importOld} disabled={busy}>Bring them in</H3Btn></div>}
+      {scan && status && !onPc && stepping && <div className="sup-alert info">Keep this page open while the scan runs. It reads a few patients at a time; if it is interrupted, what was read is kept and Continue carries on.</div>}
+      {scan && paused && <div className="sup-alert warn"><span style={{ flex: 1 }}>A scan stopped part-way: {status.progress ? status.progress.done + ' of ' + status.progress.patients : 'some'} patients read.{status.error ? ' (' + status.error + ')' : ''}</span><H3Btn sm kind="pri" onClick={() => { setError(''); runSteps(status); }} disabled={!mayCollect}>Continue</H3Btn></div>}
+      {!scan && paused && <div className="sup-alert warn"><span style={{ flex: 1 }}>A scan stopped part-way. Open H360 Scan to carry on.</span><H3Btn sm onClick={() => setRoute({ view: 'supH360Scan' })}>H360 Scan</H3Btn></div>}
+      {scan && status && status.localStore && status.localStore.ok === false && <div className="sup-alert critical">{status.localStore.error}</div>}
+      {scan && status && status.legacyReports > 0 && <div className="sup-alert info"><span style={{ flex: 1 }}>{status.legacyReports} report(s) written with the old collector are on this computer and not in the app yet.</span><H3Btn sm onClick={importOld} disabled={busy}>Bring them in</H3Btn></div>}
       {error && <div className="sup-alert critical">{error}</div>}
-      {status && status.error && !running && <div className="sup-alert critical">{status.error}</div>}
-      {snapshot && (snapshot.warnings || []).map((w, i) => <div key={i} className="sup-alert warn">{w}</div>)}
+      {scan && status && status.error && !running && <div className="sup-alert critical">{status.error}</div>}
+      {scan && snapshot && (snapshot.warnings || []).map((w, i) => <div key={i} className="sup-alert warn">{w}</div>)}
+      {!scan && running && <div className="sup-alert info"><span style={{ flex: 1 }}>A scan is running now; this page shows what the last finished scan read.</span><H3Btn sm onClick={() => setRoute({ view: 'supH360Scan' })}>Watch it</H3Btn></div>}
 
-      {status && <H3Progress status={stepping ? Object.assign({}, status, { running: true, error: null }) : status} />}
-      {status && status.log && status.log.length > 0 && (
+      {scan && status && <H3Progress status={stepping ? Object.assign({}, status, { running: true, error: null }) : status} />}
+      {scan && status && status.log && status.log.length > 0 && (
         <div className="sup-card"><ul className="h3-log" ref={logRef}>{status.log.map((line, i) => <li key={i}>{new Date(line.at).toLocaleTimeString()}  {line.message}</li>)}</ul></div>
       )}
 
-      {snapshot && <div className="h3-tiles">
+      {/* What the last scan found, and where to go next: every count here opens the patients. */}
+      {scan && snapshot && <div className="h3-tiles">
+        <button className="h3-tile" onClick={() => setRoute({ view: 'supH360' })}><b>{snapshot.rows.length}</b><span>In-patients · {snapshot.stations.length} stations</span></button>
+        {requestedCount > 0 && <button className="h3-tile req" title="Patients whose discharge has been requested in H360 (shown in pink there). A report imports them into Discharged." onClick={() => setRoute({ view: 'supH360' })}><b>{requestedCount}</b><span>Discharge requested</span></button>}
+        {opd && opd.counts && <button className="h3-tile ok" onClick={() => setRoute({ view: 'supH360' })}><b>{opd.counts.attended}</b><span>Came to OPD ({h3ShowDate(opd.date)})</span></button>}
+        {shape && shape.found ? <button className="h3-tile" onClick={() => setRoute({ view: 'supH360' })}><b>{admissions.rows.length}</b><span>IPD Admission list rows</span></button>
+          : <div className="h3-tile" title={onPc ? 'The IPD Admission list is read with every scan on the hospital PC.' : 'H360 fills this list by script after the page opens, so the live site cannot read it; a scan on the hospital PC can.'}><b>—</b><span>IPD Admission list{onPc ? '' : ' (hospital PC only)'}</span></div>}
+      </div>}
+      {scan && snapshot && <div className="sup-toolbar">
+        <H3Btn kind="pri" onClick={() => setRoute({ view: 'supNew', h360: true })} disabled={!h3Can('add')}><Ic d={I.plus} s={14} />New report from H360</H3Btn>
+        <H3Btn onClick={() => setRoute({ view: 'supH360' })}>H360 Patients</H3Btn>
+        <H3Btn onClick={() => setRoute({ view: 'supBoard' })}>Patient Board</H3Btn>
+        <span className="h3-muted" style={{ flex: 1 }}>A report fills itself from the latest scan; the lists are refreshed again when it is imported.</span>
+      </div>}
+      {scan && loaded && !snapshot && !running && <div className="sup-card"><div className="sup-card-b h3-muted" style={{ textAlign: 'center', padding: 36 }}>No patients read yet. {status && status.hasLogin ? <span>Press <b>Scan all patients</b>.</span> : <span>Enter the H360 login first.</span>}</div></div>}
+
+      {!scan && snapshot && <div className="h3-tiles">
         <button className={'h3-tile' + (station === null && !onlyRequested ? ' on' : '')} onClick={() => { setStation(null); setOnlyRequested(false); }}><b>{snapshot.rows.length}</b><span>All stations</span></button>
         {requestedCount > 0 && <button className={'h3-tile req' + (onlyRequested ? ' on' : '')} title="Patients whose discharge has been requested in H360 (shown in pink there). A report imports them into Discharged." onClick={() => { setOnlyRequested((v) => !v); setTab('patients'); }}><b>{requestedCount}</b><span>Discharge requested</span></button>}
         {snapshot.stations.map((item) => <button key={item.station} className={'h3-tile' + (station === item.station ? ' on' : '')} onClick={() => { setStation(item.station); setTab('patients'); }}><b>{item.count}</b><span>{item.station}</span></button>)}
       </div>}
 
-      {(snapshot || (admissions && admissions.rows.length > 0) || opd) && <div className="sup-toolbar">
+      {!scan && (snapshot || (admissions && admissions.rows.length > 0) || opd) && <div className="sup-toolbar">
         <div className="sup-seg">
           <button className={tab === 'patients' ? 'on' : ''} onClick={() => setTab('patients')}>In-patients{snapshot ? ' (' + snapshot.rows.length + ')' : ''}</button>
           <button className={tab === 'admissions' ? 'on' : ''} onClick={() => setTab('admissions')}>IPD Admission list{admissions && admissions.rows.length ? ' (' + admissions.rows.length + ')' : ''}</button>
@@ -436,7 +466,7 @@ function H3Patients({ setRoute }) {
         <span className="h3-muted" style={{ flex: 1 }}>{tab === 'patients' && snapshot ? 'Showing ' + rows.length + ' of ' + snapshot.rows.length + ' patients. Click a patient to open the records.' : ''}</span>
       </div>}
 
-      {tab === 'patients' && snapshot && <div className="sup-card"><div className="h3-tablewrap"><table className="h3-table">
+      {!scan && tab === 'patients' && snapshot && <div className="sup-card"><div className="h3-tablewrap"><table className="h3-table">
         <thead><tr><th>#</th>{snapshot.columns.map((name) => <th key={name}>{name}</th>)}</tr></thead>
         <tbody>{rows.map((row, i) => (
           <tr key={row._adm || i} className={(row._adm ? 'open' : '') + (h3Requested(row) ? ' req' : '')} onClick={() => row._adm && setOpen(row._adm)}>
@@ -445,19 +475,19 @@ function H3Patients({ setRoute }) {
         ))}</tbody>
       </table></div></div>}
 
-      {tab === 'admissions' && <React.Fragment>
+      {!scan && tab === 'admissions' && <React.Fragment>
         {shape && shape.found && <div className="h3-muted">Read {h3When(admissions.collectedAt)} from the IPD Admission page of H360{shape.total > shape.read ? ' (' + shape.read + ' of ' + shape.total + ' rows)' : ''}. Used for: {Object.keys(shape.recognised || {}).join(', ') || 'nothing yet'}.{(shape.missing || []).length ? ' Not found on the page: ' + shape.missing.join(', ') + '.' : ''}</div>}
-        {(!admissions || !admissions.rows.length) && <div className="sup-card"><div className="sup-card-b h3-muted">The IPD Admission list has not been read yet. {onPc ? 'It is read with every collection: click "Collect all patients" or "List only".' : 'It is read by the collection on the hospital PC.'}{status && status.lastRun && status.lastRun.register && status.lastRun.register.error ? ' Last attempt: ' + status.lastRun.register.error : ''}</div></div>}
+        {(!admissions || !admissions.rows.length) && <div className="sup-card"><div className="sup-card-b h3-muted">The IPD Admission list has not been read yet. {onPc ? 'It is read with every scan: click "Scan all patients" or "List only" on H360 Scan.' : 'H360 fills it by script after the page opens, so the live site cannot read it; it is read by a scan on the hospital PC.'}{status && status.lastRun && status.lastRun.register && status.lastRun.register.error ? ' Last attempt: ' + status.lastRun.register.error : ''}</div></div>}
         {admissions && admissions.rows.length > 0 && <div className="sup-card"><div className="h3-tablewrap"><table className="h3-table">
           <thead><tr><th>#</th>{regCols.names.map((name) => <th key={name}>{name}</th>)}</tr></thead>
           <tbody>{regRows.map((r, i) => <tr key={i}><td>{i + 1}</td>{regCols.names.map((name) => <td key={name}>{((regCols.raw ? r.raw : r.fields) || {})[name] || ''}</td>)}</tr>)}</tbody>
         </table></div></div>}
       </React.Fragment>}
 
-      {tab === 'opd' && <H3Opd opd={opd} onPc={onPc} query={query} />}
+      {!scan && tab === 'opd' && <H3Opd opd={opd} onPc={onPc} query={query} />}
 
-      {loaded && !snapshot && tab === 'patients' && <div className="sup-card"><div className="sup-card-b h3-muted" style={{ textAlign: 'center', padding: 36 }}>No patients collected yet. {onPc ? <span>Press <b>Collect all patients</b>.</span> : <span>Press <b>Refresh patient lists</b>, or run a collection on the hospital PC.</span>}</div></div>}
-      {open && <H3PatientDrawer admissionNo={open} onClose={() => setOpen(null)} />}
+      {!scan && loaded && !snapshot && tab === 'patients' && <div className="sup-card"><div className="sup-card-b h3-muted" style={{ textAlign: 'center', padding: 36 }}>No patients read yet. <span>Open <b>H360 Scan</b> and press <b>Scan all patients</b>.</span></div></div>}
+      {!scan && open && <H3PatientDrawer admissionNo={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }
@@ -465,7 +495,7 @@ function H3Patients({ setRoute }) {
 /* ================= H360 inside the shift report (New Report) ================= */
 
 // What "Import from H360" may do to the report on screen (server/h360/sheets.js UPDATE_DEFAULTS).
-const H3_UPDATE_DEFAULTS = { addNew: true, updateDetails: true, diagnosis: 'empty', remarks: 'empty', remarksFrom: 'nursing', useComplaint: false, sections: true, register: true, dischargeRequests: true };
+const H3_UPDATE_DEFAULTS = { addNew: true, updateDetails: true, diagnosis: 'empty', remarks: 'empty', remarksFrom: 'progress', useComplaint: false, sections: true, register: true, dischargeRequests: true };
 const H3_OPTIONS_KEY = 'unico_h360_update_options_v1';
 
 // The import panel of the report editor: how fresh the H360 collection is, the choices,
@@ -499,9 +529,9 @@ function SupH360Update({ hasPatients, busy, onRun, onClose, setRoute }) {
         <span style={{ flex: 1 }}>{!status ? 'Checking the H360 collection…' : last
           ? 'H360 collection: ' + last.total + ' in-patients, collected ' + h3When(last.collectedAt) + '.'
           : 'Nothing has been collected from H360 yet.'}</span>
-        <H3Btn sm onClick={() => setRoute({ view: 'supH360' })}>{last ? 'Collect again' : 'Collect patients'}</H3Btn>
+        <H3Btn sm onClick={() => setRoute({ view: 'supH360Scan' })}>{last ? 'Scan again' : 'Scan H360'}</H3Btn>
       </div>
-      <div className="h3-muted">New admissions, critical-area and cabin patients go to their lists with bed, age, consultant, diagnosis and remarks. A patient with a discharge request in H360 goes to Discharged; LAMA and completed discharges follow the IPD Admission list. Surgery, procedures, pressure sore, ventilator and the counts are filled where H360 has them. Nothing you typed is overwritten unless you choose so below.</div>
+      <div className="h3-muted">The patient lists are refreshed from H360 first when the last scan is more than a few minutes old. Admissions and leavers are counted for this report's shift hours only (type the Shift Time to set them). New admissions, critical-area and cabin patients go to their lists with bed, age, consultant, diagnosis and remarks. A patient with a discharge request in H360 goes to Discharged; LAMA and completed discharges follow the IPD Admission list. Surgery, procedures, pressure sore, ventilator and the counts are filled where H360 has them. Nothing you typed is overwritten unless you choose so below.</div>
       <div className="sup-toolbar">
         <H3Btn kind="pri" onClick={run} disabled={busy || !last}>{busy ? 'Importing…' : hasPatients ? 'Update now' : 'Import now'}</H3Btn>
         <H3Btn onClick={() => setMore((v) => !v)}>{more ? 'Hide options' : 'Options'}</H3Btn>
@@ -526,8 +556,8 @@ function SupH360Update({ hasPatients, busy, onRun, onClose, setRoute }) {
           </select></div>
         <div className="sup-fld"><label>Take remarks from</label>
           <select value={o.remarksFrom} onChange={(e) => set('remarksFrom', e.target.value)}>
+            <option value="progress">The newest doctor progress note (the nursing note when there is none)</option>
             <option value="nursing">The newest nursing follow-up note</option>
-            <option value="progress">The newest doctor progress note</option>
             <option value="both">Both: doctor progress note, then nursing note</option>
             <option value="handover">The doctors' handover: clinical summary and plan</option>
           </select></div>
@@ -572,7 +602,8 @@ function SupH360Card({ setRoute }) {
       <div className="sup-hub-s">{line}</div>
       <div className="h3-muted">Patients read from H360. A new report imports them with one click.</div>
       <div className="sup-hub-row">
-        <H3Btn sm kind="pri" onClick={() => setRoute({ view: 'supH360' })}>{run || (status && status.running) ? 'H360 Patients' : 'Collect patients'}</H3Btn>
+        <H3Btn sm kind="pri" onClick={() => setRoute({ view: 'supH360Scan' })}>{status && status.running ? 'Scan running…' : 'Scan H360'}</H3Btn>
+        {run && <H3Btn sm onClick={() => setRoute({ view: 'supH360' })}>H360 Patients</H3Btn>}
         {run && h3Can('add') && <H3Btn sm onClick={() => setRoute({ view: 'supNew', h360: true })}><Ic d={I.plus} s={14} />New report from H360</H3Btn>}
       </div>
     </div>
@@ -580,7 +611,10 @@ function SupH360Card({ setRoute }) {
 }
 
 function SupH360View({ setRoute }) {
-  return <H3Patients setRoute={setRoute} />;
+  return <H3Patients setRoute={setRoute} mode="patients" />;
+}
+function SupH360ScanView({ setRoute }) {
+  return <H3Patients setRoute={setRoute} mode="scan" />;
 }
 
 /* ---------------- styles ---------------- */
@@ -664,4 +698,4 @@ div.h3-tile{cursor:default}
 `;
 (function injectH3Css() { try { if (typeof document === 'undefined' || document.getElementById('h3-css')) return; const st = document.createElement('style'); st.id = 'h3-css'; st.textContent = H3_CSS; document.head.appendChild(st); } catch (e) {} })();
 
-Object.assign(window, { SupH360View, SupH360Card, SupH360Update, SupH360Convert });
+Object.assign(window, { SupH360View, SupH360ScanView, SupH360Card, SupH360Update, SupH360Convert });

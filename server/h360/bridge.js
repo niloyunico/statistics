@@ -121,6 +121,8 @@ function toSheet(report) {
   return {
     date: text(report.date),
     shift: text(report.shift),
+    // The hours the report covers: "8:00 PM - 8:00 AM" decides which admissions and leavers are this shift's.
+    shiftTime: text(report.shiftTime),
     title: titleFor(text(report.shift) || 'Night'),
     data,
     preparedBy: { role: 'Name of Nursing Supervisor', name: text(report.supervisorName) },
@@ -202,14 +204,15 @@ function fromSheet(sheet, before) {
   return out;
 }
 
-// Diagnosis and remarks typed in an earlier supervisor report, by UHID.
+// The diagnosis typed in an earlier supervisor report, by UHID. Remarks are not carried:
+// they describe one shift, and the next shift's come from the newest notes.
 function carriedFrom(report) {
   const carried = new Map();
   if (!report) return carried;
   for (const list of LISTS.filter((item) => item.patient)) {
     for (const row of Array.isArray(report[list.key]) ? report[list.key] : []) {
       const uhid = text(row && row.uhid);
-      if (uhid && !carried.has(uhid)) carried.set(uhid, { diagnosis: text(row.diagnosis), remarks: text(row.remarks) });
+      if (uhid && !carried.has(uhid)) carried.set(uhid, { diagnosis: text(row.diagnosis) });
     }
   }
   return carried;

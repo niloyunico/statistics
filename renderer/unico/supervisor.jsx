@@ -24,6 +24,7 @@ const supApi = {
   del: (u) => fetch(u, { method: 'DELETE' }).then((r) => r.json()),
 };
 const SUP_SHIFTS = ['Morning', 'Evening', 'Night'];
+const supWhen = (value) => { try { return value ? new Date(value).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'unknown'; } catch (e) { return String(value || ''); } };
 // Render overlays (modals) at document.body so no transformed/overflow ancestor
 // (the app content column) clips or off-centers them.
 function supPortal(node) { try { if (typeof document !== 'undefined' && typeof ReactDOM !== 'undefined' && ReactDOM.createPortal) return ReactDOM.createPortal(node, document.body); } catch (e) {} return node; }
@@ -653,9 +654,13 @@ function CarryForwardModal({ currentId, currentRep, onClose, onImport }) {
 }
 
 /* ================================================================= EDITOR */
+// The name of the account signed in, for the supervisor's name on a new report.
+function supSignedInName() {
+  try { const u = window.__UNICO_USER__; return (u && String(u.name || '').trim()) || ''; } catch (e) { return ''; }
+}
 function blankReport(shift) {
   return {
-    date: supTodayISO(), shift: shift || supCurrentShift(), shiftTime: '', supervisorName: '', status: 'draft',
+    date: supTodayISO(), shift: shift || supCurrentShift(), shiftTime: '', supervisorName: supSignedInName(), status: 'draft',
     newAdmissions: [], criticalArea: [], cabinArea: [], lama: [], discharged: [], otTable: [], surgeries: [], interventional: [], radiological: [],
     radiologyCounts: {}, ventilators: [], erCensus: {}, general: {}, pressureSore: [], phlebitis: [],
     absenteeism: '', sickLeave: '', roundObservation: '', census: {}, totals: {},
@@ -677,7 +682,8 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
   const [secName, setSecName] = useState('');
   const [carryOpen, setCarryOpen] = useState(false);
   // Import from H360 (server/h360): the panel, and what the last import did.
-  const [h3, setH3] = useState({ open: !!h360, busy: false, notes: [] });
+  const [h3, setH3] = useState({ open: !!h360, busy: false, notes: [], unsure: [] });
+  const [wording, setWording] = useState(false);
   const admin = supIsAdmin();
   const readOnly = rep.status === 'approved' && !admin;
 
@@ -855,7 +861,11 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
       if ((j.moved || []).length) notes.push('Placed by the IPD Admission list: ' + j.moved.join(', ') + '.');
       if ((j.died || []).length) notes.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + j.died.join(', ') + '.');
       if ((j.gone || []).length) notes.push('No longer on the H360 lists (move them to Discharged or LAMA if they left): ' + j.gone.join(', ') + '.');
-      setH3({ open: false, busy: false, notes });
+      (j.duplicates || []).forEach((d) => notes.push('H360 holds the same diagnosis text for ' + d.names.join(' and ') + ' ("' + d.diagnosis + '…"): a problem list may have been written into the wrong record. Check before the report goes out.'));
+      if (j.refreshed && j.refreshed.error) notes.push('The H360 patient lists could not be refreshed first (' + j.refreshed.error + '); the lists of ' + supWhen(j.refreshed.at) + ' were used.');
+      else if (j.refreshed && j.refreshed.at && !j.refreshed.fresh) notes.push('The H360 patient lists were refreshed first (' + supWhen(j.refreshed.at) + ').');
+      if (j.span && j.span.from) notes.push('This report covers ' + j.span.from.slice(11, 16) + ' to ' + j.span.to.slice(11, 16) + (j.span.to.slice(0, 10) !== j.span.from.slice(0, 10) ? ' next day' : '') + (cur.shiftTime ? ' (from its Shift Time)' : ' (the usual ' + cur.shift + ' hours; type the Shift Time to change it)') + ': admissions and leavers outside these hours belong to another shift.');
+      setH3({ open: false, busy: false, notes, unsure: (j.unsure || []).map((item) => ({ ...item, row: { ...item.row, dept: supH360Dept(item.row.dept, deptNames) } })) });
       supToast((j.added || []).length ? j.added.length + ' patient(s) imported from H360.' : 'Report updated from H360.', 'success');
       if (!String(cur.supervisorName || '').trim()) supToast('Type the supervisor name to save this report.', 'info');
     } catch (e) {
@@ -864,6 +874,26 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
     }
   };
 
+  // A patient who left H360 between two scans a day apart: the supervisor says which list, or that it was not this shift.
+  const placeUnsure = (item, list) => {
+    if (list) { const { h360Dept, ...row } = item.row; edit({ [list]: [...(repRef.current[list] || []), row] }); setOpen((o) => ({ ...o, [list]: true })); }
+    setH3((s) => ({ ...s, unsure: s.unsure.filter((u) => u !== item) }));
+  };
+  // The report as it is on the screen, as the Word log sheet. Sent to the server as it stands,
+  // so it prints the same whether or not it has been saved yet.
+  const doWordSheet = async () => {
+    setWording(true);
+    try {
+      const r = await fetch('/api/h360/report/docx', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ report: repRef.current }) });
+      if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || 'The Word file could not be made.'); }
+      const named = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '');
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url; a.download = named ? named[1] : 'Log Sheet For ' + (repRef.current.shift || '') + ' Supervisor.docx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) { supToast((e && e.message) || 'The Word file could not be made.', 'error'); } finally { setWording(false); }
+  };
   const saveSig = (sig) => { if (window.unicoSig) window.unicoSig.save(sig); edit({ sign: sig }); };
   const addPatient = (target, row) => { edit({ [target]: [...(rep[target] || []), { ...row }] }); setOpen((o) => ({ ...o, [target]: true })); };
   const createCustomSection = (title) => {
@@ -919,11 +949,11 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
       <div className="sup-toolbar sup-sticky">
         <SupBtn sm onClick={() => setRoute({ view: 'supHistory' })}><Ic d={I.chevR} s={14} style={{ transform: 'rotate(180deg)' }} />Back</SupBtn>
         <StatusBadge status={rep.status} />
-        <span className={'sup-saved' + (saved === 'Saved' ? ' ok' : '')}>{saved}</span>
+        <span className={'sup-saved' + (saved === 'Saved ✓' ? ' ok' : '')}>{saved || (!readOnly && !rep.id && !String(rep.supervisorName || '').trim() ? 'Not saved yet — type the supervisor name' : '')}</span>
         <span style={{ flex: 1 }} />
         {!readOnly && window.SupH360Update && <SupBtn sm kind="pri" onClick={() => setH3((s) => ({ ...s, open: !s.open }))} title="Bring the patients of every nurse station, discharges, surgeries and counts in from H360"><Ic d={I.download} s={14} />{allPatients.length ? 'Update from H360' : 'Import from H360'}</SupBtn>}
         {!readOnly && <SupBtn sm onClick={() => setQuickAdd(true)}><Ic d={I.plus} s={14} />Add Patient</SupBtn>}
-        {rep.id && <a className="sup-btn sm" href={'/api/h360/report/' + encodeURIComponent(rep.id) + '/docx'} title="This report as the Word log sheet (save first: it prints what is saved)"><Ic d={I.doc} s={14} />Word log sheet</a>}
+        <SupBtn sm kind="word" onClick={doWordSheet} disabled={wording} title="This report, as it is on the screen, as the Word log sheet"><Ic d={I.doc} s={14} />{wording ? 'Exporting…' : 'Word log sheet'}</SupBtn>
         {!rep.id ? null : <SupBtn sm onClick={() => setRoute({ view: 'supReport', id: rep.id })}><Ic d={I.print} s={14} />Print &amp; Export</SupBtn>}
         {!readOnly && rep.status === 'draft' && <SupBtn sm kind="pri" onClick={() => setStatus('submitted')}><Ic d={I.check} s={14} />Submit</SupBtn>}
         {admin && rep.status === 'submitted' && <SupBtn sm kind="pri" onClick={() => setStatus('approved')}><Ic d={I.check} s={14} />Approve</SupBtn>}
@@ -933,6 +963,18 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
       {readOnly && <div className="sup-alert info"><Ic d={I.check} s={15} />This report is approved and locked. An administrator can reopen it for edits.</div>}
       {h3.open && !readOnly && window.SupH360Update && <window.SupH360Update hasPatients={allPatients.length > 0} busy={h3.busy} onRun={runH360} onClose={() => setH3((s) => ({ ...s, open: false }))} setRoute={setRoute} />}
       {h3.notes.length > 0 && <div>{h3.notes.map((t, i) => <div key={'h' + i} className="sup-alert info">{t}</div>)}</div>}
+      {h3.unsure.length > 0 && !readOnly && <div className="sup-card"><div className="sup-card-b">
+        <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 4 }}>Left H360 since the previous scan — which shift?</div>
+        <div className="h3-muted" style={{ marginBottom: 8 }}>These patients were on the station lists at the previous scan and are gone now. The scans are too far apart to say whether they left in this shift, so they are not placed. Add each to the right list, or leave them to the shift they belong to.</div>
+        {h3.unsure.map((item, i) => (
+          <div key={item.uhid || i} className="sup-alert warn" style={{ marginBottom: 6 }}>
+            <span style={{ flex: 1 }}><b>{item.name}</b>{item.row.dept ? ' · ' + item.row.dept : ''}{item.row.bed ? ' ' + item.row.bed : ''} — last seen {supWhen(item.since)}, gone by {supWhen(item.until)}</span>
+            <SupBtn sm kind="pri" onClick={() => placeUnsure(item, 'discharged')}>Discharged</SupBtn>
+            <SupBtn sm onClick={() => placeUnsure(item, 'lama')}>LAMA</SupBtn>
+            <SupBtn sm onClick={() => placeUnsure(item, null)}>Not this shift</SupBtn>
+          </div>
+        ))}
+      </div></div>}
       {alerts.length > 0 && <div>{alerts.map((a, i) => <div key={i} className={'sup-alert ' + a.level}><Ic d={I.bell} s={15} />{a.text}</div>)}</div>}
 
       {/* header identity */}
@@ -1206,7 +1248,7 @@ function SupHistory({ setRoute }) {
                 <td data-label="Actions" style={{ whiteSpace: 'nowrap' }}>
                   <SupBtn sm onClick={() => setRoute({ view: 'supNew', id: r.id })}>Open</SupBtn>{' '}
                   <SupBtn sm onClick={() => setRoute({ view: 'supReport', id: r.id })}><Ic d={I.print} s={13} />Export</SupBtn>{' '}
-                  <a className="sup-btn sm" href={'/api/h360/report/' + encodeURIComponent(r.id) + '/docx'} title="The hospital's paper log sheet, as a Word file">Word log sheet</a>{' '}
+                  <a className="sup-btn sm word" href={'/api/h360/report/' + encodeURIComponent(r.id) + '/docx'} title="The hospital's paper log sheet, as a Word file"><Ic d={I.doc} s={13} />Word</a>{' '}
                   <SupBtn sm onClick={() => duplicate(r)}>Duplicate</SupBtn>{' '}
                   {r.status === 'draft' && <SupBtn sm onClick={() => setStatus(r, 'submitted')}>Submit</SupBtn>}
                   {admin && r.status === 'submitted' && <SupBtn sm onClick={() => setStatus(r, 'approved')}>Approve</SupBtn>}
@@ -1542,7 +1584,7 @@ function SupReportView({ id, depts, setRoute }) {
         <SupBtn sm onClick={doPrint}><Ic d={I.print} s={14} />Print</SupBtn>
         {/* This report, as the page shows it, as an editable .docx file. (The hospital's paper
             log sheet is a different Word file: "Word log sheet" in the report and in All Reports.) */}
-        <SupBtn sm onClick={doWord} disabled={wording || !rep} title="Download this report, as shown below, as a Word file"><Ic d={I.doc} s={14} />{wording ? 'Exporting…' : 'Export Word'}</SupBtn>
+        <SupBtn sm kind="word" onClick={doWord} disabled={wording || !rep} title="Download this report, as shown below, as a Word file"><Ic d={I.doc} s={14} />{wording ? 'Exporting…' : 'Export Word'}</SupBtn>
         <SupBtn sm kind="pri" onClick={doExport} disabled={exporting || !rep}><Ic d={I.download} s={14} />{exporting ? 'Exporting…' : 'Export PDF'}</SupBtn>
       </div>
 
@@ -1720,9 +1762,9 @@ function SupBoard({ depts, setRoute }) {
           <button className={!useH360 ? 'on' : ''} onClick={() => { setSource('reports'); setDept(''); }}>From reports ({fromReports.length})</button>
         </div>
         <span style={{ flex: 1, fontSize: 12, color: 'var(--muted,#64748b)' }}>{useH360 ? 'Every patient in a bed at the last H360 collection. Diagnosis and notes typed in a report are shown where there are any.' : 'Patients typed into reports and not yet discharged in a later report.'}</span>
-        <SupBtn sm onClick={() => setRoute({ view: 'supH360' })}>Collect again</SupBtn>
+        <SupBtn sm onClick={() => setRoute({ view: 'supH360Scan' })}>Scan again</SupBtn>
       </div>}
-      {!hasH360 && <div className="sup-alert info"><span style={{ flex: 1 }}>This board is built from the reports. Collect the patients from H360 to see everyone who is in a bed now.</span><SupBtn sm onClick={() => setRoute({ view: 'supH360' })}>H360 Patients</SupBtn></div>}
+      {!hasH360 && <div className="sup-alert info"><span style={{ flex: 1 }}>This board is built from the reports. Collect the patients from H360 to see everyone who is in a bed now.</span><SupBtn sm onClick={() => setRoute({ view: 'supH360Scan' })}>Scan H360</SupBtn></div>}
 
       <div className="sup-kpis">
         <div className="sup-kpi"><div className="n">{active.length}</div><div className="l">Total patients present</div></div>
@@ -1810,6 +1852,7 @@ function SupervisorView({ view, id, shift, openAdd, h360, depts, setRoute }) {
   // The H360 link (patient collection): supervisor-h360.jsx. The H360 log sheet is part of the
   // report now, so its old address opens the list of reports.
   if (view === 'supH360' && window.SupH360View) return <window.SupH360View setRoute={setRoute} />;
+  if (view === 'supH360Scan' && window.SupH360ScanView) return <window.SupH360ScanView setRoute={setRoute} />;
   if (view === 'supSheet') return <SupHistory setRoute={setRoute} />;
   if (view === 'supHistory') return <SupHistory setRoute={setRoute} />;
   if (view === 'supReport') return <SupReportView id={id} depts={depts} setRoute={setRoute} />;
@@ -1881,6 +1924,8 @@ const SUP_CSS = `
 .sup-btn:disabled{opacity:.55;cursor:default;transform:none}
 .sup-btn.pri{background:#2563eb;border-color:#2563eb;color:#fff;box-shadow:0 6px 14px -6px rgba(37,99,235,.7)}
 .sup-btn.pri:hover{background:#1d4ed8;border-color:#1d4ed8}
+.sup-btn.word{background:#185abd;border-color:#185abd;color:#fff;box-shadow:0 6px 14px -6px rgba(24,90,189,.7)}
+.sup-btn.word:hover{background:#124a9e;border-color:#124a9e}
 .sup-btn.dgr{color:#dc2626;border-color:#fecaca}
 .sup-btn.dgr:hover{background:#fef2f2}
 .sup-btn.sm{padding:5px 10px;font-size:11.5px}

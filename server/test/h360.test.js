@@ -24,7 +24,8 @@ const opdList = require('../h360/opd');
 
 let passed = 0;
 const ok = (name) => { passed++; console.log('  ok  ' + name); };
-const { standIn, TODAY, daysAgo } = require('./h360-standin');
+const { standIn, TODAY, daysAgo, shiftNow, inShift } = require('./h360-standin');
+const SHIFT = shiftNow();
 
 const listen = (app) => new Promise((resolve) => { const server = http.createServer(app).listen(0, '127.0.0.1', () => resolve(server)); });
 
@@ -58,6 +59,28 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
   assert.throws(() => views.assertReadOnly('https://elsewhere.example/consultation-note/5', 'https://his.example'), /Blocked/);
   assert.ok(views.assertReadOnly('https://his.example/consultation-note/5', 'https://his.example'));
   ok('only view-only H360 pages may be requested');
+
+  /* ---- the period a report covers ---- */
+  assert.deepStrictEqual(sheets.shiftHours('8:00 PM - 8:00 AM'), ['20:00', '08:00']);
+  assert.deepStrictEqual(sheets.shiftHours('07:00-15:00'), ['07:00', '15:00']);
+  assert.strictEqual(sheets.shiftHours('M1'), null);
+  const night = sheets.period('2026-10-13', 'Night', '');
+  assert.deepStrictEqual([night.from, night.to, night.days], ['2026-10-13 20:00:00', '2026-10-14 06:00:00', ['2026-10-13', '2026-10-14']]);
+  const morning = sheets.period('2026-10-14', 'Morning', '');
+  const evening = sheets.period('2026-10-14', 'Evening', '');
+  assert.ok(night.to <= morning.from && morning.to <= evening.from, 'the three shifts of a day must not overlap');
+  assert.strictEqual(sheets.period('2026-10-14', 'Morning', '7:00 AM - 3:00 PM').to, '2026-10-14 15:00:00');
+  ok('a report covers its own shift hours, and the three shifts of a day do not overlap');
+
+  /* ---- the diagnosis read out of a clinical summary ---- */
+  assert.deepStrictEqual(sheets.diagnosisInSummary('Admission issue:\n1. Fever, weakness\n2. Anorexia, vomiting\nDx\n1. Dengue fever\n2. DM\nPlan:\nIV fluid'), ['Dengue fever', 'DM']);
+  assert.deepStrictEqual(sheets.diagnosisInSummary('Admission Issues:\n1. Fever 3 days\nDx: DF, HTN, ?UTI\nHBSAG+\nPlan: CBC'), ['DF, HTN, ?UTI', 'HBSAG+']);
+  assert.deepStrictEqual(sheets.diagnosisInSummary('Issues and Progress:\n1. Fever for 4 days (NS1 positive)\n2. Cough for 2 days.'), []);
+  assert.deepStrictEqual(sheets.diagnosisInSummary('Pneumonia\nDM'), ['Pneumonia', 'DM']);
+  assert.strictEqual(sheets.ventilationOf({ breathing: '', diagnosis: 'Septic shock • Type-2 RF requiring MV D5', summary: '', progress: '' }), 'Invasive');
+  assert.strictEqual(sheets.ventilationOf({ breathing: '', diagnosis: 'S/P Extubation D2 (On MV from 2.10.26 -5.10.26)', summary: '', progress: '' }), null);
+  assert.strictEqual(sheets.ventilationOf({ breathing: 'BiPAP 2 hourly', diagnosis: '', summary: '', progress: '' }), 'Non-Invasive (CPAP/BiPAP)');
+  ok('the diagnosis is taken from under a "Dx" heading and never from the headings themselves; ventilation is read from the notes when the oxygen box is empty');
 
   /* ---- the login is sealed ---- */
   delete process.env.HIS_USER; delete process.env.HIS_PASS;
@@ -129,11 +152,11 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
 
 /* the OPD Nurse Station list */
     assert.ok(lines.some((m) => /OPD list: 4 out-patients, 2 with vitals taken, 2 seen by the doctor/.test(m)), lines.join(' | '));
-    const opdShared = await sharedDb.collection('h360Opd').findOne({ _id: TODAY });
+    const opdShared = await sharedDb.collection('h360Opd').findOne({ _id: SHIFT.date });
     assert.deepStrictEqual(opdShared.counts, { all: 4, appointed: 2, prescribed: 2, vitals: 2, attended: 3 });
     assert.strictEqual(opdShared.rows, undefined);
     assert.deepStrictEqual(opdShared.departments.map((d) => [d.department, d.total, d.vitals]).sort(), [['Family medicine', 2, 0], ['General Surgery', 2, 2]]);
-    const opdOwn = await localDb.collection('opd').findOne({ _id: TODAY });
+    const opdOwn = await localDb.collection('opd').findOne({ _id: SHIFT.date });
     assert.deepStrictEqual(opdOwn.rows.map((row) => [row.name, row.serial, row.status, row.vitals]).sort(), [
       ['OPD ANNA', '24', 'Appointed (Vitals Taken)', true], ['OPD BEN', '10', 'Appointed', false], ['OPD CARA', '2', 'Prescribed', false], ['OPD DAN', '', 'Prescribed (Vitals Taken)', true]]);
     assert.strictEqual(opdOwn.rows[0].department.length > 0 && opdOwn.rows[0].doctor.startsWith('Dr.'), true);
@@ -149,7 +172,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     ok('on the PC the patient viewer shows the full records');
 
     /* the log sheet */
-    const sheet = await sheets.create(sharedStore, { date: TODAY, shift: 'Morning' }, 'tester');
+    const sheet = await sheets.create(sharedStore, { date: SHIFT.date, shift: SHIFT.shift }, 'tester');
     const names = (id) => sheet.data[id].rows.map((row) => row.name);
     assert.deepStrictEqual(names('newAdmissions'), ['TEST DELTA']);
     assert.deepStrictEqual(names('critical'), ['TEST BRAVO']);
@@ -170,7 +193,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
 
     /* a list-only refresh from the live site */
     const gone = mock.state.patients.splice(2, 1)[0];
-    mock.state.left.charlie = { ...gone, dis_ind: '1', dis_datetime: `${TODAY} 00:55:00`, dis_reason: 'LAMA' };
+    mock.state.left.charlie = { ...gone, dis_ind: '1', dis_datetime: `${inShift(25)}`, dis_reason: 'LAMA' };
     where = 'cloud';
     const refreshed = await service.collect('full', () => {});
     assert.strictEqual(refreshed.mode, 'list');
@@ -195,6 +218,18 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.deepStrictEqual(result.report.data.discharged.rows.map((row) => row.name), ['TEST ALPHA', 'TEST ECHO']);
     assert.ok(saved.updatedAt);
     ok('Update from H360 moves a patient who left against advice to LAMA and keeps what was typed; an older copy cannot overwrite a newer save');
+
+    /* a patient gone from the lists whose shift nobody can tell: offered, not placed */
+    const dayBefore = new Date(Date.now() - 30 * 3600 * 1000);
+    await sharedDb.collection('h360Patients').insertOne({ key: 'U0009|IP-9', uhid: 'U0009', ipNo: 'IP-9', admissionNo: '1009', patientNo: '509', active: false, station: 'Nurse Station L-9',
+      lastSeenAt: dayBefore, inactiveSince: new Date(), seq: 9, admission: { patient_name: 'TEST INDIA', patient_code: 'U0009', admission_uid: 'IP-9', bed_name: '905', primary_doctor_name: 'Dr. Nine', admission_date: daysAgo(2) + ' 10:00:00', death_ind: '0' }, profile: { Age: '40 Y 0 M 0 D' } });
+    const bridgeLib = require('../h360/bridge');
+    const offered = await sheets.fill(sharedStore, bridgeLib.toSheet({ date: SHIFT.date, shift: SHIFT.shift }), {}, new Map());
+    assert.deepStrictEqual(offered.unsure.map((item) => [item.name, item.row.name, item.row.dept]), [['TEST INDIA', 'TEST INDIA', 'Level-09\n905']]);
+    assert.ok(!offered.data.discharged.rows.some((row) => row.name === 'TEST INDIA'));
+    assert.deepStrictEqual(offered.moved, ['TEST CHARLIE (LAMA)', 'TEST ECHO (Discharged)']);
+    await sharedDb.collection('h360Patients').deleteOne({ uhid: 'U0009' });
+    ok('a patient who left between two collections a day apart is offered to the supervisor, not written into a shift they may not have left in');
 
     /* every record in the app database, then back to the log sheet only */
     where = 'pc';
@@ -348,7 +383,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     const word = await get(`/api/h360/sheets/${sheet.id}/docx`);
     assert.strictEqual(word.body.slice(0, 2).toString(), 'PK');
     const print = (await get(`/api/h360/sheets/${sheet.id}/print`)).body.toString();
-    assert.ok(print.includes('Log Sheet for Morning Supervisor') && print.includes('TEST ECHO') && print.includes('data:image/png;base64,'));
+    assert.ok(print.includes('Log Sheet for ' + SHIFT.shift + ' Supervisor') && print.includes('TEST ECHO') && print.includes('data:image/png;base64,'));
     const excel = await get('/api/h360/export.xlsx');
     assert.strictEqual(excel.status, 200);
     assert.strictEqual(excel.body.slice(0, 2).toString(), 'PK');
@@ -356,7 +391,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
 /* the shift supervisor report, filled in from H360 (New Report) */
     const post = async (path, body) => { const r = await fetch(base + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }); return { status: r.status, body: await r.json() }; };
     const mine = {
-      date: TODAY, shift: 'Morning', supervisorName: 'Test Supervisor', shiftTime: '7:00 AM - 3:00 PM',
+      date: SHIFT.date, shift: SHIFT.shift, supervisorName: 'Test Supervisor', shiftTime: '',
       cabinArea: [{ dept: 'IPD Cabin Level 10', bed: '1020/A', name: 'TEST CHARLIE', uhid: 'U0003', diagnosis: 'Typed by hand', remarks: 'Keep me', c_custom: 'a custom column' }],
       criticalArea: [{ dept: 'Medical ICU', bed: 'MICU-9', name: 'TEST BRAVO', uhid: 'U0002', diagnosis: '', remarks: '' }],
       newAdmissions: [{ dept: 'IPD Cabin Level 10', bed: '1018/B', name: 'TEST ALPHA', uhid: 'U0001', diagnosis: 'Fever', remarks: 'typed' }],
@@ -400,7 +435,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     const logSheet = await get('/api/h360/report/' + kept.id + '/docx');
     assert.strictEqual(logSheet.body.slice(0, 2).toString(), 'PK');
     const page = (await get('/api/h360/report/' + kept.id + '/print')).body.toString();
-    assert.ok(page.includes('Log Sheet for Morning Supervisor') && page.includes('TEST CHARLIE') && page.includes('Level-10<br>1018/B') && page.includes('Test Supervisor'), 'the print page of a supervisor report');
+    assert.ok(page.includes('Log Sheet for ' + SHIFT.shift + ' Supervisor') && page.includes('TEST CHARLIE') && page.includes('Level-10<br>1018/B') && page.includes('Test Supervisor'), 'the print page of a supervisor report');
     assert.strictEqual((await get('/api/h360/report/nope/docx')).status, 404);
     // Print & Export sends the headings and tables it is showing: its Word file is that page, not the log sheet
     const shown = {
@@ -418,7 +453,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.strictEqual(converted.body.converted, 2);
     assert.strictEqual((await post('/api/h360/sheets/convert')).body.converted, 0);
     const all = await supervisor.getReports({});
-    const fromSheet = all.find((r) => r.date === TODAY && r.id !== kept.id);
+    const fromSheet = all.find((r) => r.date === SHIFT.date && r.id !== kept.id);
     assert.ok(fromSheet && fromSheet.status === 'draft' && fromSheet.lama.some((row) => row.name === 'TEST CHARLIE' && row.dept === 'Level-10' && row.bed === '1020/A'));
     assert.strictEqual(all.length, 3);
     ok('a supervisor report prints as the Word log sheet, and the log sheets written before become draft reports once');
@@ -454,7 +489,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
         assert.strictEqual(read.rows.find((row) => row.fields.uhid === 'U0003').fields.outcome, 'lama');
         const outPatients = opdList.parse(await viaBrowser.opd());
         assert.deepStrictEqual(outPatients.counts, { all: 4, appointed: 2, prescribed: 2, vitals: 2, attended: 3 });
-        assert.strictEqual(outPatients.date, TODAY);
+        assert.strictEqual(outPatients.date, SHIFT.date);
         const pageHtml = await viaBrowser.get(mock.state.base + '/consultation-note/1001');
         assert.ok(/stable on room air/.test(pageHtml.html));
       } finally {

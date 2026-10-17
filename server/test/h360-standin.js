@@ -8,20 +8,37 @@ const hospitalNow = new Date(Date.now() + 6 * 3600 * 1000);
 const TODAY = hospitalNow.toISOString().slice(0, 10);
 const [YEAR, MONTH, DAY] = TODAY.split('-');
 const daysAgo = (n) => new Date(hospitalNow.getTime() - n * 86400000).toISOString().slice(0, 10);
+// The shift the hospital is in now (a Night after midnight is dated by the evening it began),
+// and a time that many minutes into it: what happens in the fixtures happens in the shift
+// the tests report on, so the tests hold at any hour.
+const pad = (n) => String(n).padStart(2, '0');
+function shiftNow() {
+  const hour = hospitalNow.getUTCHours();
+  if (hour < 6) return { date: daysAgo(1), shift: 'Night', start: '20:00' };
+  if (hour < 14) return { date: TODAY, shift: 'Morning', start: '06:00' };
+  if (hour < 20) return { date: TODAY, shift: 'Evening', start: '14:00' };
+  return { date: TODAY, shift: 'Night', start: '20:00' };
+}
+function inShift(minutes) {
+  const now = shiftNow();
+  const [h, m] = now.start.split(':').map(Number);
+  const total = h * 60 + m + minutes;
+  return `${now.date} ${pad(Math.floor(total / 60) % 24)}:${pad(total % 60)}:00`;
+}
 
 function standIn() {
   const state = {
     hits: [],
     registerMode: 'table',
     patients: [
-      { station: '11', admission_no_pk: 1001, patient_no_fk: 501, patient_name: 'TEST ALPHA', patient_code: 'U0001', admission_uid: 'IP-1', admission_date: `${TODAY} 00:30:00`, bed_name: '1018/B', ward_name: 'Cabin', primary_doctor_name: 'Dr. One', doc_department: 'Medicine', dis_req_ind: '1', death_ind: '0', contact_person_mobile: '01700000000' },
+      { station: '11', admission_no_pk: 1001, patient_no_fk: 501, patient_name: 'TEST ALPHA', patient_code: 'U0001', admission_uid: 'IP-1', admission_date: `${inShift(10)}`, bed_name: '1018/B', ward_name: 'Cabin', primary_doctor_name: 'Dr. One', doc_department: 'Medicine', dis_req_ind: '1', death_ind: '0', contact_person_mobile: '01700000000' },
       { station: '12', admission_no_pk: 1002, patient_no_fk: 502, patient_name: 'TEST BRAVO', patient_code: 'U0002', admission_uid: 'IP-2', admission_date: `${daysAgo(5)} 14:00:00`, bed_name: 'MICU-3', ward_name: 'ICU', primary_doctor_name: 'Dr. Two', doc_department: 'Critical Care', dis_req_ind: '0', death_ind: '0' },
       { station: '11', admission_no_pk: 1003, patient_no_fk: 503, patient_name: 'TEST CHARLIE', patient_code: 'U0003', admission_uid: 'IP-3', admission_date: `${daysAgo(3)} 09:00:00`, bed_name: '1020/A', ward_name: 'Cabin', primary_doctor_name: 'Dr. One', doc_department: 'Medicine', dis_req_ind: '0', death_ind: '0' },
     ],
     // On the IPD Admission list only: admitted today and not received by a station; and discharged today.
     registerOnly: [
-      { admission_no_pk: 1004, patient_name: 'TEST DELTA', patient_code: 'U0004', admission_uid: 'IP-4', admission_date: `${TODAY} 00:45:00`, bed_name: '1101/A', ward_name: 'Nurse Station L-11', primary_doctor_name: 'Dr. Three', dis_ind: '0' },
-      { admission_no_pk: 1005, patient_name: 'TEST ECHO', patient_code: 'U0005', admission_uid: 'IP-5', admission_date: `${daysAgo(4)} 10:00:00`, bed_name: '0905/C', ward_name: 'Nurse Station L-9', primary_doctor_name: 'Dr. Two', dis_ind: '1', dis_datetime: `${TODAY} 00:50:00`, dis_reason: 'Normal Discharge', bill_status: 'Cleared' },
+      { admission_no_pk: 1004, patient_name: 'TEST DELTA', patient_code: 'U0004', admission_uid: 'IP-4', admission_date: `${inShift(15)}`, bed_name: '1101/A', ward_name: 'Nurse Station L-11', primary_doctor_name: 'Dr. Three', dis_ind: '0' },
+      { admission_no_pk: 1005, patient_name: 'TEST ECHO', patient_code: 'U0005', admission_uid: 'IP-5', admission_date: `${daysAgo(4)} 10:00:00`, bed_name: '0905/C', ward_name: 'Nurse Station L-9', primary_doctor_name: 'Dr. Two', dis_ind: '1', dis_datetime: `${inShift(20)}`, dis_reason: 'Normal Discharge', bill_status: 'Cleared' },
     ],
     left: {},
   };
@@ -105,7 +122,7 @@ function standIn() {
     { id: 9004, name: 'OPD DAN', age: '40 Y 1 M 1 D', gender: 'Male', department: 'General Surgery', doctor: 'Dr. Knife', serial: '', status: 'Prescribed (Vitals Taken)', list: 'prescribed' },
   ];
   app.get('/prescription/appointments/opd-nurse-station', needLogin, (req, res) => {
-    const [y, m, d] = TODAY.split('-');
+    const [y, m, d] = shiftNow().date.split('-');
     const card = (p) => `<div class="col-md-3"><div class="card text-center"><img src="/photo/${p.id}.png"><h5>${p.name}</h5><p>Age: ${p.age}, Gender: ${p.gender}</p><p>Appointment Date: ${d}/${m}/${y}</p><p>${p.department}</p><p>${p.doctor}</p><p>Serial: ${p.serial}</p><span class="badge">${p.status}</span><div class="btn-group"><a class="btn" href="/emr/opd-emr/${p.id}">EMR</a><a class="btn" href="/prescription/vitals-entry/${p.id}">VITALS</a></div></div></div>`;
     const pane = (id, list, shown) => `<div class="tab-pane" id="${id}" style="${shown ? '' : 'display:none'}"><div class="row">${list.map(card).join('')}</div></div>`;
     res.send(page(`<h4>OPD Nurse Station Patient List</h4>
@@ -151,4 +168,4 @@ function standIn() {
 }
 
 
-module.exports = { standIn, TODAY, daysAgo };
+module.exports = { standIn, TODAY, daysAgo, shiftNow, inShift };

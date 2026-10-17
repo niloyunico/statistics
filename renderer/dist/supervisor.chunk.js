@@ -36,6 +36,18 @@ const supApi = {
   }).then(r => r.json())
 };
 const SUP_SHIFTS = ['Morning', 'Evening', 'Night'];
+const supWhen = value => {
+  try {
+    return value ? new Date(value).toLocaleString([], {
+      day: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    }) : 'unknown';
+  } catch (e) {
+    return String(value || '');
+  }
+};
 function supPortal(node) {
   try {
     if (typeof document !== 'undefined' && typeof ReactDOM !== 'undefined' && ReactDOM.createPortal) return ReactDOM.createPortal(node, document.body);
@@ -1827,12 +1839,20 @@ function CarryForwardModal({
     s: 15
   }), busy ? 'Copying…' : 'Carry forward')))));
 }
+function supSignedInName() {
+  try {
+    const u = window.__UNICO_USER__;
+    return u && String(u.name || '').trim() || '';
+  } catch (e) {
+    return '';
+  }
+}
 function blankReport(shift) {
   return {
     date: supTodayISO(),
     shift: shift || supCurrentShift(),
     shiftTime: '',
-    supervisorName: '',
+    supervisorName: supSignedInName(),
     status: 'draft',
     newAdmissions: [],
     criticalArea: [],
@@ -1888,8 +1908,10 @@ function SupEditor({
   const [h3, setH3] = useState({
     open: !!h360,
     busy: false,
-    notes: []
+    notes: [],
+    unsure: []
   });
+  const [wording, setWording] = useState(false);
   const admin = supIsAdmin();
   const readOnly = rep.status === 'approved' && !admin;
   const draftKey = rid => 'unico_sup_draft_' + (rid || 'new');
@@ -2187,10 +2209,20 @@ function SupEditor({
       if ((j.moved || []).length) notes.push('Placed by the IPD Admission list: ' + j.moved.join(', ') + '.');
       if ((j.died || []).length) notes.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + j.died.join(', ') + '.');
       if ((j.gone || []).length) notes.push('No longer on the H360 lists (move them to Discharged or LAMA if they left): ' + j.gone.join(', ') + '.');
+      (j.duplicates || []).forEach(d => notes.push('H360 holds the same diagnosis text for ' + d.names.join(' and ') + ' ("' + d.diagnosis + '…"): a problem list may have been written into the wrong record. Check before the report goes out.'));
+      if (j.refreshed && j.refreshed.error) notes.push('The H360 patient lists could not be refreshed first (' + j.refreshed.error + '); the lists of ' + supWhen(j.refreshed.at) + ' were used.');else if (j.refreshed && j.refreshed.at && !j.refreshed.fresh) notes.push('The H360 patient lists were refreshed first (' + supWhen(j.refreshed.at) + ').');
+      if (j.span && j.span.from) notes.push('This report covers ' + j.span.from.slice(11, 16) + ' to ' + j.span.to.slice(11, 16) + (j.span.to.slice(0, 10) !== j.span.from.slice(0, 10) ? ' next day' : '') + (cur.shiftTime ? ' (from its Shift Time)' : ' (the usual ' + cur.shift + ' hours; type the Shift Time to change it)') + ': admissions and leavers outside these hours belong to another shift.');
       setH3({
         open: false,
         busy: false,
-        notes
+        notes,
+        unsure: (j.unsure || []).map(item => ({
+          ...item,
+          row: {
+            ...item.row,
+            dept: supH360Dept(item.row.dept, deptNames)
+          }
+        }))
       });
       supToast((j.added || []).length ? j.added.length + ' patient(s) imported from H360.' : 'Report updated from H360.', 'success');
       if (!String(cur.supervisorName || '').trim()) supToast('Type the supervisor name to save this report.', 'info');
@@ -2200,6 +2232,56 @@ function SupEditor({
         busy: false
       }));
       supToast(e.message || 'The import failed.', 'error');
+    }
+  };
+  const placeUnsure = (item, list) => {
+    if (list) {
+      const {
+        h360Dept,
+        ...row
+      } = item.row;
+      edit({
+        [list]: [...(repRef.current[list] || []), row]
+      });
+      setOpen(o => ({
+        ...o,
+        [list]: true
+      }));
+    }
+    setH3(s => ({
+      ...s,
+      unsure: s.unsure.filter(u => u !== item)
+    }));
+  };
+  const doWordSheet = async () => {
+    setWording(true);
+    try {
+      const r = await fetch('/api/h360/report/docx', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          report: repRef.current
+        })
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || 'The Word file could not be made.');
+      }
+      const named = /filename="([^"]+)"/.exec(r.headers.get('content-disposition') || '');
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = named ? named[1] : 'Log Sheet For ' + (repRef.current.shift || '') + ' Supervisor.docx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) {
+      supToast(e && e.message || 'The Word file could not be made.', 'error');
+    } finally {
+      setWording(false);
     }
   };
   const saveSig = sig => {
@@ -2352,8 +2434,8 @@ function SupEditor({
   }), "Back"), React.createElement(StatusBadge, {
     status: rep.status
   }), React.createElement("span", {
-    className: 'sup-saved' + (saved === 'Saved' ? ' ok' : '')
-  }, saved), React.createElement("span", {
+    className: 'sup-saved' + (saved === 'Saved ✓' ? ' ok' : '')
+  }, saved || (!readOnly && !rep.id && !String(rep.supervisorName || '').trim() ? 'Not saved yet — type the supervisor name' : '')), React.createElement("span", {
     style: {
       flex: 1
     }
@@ -2374,14 +2456,16 @@ function SupEditor({
   }, React.createElement(Ic, {
     d: I.plus,
     s: 14
-  }), "Add Patient"), rep.id && React.createElement("a", {
-    className: "sup-btn sm",
-    href: '/api/h360/report/' + encodeURIComponent(rep.id) + '/docx',
-    title: "This report as the Word log sheet (save first: it prints what is saved)"
+  }), "Add Patient"), React.createElement(SupBtn, {
+    sm: true,
+    kind: "word",
+    onClick: doWordSheet,
+    disabled: wording,
+    title: "This report, as it is on the screen, as the Word log sheet"
   }, React.createElement(Ic, {
     d: I.doc,
     s: 14
-  }), "Word log sheet"), !rep.id ? null : React.createElement(SupBtn, {
+  }), wording ? 'Exporting…' : 'Word log sheet'), !rep.id ? null : React.createElement(SupBtn, {
     sm: true,
     onClick: () => setRoute({
       view: 'supReport',
@@ -2427,7 +2511,42 @@ function SupEditor({
   }), h3.notes.length > 0 && React.createElement("div", null, h3.notes.map((t, i) => React.createElement("div", {
     key: 'h' + i,
     className: "sup-alert info"
-  }, t))), alerts.length > 0 && React.createElement("div", null, alerts.map((a, i) => React.createElement("div", {
+  }, t))), h3.unsure.length > 0 && !readOnly && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b"
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 13,
+      marginBottom: 4
+    }
+  }, "Left H360 since the previous scan \u2014 which shift?"), React.createElement("div", {
+    className: "h3-muted",
+    style: {
+      marginBottom: 8
+    }
+  }, "These patients were on the station lists at the previous scan and are gone now. The scans are too far apart to say whether they left in this shift, so they are not placed. Add each to the right list, or leave them to the shift they belong to."), h3.unsure.map((item, i) => React.createElement("div", {
+    key: item.uhid || i,
+    className: "sup-alert warn",
+    style: {
+      marginBottom: 6
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("b", null, item.name), item.row.dept ? ' · ' + item.row.dept : '', item.row.bed ? ' ' + item.row.bed : '', " \u2014 last seen ", supWhen(item.since), ", gone by ", supWhen(item.until)), React.createElement(SupBtn, {
+    sm: true,
+    kind: "pri",
+    onClick: () => placeUnsure(item, 'discharged')
+  }, "Discharged"), React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => placeUnsure(item, 'lama')
+  }, "LAMA"), React.createElement(SupBtn, {
+    sm: true,
+    onClick: () => placeUnsure(item, null)
+  }, "Not this shift"))))), alerts.length > 0 && React.createElement("div", null, alerts.map((a, i) => React.createElement("div", {
     key: i,
     className: 'sup-alert ' + a.level
   }, React.createElement(Ic, {
@@ -3219,10 +3338,13 @@ function SupHistory({
     d: I.print,
     s: 13
   }), "Export"), ' ', React.createElement("a", {
-    className: "sup-btn sm",
+    className: "sup-btn sm word",
     href: '/api/h360/report/' + encodeURIComponent(r.id) + '/docx',
     title: "The hospital's paper log sheet, as a Word file"
-  }, "Word log sheet"), ' ', React.createElement(SupBtn, {
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 13
+  }), "Word"), ' ', React.createElement(SupBtn, {
     sm: true,
     onClick: () => duplicate(r)
   }, "Duplicate"), ' ', r.status === 'draft' && React.createElement(SupBtn, {
@@ -3915,6 +4037,7 @@ function SupReportView({
     s: 14
   }), "Print"), React.createElement(SupBtn, {
     sm: true,
+    kind: "word",
     onClick: doWord,
     disabled: wording || !rep,
     title: "Download this report, as shown below, as a Word file"
@@ -4383,9 +4506,9 @@ function SupBoard({
   }, useH360 ? 'Every patient in a bed at the last H360 collection. Diagnosis and notes typed in a report are shown where there are any.' : 'Patients typed into reports and not yet discharged in a later report.'), React.createElement(SupBtn, {
     sm: true,
     onClick: () => setRoute({
-      view: 'supH360'
+      view: 'supH360Scan'
     })
-  }, "Collect again")), !hasH360 && React.createElement("div", {
+  }, "Scan again")), !hasH360 && React.createElement("div", {
     className: "sup-alert info"
   }, React.createElement("span", {
     style: {
@@ -4394,9 +4517,9 @@ function SupBoard({
   }, "This board is built from the reports. Collect the patients from H360 to see everyone who is in a bed now."), React.createElement(SupBtn, {
     sm: true,
     onClick: () => setRoute({
-      view: 'supH360'
+      view: 'supH360Scan'
     })
-  }, "H360 Patients")), React.createElement("div", {
+  }, "Scan H360")), React.createElement("div", {
     className: "sup-kpis"
   }, React.createElement("div", {
     className: "sup-kpi"
@@ -4594,6 +4717,9 @@ function SupervisorView({
   if (view === 'supH360' && window.SupH360View) return React.createElement(window.SupH360View, {
     setRoute: setRoute
   });
+  if (view === 'supH360Scan' && window.SupH360ScanView) return React.createElement(window.SupH360ScanView, {
+    setRoute: setRoute
+  });
   if (view === 'supSheet') return React.createElement(SupHistory, {
     setRoute: setRoute
   });
@@ -4683,6 +4809,8 @@ const SUP_CSS = `
 .sup-btn:disabled{opacity:.55;cursor:default;transform:none}
 .sup-btn.pri{background:#2563eb;border-color:#2563eb;color:#fff;box-shadow:0 6px 14px -6px rgba(37,99,235,.7)}
 .sup-btn.pri:hover{background:#1d4ed8;border-color:#1d4ed8}
+.sup-btn.word{background:#185abd;border-color:#185abd;color:#fff;box-shadow:0 6px 14px -6px rgba(24,90,189,.7)}
+.sup-btn.word:hover{background:#124a9e;border-color:#124a9e}
 .sup-btn.dgr{color:#dc2626;border-color:#fecaca}
 .sup-btn.dgr:hover{background:#fef2f2}
 .sup-btn.sm{padding:5px 10px;font-size:11.5px}
@@ -5378,7 +5506,8 @@ function H3Progress({
   })), React.createElement("em", null, s.done, "/", s.total))))));
 }
 function H3Patients({
-  setRoute
+  setRoute,
+  mode
 }) {
   const [status, setStatus] = useState(null);
   const [snapshot, setSnapshot] = useState(null);
@@ -5538,11 +5667,14 @@ function H3Patients({
   const onPc = !status || status.site === 'pc';
   const shape = admissions && admissions.shape;
   const sub = snapshot ? snapshot.rows.length + ' in-patients in ' + snapshot.stations.length + ' stations · collected ' + h3When(snapshot.collectedAt) + (snapshot.site ? ' from ' + (H3_SITE[snapshot.site] || snapshot.site) : '') : 'Patients of every nurse station, read from H360';
+  const scan = mode === 'scan';
+  const last = status && status.lastRun;
+  const scanSub = status && status.running ? 'A scan is running now' : last ? last.total + ' in-patients at the last scan · ' + h3When(last.collectedAt) + (last.site ? ' from ' + (H3_SITE[last.site] || last.site) : '') : 'Nothing has been read from H360 yet';
   return React.createElement("div", {
     className: "sup-wrap"
-  }, React.createElement(H3Hero, {
-    title: "H360 Patients",
-    sub: sub
+  }, scan ? React.createElement(H3Hero, {
+    title: "H360 Scan",
+    sub: scanSub
   }, status && status.canManage && React.createElement(H3Btn, {
     onClick: () => setSettings(v => !v),
     title: "H360 login and what is kept in the app database"
@@ -5550,14 +5682,7 @@ function H3Patients({
     d: I.gear,
     s: 15,
     c: "#fff"
-  }), status.hasLogin ? 'H360 login: ' + status.user : 'H360 login'), snapshot && React.createElement("a", {
-    className: "sup-btn",
-    href: "/api/h360/export.xlsx"
-  }, React.createElement(Ic, {
-    d: I.download,
-    s: 15,
-    c: "#fff"
-  }), "Excel"), React.createElement(H3Btn, {
+  }), status.hasLogin ? 'H360 login: ' + status.user : 'H360 login'), React.createElement(H3Btn, {
     onClick: () => collect('list'),
     disabled: !canStart,
     title: "Updates only the patient lists (admissions, beds, discharge requests, who has left). Takes a few seconds; no records are read."
@@ -5576,21 +5701,40 @@ function H3Patients({
     onClick: () => collect('quick'),
     disabled: !canStart,
     title: onPc ? 'Reads notes, vital signs and handovers of every patient, new patients in full, and other records only when they have become old.' : 'Updates the lists, then reads the records of every patient not read in the last two hours. Keep this page open while it runs.'
-  }, running || busy ? 'Collecting…' : 'Collect all patients')), settings && status && status.canManage && React.createElement(H3Settings, {
+  }, running || busy ? 'Scanning…' : 'Scan all patients')) : React.createElement(H3Hero, {
+    title: "H360 Patients",
+    sub: sub
+  }, snapshot && React.createElement("a", {
+    className: "sup-btn",
+    href: "/api/h360/export.xlsx"
+  }, React.createElement(Ic, {
+    d: I.download,
+    s: 15,
+    c: "#fff"
+  }), "Excel"), React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: () => setRoute({
+      view: 'supH360Scan'
+    }),
+    title: "Read H360 again: H360 Scan"
+  }, React.createElement(Ic, {
+    d: I.pulse || I.doc,
+    s: 15
+  }), running || stepping ? 'Scan running…' : 'Scan H360')), scan && settings && status && status.canManage && React.createElement(H3Settings, {
     status: status,
     reload: loadStatus,
     onClose: () => setSettings(false)
   }), status && !status.hasLogin && React.createElement("div", {
     className: "sup-alert warn"
-  }, status.canManage ? status.loginElsewhere ? 'The H360 login was saved from ' + (status.site === 'pc' ? 'the live site' : 'the hospital PC') + ', which keeps its own sealed copy. Enter it once here too: click "H360 login" above.' : 'No H360 login is saved yet. Click "H360 login" above and enter it once.' : 'No H360 login is saved for ' + (H3_SITE[status.site] || 'this server') + ' yet. Ask the administrator to enter it.'), status && !onPc && stepping && React.createElement("div", {
+  }, status.canManage ? status.loginElsewhere ? 'The H360 login was saved from ' + (status.site === 'pc' ? 'the live site' : 'the hospital PC') + ', which keeps its own sealed copy. Enter it once here too: click "H360 login" above.' : 'No H360 login is saved yet. Click "H360 login" above and enter it once.' : 'No H360 login is saved for ' + (H3_SITE[status.site] || 'this server') + ' yet. Ask the administrator to enter it.'), scan && status && !onPc && stepping && React.createElement("div", {
     className: "sup-alert info"
-  }, "Keep this page open while the collection runs. It reads a few patients at a time; if it is interrupted, what was read is kept and Continue carries on."), paused && React.createElement("div", {
+  }, "Keep this page open while the scan runs. It reads a few patients at a time; if it is interrupted, what was read is kept and Continue carries on."), scan && paused && React.createElement("div", {
     className: "sup-alert warn"
   }, React.createElement("span", {
     style: {
       flex: 1
     }
-  }, "A collection stopped part-way: ", status.progress ? status.progress.done + ' of ' + status.progress.patients : 'some', " patients read.", status.error ? ' (' + status.error + ')' : ''), React.createElement(H3Btn, {
+  }, "A scan stopped part-way: ", status.progress ? status.progress.done + ' of ' + status.progress.patients : 'some', " patients read.", status.error ? ' (' + status.error + ')' : ''), React.createElement(H3Btn, {
     sm: true,
     kind: "pri",
     onClick: () => {
@@ -5598,9 +5742,20 @@ function H3Patients({
       runSteps(status);
     },
     disabled: !mayCollect
-  }, "Continue")), status && status.localStore && status.localStore.ok === false && React.createElement("div", {
+  }, "Continue")), !scan && paused && React.createElement("div", {
+    className: "sup-alert warn"
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, "A scan stopped part-way. Open H360 Scan to carry on."), React.createElement(H3Btn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supH360Scan'
+    })
+  }, "H360 Scan")), scan && status && status.localStore && status.localStore.ok === false && React.createElement("div", {
     className: "sup-alert critical"
-  }, status.localStore.error), status && status.legacyReports > 0 && React.createElement("div", {
+  }, status.localStore.error), scan && status && status.legacyReports > 0 && React.createElement("div", {
     className: "sup-alert info"
   }, React.createElement("span", {
     style: {
@@ -5612,24 +5767,94 @@ function H3Patients({
     disabled: busy
   }, "Bring them in")), error && React.createElement("div", {
     className: "sup-alert critical"
-  }, error), status && status.error && !running && React.createElement("div", {
+  }, error), scan && status && status.error && !running && React.createElement("div", {
     className: "sup-alert critical"
-  }, status.error), snapshot && (snapshot.warnings || []).map((w, i) => React.createElement("div", {
+  }, status.error), scan && snapshot && (snapshot.warnings || []).map((w, i) => React.createElement("div", {
     key: i,
     className: "sup-alert warn"
-  }, w)), status && React.createElement(H3Progress, {
+  }, w)), !scan && running && React.createElement("div", {
+    className: "sup-alert info"
+  }, React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }, "A scan is running now; this page shows what the last finished scan read."), React.createElement(H3Btn, {
+    sm: true,
+    onClick: () => setRoute({
+      view: 'supH360Scan'
+    })
+  }, "Watch it")), scan && status && React.createElement(H3Progress, {
     status: stepping ? Object.assign({}, status, {
       running: true,
       error: null
     }) : status
-  }), status && status.log && status.log.length > 0 && React.createElement("div", {
+  }), scan && status && status.log && status.log.length > 0 && React.createElement("div", {
     className: "sup-card"
   }, React.createElement("ul", {
     className: "h3-log",
     ref: logRef
   }, status.log.map((line, i) => React.createElement("li", {
     key: i
-  }, new Date(line.at).toLocaleTimeString(), "  ", line.message)))), snapshot && React.createElement("div", {
+  }, new Date(line.at).toLocaleTimeString(), "  ", line.message)))), scan && snapshot && React.createElement("div", {
+    className: "h3-tiles"
+  }, React.createElement("button", {
+    className: "h3-tile",
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, React.createElement("b", null, snapshot.rows.length), React.createElement("span", null, "In-patients \xB7 ", snapshot.stations.length, " stations")), requestedCount > 0 && React.createElement("button", {
+    className: "h3-tile req",
+    title: "Patients whose discharge has been requested in H360 (shown in pink there). A report imports them into Discharged.",
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, React.createElement("b", null, requestedCount), React.createElement("span", null, "Discharge requested")), opd && opd.counts && React.createElement("button", {
+    className: "h3-tile ok",
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, React.createElement("b", null, opd.counts.attended), React.createElement("span", null, "Came to OPD (", h3ShowDate(opd.date), ")")), shape && shape.found ? React.createElement("button", {
+    className: "h3-tile",
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, React.createElement("b", null, admissions.rows.length), React.createElement("span", null, "IPD Admission list rows")) : React.createElement("div", {
+    className: "h3-tile",
+    title: onPc ? 'The IPD Admission list is read with every scan on the hospital PC.' : 'H360 fills this list by script after the page opens, so the live site cannot read it; a scan on the hospital PC can.'
+  }, React.createElement("b", null, "\u2014"), React.createElement("span", null, "IPD Admission list", onPc ? '' : ' (hospital PC only)'))), scan && snapshot && React.createElement("div", {
+    className: "sup-toolbar"
+  }, React.createElement(H3Btn, {
+    kind: "pri",
+    onClick: () => setRoute({
+      view: 'supNew',
+      h360: true
+    }),
+    disabled: !h3Can('add')
+  }, React.createElement(Ic, {
+    d: I.plus,
+    s: 14
+  }), "New report from H360"), React.createElement(H3Btn, {
+    onClick: () => setRoute({
+      view: 'supH360'
+    })
+  }, "H360 Patients"), React.createElement(H3Btn, {
+    onClick: () => setRoute({
+      view: 'supBoard'
+    })
+  }, "Patient Board"), React.createElement("span", {
+    className: "h3-muted",
+    style: {
+      flex: 1
+    }
+  }, "A report fills itself from the latest scan; the lists are refreshed again when it is imported.")), scan && loaded && !snapshot && !running && React.createElement("div", {
+    className: "sup-card"
+  }, React.createElement("div", {
+    className: "sup-card-b h3-muted",
+    style: {
+      textAlign: 'center',
+      padding: 36
+    }
+  }, "No patients read yet. ", status && status.hasLogin ? React.createElement("span", null, "Press ", React.createElement("b", null, "Scan all patients"), ".") : React.createElement("span", null, "Enter the H360 login first."))), !scan && snapshot && React.createElement("div", {
     className: "h3-tiles"
   }, React.createElement("button", {
     className: 'h3-tile' + (station === null && !onlyRequested ? ' on' : ''),
@@ -5651,7 +5876,7 @@ function H3Patients({
       setStation(item.station);
       setTab('patients');
     }
-  }, React.createElement("b", null, item.count), React.createElement("span", null, item.station)))), (snapshot || admissions && admissions.rows.length > 0 || opd) && React.createElement("div", {
+  }, React.createElement("b", null, item.count), React.createElement("span", null, item.station)))), !scan && (snapshot || admissions && admissions.rows.length > 0 || opd) && React.createElement("div", {
     className: "sup-toolbar"
   }, React.createElement("div", {
     className: "sup-seg"
@@ -5675,7 +5900,7 @@ function H3Patients({
     style: {
       flex: 1
     }
-  }, tab === 'patients' && snapshot ? 'Showing ' + rows.length + ' of ' + snapshot.rows.length + ' patients. Click a patient to open the records.' : '')), tab === 'patients' && snapshot && React.createElement("div", {
+  }, tab === 'patients' && snapshot ? 'Showing ' + rows.length + ' of ' + snapshot.rows.length + ' patients. Click a patient to open the records.' : '')), !scan && tab === 'patients' && snapshot && React.createElement("div", {
     className: "sup-card"
   }, React.createElement("div", {
     className: "h3-tablewrap"
@@ -5689,13 +5914,13 @@ function H3Patients({
     onClick: () => row._adm && setOpen(row._adm)
   }, React.createElement("td", null, i + 1), snapshot.columns.map(name => React.createElement("td", {
     key: name
-  }, row[name] || '')))))))), tab === 'admissions' && React.createElement(React.Fragment, null, shape && shape.found && React.createElement("div", {
+  }, row[name] || '')))))))), !scan && tab === 'admissions' && React.createElement(React.Fragment, null, shape && shape.found && React.createElement("div", {
     className: "h3-muted"
   }, "Read ", h3When(admissions.collectedAt), " from the IPD Admission page of H360", shape.total > shape.read ? ' (' + shape.read + ' of ' + shape.total + ' rows)' : '', ". Used for: ", Object.keys(shape.recognised || {}).join(', ') || 'nothing yet', ".", (shape.missing || []).length ? ' Not found on the page: ' + shape.missing.join(', ') + '.' : ''), (!admissions || !admissions.rows.length) && React.createElement("div", {
     className: "sup-card"
   }, React.createElement("div", {
     className: "sup-card-b h3-muted"
-  }, "The IPD Admission list has not been read yet. ", onPc ? 'It is read with every collection: click "Collect all patients" or "List only".' : 'It is read by the collection on the hospital PC.', status && status.lastRun && status.lastRun.register && status.lastRun.register.error ? ' Last attempt: ' + status.lastRun.register.error : '')), admissions && admissions.rows.length > 0 && React.createElement("div", {
+  }, "The IPD Admission list has not been read yet. ", onPc ? 'It is read with every scan: click "Scan all patients" or "List only" on H360 Scan.' : 'H360 fills it by script after the page opens, so the live site cannot read it; it is read by a scan on the hospital PC.', status && status.lastRun && status.lastRun.register && status.lastRun.register.error ? ' Last attempt: ' + status.lastRun.register.error : '')), admissions && admissions.rows.length > 0 && React.createElement("div", {
     className: "sup-card"
   }, React.createElement("div", {
     className: "h3-tablewrap"
@@ -5707,11 +5932,11 @@ function H3Patients({
     key: i
   }, React.createElement("td", null, i + 1), regCols.names.map(name => React.createElement("td", {
     key: name
-  }, ((regCols.raw ? r.raw : r.fields) || {})[name] || ''))))))))), tab === 'opd' && React.createElement(H3Opd, {
+  }, ((regCols.raw ? r.raw : r.fields) || {})[name] || ''))))))))), !scan && tab === 'opd' && React.createElement(H3Opd, {
     opd: opd,
     onPc: onPc,
     query: query
-  }), loaded && !snapshot && tab === 'patients' && React.createElement("div", {
+  }), !scan && loaded && !snapshot && tab === 'patients' && React.createElement("div", {
     className: "sup-card"
   }, React.createElement("div", {
     className: "sup-card-b h3-muted",
@@ -5719,7 +5944,7 @@ function H3Patients({
       textAlign: 'center',
       padding: 36
     }
-  }, "No patients collected yet. ", onPc ? React.createElement("span", null, "Press ", React.createElement("b", null, "Collect all patients"), ".") : React.createElement("span", null, "Press ", React.createElement("b", null, "Refresh patient lists"), ", or run a collection on the hospital PC."))), open && React.createElement(H3PatientDrawer, {
+  }, "No patients read yet. ", React.createElement("span", null, "Open ", React.createElement("b", null, "H360 Scan"), " and press ", React.createElement("b", null, "Scan all patients"), "."))), !scan && open && React.createElement(H3PatientDrawer, {
     admissionNo: open,
     onClose: () => setOpen(null)
   }));
@@ -5729,7 +5954,7 @@ const H3_UPDATE_DEFAULTS = {
   updateDetails: true,
   diagnosis: 'empty',
   remarks: 'empty',
-  remarksFrom: 'nursing',
+  remarksFrom: 'progress',
   useComplaint: false,
   sections: true,
   register: true,
@@ -5807,11 +6032,11 @@ function SupH360Update({
   }, !status ? 'Checking the H360 collection…' : last ? 'H360 collection: ' + last.total + ' in-patients, collected ' + h3When(last.collectedAt) + '.' : 'Nothing has been collected from H360 yet.'), React.createElement(H3Btn, {
     sm: true,
     onClick: () => setRoute({
-      view: 'supH360'
+      view: 'supH360Scan'
     })
-  }, last ? 'Collect again' : 'Collect patients')), React.createElement("div", {
+  }, last ? 'Scan again' : 'Scan H360')), React.createElement("div", {
     className: "h3-muted"
-  }, "New admissions, critical-area and cabin patients go to their lists with bed, age, consultant, diagnosis and remarks. A patient with a discharge request in H360 goes to Discharged; LAMA and completed discharges follow the IPD Admission list. Surgery, procedures, pressure sore, ventilator and the counts are filled where H360 has them. Nothing you typed is overwritten unless you choose so below."), React.createElement("div", {
+  }, "The patient lists are refreshed from H360 first when the last scan is more than a few minutes old. Admissions and leavers are counted for this report's shift hours only (type the Shift Time to set them). New admissions, critical-area and cabin patients go to their lists with bed, age, consultant, diagnosis and remarks. A patient with a discharge request in H360 goes to Discharged; LAMA and completed discharges follow the IPD Admission list. Surgery, procedures, pressure sore, ventilator and the counts are filled where H360 has them. Nothing you typed is overwritten unless you choose so below."), React.createElement("div", {
     className: "sup-toolbar"
   }, React.createElement(H3Btn, {
     kind: "pri",
@@ -5847,10 +6072,10 @@ function SupH360Update({
     value: o.remarksFrom,
     onChange: e => set('remarksFrom', e.target.value)
   }, React.createElement("option", {
+    value: "progress"
+  }, "The newest doctor progress note (the nursing note when there is none)"), React.createElement("option", {
     value: "nursing"
   }, "The newest nursing follow-up note"), React.createElement("option", {
-    value: "progress"
-  }, "The newest doctor progress note"), React.createElement("option", {
     value: "both"
   }, "Both: doctor progress note, then nursing note"), React.createElement("option", {
     value: "handover"
@@ -5929,9 +6154,14 @@ function SupH360Card({
     sm: true,
     kind: "pri",
     onClick: () => setRoute({
+      view: 'supH360Scan'
+    })
+  }, status && status.running ? 'Scan running…' : 'Scan H360'), run && React.createElement(H3Btn, {
+    sm: true,
+    onClick: () => setRoute({
       view: 'supH360'
     })
-  }, run || status && status.running ? 'H360 Patients' : 'Collect patients'), run && h3Can('add') && React.createElement(H3Btn, {
+  }, "H360 Patients"), run && h3Can('add') && React.createElement(H3Btn, {
     sm: true,
     onClick: () => setRoute({
       view: 'supNew',
@@ -5946,7 +6176,16 @@ function SupH360View({
   setRoute
 }) {
   return React.createElement(H3Patients, {
-    setRoute: setRoute
+    setRoute: setRoute,
+    mode: "patients"
+  });
+}
+function SupH360ScanView({
+  setRoute
+}) {
+  return React.createElement(H3Patients, {
+    setRoute: setRoute,
+    mode: "scan"
   });
 }
 const H3_CSS = `
@@ -6038,6 +6277,7 @@ div.h3-tile{cursor:default}
 })();
 Object.assign(window, {
   SupH360View,
+  SupH360ScanView,
   SupH360Card,
   SupH360Update,
   SupH360Convert

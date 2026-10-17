@@ -23,7 +23,9 @@ const UPDATE_DEFAULTS = {
   updateDetails: true,
   diagnosis: 'empty',
   remarks: 'empty',
-  remarksFrom: 'nursing', // 'nursing' | 'progress' | 'both' | 'handover'
+  // The doctor's newest progress note (the nursing note when there is none): what the
+  // sheet's Remarks column has always carried. 'nursing' | 'progress' | 'both' | 'handover'
+  remarksFrom: 'progress',
   useComplaint: false,
   // Surgery, procedures, pressure sore, ventilator and the counts that H360 records can answer.
   sections: true,
@@ -71,9 +73,32 @@ const nextDay = (date) => {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 };
 
-// A night report also covers the early hours of the following morning.
-function period(date, shift) {
-  return { from: `${date} 00:00:00`, to: shift === 'Night' ? `${nextDay(date)} 09:00:00` : `${date} 23:59:59` };
+// The hours of a shift when the report does not say. A Night report is dated by the
+// evening it starts and runs into the next morning. The three must not overlap: every
+// shift's period used to start at midnight, so one day's admissions and leavers were
+// counted again in every shift report of that day.
+const SHIFT_HOURS = { Morning: ['06:00', '14:00'], Evening: ['14:00', '20:00'], Night: ['20:00', '06:00'] };
+
+// "8:00 PM - 8:00 AM", "07:00-15:00", "7am to 3pm" -> ['20:00', '08:00']; null when unreadable.
+function shiftHours(shiftTime) {
+  const found = [];
+  for (const m of text(shiftTime).matchAll(/(\d{1,2})(?::(\d{2}))?\s*([ap])(?:\.?m\b|\.?m\.)?|(\d{1,2}):(\d{2})/gi)) {
+    let hour = Number(m[1] !== undefined ? m[1] : m[4]);
+    const minute = m[1] !== undefined ? m[2] || '00' : m[5];
+    if (m[3]) hour = (hour % 12) + (/p/i.test(m[3]) ? 12 : 0);
+    if (hour > 23 || Number(minute) > 59) continue;
+    found.push(`${pad2(hour)}:${minute}`);
+    if (found.length === 2) break;
+  }
+  return found.length === 2 && found[0] !== found[1] ? found : null;
+}
+
+// The period a report covers: its own shift time when one is written, else the shift's usual hours.
+function period(date, shift, shiftTime) {
+  const [start, end] = shiftHours(shiftTime) || SHIFT_HOURS[shift] || SHIFT_HOURS.Morning;
+  const from = `${date} ${start}:00`;
+  const to = `${end <= start ? nextDay(date) : date} ${end}:00`;
+  return { from, to, days: [...new Set([from.slice(0, 10), to.slice(0, 10)])] };
 }
 
 // The floor of the units whose station name does not say it.
@@ -248,17 +273,32 @@ const MENTIONS = {
   DL: /\bdlp?\b|dyslipid/i,
 };
 
-// A Clinical Summary is used as diagnosis when it says so ("Dx: ...") or when
-// it is a plain list; a summary that tells the story of the admission is not.
+// A Clinical Summary is used as diagnosis when it says so ("Dx: ...", or a "Dx" heading
+// with the diagnoses on the lines under it) or when it is a plain list; a summary that
+// tells the story of the admission is not, and its headings ("Admission issues:") never are.
 const STORY = /\b(admitted|complain|presented|came|history|h\/o|c\/c|since|for \d+ ?(?:day|week|month|hour|yr|year)s?)\b/i;
+const HEADING = /^(?:admission issues?|issues?(?: and| &)? progress|past(?: medical)? history|history|plan(?:ned intervention)?|investigations?|inv|treatment|advice|c\/c|chief complaints?|complaints?|o\/e|on examination|progress)\b[^:]{0,40}:?\s*$/i;
+const DX_HEAD = /^(?:dx|d\/x|(?:provisional |final |working )?diagnosis)\s*[:–-]?\s*$/i;
+const DX_INLINE = /^(?:dx|d\/x|(?:provisional |final |working )?diagnosis)\s*[:–-]\s*(.+)$/i;
+// "Plan: CBC" is a heading with its text on the same line; "Fever: 3 days" is not.
+const HEADING_START = /^(?:plan(?:ned intervention)?|inv|investigations?|advice|treatment|admission issues?|past(?: medical)? history|history|c\/c|chief complaints?|o\/e|on examination|progress|follow.?up|f\/u)\s*:/i;
+const isHeading = (line) => HEADING.test(line) || HEADING_START.test(line) || /:\s*$/.test(line);
 function diagnosisInSummary(summary) {
   const lines = listItems(summary);
-  const marked = lines
-    .map((line) => line.match(/\b(?:dx|d\/x|diagnosis)\s*[:–-]\s*(.+)$/i))
-    .filter(Boolean)
-    .map((match) => match[1].split(/\s+(?:admission issue|plan|inv)\b/i)[0].trim().slice(0, 240));
+  const marked = [];
+  for (let i = 0; i < lines.length; i++) {
+    const inline = lines[i].match(DX_INLINE);
+    if (!inline && !DX_HEAD.test(lines[i])) continue;
+    if (inline) marked.push(inline[1].split(/\s+(?:admission issue|plan|inv)\b/i)[0].trim().slice(0, 240));
+    // The lines under the heading, up to the next heading, are the rest of the diagnosis.
+    for (let j = i + 1; j < lines.length && !isHeading(lines[j]) && !DX_HEAD.test(lines[j]) && !DX_INLINE.test(lines[j]); j++) {
+      if (lines[j].length <= 120 && !STORY.test(lines[j])) marked.push(lines[j].slice(0, 240));
+      else break;
+    }
+  }
   if (marked.length) return marked;
-  return lines.length && lines.every((line) => line.length <= 80 && !STORY.test(line)) ? lines : [];
+  const plain = lines.filter((line) => !isHeading(line));
+  return plain.length && plain.every((line) => line.length <= 80 && !STORY.test(line)) ? plain : [];
 }
 
 // The doctors' Problem List when there is one; otherwise the newest handover's
@@ -291,7 +331,7 @@ function suggestedText(suggestion, options) {
   const diagnosis = (s.diagnosis || (options.useComplaint && s.complaint ? `C/C: ${s.complaint}` : '')).slice(0, 1500);
   const remarks = {
     nursing: s.nursing,
-    progress: s.progress,
+    progress: s.progress || s.nursing,
     both: [s.progress && `Doctor: ${s.progress}`, s.nursing && `Nurse: ${s.nursing}`].filter(Boolean).join('\n'),
     // Falls back to the nursing note for patients without a handover form.
     handover: [s.summary, s.plan && `Plan: ${s.plan}`].filter(Boolean).join('\n') || s.nursing,
@@ -321,14 +361,15 @@ function patientRow(patient, carried, picture, options) {
   return row;
 }
 
-// What H360 currently knows, shaped for the report.
-async function hospitalPicture(store, date, shift) {
+// What H360 currently knows, shaped for the report. `span` is the report's period (see period()).
+async function hospitalPicture(store, date, shift, shiftTime) {
   await store.ready;
+  const span = period(date, shift, shiftTime);
   const run = await store.col('runs').find().sort({ collectedAt: -1 }).limit(1).next();
-  if (!run) return { collectedAt: null, patients: [], left: [], register: [], suggestions: new Map(), opd: null };
+  if (!run) return { collectedAt: null, patients: [], left: [], register: [], suggestions: new Map(), opd: null, span };
   const patients = await store.col('patients').find({ lastRunId: run._id }).sort({ seq: 1 }).toArray();
 
-  const { from, to } = period(date, shift);
+  const { from, to } = span;
   const left = await store
     .col('patients')
     .find({ active: false, inactiveSince: { $gte: instant(from), $lte: instant(to) } })
@@ -348,7 +389,7 @@ async function hospitalPicture(store, date, shift) {
   const suggestions = new Map([...patients, ...left].filter((patient) => patient.suggestion).map((patient) => [patient.admissionNo, patient.suggestion]));
   // The OPD list of the report's own day, when it was read.
   const opd = await store.col('opd').findOne({ _id: date }, { projection: { rows: 0 } });
-  return { collectedAt: run.collectedAt, patients, left, register, suggestions, opd };
+  return { collectedAt: run.collectedAt, patients, left, register, suggestions, opd, span };
 }
 
 // A row of the IPD Admission list, shaped like a patient of a station list.
@@ -361,11 +402,24 @@ function fromRegister(row) {
   };
 }
 
+// A patient gone from the station lists left some time between the last collection that
+// saw them and the first that did not. That is this shift's leaver when the window begins
+// in the shift (or just before it: the previous shift's collection is usually made at the
+// hand-over). When the window began long before the shift, nobody can say which shift
+// they left in: such a leaver is handed back as "unsure" for the supervisor to place.
+const GRACE_MS = 2 * 60 * 60 * 1000;
+function leftInShift(patient, span) {
+  const seen = patient.lastSeenAt ? new Date(patient.lastSeenAt).getTime() : NaN;
+  return !Number.isFinite(seen) || seen >= instant(span.from).getTime() - GRACE_MS;
+}
+
 // Everyone who left during the shift and how: gone from the station lists, or
 // shown as discharged by the IPD Admission list (which also says who left
 // against advice and who died). A patient still on a station list has not left.
-function leavers(picture, date, shift) {
-  const { from, to } = period(date, shift);
+// Each leaver carries `sure` (left in this shift) and, when not, the window they left in.
+function leavers(picture, date, shift, shiftTime) {
+  const span = picture.span || period(date, shift, shiftTime);
+  const { from, to } = span;
   const present = new Set(picture.patients.map((patient) => text(patient.uhid)));
   const listed = new Map();
   for (const row of picture.register || []) if (text(row.fields.uhid) && !listed.has(text(row.fields.uhid))) listed.set(text(row.fields.uhid), row);
@@ -374,21 +428,26 @@ function leavers(picture, date, shift) {
     const row = listed.get(text(patient.uhid));
     const said = row ? row.fields : {};
     const outcome = said.outcome || (String((patient.admission || {}).death_ind) === '1' ? 'death' : 'discharged');
-    out.set(text(patient.uhid) || patient.admissionNo, { patient, outcome, reason: text(said.dischargeType), billing: text(said.billing) });
+    // The IPD Admission list, when it has the time, settles which shift it was.
+    const sure = said.dischargedAt ? said.dischargedAt >= from && said.dischargedAt <= to : leftInShift(patient, span);
+    out.set(text(patient.uhid) || patient.admissionNo, {
+      patient, outcome, reason: text(said.dischargeType), billing: text(said.billing), sure,
+      window: { since: patient.lastSeenAt || null, until: patient.inactiveSince || null },
+    });
   }
   for (const row of picture.register || []) {
     const f = row.fields;
     const uhid = text(f.uhid);
     if (!uhid || !f.outcome || !f.dischargedAt || f.dischargedAt < from || f.dischargedAt > to) continue;
     if (present.has(uhid) || out.has(uhid)) continue;
-    out.set(uhid, { patient: fromRegister(row), outcome: f.outcome, reason: text(f.dischargeType), billing: text(f.billing) });
+    out.set(uhid, { patient: fromRegister(row), outcome: f.outcome, reason: text(f.dischargeType), billing: text(f.billing), sure: true, window: null });
   }
   return [...out.values()];
 }
 
 // Admitted during the shift according to the IPD Admission list, but on no station list (yet, or any more).
-function unlistedAdmissions(picture, date, shift) {
-  const { from, to } = period(date, shift);
+function unlistedAdmissions(picture, date, shift, shiftTime) {
+  const { from, to } = picture.span || period(date, shift, shiftTime);
   const present = new Set(picture.patients.map((patient) => text(patient.uhid)));
   const seen = new Set();
   return (picture.register || [])
@@ -412,11 +471,28 @@ function leaverRow(leaver, row) {
 
 const INVASIVE = /ventilat|intubat|\bett\b|tracheost|\bmv\b|\bsimv\b|\bimv\b/i;
 const NON_INVASIVE = /bipap|bpap|cpap|\bniv\b|non.?invasive|hi.?flow|hfnc/i;
+// The handover's oxygen box is often left empty while the notes say "requiring MV D5" or
+// "S/P ET tube intubation D2". Only what is said to be CURRENT counts, and not once the
+// notes say the tube is out.
+const VENTED_NOW = /\b(?:on|requiring|under|needs?|continu(?:e|ed|ing)|still on)\s+(?:mv|mechanical ventilat\w*|invasive ventilat\w*|ventilator(?:y support)?)\b|\b(?:re-?)?intubated\b|\bventilated\b|\bmv\s*d(?:ay)?\s*\d+\b|\b(?:et|ett|endotracheal)\s*tube\b/i;
+const NIV_NOW = /\b(?:on|requiring|under|needs?|continu(?:e|ed|ing)|still on)\s+(?:bipap|bpap|cpap|niv|hfnc|hi.?flow|non.?invasive)/i;
+const OFF_VENT = /\b(?:s\/p|post|after|following)\s*extubat|\bextubated\b|weaned (?:off|from)|off (?:the )?(?:mv|ventilator)|tube (?:out|removed)/i;
+function ventilationOf(s) {
+  if (NON_INVASIVE.test(s.breathing)) return 'Non-Invasive (CPAP/BiPAP)';
+  if (INVASIVE.test(s.breathing)) return 'Invasive';
+  // A box that is filled in ("O2", "Room air", "Nasal cannula") is the answer; only an empty one is read from the notes.
+  if (text(s.breathing)) return null;
+  const said = [s.diagnosis, s.summary, s.progress].join('\n');
+  if (OFF_VENT.test(said)) return null;
+  if (VENTED_NOW.test(said)) return 'Invasive';
+  if (NIV_NOW.test(said)) return 'Non-Invasive (CPAP/BiPAP)';
+  return null;
+}
 
 // Fills the sections H360 records can answer, without touching rows that are
 // already there. Returns how many rows or numbers were written.
 function importSections(report, picture, options) {
-  const days = new Set([report.date, ...(report.shift === 'Night' ? [nextDay(report.date)] : [])]);
+  const days = new Set((picture.span || period(report.date, report.shift, report.shiftTime)).days);
   const same = (a, b) => text(a).toLowerCase() === text(b).toLowerCase();
   let written = 0;
   const addRow = (sectionId, row, isSame) => {
@@ -452,12 +528,12 @@ function importSections(report, picture, options) {
         name: row.name, age: row.age, bed: row.dept, diagnosis: row.diagnosis, consultant: row.consultant, stage: '', remarks: s.pressure,
       }, (existing) => same(existing.name, row.name));
     }
-    const kind = NON_INVASIVE.test(s.breathing) ? 'Non-Invasive (CPAP/BiPAP)' : INVASIVE.test(s.breathing) ? 'Invasive' : null;
+    const kind = ventilationOf(s);
     if (kind) {
       const child = /^(\d+)\s*y/i.test(row.age) && Number(row.age.match(/^(\d+)/)[1]) < 18;
       vent[kind][child ? 'child' : 'adult']++;
       vent[kind].units.add(unit);
-      vent[kind].names.push(`${row.name} (${s.breathing})`);
+      vent[kind].names.push(s.breathing ? `${row.name} (${s.breathing})` : `${row.name} (from the notes)`);
     }
   }
 
@@ -480,7 +556,7 @@ function importSections(report, picture, options) {
     }
   };
   count('Planned Discharges', picture.patients.filter((patient) => String((patient.admission || {}).dis_req_ind) === '1').length);
-  const died = options.register ? leavers(picture, report.date, report.shift).filter((leaver) => leaver.outcome === 'death').length : 0;
+  const died = leavers(picture, report.date, report.shift, report.shiftTime).filter((leaver) => leaver.sure && leaver.outcome === 'death').length;
   count('Death', picture.patients.filter((patient) => String((patient.admission || {}).death_ind) === '1').length + died);
   count('Blood Transfusion (Bed No)', transfusions);
   return written;
@@ -494,10 +570,10 @@ function leavingRow(row) {
   return kept;
 }
 
-function listFor(patient, date, shift, options) {
+function listFor(patient, span, options) {
   if (options && options.dischargeRequests && dischargeRequested(patient)) return 'discharged';
   const admitted = text((patient.admission || {}).admission_date);
-  const { from, to } = period(date, shift);
+  const { from, to } = span;
   if (admitted >= from && admitted <= to) return 'newAdmissions';
   return CRITICAL_UNIT.test(patient.station) ? 'critical' : 'ward';
 }
@@ -539,7 +615,8 @@ async function carriedText(db, date, exceptId) {
   if (previous) {
     for (const id of PATIENT_SECTIONS) {
       for (const row of ((previous.data || {})[id] || {}).rows || []) {
-        if (row.uhid && !carried.has(row.uhid)) carried.set(row.uhid, { diagnosis: row.diagnosis, remarks: row.remarks });
+        // The remarks of an earlier shift are that shift's; only the diagnosis carries over.
+        if (row.uhid && !carried.has(row.uhid)) carried.set(row.uhid, { diagnosis: row.diagnosis });
       }
     }
   }
@@ -585,14 +662,14 @@ async function draft(store, { date, shift }) {
 
   const data = blankData();
   for (const patient of picture.patients) {
-    const to = listFor(patient, date, shift, options);
+    const to = listFor(patient, picture.span, options);
     const row = patientRow(patient, carried, picture, options);
     data[to].rows.push(to === 'discharged' ? leavingRow(row) : row);
   }
   for (const patient of unlistedAdmissions(picture, date, shift)) data.newAdmissions.rows.push(patientRow(patient, carried, picture, options));
   for (const leaver of leavers(picture, date, shift)) {
     // A death is counted in General Information; it is neither a discharge nor a LAMA.
-    if (leaver.outcome === 'death') continue;
+    if (leaver.outcome === 'death' || !leaver.sure) continue;
     data[leaver.outcome === 'lama' ? 'lama' : 'discharged'].rows.push(leaverRow(leaver, patientRow(leaver.patient, carried, picture, options)));
   }
   data.census.rows = censusRows(picture.patients);
@@ -707,6 +784,7 @@ function applyPicture(report, picture, carried, options) {
   const added = [];
   // Moved to Discharged because H360 now shows a discharge request for them.
   const requested = [];
+  const span = picture.span || period(report.date, report.shift, report.shiftTime);
   const changed = { diagnosis: 0, remarks: 0, details: 0, sections: 0 };
   const write = (row, key, value, mode) => {
     if (!value || mode === 'none' || value === row[key] || (mode === 'empty' && text(row[key]))) return;
@@ -718,7 +796,7 @@ function applyPicture(report, picture, carried, options) {
     const row = known.get(fresh.uhid);
     if (!row) {
       if (options.addNew) {
-        const to = listFor(patient, report.date, report.shift, options);
+        const to = listFor(patient, span, options);
         const made = patientRow(patient, carried, picture, options);
         report.data[to].rows.push(to === 'discharged' ? leavingRow(made) : made);
         added.push(fresh.name);
@@ -745,23 +823,31 @@ function applyPicture(report, picture, carried, options) {
     write(row, 'diagnosis', fresh.diagnosis, options.diagnosis);
     write(row, 'remarks', fresh.remarks, options.remarks);
   }
-  // What the IPD Admission list adds: admissions that are on no station list, and
-  // where those who left belong. A row already written is moved, never rewritten.
+  // Where those who left belong, and what the IPD Admission list adds: admissions that
+  // are on no station list. A row already written is moved, never rewritten.
   const moved = [];
   const died = [];
-  if (options.register) {
-    if (options.addNew) {
-      for (const patient of unlistedAdmissions(picture, report.date, report.shift)) {
-        if (known.has(text(patient.uhid))) continue;
-        const row = patientRow(patient, carried, picture, options);
-        report.data.newAdmissions.rows.push(row);
-        known.set(row.uhid, row);
-        added.push(row.name);
-      }
+  const unsure = [];
+  if (options.register && options.addNew) {
+    for (const patient of unlistedAdmissions(picture, report.date, report.shift)) {
+      if (known.has(text(patient.uhid))) continue;
+      const row = patientRow(patient, carried, picture, options);
+      report.data.newAdmissions.rows.push(row);
+      known.set(row.uhid, row);
+      added.push(row.name);
     }
-    for (const leaver of leavers(picture, report.date, report.shift)) {
+  }
+  {
+    const seen = options.register ? picture : { ...picture, register: [] };
+    for (const leaver of leavers(seen, report.date, report.shift)) {
       const uhid = text(leaver.patient.uhid);
       const name = text((leaver.patient.admission || {}).patient_name);
+      const inReport = ['lama', 'discharged', ...ACTIVE_LISTS].some((sectionId) => report.data[sectionId].rows.some((row) => uhid && row.uhid === uhid));
+      if (!leaver.sure) {
+        // Left since the last collection, but in which shift nobody can say: offered, not placed.
+        if (!inReport) unsure.push({ name, uhid, since: leaver.window.since, until: leaver.window.until, outcome: leaver.outcome, row: leaverRow(leaver, patientRow(leaver.patient, carried, picture, options)) });
+        continue;
+      }
       if (leaver.outcome === 'death') {
         died.push(name);
         continue;
@@ -791,7 +877,7 @@ function applyPicture(report, picture, carried, options) {
   if (options.sections) changed.sections = importSections(report, picture, options);
   // OPD patients who have come (vitals taken, or seen by the doctor), where nothing is written yet.
   if (picture.opd && picture.opd.counts && !text(report.data.census.fields.opd)) report.data.census.fields.opd = String(picture.opd.counts.attended);
-  return { added, gone, moved, died, requested, changed };
+  return { added, gone, moved, died, requested, unsure, changed, span };
 }
 
 // Brings a report up to date with the latest collection, as far as the chosen
@@ -804,10 +890,12 @@ async function refresh(store, id, sent, by) {
   if (!report) throw fail(404, 'Report not found.');
   upgrade(report);
   const { carried } = await carriedText(db, report.date, report._id);
-  const picture = await hospitalPicture(store, report.date, report.shift);
+  report.shiftTime = text(((report.data.round || {}).fields || {}).time);
+  const picture = await hospitalPicture(store, report.date, report.shift, report.shiftTime);
   if (!picture.collectedAt) throw fail(409, 'Nothing has been collected from H360 yet. Collect the patients first.');
 
   const { added, gone, moved, died, requested, changed } = applyPicture(report, picture, carried, options);
+  delete report.shiftTime;
 
   const updatedAt = new Date();
   await db.collection(SHEETS).updateOne(
@@ -861,20 +949,33 @@ async function board(store) {
 
 // The same update for a report that is kept somewhere else (the shift supervisor report,
 // see bridge.js): works on the copy it is given and hands it back, saving nothing.
-//   sheet    { date, shift, data } in the log sheet's shape
-//   carried  diagnosis and remarks typed in the previous report, by UHID
+//   sheet    { date, shift, shiftTime, data } in the log sheet's shape
+//   carried  the diagnosis typed in the previous report, by UHID
 async function fill(store, sheet, sent, carried) {
   const options = updateOptions(sent);
   checkDateAndShift(sheet.date, sheet.shift);
-  const picture = await hospitalPicture(store, sheet.date, sheet.shift);
-  if (!picture.collectedAt) throw fail(409, 'Nothing has been collected from H360 yet. Collect the patients first (H360 Patients).');
-  const report = upgrade({ date: sheet.date, shift: sheet.shift, data: { ...blankData(), ...(sheet.data || {}) } });
+  const picture = await hospitalPicture(store, sheet.date, sheet.shift, sheet.shiftTime);
+  if (!picture.collectedAt) throw fail(409, 'Nothing has been collected from H360 yet. Collect the patients first (H360 Scan).');
+  const report = upgrade({ date: sheet.date, shift: sheet.shift, shiftTime: text(sheet.shiftTime), data: { ...blankData(), ...(sheet.data || {}) } });
   const result = applyPicture(report, picture, carried || new Map(), options);
   const opd = picture.opd && picture.opd.counts ? { date: picture.opd.date, collectedAt: picture.opd.collectedAt, counts: picture.opd.counts } : null;
-  return { data: report.data, sourceCollectedAt: picture.collectedAt, census: report.data.census.rows, opd, ...result };
+  return { data: report.data, sourceCollectedAt: picture.collectedAt, census: report.data.census.rows, opd, duplicates: sameDiagnosis(picture), ...result };
+}
+
+// Two patients whose newest H360 diagnosis is the same long text: a problem list pasted
+// into the wrong patient's record (seen on the live site). Named, so the supervisor checks.
+function sameDiagnosis(picture) {
+  const byText = new Map();
+  for (const patient of picture.patients) {
+    const s = picture.suggestions.get(patient.admissionNo);
+    const said = text(s && s.diagnosis).replace(/\s+/g, ' ');
+    if (said.length < 60) continue;
+    byText.set(said, [...(byText.get(said) || []), text((patient.admission || {}).patient_name)]);
+  }
+  return [...byText.values()].filter((names) => names.length > 1).map((names) => ({ names, diagnosis: [...byText.keys()].find((key) => byText.get(key) === names).slice(0, 120) }));
 }
 
 module.exports = {
-  draft, create, get, list, update, remove, refresh, fill, board, importLegacy, legacyWaiting, suggestionsFrom, composeDiagnosis, hospitalPicture, leavers,
-  UPDATE_DEFAULTS, SHEETS,
+  draft, create, get, list, update, remove, refresh, fill, board, importLegacy, legacyWaiting, suggestionsFrom, composeDiagnosis, diagnosisInSummary, hospitalPicture, leavers,
+  period, shiftHours, ventilationOf, UPDATE_DEFAULTS, SHEETS,
 };

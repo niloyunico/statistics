@@ -234,7 +234,7 @@ function App(){
     body= (typeof QualityView!=='undefined') ? <QualityView view={qv} initialDept={route.dept} setRoute={setRoute}/> : null;
   } else if(route.view && route.view.indexOf('sup')===0 && typeof SupervisorView!=='undefined'){
     // Shift Supervisor Reports module — renders INSIDE the global shell (window.SupervisorView).
-    const SV_TITLE={supHome:'Dashboard',supBoard:'Patient Board',supNew:'New Report',supHistory:'All Reports',supReport:'Print & Export',supH360:'H360 Patients',supSheet:'All Reports'};
+    const SV_TITLE={supHome:'Dashboard',supBoard:'Patient Board',supNew:'New Report',supHistory:'All Reports',supReport:'Print & Export',supH360Scan:'H360 Scan',supH360:'H360 Patients',supSheet:'All Reports'};
     crumbs=['UNICO','Supervisor Reports',SV_TITLE[route.view]||'Dashboard'];
     body=<SupervisorView view={route.view} id={route.id} shift={route.shift} openAdd={route.openAdd} h360={route.h360} depts={depts} setRoute={setRoute}/>;
   } else if(route.view&&route.view.indexOf('ds')===0){
