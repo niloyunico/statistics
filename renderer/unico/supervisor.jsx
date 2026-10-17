@@ -846,8 +846,8 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
         (j.census || []).forEach((u) => { const n = supH360Dept(u.unit, deptNames); sums[n] = (sums[n] || 0) + supNum(u.patients); });
         const census = supCensusTidy(cur.census, deptNames);
         Object.keys(sums).forEach((n) => { census[n] = String(sums[n]); });
-        // OPD: those who came (vitals taken, or seen by the doctor), where nothing is typed yet
-        if (opd && !String(census['OPD Total'] == null ? '' : census['OPD Total']).trim()) census['OPD Total'] = String(opd.counts.attended);
+        // OPD: only those with vitals taken (the hospital's count), where nothing is typed yet
+        if (opd && !String(census['OPD Total'] == null ? '' : census['OPD Total']).trim()) census['OPD Total'] = String(opd.counts.vitals);
         patch.census = census;
       }
       edit(patch);
@@ -856,7 +856,7 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
       const notes = [];
       if ((j.added || []).length) notes.push('Added ' + j.added.length + ' patient(s): ' + j.added.join(', ') + '.');
       notes.push('Filled in: diagnosis for ' + (c.diagnosis || 0) + ' patient(s), remarks for ' + (c.remarks || 0) + '; bed, age or consultant updated for ' + (c.details || 0) + '; ' + (c.sections || 0) + ' row(s) or number(s) added to the other sections.');
-      if (opd) notes.push('OPD: ' + opd.counts.all + ' out-patients, ' + opd.counts.vitals + ' with vitals taken, ' + opd.counts.prescribed + ' seen by the doctor. OPD Total in the census counts those who came: ' + opd.counts.attended + '.');
+      if (opd) notes.push('OPD: ' + opd.counts.all + ' out-patients, ' + opd.counts.vitals + ' with vitals taken, ' + opd.counts.prescribed + ' seen by the doctor. OPD Total in the census counts only those with vitals taken: ' + opd.counts.vitals + '.');
       if ((j.requested || []).length) notes.push('Discharge requested in H360, placed in Discharged: ' + j.requested.join(', ') + '.');
       if ((j.moved || []).length) notes.push('Placed by the IPD Admission list: ' + j.moved.join(', ') + '.');
       if ((j.died || []).length) notes.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + j.died.join(', ') + '.');
@@ -965,7 +965,7 @@ function SupEditor({ id, shift, openAdd, h360, depts, setRoute }) {
       {h3.notes.length > 0 && <div>{h3.notes.map((t, i) => <div key={'h' + i} className="sup-alert info">{t}</div>)}</div>}
       {h3.unsure.length > 0 && !readOnly && <div className="sup-card"><div className="sup-card-b">
         <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 4 }}>Left H360 since the previous scan — which shift?</div>
-        <div className="h3-muted" style={{ marginBottom: 8 }}>These patients were on the station lists at the previous scan and are gone now. The scans are too far apart to say whether they left in this shift, so they are not placed. Add each to the right list, or leave them to the shift they belong to.</div>
+        <div className="h3-muted" style={{ marginBottom: 8 }}>These patients were on the station lists at the previous scan (within the last day) and are gone now. The scans are too far apart to say whether they left in this shift, so they are not placed. Add each to the right list, or leave them to the shift they belong to.</div>
         {h3.unsure.map((item, i) => (
           <div key={item.uhid || i} className="sup-alert warn" style={{ marginBottom: 6 }}>
             <span style={{ flex: 1 }}><b>{item.name}</b>{item.row.dept ? ' · ' + item.row.dept : ''}{item.row.bed ? ' ' + item.row.bed : ''} — last seen {supWhen(item.since)}, gone by {supWhen(item.until)}</span>

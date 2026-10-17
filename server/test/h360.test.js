@@ -65,7 +65,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
   assert.deepStrictEqual(sheets.shiftHours('07:00-15:00'), ['07:00', '15:00']);
   assert.strictEqual(sheets.shiftHours('M1'), null);
   const night = sheets.period('2026-10-13', 'Night', '');
-  assert.deepStrictEqual([night.from, night.to, night.days], ['2026-10-13 20:00:00', '2026-10-14 06:00:00', ['2026-10-13', '2026-10-14']]);
+  assert.deepStrictEqual([night.from, night.to, night.days], ['2026-10-13 20:00:00', '2026-10-14 08:00:00', ['2026-10-13', '2026-10-14']]);
   const morning = sheets.period('2026-10-14', 'Morning', '');
   const evening = sheets.period('2026-10-14', 'Evening', '');
   assert.ok(night.to <= morning.from && morning.to <= evening.from, 'the three shifts of a day must not overlap');
@@ -188,7 +188,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.strictEqual(sheet.data.pressureSores.rows[0].name, 'TEST BRAVO');
     assert.strictEqual(sheet.data.general.rows.find((row) => row.item === 'Planned Discharges').value, '01');
     assert.strictEqual(sheet.data.census.fields.ipd, '3');
-    assert.strictEqual(sheet.data.census.fields.opd, '3');
+    assert.strictEqual(sheet.data.census.fields.opd, '2');
     ok('a new log sheet is filled from the collection: a discharge request goes to Discharged, and the IPD Admission list adds an unlisted admission and a discharge');
 
     /* a list-only refresh from the live site */
@@ -220,7 +220,7 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     ok('Update from H360 moves a patient who left against advice to LAMA and keeps what was typed; an older copy cannot overwrite a newer save');
 
     /* a patient gone from the lists whose shift nobody can tell: offered, not placed */
-    const dayBefore = new Date(Date.now() - 30 * 3600 * 1000);
+    const dayBefore = new Date(Date.now() - 12 * 3600 * 1000); // before this shift began, inside the last day
     await sharedDb.collection('h360Patients').insertOne({ key: 'U0009|IP-9', uhid: 'U0009', ipNo: 'IP-9', admissionNo: '1009', patientNo: '509', active: false, station: 'Nurse Station L-9',
       lastSeenAt: dayBefore, inactiveSince: new Date(), seq: 9, admission: { patient_name: 'TEST INDIA', patient_code: 'U0009', admission_uid: 'IP-9', bed_name: '905', primary_doctor_name: 'Dr. Nine', admission_date: daysAgo(2) + ' 10:00:00', death_ind: '0' }, profile: { Age: '40 Y 0 M 0 D' } });
     const bridgeLib = require('../h360/bridge');
@@ -228,6 +228,11 @@ const listen = (app) => new Promise((resolve) => { const server = http.createSer
     assert.deepStrictEqual(offered.unsure.map((item) => [item.name, item.row.name, item.row.dept]), [['TEST INDIA', 'TEST INDIA', 'Level-09\n905']]);
     assert.ok(!offered.data.discharged.rows.some((row) => row.name === 'TEST INDIA'));
     assert.deepStrictEqual(offered.moved, ['TEST CHARLIE (LAMA)', 'TEST ECHO (Discharged)']);
+    // last seen three days ago: left on an earlier day, not offered at all
+    await sharedDb.collection('h360Patients').updateOne({ uhid: 'U0009' }, { $set: { lastSeenAt: new Date(Date.now() - 72 * 3600 * 1000) } });
+    const older = await sheets.fill(sharedStore, bridgeLib.toSheet({ date: SHIFT.date, shift: SHIFT.shift }), {}, new Map());
+    assert.deepStrictEqual(older.unsure, []);
+    assert.ok(!older.data.discharged.rows.some((row) => row.name === 'TEST INDIA'));
     await sharedDb.collection('h360Patients').deleteOne({ uhid: 'U0009' });
     ok('a patient who left between two collections a day apart is offered to the supervisor, not written into a shift they may not have left in');
 

@@ -2188,7 +2188,7 @@ function SupEditor({
         Object.keys(sums).forEach(n => {
           census[n] = String(sums[n]);
         });
-        if (opd && !String(census['OPD Total'] == null ? '' : census['OPD Total']).trim()) census['OPD Total'] = String(opd.counts.attended);
+        if (opd && !String(census['OPD Total'] == null ? '' : census['OPD Total']).trim()) census['OPD Total'] = String(opd.counts.vitals);
         patch.census = census;
       }
       edit(patch);
@@ -2204,7 +2204,7 @@ function SupEditor({
       const notes = [];
       if ((j.added || []).length) notes.push('Added ' + j.added.length + ' patient(s): ' + j.added.join(', ') + '.');
       notes.push('Filled in: diagnosis for ' + (c.diagnosis || 0) + ' patient(s), remarks for ' + (c.remarks || 0) + '; bed, age or consultant updated for ' + (c.details || 0) + '; ' + (c.sections || 0) + ' row(s) or number(s) added to the other sections.');
-      if (opd) notes.push('OPD: ' + opd.counts.all + ' out-patients, ' + opd.counts.vitals + ' with vitals taken, ' + opd.counts.prescribed + ' seen by the doctor. OPD Total in the census counts those who came: ' + opd.counts.attended + '.');
+      if (opd) notes.push('OPD: ' + opd.counts.all + ' out-patients, ' + opd.counts.vitals + ' with vitals taken, ' + opd.counts.prescribed + ' seen by the doctor. OPD Total in the census counts only those with vitals taken: ' + opd.counts.vitals + '.');
       if ((j.requested || []).length) notes.push('Discharge requested in H360, placed in Discharged: ' + j.requested.join(', ') + '.');
       if ((j.moved || []).length) notes.push('Placed by the IPD Admission list: ' + j.moved.join(', ') + '.');
       if ((j.died || []).length) notes.push('Shown as died in the IPD Admission list (counted under Death; check the lists): ' + j.died.join(', ') + '.');
@@ -2526,7 +2526,7 @@ function SupEditor({
     style: {
       marginBottom: 8
     }
-  }, "These patients were on the station lists at the previous scan and are gone now. The scans are too far apart to say whether they left in this shift, so they are not placed. Add each to the right list, or leave them to the shift they belong to."), h3.unsure.map((item, i) => React.createElement("div", {
+  }, "These patients were on the station lists at the previous scan (within the last day) and are gone now. The scans are too far apart to say whether they left in this shift, so they are not placed. Add each to the right list, or leave them to the shift they belong to."), h3.unsure.map((item, i) => React.createElement("div", {
     key: item.uhid || i,
     className: "sup-alert warn",
     style: {
@@ -5401,7 +5401,7 @@ function H3Opd({
   const rows = (opd.rows || []).filter(row => !q || [row.name, row.department, row.doctor, row.status, row.serial].some(value => String(value || '').toLowerCase().includes(q)));
   return React.createElement(React.Fragment, null, React.createElement("div", {
     className: "h3-muted"
-  }, "OPD Nurse Station list of ", h3ShowDate(opd.date), ", read ", h3When(opd.collectedAt), ". A report takes \"came to OPD\" as its OPD total."), React.createElement("div", {
+  }, "OPD Nurse Station list of ", h3ShowDate(opd.date), ", read ", h3When(opd.collectedAt), ". A report takes \"vitals taken\" as its OPD total."), React.createElement("div", {
     className: "h3-tiles"
   }, React.createElement("div", {
     className: "h3-tile"
@@ -5813,7 +5813,7 @@ function H3Patients({
     onClick: () => setRoute({
       view: 'supH360'
     })
-  }, React.createElement("b", null, opd.counts.attended), React.createElement("span", null, "Came to OPD (", h3ShowDate(opd.date), ")")), shape && shape.found ? React.createElement("button", {
+  }, React.createElement("b", null, opd.counts.vitals), React.createElement("span", null, "OPD vitals taken (", h3ShowDate(opd.date), ")")), shape && shape.found ? React.createElement("button", {
     className: "h3-tile",
     onClick: () => setRoute({
       view: 'supH360'

@@ -74,10 +74,11 @@ const nextDay = (date) => {
 };
 
 // The hours of a shift when the report does not say. A Night report is dated by the
-// evening it starts and runs into the next morning. The three must not overlap: every
+// evening it starts and runs to 8 AM, when the Morning begins (the hospital's rule: a patient
+// admitted before 8 AM is the Night report's). The three must not overlap: every
 // shift's period used to start at midnight, so one day's admissions and leavers were
 // counted again in every shift report of that day.
-const SHIFT_HOURS = { Morning: ['06:00', '14:00'], Evening: ['14:00', '20:00'], Night: ['20:00', '06:00'] };
+const SHIFT_HOURS = { Morning: ['08:00', '14:00'], Evening: ['14:00', '20:00'], Night: ['20:00', '08:00'] };
 
 // "8:00 PM - 8:00 AM", "07:00-15:00", "7am to 3pm" -> ['20:00', '08:00']; null when unreadable.
 function shiftHours(shiftTime) {
@@ -412,6 +413,13 @@ function leftInShift(patient, span) {
   const seen = patient.lastSeenAt ? new Date(patient.lastSeenAt).getTime() : NaN;
   return !Number.isFinite(seen) || seen >= instant(span.from).getTime() - GRACE_MS;
 }
+// Last seen more than a day before the shift: they left on an earlier day, which some
+// earlier report covers. Offering them again with every new report only got in the way.
+const STALE_MS = 24 * 60 * 60 * 1000;
+function leftLongBefore(patient, span) {
+  const seen = patient.lastSeenAt ? new Date(patient.lastSeenAt).getTime() : NaN;
+  return Number.isFinite(seen) && seen < instant(span.from).getTime() - STALE_MS;
+}
 
 // Everyone who left during the shift and how: gone from the station lists, or
 // shown as discharged by the IPD Admission list (which also says who left
@@ -430,6 +438,7 @@ function leavers(picture, date, shift, shiftTime) {
     const outcome = said.outcome || (String((patient.admission || {}).death_ind) === '1' ? 'death' : 'discharged');
     // The IPD Admission list, when it has the time, settles which shift it was.
     const sure = said.dischargedAt ? said.dischargedAt >= from && said.dischargedAt <= to : leftInShift(patient, span);
+    if (!sure && !said.dischargedAt && leftLongBefore(patient, span)) continue;
     out.set(text(patient.uhid) || patient.admissionNo, {
       patient, outcome, reason: text(said.dischargeType), billing: text(said.billing), sure,
       window: { since: patient.lastSeenAt || null, until: patient.inactiveSince || null },
@@ -674,7 +683,7 @@ async function draft(store, { date, shift }) {
   }
   data.census.rows = censusRows(picture.patients);
   data.census.fields.ipd = picture.patients.length ? String(picture.patients.length) : '';
-  if (picture.opd && picture.opd.counts) data.census.fields.opd = String(picture.opd.counts.attended);
+  if (picture.opd && picture.opd.counts) data.census.fields.opd = String(picture.opd.counts.vitals);
   importSections({ date, shift, data }, picture, options);
 
   return {
@@ -875,8 +884,8 @@ function applyPicture(report, picture, carried, options) {
   report.data.census.rows = censusRows(picture.patients);
   report.data.census.fields.ipd = String(picture.patients.length);
   if (options.sections) changed.sections = importSections(report, picture, options);
-  // OPD patients who have come (vitals taken, or seen by the doctor), where nothing is written yet.
-  if (picture.opd && picture.opd.counts && !text(report.data.census.fields.opd)) report.data.census.fields.opd = String(picture.opd.counts.attended);
+  // OPD patients whose vitals were taken (the hospital counts those, not everyone appointed), where nothing is written yet.
+  if (picture.opd && picture.opd.counts && !text(report.data.census.fields.opd)) report.data.census.fields.opd = String(picture.opd.counts.vitals);
   return { added, gone, moved, died, requested, unsure, changed, span };
 }
 

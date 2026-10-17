@@ -14,8 +14,8 @@ const daysAgo = (n) => new Date(hospitalNow.getTime() - n * 86400000).toISOStrin
 const pad = (n) => String(n).padStart(2, '0');
 function shiftNow() {
   const hour = hospitalNow.getUTCHours();
-  if (hour < 6) return { date: daysAgo(1), shift: 'Night', start: '20:00' };
-  if (hour < 14) return { date: TODAY, shift: 'Morning', start: '06:00' };
+  if (hour < 8) return { date: daysAgo(1), shift: 'Night', start: '20:00' };
+  if (hour < 14) return { date: TODAY, shift: 'Morning', start: '08:00' };
   if (hour < 20) return { date: TODAY, shift: 'Evening', start: '14:00' };
   return { date: TODAY, shift: 'Night', start: '20:00' };
 }

@@ -211,7 +211,7 @@ function H3Opd({ opd, onPc, query }) {
   const rows = (opd.rows || []).filter((row) => !q || [row.name, row.department, row.doctor, row.status, row.serial].some((value) => String(value || '').toLowerCase().includes(q)));
   return (
     <React.Fragment>
-      <div className="h3-muted">OPD Nurse Station list of {h3ShowDate(opd.date)}, read {h3When(opd.collectedAt)}. A report takes "came to OPD" as its OPD total.</div>
+      <div className="h3-muted">OPD Nurse Station list of {h3ShowDate(opd.date)}, read {h3When(opd.collectedAt)}. A report takes "vitals taken" as its OPD total.</div>
       <div className="h3-tiles">
         <div className="h3-tile"><b>{c.all}</b><span>Out-patients today</span></div>
         <div className="h3-tile ok"><b>{c.vitals}</b><span>Vitals taken</span></div>
@@ -438,7 +438,7 @@ function H3Patients({ setRoute, mode }) {
       {scan && snapshot && <div className="h3-tiles">
         <button className="h3-tile" onClick={() => setRoute({ view: 'supH360' })}><b>{snapshot.rows.length}</b><span>In-patients · {snapshot.stations.length} stations</span></button>
         {requestedCount > 0 && <button className="h3-tile req" title="Patients whose discharge has been requested in H360 (shown in pink there). A report imports them into Discharged." onClick={() => setRoute({ view: 'supH360' })}><b>{requestedCount}</b><span>Discharge requested</span></button>}
-        {opd && opd.counts && <button className="h3-tile ok" onClick={() => setRoute({ view: 'supH360' })}><b>{opd.counts.attended}</b><span>Came to OPD ({h3ShowDate(opd.date)})</span></button>}
+        {opd && opd.counts && <button className="h3-tile ok" onClick={() => setRoute({ view: 'supH360' })}><b>{opd.counts.vitals}</b><span>OPD vitals taken ({h3ShowDate(opd.date)})</span></button>}
         {shape && shape.found ? <button className="h3-tile" onClick={() => setRoute({ view: 'supH360' })}><b>{admissions.rows.length}</b><span>IPD Admission list rows</span></button>
           : <div className="h3-tile" title={onPc ? 'The IPD Admission list is read with every scan on the hospital PC.' : 'H360 fills this list by script after the page opens, so the live site cannot read it; a scan on the hospital PC can.'}><b>—</b><span>IPD Admission list{onPc ? '' : ' (hospital PC only)'}</span></div>}
       </div>}
