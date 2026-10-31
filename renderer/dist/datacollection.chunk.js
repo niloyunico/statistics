@@ -412,21 +412,32 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     d.setMonth(d.getMonth() - 1);
     return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0');
   };
-  function defaultMonthFor(dept) {
-    const order = MO();
-    if (dept && dept.months && dept.months.length) {
-      const last = dept.months[dept.months.length - 1];
-      const i = order.indexOf(last);
-      const cap = dcMonthRank(dcDefaultMonth());
-      if (i >= 0 && i + 1 < order.length && !(dcMonthRank(order[i + 1]) > cap)) return order[i + 1];
-      return dcMonthRank(last) > cap ? dcDefaultMonth() : last;
-    }
-    const MMM = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const now = new Date();
-    const curKey = MMM[now.getMonth()] + '-' + String(now.getFullYear()).slice(-2);
-    const ci = order.indexOf(curKey);
-    if (ci >= 0) return order[Math.max(0, ci - 1)];
-    return order[order.length - 1] || '';
+  function dcSubmissionWindow(now = new Date()) {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Dhaka',
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric'
+    }).formatToParts(now);
+    const part = type => Number(parts.find(p => p.type === type).value);
+    const year = part('year'),
+      month = part('month') - 1,
+      day = part('day');
+    const key = (y, m) => MONS_ABBR[m] + '-' + String(y % 100).padStart(2, '0');
+    const days = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    const current = key(year, month);
+    const latest = day >= days - 1 ? key(year + (month === 11 ? 1 : 0), (month + 1) % 12) : current;
+    return {
+      current,
+      latest
+    };
+  }
+  function defaultMonthFor() {
+    return dcSubmissionWindow().current;
+  }
+  function dcSubmissionMonthOpts(starts, keep) {
+    const latest = dcSubmissionWindow().latest;
+    return dcPortalUser() ? dcRealMonthOpts(starts, keep, latest) : [...new Set([...dcWideMonths().filter(m => dcMonthRank(m) <= dcMonthRank(latest)), latest, ...(keep || []).filter(Boolean)])].sort((a, b) => dcMonthRank(b) - dcMonthRank(a));
   }
   function staffNames() {
     const s = window.STAFF_SEED || window.__UNICO_STAFF__ || [];
@@ -2525,7 +2536,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, [draftKey]);
     const assigned = resps.filter(r => dept && canReportDept(r, dept.id));
     const order = MO();
-    const monthOpts = dcPortalUser() ? dcRealMonthOpts([dcPatientStart(dept, subs)], [month, prefill && prefill.month]) : order.slice(Math.max(0, order.indexOf('Jan-25')), order.length);
+    const monthOpts = dcSubmissionMonthOpts([dcPatientStart(dept, subs)], [month, prefill && prefill.month]);
     const monthStatus = useMemo(() => {
       const map = {};
       (subs || []).forEach(s => {
@@ -2928,8 +2939,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const fyMonths = window.QUALITY_QUARTER_MONTHS ? ['Q1', 'Q2', 'Q3', 'Q4'].reduce((a, q) => a.concat(window.QUALITY_QUARTER_MONTHS[q] || []), []) : null;
     const [areaKey, setAreaKey] = useState(prefill && prefill.area || (areas.find(a => a.indicators && a.indicators.length) || areas[0] || {}).key || '');
     const area = useMemo(() => areas.find(a => a.key === areaKey) || areas[0], [areas, areaKey]);
-    const monthOpts = dcPortalUser() ? dcRealMonthOpts(dcAreaStarts(area, []), [prefill && prefill.month]) : dcWideMonths();
-    const defMonth = dcDefaultMonth() || (fyMonths && fyMonths.length ? fyMonths[fyMonths.length - 1] : monthOpts[monthOpts.length - 1]) || '';
+    const monthOpts = dcSubmissionMonthOpts(dcAreaStarts(area, []), [prefill && prefill.month]);
+    const defMonth = dcSubmissionWindow().current;
     const [indId, setIndId] = useState(prefill && prefill.indicatorId || '');
     const [newInd, setNewInd] = useState({
       name: '',
@@ -9332,8 +9343,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   };
   const dcMonthKey = r => MONS_ABBR[(r % 12 + 12) % 12] + '-' + String(Math.floor(r / 12) % 100).padStart(2, '0');
   const dcPortalUser = () => dcIsPortalRole(typeof window !== 'undefined' && window.__UNICO_USER__ || null);
-  const dcRealMonthOpts = (startMonths, keep) => {
-    const last = dcDefaultMonth();
+  const dcRealMonthOpts = (startMonths, keep, last = dcDefaultMonth()) => {
     const lr = dcMonthRank(last);
     let first = null;
     (startMonths || []).forEach(m => {
