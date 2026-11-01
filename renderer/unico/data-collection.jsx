@@ -27,6 +27,24 @@
   // this they'd each fire their own /api/submissions?status=all query, hammering the
   // database (a cause of "failed database" errors when several collectors submit at
   // once). Concurrent callers share one in-flight request; results cache for 8s.
+  // Preserve server errors, and never leave the submit button waiting indefinitely.
+  async function dcQualityPost(body) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const response = await fetch('/api/submissions/quality', { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body), signal: controller.signal });
+      if (response.status === 401 || response.redirected) throw new Error('Your session has expired. Sign in again before submitting. Your entries are still here.');
+      let result;
+      try { result = await response.json(); } catch (error) { throw new Error('The server did not return a submission result. Check My submissions before trying again.'); }
+      if (!result || typeof result.ok !== 'boolean') throw new Error('The server did not confirm this submission. Check My submissions before trying again.');
+      if (result.ok) { dcInvalidateSubs(); window.dispatchEvent(new Event('unico:data-refreshed')); }
+      return result;
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error('The server took too long to confirm. Your entries are still here. Check My submissions before trying again.');
+      throw error;
+    } finally { clearTimeout(timer); }
+  }
+
   let _dcAllCache = null, _dcAllAt = 0, _dcAllPromise = null;
   // Generation: bumped on every change. A fetch that STARTED before a submit/edit must not be
   // cached (or handed to a new caller) as current — it refilled the cache with the old rows,
@@ -373,7 +391,7 @@
   /* "Data already recorded" pop-up: what is on record next to what was typed, plus a required
      reason. Sending turns the report into an edit request (isCorrection) — nothing on record
      changes until an administrator approves it. */
-  function DcCompareModal({ title, rows, reason, setReason, busy, onEdit, onSend }) {
+  function DcCompareModal({ title, rows, reason, setReason, busy, onEdit, onSend, error }) {
     const [showSame, setShowSame] = useState(false);
     const changed = rows.filter((r) => r.changed), same = rows.filter((r) => !r.changed);
     const none = changed.length === 0;
@@ -402,6 +420,7 @@
                 </tbody>
               </table>
             </div>
+            {error && <div role="alert" style={{ color: 'var(--rose)', fontWeight: 600 }}>{error}</div>}
             {none && <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--rose)' }}>No changes from what is on record.</div>}
             <label style={{ fontSize: 11.5, color: 'var(--muted)', fontWeight: 600 }}>Reason for the change (required)</label>
             <textarea style={{ ...inputStyle, minHeight: 58, resize: 'vertical' }} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. wrong count entered — should be Y not X" autoFocus />
@@ -1408,6 +1427,9 @@
     const [remark, setRemark] = useState('');
     const [responsible, setResponsible] = useState(lockResp ? (me.name || '') : ((prefill && prefill.responsible) || ''));
     const [busy, setBusy] = useState(false);
+    const [submitError, setSubmitError] = useState('');
+    const failSubmit = (message) => { setSubmitError(message); toast(message, 'error'); };
+    const sendingRef = React.useRef(false);
     const [done, setDone] = useState(null);
     const [flash, setFlash] = useState(null); // 3s success popup
     const [guideOpen, setGuideOpen] = useState(false); // HQI guide collapsed by default (click "Show" to expand)
@@ -1674,14 +1696,16 @@
     const qRemarkOut = () => (notObserved ? ('Not observed — ' + noReason.trim() + (remark.trim() ? ' (' + remark.trim() + ')' : '')) : remark);
     const qNext = () => ({ notObserved, rate: computeAsRate, value: notObserved ? null : (computeAsRate ? (ratePending ? null : result) : numerator), num: (!notObserved && computeAsRate) ? numerator : null, den: (!notObserved && computeAsRate && !denLockedForCollector) ? denNum : null, incidents: notObserved ? [] : incidents, remark: qRemarkOut(), capa: notObserved ? null : capa });
     const submit = () => {
-      if (!area) { toast('Select an area', 'error'); return; }
-      if (!indId) { toast('Select an indicator', 'error'); return; }
-      if (isNew && !newInd.name.trim()) { toast('Enter the new indicator name', 'error'); return; }
-      if (!month) { toast('Pick a month', 'error'); return; }
-      if (notObserved && !noReason.trim()) { toast('Please say WHY it was not observed this month.', 'error'); return; }
+      if (sendingRef.current) return;
+      setSubmitError('');
+      if (!area) { failSubmit('Select an area'); return; }
+      if (!indId) { failSubmit('Select an indicator'); return; }
+      if (isNew && !newInd.name.trim()) { failSubmit('Enter the new indicator name'); return; }
+      if (!month) { failSubmit('Pick a month'); return; }
+      if (notObserved && !noReason.trim()) { failSubmit('Please say WHY it was not observed this month.'); return; }
       // A forgotten numerator is not a measured zero: `Number('') || 0` sent a 0% breach as
       // genuine data — exactly what "Not observed" exists to prevent. A typed 0 stays valid.
-      if (!notObserved && numMode === 'direct' && !autoCount && String(directNum == null ? '' : directNum).trim() === '') { toast('Enter ' + numLabel + ' — type 0 if there were none this month', 'error'); return; }
+      if (!notObserved && numMode === 'direct' && !autoCount && String(directNum == null ? '' : directNum).trim() === '') { failSubmit('Enter ' + numLabel + ' — type 0 if there were none this month'); return; }
       if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
         // Zero-exposure month (e.g. "no surgical discharges"): 0 events over an EXPLICIT 0
         // denominator is a legitimate report — only refuse when events exist without a base,
@@ -1692,27 +1716,31 @@
         const denCells = numMode === 'group' ? GROUP_KEYS.map(([k]) => groupsDen[k])
           : numMode === 'dept' ? [].concat.apply([], deptRows.map((r) => GROUP_KEYS.map(([k]) => r.g && r.g[k] && r.g[k].d))) : [den];
         const explicitZero = !(Number(numerator) > 0) && denCells.some(typed) && denCells.filter(typed).every((v) => Number(v) === 0);
-        if (!explicitZero) { toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error'); return; }
+        if (!explicitZero) { failSubmit('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month')); return; }
       }
-      if (hospitalWide && !notObserved && incidents.some((x) => dcIncidentFilled(x) && !x.department)) { toast('Choose the department where each incident happened.', 'error'); return; }
+      if (hospitalWide && !notObserved && incidents.some((x) => dcIncidentFilled(x) && !x.department)) { failSubmit('Choose the department where each incident happened.'); return; }
       if (!notObserved && autoCount && numMode === 'direct') {
-        if (incidents.length === 0 && !zeroOk) { toast('Nothing entered — add each incident, or press “Confirm 0 cases” if there were none this month.', 'error'); return; }
+        if (incidents.length === 0 && !zeroOk) { failSubmit('Nothing entered — add each incident, or press “Confirm 0 cases” if there were none this month.'); return; }
         const bad = incidents.findIndex((x) => incMissing(x).length > 0);
         if (bad >= 0) {
           const miss = incMissing(incidents[bad]);
           setOpenInc(bad);
-          toast('Incident ' + (bad + 1) + ' — ' + (miss.length === incReq.length ? 'fill it in, or remove it' : ('still needs: ' + miss.slice(0, 3).map((m) => m[1]).join(', ') + (miss.length > 3 ? ' and ' + (miss.length - 3) + ' more' : ''))), 'error');
+          failSubmit('Incident ' + (bad + 1) + ' — ' + (miss.length === incReq.length ? 'fill it in, or remove it' : ('still needs: ' + miss.slice(0, 3).map((m) => m[1]).join(', ') + (miss.length > 3 ? ' and ' + (miss.length - 3) + ' more' : ''))));
           return;
         }
       }
       if (qCorrection) { setQCmp({ prior: qPriorLocal() }); return; }
       sendQ(false, '');
     };
-    const sendQ = (corr, why) => { dcConfirmOldMonths([month]).then((ok) => { if (ok) sendQNow(corr, why); }); };
+    const sendQ = (corr, why) => {
+      if (sendingRef.current) return;
+      setSubmitError('');
+      Promise.resolve().then(() => dcConfirmOldMonths([month])).then((ok) => { if (ok) return sendQNow(corr, why); }).catch((error) => { sendingRef.current = false; setBusy(false); failSubmit(error.message || 'Could not send the report. Your entries are still here.'); });
+    };
     const sendQNow = (corr, why) => {
       const matched = resps.find((r) => r.name === responsible);
-      setBusy(true); setDone(null);
-      dcApi.post('/api/submissions/quality', {
+      sendingRef.current = true; setBusy(true); setDone(null);
+      return dcQualityPost({
         area: area.key, month, isCorrection: corr, correctionReason: corr ? why : '',
         indicatorId: isNew ? '' : indId,
         indicatorName: isNew ? newInd.name : (curInd && curInd.name),
@@ -1741,8 +1769,8 @@
         if (r.ok) { setQCmp(null); setQReason(''); setDone({ area: area.name, month }); setFlash({ ts: Date.now(), title: corr ? 'Edit request sent!' : 'Data submitted successfully!', sub: area.name + ' · ' + ((curInd && curInd.name) || (isNew && newInd.name) || 'Quality data') + ' · ' + monthLabel(month) }); setGroups({ nurse: '', doctor: '', pca: '', other: '' }); setGroupsDen({ nurse: '', doctor: '', pca: '', other: '' }); setDeptRows([]); setDirectNum(''); setCapa({ finding: '', corrective: '', preventive: '' }); setIncidents([]); setOpenInc(-1); setZeroOk(false); if (!denLockedForCollector) setDen(''); setRemark(''); setNotObserved(false); setNoReason(''); if (isNew) { setIndId(''); setNewInd({ name: '', formula: 'count', numLabel: '', denLabel: '', unit: '' }); } toast(corr ? 'Edit request sent for review' : 'Saved monthly value', 'success'); if (onSubmitted) { try { onSubmitted(r); } catch (e) { } } }
         else if (r.code === 'exists') setQCmp({ prior: r.prior || {} });
         else if (r.code === 'pending') { setQCmp(null); setQPending({ id: r.pendingId, message: r.error }); }
-        else toast(r.error || 'Submission failed', 'error');
-      }).catch(() => { setBusy(false); toast('Submission failed', 'error'); });
+        else failSubmit(r.error || 'Submission failed. Your entries are still here.');
+      }).catch((error) => { failSubmit(error.message || 'Submission failed. Your entries are still here.'); }).finally(() => { sendingRef.current = false; setBusy(false); });
     };
 
     const showEntry = (indId && !isNew) || (isNew && newInd.name);
@@ -1828,7 +1856,7 @@
           + '@media (prefers-reduced-motion:reduce){.dqf *{animation:none!important}}'}</style>
         <SectionTitle icon={I.activity} title="Submit Quality Data" sub="Enter the month's value — by staff group (Nurse / Doctor / PCA / Other) or directly — the count / rate is calculated automatically." />
         {flash && <DcSuccessPopup key={flash.ts} title={flash.title} sub={flash.sub} onClose={() => setFlash(null)} />}
-        {qCmp && <DcCompareModal title={'Data already recorded for ' + (area ? area.name : '') + ' · ' + ((curInd && curInd.name) || '') + ' · ' + monthLabel(month)} rows={dcQualityCompareRows(qCmp.prior, qNext(), numLabel, denLabel)} reason={qReason} setReason={setQReason} busy={busy} onEdit={() => setQCmp(null)} onSend={() => sendQ(true, qReason.trim())} />}
+        {qCmp && <DcCompareModal error={submitError} title={'Data already recorded for ' + (area ? area.name : '') + ' · ' + ((curInd && curInd.name) || '') + ' · ' + monthLabel(month)} rows={dcQualityCompareRows(qCmp.prior, qNext(), numLabel, denLabel)} reason={qReason} setReason={setQReason} busy={busy} onEdit={() => setQCmp(null)} onSend={() => sendQ(true, qReason.trim())} />}
         {qPending && <DcPendingNotice id={qPending.id} message={qPending.message} onClose={() => setQPending(null)} />}
         {done && <Banner ok onClose={() => setDone(null)}>Saved ✓ — {done.area} · {monthLabel(done.month)} sent for admin review.</Banner>}
         <Card style={{ padding: 0 }}>
@@ -2218,6 +2246,7 @@
             )}
           </div>
 
+          {submitError && <div role="alert" style={{ margin: '0 18px 12px', padding: 12, border: '1px solid var(--rose)', borderRadius: 8, color: 'var(--rose)', background: 'var(--panel,#fff)' }}>{submitError}</div>}
           {/* 4 — actions */}
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px', padding: '11px ' + pad + 'px', borderTop: '1px solid var(--line-2)', background: 'rgba(247,249,252,.6)', borderRadius: '0 0 16px 16px' }}>
             <button className="btn pri" style={btnBig || undefined} disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>

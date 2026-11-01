@@ -58,6 +58,39 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       body: JSON.stringify(body || {})
     }).then(r => r.json())
   };
+  async function dcQualityPost(body) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+    try {
+      const response = await fetch('/api/submissions/quality', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json'
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      });
+      if (response.status === 401 || response.redirected) throw new Error('Your session has expired. Sign in again before submitting. Your entries are still here.');
+      let result;
+      try {
+        result = await response.json();
+      } catch (error) {
+        throw new Error('The server did not return a submission result. Check My submissions before trying again.');
+      }
+      if (!result || typeof result.ok !== 'boolean') throw new Error('The server did not confirm this submission. Check My submissions before trying again.');
+      if (result.ok) {
+        dcInvalidateSubs();
+        window.dispatchEvent(new Event('unico:data-refreshed'));
+      }
+      return result;
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error('The server took too long to confirm. Your entries are still here. Check My submissions before trying again.');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   let _dcAllCache = null,
     _dcAllAt = 0,
     _dcAllPromise = null;
@@ -601,7 +634,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     setReason,
     busy,
     onEdit,
-    onSend
+    onSend,
+    error
   }) {
     const [showSame, setShowSame] = useState(false);
     const changed = rows.filter(r => r.changed),
@@ -711,7 +745,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, React.createElement("button", {
       className: "btn sm",
       onClick: () => setShowSame(v => !v)
-    }, showSame ? 'Hide' : 'Show', " ", same.length, " unchanged"))), showSame && same.map(row)))), none && React.createElement("div", {
+    }, showSame ? 'Hide' : 'Show', " ", same.length, " unchanged"))), showSame && same.map(row)))), error && React.createElement("div", {
+      role: "alert",
+      style: {
+        color: 'var(--rose)',
+        fontWeight: 600
+      }
+    }, error), none && React.createElement("div", {
       style: {
         fontSize: 12.5,
         fontWeight: 700,
@@ -2981,6 +3021,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const [remark, setRemark] = useState('');
     const [responsible, setResponsible] = useState(lockResp ? me.name || '' : prefill && prefill.responsible || '');
     const [busy, setBusy] = useState(false);
+    const [submitError, setSubmitError] = useState('');
+    const failSubmit = message => {
+      setSubmitError(message);
+      toast(message, 'error');
+    };
+    const sendingRef = React.useRef(false);
     const [done, setDone] = useState(null);
     const [flash, setFlash] = useState(null);
     const [guideOpen, setGuideOpen] = useState(false);
@@ -3350,28 +3396,30 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       capa: notObserved ? null : capa
     });
     const submit = () => {
+      if (sendingRef.current) return;
+      setSubmitError('');
       if (!area) {
-        toast('Select an area', 'error');
+        failSubmit('Select an area');
         return;
       }
       if (!indId) {
-        toast('Select an indicator', 'error');
+        failSubmit('Select an indicator');
         return;
       }
       if (isNew && !newInd.name.trim()) {
-        toast('Enter the new indicator name', 'error');
+        failSubmit('Enter the new indicator name');
         return;
       }
       if (!month) {
-        toast('Pick a month', 'error');
+        failSubmit('Pick a month');
         return;
       }
       if (notObserved && !noReason.trim()) {
-        toast('Please say WHY it was not observed this month.', 'error');
+        failSubmit('Please say WHY it was not observed this month.');
         return;
       }
       if (!notObserved && numMode === 'direct' && !autoCount && String(directNum == null ? '' : directNum).trim() === '') {
-        toast('Enter ' + numLabel + ' — type 0 if there were none this month', 'error');
+        failSubmit('Enter ' + numLabel + ' — type 0 if there were none this month');
         return;
       }
       if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
@@ -3379,24 +3427,24 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         const denCells = numMode === 'group' ? GROUP_KEYS.map(([k]) => groupsDen[k]) : numMode === 'dept' ? [].concat.apply([], deptRows.map(r => GROUP_KEYS.map(([k]) => r.g && r.g[k] && r.g[k].d))) : [den];
         const explicitZero = !(Number(numerator) > 0) && denCells.some(typed) && denCells.filter(typed).every(v => Number(v) === 0);
         if (!explicitZero) {
-          toast('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'), 'error');
+          failSubmit('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'));
           return;
         }
       }
       if (hospitalWide && !notObserved && incidents.some(x => dcIncidentFilled(x) && !x.department)) {
-        toast('Choose the department where each incident happened.', 'error');
+        failSubmit('Choose the department where each incident happened.');
         return;
       }
       if (!notObserved && autoCount && numMode === 'direct') {
         if (incidents.length === 0 && !zeroOk) {
-          toast('Nothing entered — add each incident, or press “Confirm 0 cases” if there were none this month.', 'error');
+          failSubmit('Nothing entered — add each incident, or press “Confirm 0 cases” if there were none this month.');
           return;
         }
         const bad = incidents.findIndex(x => incMissing(x).length > 0);
         if (bad >= 0) {
           const miss = incMissing(incidents[bad]);
           setOpenInc(bad);
-          toast('Incident ' + (bad + 1) + ' — ' + (miss.length === incReq.length ? 'fill it in, or remove it' : 'still needs: ' + miss.slice(0, 3).map(m => m[1]).join(', ') + (miss.length > 3 ? ' and ' + (miss.length - 3) + ' more' : '')), 'error');
+          failSubmit('Incident ' + (bad + 1) + ' — ' + (miss.length === incReq.length ? 'fill it in, or remove it' : 'still needs: ' + miss.slice(0, 3).map(m => m[1]).join(', ') + (miss.length > 3 ? ' and ' + (miss.length - 3) + ' more' : '')));
           return;
         }
       }
@@ -3409,15 +3457,22 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       sendQ(false, '');
     };
     const sendQ = (corr, why) => {
-      dcConfirmOldMonths([month]).then(ok => {
-        if (ok) sendQNow(corr, why);
+      if (sendingRef.current) return;
+      setSubmitError('');
+      Promise.resolve().then(() => dcConfirmOldMonths([month])).then(ok => {
+        if (ok) return sendQNow(corr, why);
+      }).catch(error => {
+        sendingRef.current = false;
+        setBusy(false);
+        failSubmit(error.message || 'Could not send the report. Your entries are still here.');
       });
     };
     const sendQNow = (corr, why) => {
       const matched = resps.find(r => r.name === responsible);
+      sendingRef.current = true;
       setBusy(true);
       setDone(null);
-      dcApi.post('/api/submissions/quality', {
+      return dcQualityPost({
         area: area.key,
         month,
         isCorrection: corr,
@@ -3539,10 +3594,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
             id: r.pendingId,
             message: r.error
           });
-        } else toast(r.error || 'Submission failed', 'error');
-      }).catch(() => {
+        } else failSubmit(r.error || 'Submission failed. Your entries are still here.');
+      }).catch(error => {
+        failSubmit(error.message || 'Submission failed. Your entries are still here.');
+      }).finally(() => {
+        sendingRef.current = false;
         setBusy(false);
-        toast('Submission failed', 'error');
       });
     };
     const showEntry = indId && !isNew || isNew && newInd.name;
@@ -3683,6 +3740,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       sub: flash.sub,
       onClose: () => setFlash(null)
     }), qCmp && React.createElement(DcCompareModal, {
+      error: submitError,
       title: 'Data already recorded for ' + (area ? area.name : '') + ' · ' + (curInd && curInd.name || '') + ' · ' + monthLabel(month),
       rows: dcQualityCompareRows(qCmp.prior, qNext(), numLabel, denLabel),
       reason: qReason,
@@ -5074,7 +5132,17 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         color: 'var(--muted)',
         marginTop: 6
       }
-    }, hist.length - known.length, " of the last ", hist.length, " months has no reading on record.")))), React.createElement("div", {
+    }, hist.length - known.length, " of the last ", hist.length, " months has no reading on record.")))), submitError && React.createElement("div", {
+      role: "alert",
+      style: {
+        margin: '0 18px 12px',
+        padding: 12,
+        border: '1px solid var(--rose)',
+        borderRadius: 8,
+        color: 'var(--rose)',
+        background: 'var(--panel,#fff)'
+      }
+    }, submitError), React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',

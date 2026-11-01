@@ -1,0 +1,20 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync(require('node:path').join(__dirname,'../../renderer/unico/data-collection.jsx'),'utf8');
+const helper=source.slice(source.indexOf('  async function dcQualityPost('),source.indexOf('  let _dcAllCache'));
+let reply,events=0,invalidations=0,abort;
+const ctx={fetch:async()=>reply,AbortController,Event,setTimeout:fn=>{abort=fn;return 1;},clearTimeout:()=>{},dcInvalidateSubs:()=>invalidations++,window:{dispatchEvent:()=>events++}};
+vm.runInNewContext(helper+'\nthis.post=dcQualityPost;',ctx);
+(async()=>{
+ reply={status:200,json:async()=>({ok:true,submission:{id:'test'}})};assert.equal((await ctx.post({})).ok,true);assert.equal(events,1);assert.equal(invalidations,1);
+ reply={status:403,json:async()=>({ok:false,error:'Not assigned'})};assert.equal((await ctx.post({})).error,'Not assigned');assert.equal(events,1);
+ reply={status:409,json:async()=>({ok:false,code:'pending',pendingId:'existing'})};assert.equal((await ctx.post({})).code,'pending');
+ reply={status:401};await assert.rejects(ctx.post({}),/session has expired/);
+ reply={status:200,redirected:true};await assert.rejects(ctx.post({}),/session has expired/);
+ reply={status:502,json:async()=>{throw Error('HTML')}};await assert.rejects(ctx.post({}),/Check My submissions/);
+ reply={status:200,json:async()=>null};await assert.rejects(ctx.post({}),/did not confirm/);
+ ctx.fetch=async()=>{const e=Error('abort');e.name='AbortError';throw e;};await assert.rejects(ctx.post({}),/took too long/);
+ assert.match(source,/return dcQualityPost\(\{/);
+ assert.match(source,/sendingRef.current = true/);
+ assert.match(source,/submitError && <div role="alert"/);assert.match(source,/DcCompareModal error=\{submitError\}/);
+ console.log('Quality submission response tests passed.');
+})().catch(e=>{console.error(e);process.exitCode=1});
