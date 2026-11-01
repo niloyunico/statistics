@@ -458,8 +458,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       day = part('day');
     const key = (y, m) => MONS_ABBR[m] + '-' + String(y % 100).padStart(2, '0');
     const days = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
-    const current = key(year, month);
-    const latest = day >= days - 1 ? key(year + (month === 11 ? 1 : 0), (month + 1) % 12) : current;
+    const previous = key(year - (month === 0 ? 1 : 0), (month + 11) % 12);
+    const latest = day >= days - 1 ? key(year, month) : previous;
+    const current = latest;
     return {
       current,
       latest
@@ -470,7 +471,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   }
   function dcSubmissionMonthOpts(starts, keep) {
     const latest = dcSubmissionWindow().latest;
-    return dcPortalUser() ? dcRealMonthOpts(starts, keep, latest) : [...new Set([...dcWideMonths().filter(m => dcMonthRank(m) <= dcMonthRank(latest)), latest, ...(keep || []).filter(Boolean)])].sort((a, b) => dcMonthRank(b) - dcMonthRank(a));
+    const allowedKeep = (keep || []).filter(m => m && dcMonthRank(m) != null && dcMonthRank(m) <= dcMonthRank(latest));
+    return dcPortalUser() ? dcRealMonthOpts(starts, allowedKeep, latest) : [...new Set([...dcWideMonths().filter(m => dcMonthRank(m) <= dcMonthRank(latest)), latest, ...allowedKeep])].sort((a, b) => dcMonthRank(b) - dcMonthRank(a));
   }
   function staffNames() {
     const s = window.STAFF_SEED || window.__UNICO_STAFF__ || [];

@@ -6,16 +6,18 @@ const helpers = source.slice(source.indexOf('  function dcSubmissionWindow('), s
 const ctx = { Intl, Date, MONS_ABBR: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'] };
 vm.runInNewContext(helpers + '\nthis.windowFor = dcSubmissionWindow;', ctx);
 for (const [date,current,latest] of [
- ['2026-10-29T17:59:59Z','Oct-26','Oct-26'],
- ['2026-10-29T18:00:00Z','Oct-26','Nov-26'],
- ['2026-10-31T17:59:59Z','Oct-26','Nov-26'],
- ['2026-10-31T18:00:00Z','Nov-26','Nov-26'],
- ['2026-11-28T18:00:00Z','Nov-26','Dec-26'],
- ['2026-12-29T18:00:00Z','Dec-26','Jan-27'],
- ['2027-02-25T18:00:00Z','Feb-27','Feb-27'],
- ['2027-02-26T18:00:00Z','Feb-27','Mar-27'],
- ['2028-02-26T18:00:00Z','Feb-28','Feb-28'],
- ['2028-02-27T18:00:00Z','Feb-28','Mar-28']
+ ['2026-10-29T17:59:59Z','Sep-26','Sep-26'],
+ ['2026-10-29T18:00:00Z','Oct-26','Oct-26'],
+ ['2026-10-31T17:59:59Z','Oct-26','Oct-26'],
+ ['2026-10-31T18:00:00Z','Oct-26','Oct-26'],
+ ['2026-11-28T17:59:59Z','Oct-26','Oct-26'],
+ ['2026-11-28T18:00:00Z','Nov-26','Nov-26'],
+ ['2026-12-29T18:00:00Z','Dec-26','Dec-26'],
+ ['2026-12-31T18:00:00Z','Dec-26','Dec-26'],
+ ['2027-02-25T18:00:00Z','Jan-27','Jan-27'],
+ ['2027-02-26T18:00:00Z','Feb-27','Feb-27'],
+ ['2028-02-26T18:00:00Z','Jan-28','Jan-28'],
+ ['2028-02-27T18:00:00Z','Feb-28','Feb-28']
 ]) {
  const result = ctx.windowFor(new Date(date));
  assert.equal(result.current,current,date+' default');
