@@ -823,7 +823,7 @@ function liveShadows(s) {
   out.deptFields = (sh) => { const doc = docOf(sh); if (!doc) return []; const i = (doc.months || []).indexOf(LV_MONTH_KEY(5)); const row = i >= 0 ? (doc.data || {})[String(i)] || {} : {}; return (doc.cols || []).map((c) => ({ label: c.label || c.id, sub: i >= 0 ? LV_MONTHS[5].label + ' ' + LV_MONTHS[5].y : 'No figures for ' + LV_MONTHS[5].label, value: row[c.id] != null ? String(row[c.id]) + (c.pct ? '%' : '') : '—' })); };
   out.deptId = (sh) => { const info = L.depts && L.depts.info[sh]; return info ? info.id : sh; };
   // quality: RAG per department from the latest month of every indicator
-  const areas = L.quality || []; const RAGD = {}; let tot = 0, red = 0, amber = 0, green = 0; const catalog = {}; const breach = Z(); const hh = Z(), hhN = Z();
+  const areas = L.quality || []; const RAGD = {}; let tot = 0, red = 0, amber = 0, green = 0; const catalog = {}; const breach = Z(); const hh = Z(), hhN = Z(), hhNum = Z(), hhDen = Z();
   areas.forEach((a) => {
     const sh = shortOfId(a.deptId) || a.key; const acc = RAGD[sh] || [0, 0, 0];
     (a.indicators || []).forEach((ind) => {
@@ -833,12 +833,14 @@ function liveShadows(s) {
       tot++; if (b == null || !isFinite(v)) { acc[0]++; green++; return; }
       const ok = ind.goalDirection === 'higher_is_better' ? v >= b : v <= b; const near = ind.goalDirection === 'higher_is_better' ? v >= b * 0.9 : v <= b * 1.5 + 0.5;
       if (ok) { acc[0]++; green++; } else if (near) { acc[1]++; amber++; } else { acc[2]++; red++; }
-      LV_MONTHS.forEach((mm, i) => { const x = mv[mm.key]; const vv = x == null ? null : Number(typeof x === 'object' ? x.value : x); if (vv == null || !isFinite(vv)) return; const bad = ind.goalDirection === 'higher_is_better' ? vv < b : vv > b; if (bad) breach[i]++; if (/hand hygiene/i.test(ind.name)) { hh[i] += vv; hhN[i]++; } });
+      LV_MONTHS.forEach((mm, i) => { const x = mv[mm.key]; const vv = x == null ? null : Number(typeof x === 'object' ? x.value : x); if (vv == null || !isFinite(vv)) return; const bad = ind.goalDirection === 'higher_is_better' ? vv < b : vv > b; if (bad) breach[i]++; if (/hand hygiene/i.test(ind.name)) { hh[i] += vv; hhN[i]++; const nn = Number((ind.mNum || {})[mm.key]), dd = Number((ind.mDen || {})[mm.key]); if (isFinite(nn) && dd > 0) { hhNum[i] += nn; hhDen[i] += dd; } } });
     });
     RAGD[sh] = acc;
   });
   out.RAGD = RAGD; out.qTiles = { total: tot, breaches: red, onTarget: tot ? Math.round(green / tot * 100) : 0, depts: Object.keys(RAGD).length, amber };
-  out.breachSeries = breach; out.hhSeries = hh.map((v, i) => (hhN[i] ? Math.round(v / hhN[i]) : 0));
+  // Hand hygiene pooled Σcompliant ÷ Σobserved (renderer/unico/hh-pool.js rule); the plain mean
+  // of percentages is only a fallback for months recorded as a bare percentage.
+  out.breachSeries = breach; out.hhSeries = hh.map((v, i) => (hhDen[i] > 0 ? Math.round(hhNum[i] / hhDen[i] * 100) : hhN[i] ? Math.round(v / hhN[i]) : 0));
   out.IND_CATALOG = Object.values(catalog);
   out.movers = null;
   // registers -> rows

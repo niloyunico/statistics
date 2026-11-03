@@ -66,6 +66,7 @@ const MANIFEST = [
   { file: 'quality-guide.js', jsx: false, chunk: 'qualityguide' },
   { file: 'quality-corrections.js', jsx: false },
   { file: 'quality-corrections-apply.js', jsx: false }, // DB master overrides the static one (must run after corrections, before store)
+  { file: 'hh-pool.js', jsx: false },          // window.UNICO_HH — the one hand-hygiene pooling rule (also require()d by the server)
   { file: 'quality-store.js', jsx: false },
   { file: 'appraisal-spec.js', jsx: false },   // Form HR-NUR-PA-01 as data (window.UNICO_APPRAISAL)
   { file: 'roster-spec.js', jsx: false },      // duty-roster shift codes (window.UNICO_ROSTER)

@@ -157,9 +157,12 @@ function qStatus(ind, v){
 
 function monthStatus(ind, mk){ return qStatus(ind, monthRaw(ind, mk)); }
 
-// Optional `fy` (fiscal-year start) reads that year's rollup from ind.quartersByFy; when a
-// year has no rollup (e.g. legacy quarter-only data) it falls back to the flat ind.quarters.
-function qtrSrc(ind, fy){ return (fy!=null && ind && ind.quartersByFy && ind.quartersByFy[fy]) ? ind.quartersByFy[fy] : ((ind && ind.quarters) || {}); }
+// Optional `fy` (calendar reporting year) reads that year's rollup from ind.quartersByFy, and
+// ONLY that. The flat legacy ind.quarters are the old Jun–May fiscal quarters (Q1 = Jun–Aug
+// 2025 …) with no year: falling back to them painted Oct–Dec 2025 figures into Apr–Jun of
+// EVERY year and made quarter-only indicators "have data" in years they never reported.
+// Callers with no year keep the flat quarters.
+function qtrSrc(ind, fy){ return fy!=null ? ((ind && ind.quartersByFy && ind.quartersByFy[fy]) || {}) : ((ind && ind.quarters) || {}); }
 function qtrRaw(ind, Q, fy){ const v = qtrSrc(ind, fy)[Q]; return (v==null||v==='') ? null : Number(v); }
 function qtrStatus(ind, Q, fy){ return qStatus(ind, qtrSrc(ind, fy)[Q]); }
 
@@ -1068,8 +1071,9 @@ function QCScorecard({depts}){
       const breaches = inds.reduce((a,i)=>a+countBreaches(i, MONTHS),0);
       const rep = st.ok + st.breach;
       const brRate = rep ? st.breach/rep : 0;
-      const status = d.status || (st.breach===0 ? 'Excellent' : brRate>0.16 ? 'Needs Improvement' : brRate>0.06 ? 'Good' : 'Very Good');
-      const sc = statusColorFor(status);
+      // Nothing reported this year: "No data", sorted last — not "Excellent 100%" at the top.
+      const status = !rep ? 'No data' : (d.status || (st.breach===0 ? 'Excellent' : brRate>0.16 ? 'Needs Improvement' : brRate>0.06 ? 'Good' : 'Very Good'));
+      const sc = !rep ? P.faint : statusColorFor(status);
       return {
         key: d.key,
         name: d.name,
@@ -1077,13 +1081,14 @@ function QCScorecard({depts}){
         withData,
         breaches,
         breachColor: breaches>0 ? P.rose : P.ink2,
-        rate: st.rate,
+        rate: rep ? st.rate : 0,
+        reported: rep>0,
         status,
         statusColor: sc,
         statusBg: sc+'1c',
-        barColor: st.rate>=95 ? P.green : st.rate>=85 ? P.teal : st.rate>=70 ? P.amber : P.rose
+        barColor: !rep ? P.faint : st.rate>=95 ? P.green : st.rate>=85 ? P.teal : st.rate>=70 ? P.amber : P.rose
       };
-    }).sort((a,b)=>b.rate-a.rate);
+    }).sort((a,b)=>(b.reported?1:0)-(a.reported?1:0) || b.rate-a.rate);
   }, [depts, fy]);
 
   const th = { padding:'10px 12px', fontSize:'10.5px', textTransform:'uppercase', letterSpacing:'.3px', color:P.muted, fontWeight:700, borderBottom:'1px solid '+P.line, background:P.panel2 };
@@ -1126,7 +1131,7 @@ function QCScorecard({depts}){
                       <div style={{flex:1,height:'8px',background:P.line2,borderRadius:'5px',overflow:'hidden'}}>
                         <div style={{height:'100%',width:r.rate+'%',background:r.barColor,borderRadius:'5px'}}></div>
                       </div>
-                      <span style={{fontFamily:MONO,fontWeight:600,color:P.ink,fontSize:'11.5px',width:'38px',textAlign:'right'}}>{r.rate}%</span>
+                      <span style={{fontFamily:MONO,fontWeight:600,color:r.reported?P.ink:P.faint,fontSize:'11.5px',width:'38px',textAlign:'right'}}>{r.reported?r.rate+'%':'—'}</span>
                     </div>
                   </td>
                   <td style={{padding:'10px 16px',textAlign:'center'}}>
@@ -1170,7 +1175,10 @@ function QCTrends({depts}) {
       h: x.v == null ? 0 : Math.max(2, Math.round(x.v / maxV * 100)),
       color: x.s === 'breach' ? P.rose : x.s === 'ok' ? P.green : '#c4ccd6'
     }));
-    const avg = nums.length ? (Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100) : '—';
+    // A rate's period figure pools Σnum/Σden when every reported month has its counts (same
+    // rule as the report builder's qcAnnualCell), not the mean of monthly percentages.
+    const pa = qcAnnualCell(tInd, MONTHS);
+    const avg = pa.rep && pa.isRate ? pa.value : (nums.length ? (Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100) : '—');
     return {
       name: tInd.name,
       unit: tInd.unit,
@@ -1348,7 +1356,7 @@ function QCSpark({ind,months,w=92,h=24}){
   const vals=months.map(m=>monthRaw(ind,m[0])); const nums=vals.filter(v=>v!=null);
   if(!nums.length) return <span style={{color:P.faint,fontSize:10,fontFamily:MONO}}>—</span>;
   const mn=Math.min(...nums), mx=Math.max(...nums), rng=(mx-mn)||1;
-  const pts=vals.map((v,i)=>({x:(i/(months.length-1))*w, y: v==null?null:(h-2-((v-mn)/rng)*(h-4))}));
+  const pts=vals.map((v,i)=>({x:(months.length>1?i/(months.length-1):0.5)*w,   /* one month: centre it, not 0/0 = NaN */ y: v==null?null:(h-2-((v-mn)/rng)*(h-4))}));
   const path=pts.filter(p=>p.y!=null).map((p,i)=>(i?'L':'M')+p.x.toFixed(1)+' '+p.y.toFixed(1)).join(' ');
   const breach=months.some(m=>monthStatus(ind,m[0])==='breach'); const col=breach?P.rose:P.green;
   return (<svg width={w} height={h}><path d={path} fill="none" stroke={col} strokeWidth="1.5"/>{pts.map((p,i)=>p.y!=null&&<circle key={i} cx={p.x} cy={p.y} r="1.5" fill={col}/>)}</svg>);
@@ -1451,6 +1459,20 @@ const QC_TEMPLATES = {
          ragHeatmap:0,deptRanking:0,benchmarkCompare:0,indTrend:0,
          incidentAppendix:1,standardsRefs:1,
          cover:1,toc:1,periodCompare:0,watermark:1,signatures:1} },
+  // Infection prevention & control: every department, only the infection indicators, as one
+  // indicator × department heatmap — and the hospital hand-hygiene audit on its own.
+  // allDepts selects every area; indMatch narrows to the indicators whose names match.
+  infection:{ label:'Infection Control',   type:'heatmap', allDepts:true, title:'Infection Prevention & Control Report',
+    indMatch:/hands*hygiene|cauti|catheter-associated|clabsi|central line|vap|ventilator-associated|surgical site|ssi|needles*stick|sharps/i,
+    sec:{execSummary:1,kpis:1,chart:0,breachDonut:0,table:1,incidents:1,indicatorDetail:0,
+         ragHeatmap:0,deptRanking:0,benchmarkCompare:0,indTrend:0,
+         incidentAppendix:1,standardsRefs:1,
+         cover:1,toc:0,periodCompare:0,watermark:1,signatures:1} },
+  handhygiene:{ label:'Hand Hygiene audit', type:'handhygiene', allDepts:true, title:'Hand Hygiene Compliance Report',
+    sec:{execSummary:0,kpis:1,chart:1,breachDonut:0,table:1,incidents:0,indicatorDetail:0,
+         ragHeatmap:0,deptRanking:0,benchmarkCompare:0,indTrend:0,
+         incidentAppendix:0,standardsRefs:0,
+         cover:1,toc:0,periodCompare:0,watermark:1,signatures:1} },
   full:    { label:'Full Detailed',       type:'detail',
     sec:{execSummary:1,kpis:1,chart:1,breachDonut:1,table:1,incidents:1,indicatorDetail:1,
          ragHeatmap:1,deptRanking:1,benchmarkCompare:1,indTrend:1,pendingData:1,
@@ -1525,9 +1547,13 @@ function qcLeadIndicator(d, months){
 }
 /* Per-department derived status (QCDashboard L352-355, verbatim logic). */
 function qcDeptStatus(d, months){
-  const st=deptStat(d, months); const brRate=(st.ok+st.breach)?st.breach/(st.ok+st.breach):0;
+  const st=deptStat(d, months);
+  // Nothing reported in the period is "No data" — deptStat's default 100% made an empty
+  // department read "Excellent" and top every comparison.
+  if(!(st.ok+st.breach)) return {status:'No data', color:P.faint, st, reported:false};
+  const brRate=st.breach/(st.ok+st.breach);
   const status=brRate>0.16?'Needs Improvement':brRate>0.06?'Good':'Excellent';
-  return {status, color:statusColorFor(status), st};
+  return {status, color:statusColorFor(status), st, reported:true};
 }
 /* Up-to-6 indicators with data ON THE GIVEN AXIS, shaped as chart series ({id,key,label,color}). */
 function qcIndSeries(d, months){
@@ -1638,7 +1664,13 @@ function qcIndKpis(ind, months){
     cards.push(['Total events', hasEv?String(ev):'—', P.blue, hasEv?'numerator sum over period':'no event counts recorded']);
     cards.push(['Peak (worst)', peak==null?'—':fmtVal(ind,peak), P.amber, 'worst month']);
   }
-  else     { cards.push(['Average', avg==null?'—':fmtVal(ind,avg), P.blue, 'mean over period']); cards.push(['Worst', peak==null?'—':fmtVal(ind,peak), P.amber, higher?'lowest month':'highest month']); }
+  else {
+    // A rate's period figure is the pooled Σnum/Σden (qcAnnualCell) — a plain mean of monthly
+    // percentages weighted a 10-observation month the same as a 300-observation one.
+    const pa=isRateF?qcAnnualCell(ind, months):null;
+    const pv=pa&&pa.rep?pa.value:avg;
+    cards.push([pa&&pa.pooled?'Period value':'Average', pv==null?'—':fmtVal(ind,pv), P.blue, pa&&pa.pooled?'pooled over period':'mean over period']);
+    cards.push(['Worst', peak==null?'—':fmtVal(ind,peak), P.amber, higher?'lowest month':'highest month']); }
   cards.push(['Off Benchmark', String(countBreaches(ind, months)), countBreaches(ind, months)>0?P.rose:P.green, 'months off benchmark']);
   return cards;
 }
@@ -1655,7 +1687,7 @@ function qcHeatColors(s){
 // "breach" if ANY month breached, else "ok" if any reported, else "na".
 function qcAnnualCell(ind, months){
   const rate = ['pct','rate100','rate1000','avg'].indexOf(ind.formula) >= 0 || isPctInd(ind);
-  let anyRep=false, anyBreach=false, sum=0, num=0, den=0, valSum=0, nRep=0;
+  let anyRep=false, anyBreach=false, sum=0, num=0, den=0, valSum=0, nRep=0, nND=0;
   const axis = months||MONTHS;
   // A quarter rollup covers 3 months: it must contribute ONCE per quarter, and ONLY for
   // quarters with no monthly entries at all — otherwise a quarter-only "Q1 = 5" summed
@@ -1675,15 +1707,20 @@ function qcAnnualCell(ind, months){
     anyRep=true; if(qStatus(ind, v)==='breach') anyBreach=true;
     if(rate){ nRep++; valSum += Number(v)||0;
       const n = ind.mNum && ind.mNum[m[0]], d = ind.mDen && ind.mDen[m[0]];
-      if(n!=null && n!=='' && d!=null && d!=='') { num += Number(n)||0; den += Number(d)||0; }
+      if(n!=null && n!=='' && d!=null && d!=='') { num += Number(n)||0; den += Number(d)||0; nND++; }
     } else sum += Number(v)||0;
   });
   if(!anyRep) return { rep:false, status:'na', value:null, count:0, isRate:rate, num:0, den:0 };
+  // Pool Σnum/Σden only when EVERY reported month carries its counts. Pooling just the months
+  // that had them silently dropped direct-% and quarter months, so the period cell and the
+  // Total disagreed with the month cells beside them; a mixed period is the mean instead.
+  const pooled = rate && den>0 && nND===nRep;
   const value = rate
-    ? (den>0 ? window.qiFormulaCompute(ind.formula||'pct', num, den) : (nRep ? Math.round(valSum/nRep*100)/100 : 0))
+    ? (pooled ? window.qiFormulaCompute(ind.formula||'pct', num, den) : (nRep ? Math.round(valSum/nRep*100)/100 : 0))
     : sum;
-  // num/den exposed so callers can pool a period rate across departments (Σnum/Σden).
-  return { rep:true, status: anyBreach?'breach':'ok', value, count: rate?0:sum, isRate:rate, num, den };
+  // num/den exposed so callers can pool a period rate across departments (Σnum/Σden) — only
+  // when this cell itself was pooled, so a partial fraction never leaks into a Total.
+  return { rep:true, status: anyBreach?'breach':'ok', value, count: rate?0:sum, isRate:rate, num: pooled?num:0, den: pooled?den:0, pooled };
 }
 function QCHeatGrid({d, months}){
   months = months || MONTHS;
@@ -1796,9 +1833,24 @@ function qcTrendArrow(delta, higherBetter){
 }
 /* Aggregate zero-defect rate + breach count across a set of departments over months.
    `reported` distinguishes a REAL 100% from the vacuous 100% of an all-unreported set. */
+/* With Overall Hospital in the selection, a department's hand-hygiene months copied from the
+   hospital audit (quality-store mFromAudit) are the SAME observations as the hospital's own
+   record — counting both made every audited month two indicator-months (and a breach two
+   breaches). Those copies are dropped here; the hospital record carries them once. */
+function qcWithoutAuditCopies(chosen){
+  const HHX=window.UNICO_HH;
+  if(!HHX||!(chosen||[]).some(d=>HHX.isHospital(d))) return chosen;
+  return chosen.map(d=>{ if(HHX.isHospital(d)) return d;
+    let changed=false;
+    const inds=(d.indicators||[]).map(ind=>{ const fa=ind.mFromAudit; if(!fa||!Object.keys(fa).length) return ind;
+      changed=true; const c=Object.assign({},ind);
+      ['months','mNum','mDen'].forEach(k=>{ if(c[k]){ c[k]=Object.assign({},c[k]); Object.keys(fa).forEach(m=>{ if(fa[m]) delete c[k][m]; }); } }); delete c.quartersByFy;   // its rollups were built from those same copies
+      return c; });
+    return changed?Object.assign({},d,{indicators:inds}):d; });
+}
 function qcAggStat(chosen, months){
   let ok=0, breach=0, na=0, inds=0;
-  chosen.forEach(d=>{ inds+=(d.indicators||[]).length; const s=deptStat(d, months); ok+=s.ok; breach+=s.breach; na+=s.na; });
+  qcWithoutAuditCopies(chosen).forEach(d=>{ inds+=(d.indicators||[]).length; const s=deptStat(d, months); ok+=s.ok; breach+=s.breach; na+=s.na; });
   const rate=(ok+breach)?Math.round(ok*100/(ok+breach)):100;
   return {ok, breach, na, inds, rate, depts:chosen.length, reported:(ok+breach)>0};
 }
@@ -2031,22 +2083,20 @@ function QCSignatureBlock({sig, orgName}){
    owns (unico_capa_v1). Keyed by dept.key+'/'+ind.id, default 'Open'. */
 function qcCapaMap(){ try{ return JSON.parse(localStorage.getItem('unico_capa_v1'))||{}; }catch(e){ return {}; } }
 
-/* Hand-hygiene indicators for the HH report: percentage-typed only (a count/rate1000
-   indicator's monthRaw is not a compliance % and must not be averaged in). Falls back
-   to the rest of the hospital — surfacing the hospital-wide 'Overall Hospital' record —
-   when the SELECTED departments' HH indicators carry no data ON THE REPORT AXIS. The
-   fallback must key off reported DATA, not indicator existence: dept-level HH indicators
-   exist (empty) in several areas while the only reported record is hospital-wide, so an
-   existence test rendered an all-dashes report and never reached the fallback. Shared by
-   the page-list memo AND HHPage so the page count can never disagree with the bodies. */
-function qcHHOf(chosen, depts, months){
-  const isHH=ind=>/hand\s*hygiene/i.test((ind&&ind.name)||'') && (ind.formula==='pct'||ind.formula==='direct'||isPctInd(ind));
-  const hh=[]; (chosen||[]).forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind)) hh.push({d,ind}); }));
-  if(!hh.some(h=>hasData(h.ind, months))){
-    const seen=new Set(hh.map(h=>h.ind));
-    (depts||[]).forEach(d=>(d.indicators||[]).forEach(ind=>{ if(isHH(ind) && !seen.has(ind) && hasData(ind, months)) hh.push({d,ind}); }));
+/* The hand-hygiene report's data: the ONE pooling rule (renderer/unico/hh-pool.js) over the
+   selected departments, falling back to the whole hospital when they hold no reading on the
+   axis. Pooling counts the hospital audit once — adding the Overall Hospital record AND each
+   department's copy of it (quality-store fills those from the audit) doubled the Compliant /
+   Opportunities columns. Shared by the page-list memo and HHPage so they never disagree. */
+function qcHHPool(chosen, depts, months){
+  const HH=window.UNICO_HH; if(!HH) return null;
+  const keys=(months||[]).map(m=>Array.isArray(m)?m[0]:m);
+  let r=HH.build(depts, keys, {only:(chosen||[]).map(d=>d.key)});
+  if(!HH.series(r).some(x=>x.pct!=null)){
+    const all=HH.build(depts, keys);
+    if(all.source&&HH.series(all).some(x=>x.pct!=null)) r=Object.assign(all,{fallback:true});
   }
-  return hh;
+  return r;
 }
 
 function QCReportBuilder({depts}){
@@ -2116,7 +2166,12 @@ function QCReportBuilder({depts}){
   // user had selected all 18 (indSel stays intact for switching back to Custom).
   const applyTemplate=(id)=>{ const t=QC_TEMPLATES[id]; if(!t) return;
     setSections(s=>{ const o={...s}; Object.keys(t.sec).forEach(k=>o[k]=!!t.sec[k]); return o; });
-    setIndMode('all');
+    if(t.allDepts) setSelectedDepts(allKeys.slice());
+    if(t.title) setHdrTitle(t.title);
+    if(t.indMatch){
+      const keys=[]; depts.forEach(d=>(d.indicators||[]).forEach(i=>{ if(t.indMatch.test(i.name||'')) keys.push(d.key+'::'+i.id); }));
+      setIndSel(new Set(keys)); setIndMode(keys.length?'custom':'all');
+    } else setIndMode('all');
     setReportType(t.type); setPageIdx(0); setActiveTemplate(id); };
   // ---- saved report formats: capture/restore EVERY control incl. indicator selection ----
   const snapshot=()=>({fy,reportType,period,chartStyles,hdrTitle,hdrSub,orgName,showLogo,confidential,footerNote,pageSize,orient,selectedDepts,sections,compareBaseline,sig,indMode,indSel:[...indSel]});
@@ -2180,7 +2235,12 @@ function QCReportBuilder({depts}){
     // blanks. If the whole span is empty (e.g. a future quarter picked on purpose) it is
     // left intact so the report still renders the requested period.
     if(!base.length) return base;
-    const has=m=>chosen.some(d=>(d.indicators||[]).some(ind=>qcCellVal(ind,m)!=null));
+    // A hand-hygiene report draws on the hospital audit even when the selected departments
+    // hold no reading, so its months are trimmed by the HH pool, not by the selection alone.
+    const hhAxis=reportType==='handhygiene'?qcHHPool(chosen, depts, base):null;
+    const has=hhAxis
+      ? (m=>{ const i=base.indexOf(m); const x=window.UNICO_HH.series(hhAxis)[i]; return !!x&&x.pct!=null; })
+      : (m=>chosen.some(d=>(d.indicators||[]).some(ind=>qcCellVal(ind,m)!=null)));
     let lo=0,hi=base.length-1;
     while(lo<hi&&!has(base[lo]))lo++;
     while(hi>lo&&!has(base[hi]))hi--;
@@ -2220,18 +2280,12 @@ function QCReportBuilder({depts}){
     else if(reportType==='handhygiene'){
       // Overview page whenever a department is selected (HHPage shows a helpful empty-state
       // if none report hand hygiene); add a breakdown page only when staff-group or ≥2 dept
-      // HH indicators exist. qcHHOf is the SAME finder HHPage renders from (pct-typed,
-      // hospital-wide fallback), so the page list always matches the page bodies.
-      const hh=qcHHOf(chosen, depts, pMonths);
+      // figures exist. qcHHPool is the SAME data HHPage renders from (hospital-wide
+      // fallback included), so the page list always matches the page bodies.
+      const hp=qcHHPool(chosen, depts, pMonths);
       base = chosen.length ? [{kind:'hh', part:'overview'}] : [];
-      if(hh.length){
-        const hasGroups = hh.some(h=>{ const g=h.ind.mGroups||{}; return Object.keys(g).some(k=>g[k]&&Object.keys(g[k]).length); });
-        // dept-wise audit rows stored on the submission month (mDeptBreakdown) also fill
-        // the breakdown page — the hospital-wide record alone can carry per-dept data.
-        const hasDeptBd = hh.some(h=>{ const b=h.ind.mDeptBreakdown||{}; return Object.keys(b).some(k=>Array.isArray(b[k])&&b[k].length); });
-        const deptCount = new Set(hh.map(h=>h.d.key)).size;
-        if(hasGroups || hasDeptBd || deptCount>1) base.push({kind:'hh', part:'breakdown'});
-      }
+      // Breakdown page: staff groups, or more than one department with figures.
+      if(hp&&(hp.groups.length || hp.rows.filter(r=>r.total.d>0||r.selfReported).length>1)) base.push({kind:'hh', part:'breakdown'});
     }
     // Guard month pages on a real selection (parity with compare/heatmap) so the
     // pager can't report N month pages while the body shows "select a department".
@@ -2533,7 +2587,12 @@ function QCReportBuilder({depts}){
                 // Total: counts sum; pure-rate rows show the POOLED period value (Σnum/Σden
                 // across departments) instead of the meaningless dash they used to.
                 let totTxt='—', totColor=P.ink2;
-                if(anyCount){ totTxt=String(tot); totColor=tot>0?P.rose:P.ink2; }
+                // Hand hygiene: the hospital audit counted ONCE (hh-pool.js). Summing every
+                // column added the Overall Hospital record to each department's copy of it.
+                const hhRow=/hands*hygiene/i.test(name)&&window.UNICO_HH;
+                if(hhRow){ const HHX=window.UNICO_HH; const t=HHX.totalOf(HHX.build(depts, pMonths.map(x=>x[0]), {only:chosen.map(d=>d.key)}));
+                  if(t&&t.d>0&&rateInd){ totTxt=fmtVal(rateInd,t.pct); totColor=P.ink2; } }
+                else if(anyCount){ totTxt=String(tot); totColor=tot>0?P.rose:P.ink2; }
                 else if(anyRate && den>0 && rateInd){ const pooled=window.qiFormulaCompute(rateInd.formula||'pct', num, den); if(pooled!=null){ totTxt=fmtVal(rateInd,pooled); totColor=P.ink2; } }
                 return (
                   <tr key={name} style={{borderBottom:'1px solid '+P.line2}}>
@@ -2629,7 +2688,11 @@ function QCReportBuilder({depts}){
                   }
                   return {ind,v,s}; });
                 let totTxt='—', totColor=P.ink2;
-                if(anyCount){ totTxt=String(tot); totColor=tot>0?P.rose:P.ink2; }
+                // Hand hygiene this month: the hospital audit counted once (hh-pool.js).
+                const hhRow=/hands*hygiene/i.test(name)&&window.UNICO_HH;
+                if(hhRow){ const HHX=window.UNICO_HH; const x=HHX.series(HHX.build(depts, [m[0]], {only:chosen.map(d=>d.key)}))[0];
+                  if(x&&x.pct!=null&&rateInd) totTxt=fmtVal(rateInd,x.pct); }
+                else if(anyCount){ totTxt=String(tot); totColor=tot>0?P.rose:P.ink2; }
                 else if(anyRate && den>0 && rateInd){ const pooled=window.qiFormulaCompute(rateInd.formula||'pct', num, den); if(pooled!=null) totTxt=fmtVal(rateInd,pooled); }
                 return (
                   <tr key={name} style={{borderBottom:'1px solid '+P.line2}}>
@@ -2659,8 +2722,8 @@ function QCReportBuilder({depts}){
   }
 
   function ComparePage({n,total}){
-    const rows=chosen.map(d=>{ const s=qcDeptStatus(d, pMonths); return {d, st:s.st, status:s.status, color:s.color, breaches:s.st.breach, rate:s.st.rate, inds:(d.indicators||[]).length}; });
-    const hbar=rows.map(r=>({label:r.d.name, value:r.rate, color:r.color})).sort((a,b)=>b.value-a.value);
+    const rows=chosen.map(d=>{ const s=qcDeptStatus(d, pMonths); return {d, st:s.st, status:s.status, color:s.color, breaches:s.st.breach, rate:s.reported?s.st.rate:null, inds:(d.indicators||[]).length}; });
+    const hbar=rows.map(r=>({label:r.d.name+(r.rate==null?' (no data)':''), value:r.rate||0, color:r.color})).sort((a,b)=>b.value-a.value);
     // ComparePage is always the single base page, so it is inherently the lead sheet.
     return (
       <div className="qc-rpage" style={{position:'relative'}}>
@@ -2686,7 +2749,7 @@ function QCReportBuilder({depts}){
                 <td style={{padding:'7px 10px',fontWeight:600,color:P.ink}}>{r.d.name}</td>
                 <td style={{padding:'7px 10px',color:P.ink2}}>{sec}</td>
                 <td style={{padding:'7px 10px',textAlign:'center',fontFamily:MONO}}>{r.inds}</td>
-                <td style={{padding:'7px 10px',textAlign:'center',fontFamily:MONO,fontWeight:600,color:r.rate>=90?P.green:r.rate>=70?P.amber:P.rose}}>{r.rate}%</td>
+                <td style={{padding:'7px 10px',textAlign:'center',fontFamily:MONO,fontWeight:600,color:r.rate==null?P.faint:r.rate>=90?P.green:r.rate>=70?P.amber:P.rose}}>{r.rate==null?'—':r.rate+'%'}</td>
                 <td style={{padding:'7px 10px',textAlign:'center',fontFamily:MONO,color:r.breaches>0?P.rose:P.green}}>{r.breaches}</td>
                 <td style={{padding:'7px 10px',textAlign:'center'}}><span style={{background:r.color+'1c',color:r.color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11}}>{r.status}</span></td>
               </tr>); })}</tbody>
@@ -2918,8 +2981,11 @@ function QCReportBuilder({depts}){
     const incs=[]; chosen.forEach(d=>qcIncidentsOf(d).forEach(r=>{ if(qcIncInPeriod(r,pMonths)) incs.push({dept:d.name, ind:r.ind, month:r.month, x:r.x}); }));
     // CAPA rows: replicate the Action Plans eligibility (last-quarter breach OR ≥3 breaches).
     const plans=[]; chosen.forEach(d=>(d.indicators||[]).forEach(ind=>{
-      let lastQ=null; QORDER.forEach(Q=>{ if(qtrRaw(ind,Q,fy)!=null) lastQ=Q; });
-      const lastBreach=lastQ!=null && qtrStatus(ind,lastQ,fy)==='breach'; const nB=countBreaches(ind, pMonths);
+      // Judged on the REPORT PERIOD: the latest reported month inside it is a breach, or 3+
+      // months in it are. It used to read the whole year's last quarter, so a Q1 report listed
+      // CAPAs for breaches that happened later in the year.
+      let lastV=null; pMonths.forEach(m=>{ const v=qcCellVal(ind,m); if(v!=null) lastV=v; });
+      const lastBreach=lastV!=null && qStatus(ind,lastV)==='breach'; const nB=countBreaches(ind, pMonths);
       if(!(lastBreach||nB>=3)) return;
       plans.push({dept:d.name, ind:ind.name, breaches:nB, status:capa[d.key+'/'+ind.id]||'Open'}); }));
     const stCol=s=>s==='Closed'?P.green:s==='In Progress'?P.amber:P.rose;
@@ -3000,67 +3066,60 @@ function QCReportBuilder({depts}){
      builder chrome (Header/Footer/KpiCards) and the console's monthRaw/qStatus math. */
   function HHPage({page,n,total,lead}){
     const part=page.part||'overview';
-    // Percentage-typed HH indicators of the selected departments, with the hospital-wide
-    // fallback — the SAME qcHHOf the page-list memo counts, so list and body agree.
-    const hh=qcHHOf(chosen, depts, pMonths);
-    if(!hh.length) return (
+    // The pooled hand-hygiene data (qcHHPool) — the SAME call the page-list memo makes.
+    const HHX=window.UNICO_HH;
+    const hp=qcHHPool(chosen, depts, pMonths);
+    const ser=hp&&HHX?HHX.series(hp):[];
+    if(!hp||!hp.source&&!hp.rows.length||!ser.some(x=>x.pct!=null||x.d!=null)) return (
       <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
         <Header/>
         <div style={{marginTop:60,textAlign:'center'}}>
           <div style={{fontSize:16,fontWeight:700,color:P.ink,marginBottom:8}}>Hand Hygiene Compliance</div>
-          <div style={{fontSize:12,color:P.muted,maxWidth:460,margin:'0 auto'}}>No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for {fyLabelOf(fy)}. Record hand hygiene in Quality Data — or switch the year above — then regenerate.</div>
+          <div style={{fontSize:12,color:P.muted,maxWidth:460,margin:'0 auto'}}>No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) audit for {fyLabelOf(fy)}. Record hand hygiene in Quality Data — or switch the year above — then regenerate.</div>
         </div>
         <Footer n={n} total={total}/>
       </div>
     );
-    const reportedCount=ind=>pMonths.reduce((s,m)=>s+(monthRaw(ind,m[0])!=null?1:0),0);
-    let primary=hh.find(h=>/overall|hospital/i.test((h.d.name||'')+' '+(h.ind.name||'')));
-    if(!primary) primary=hh.slice().sort((a,b)=>reportedCount(b.ind)-reportedCount(a.ind))[0];
-    const pind=primary.ind;
-    const bench=(pind.benchmarkValue!=null&&pind.benchmarkValue!=='')?Number(pind.benchmarkValue):90;
-    const higher=true; // hand-hygiene compliance is always higher-is-better (WHO ≥ benchmark)
-    const whoStat=pct=>pct==null?{label:'—',color:P.faint,bg:'#f4f6f9'}
-      :pct>=bench?{label:'Compliant',color:P.green,bg:'#e7f6ed'}
-      :pct>=75?{label:'Needs improvement',color:P.amber,bg:'#fff5e6'}
-      :{label:'Unacceptable',color:P.rose,bg:'#fbe9ec'};
-    // Per-month compliance pooled across ALL selected HH indicators. When every reporting
-    // indicator carries numerator+denominator we pool Σnum/Σden (opportunity-weighted, the
-    // epidemiologically correct rate); if any reports a direct % (no den) we fall back to an
-    // unweighted mean of each indicator's monthly value so none is dropped, and leave num/den
-    // null so the table's Compliant/Opportunities columns never show a partial figure.
-    const monthAgg=m=>{ let num=0,den=0,ndCount=0,total=0; const comps=[];
-      hh.forEach(({ind})=>{ const v=monthRaw(ind,m[0]); if(v==null) return; total++; comps.push(v);
-        const nn=ind.mNum&&ind.mNum[m[0]], dd=ind.mDen&&ind.mDen[m[0]];
-        if(nn!=null&&nn!==''&&dd!=null&&dd!==''&&Number(dd)>0){ num+=Number(nn); den+=Number(dd); ndCount++; } });
-      if(!total) return {value:null,num:null,den:null};
-      if(ndCount===total&&den>0) return {value:Math.round(num/den*10000)/100, num, den};
-      return {value:Math.round(comps.reduce((s,x)=>s+x,0)/comps.length*100)/100, num:null, den:null};
-    };
-    const series=pMonths.map(m=>Object.assign({m, label:m[1].split(' ')[0]}, monthAgg(m)));
+    const bench=hp.bench;
+    const higher=true; // hand-hygiene compliance is always higher-is-better
+    const whoStat=pct=>{ const s=HHX.status(pct,bench);
+      return !s?{label:'—',color:P.faint,bg:'#f4f6f9'}
+        :s.key==='ok'?{label:s.label,color:P.green,bg:'#e7f6ed'}
+        :s.key==='warn'?{label:s.label,color:P.amber,bg:'#fff5e6'}
+        :{label:s.label,color:P.rose,bg:'#fbe9ec'}; };
+    // One pooled figure per month (Σcompliant ÷ Σopportunities) — the audit counted once.
+    const series=pMonths.map((m,i)=>{ const x=ser[i]||{}; return {m, label:m[1].split(' ')[0], value:x.pct!=null?x.pct:null, num:x.d!=null?x.n:null, den:x.d!=null?x.d:null, pctOnly:!!x.pctOnly}; });
     const withVal=series.filter(r=>r.value!=null);
     const latest=withVal.length?withVal[withVal.length-1]:null;
-    const avg=withVal.length?Math.round(withVal.reduce((s,r)=>s+r.value,0)/withVal.length*10)/10:null;
+    const tot=HHX.totalOf(hp);
+    // The period figure is pooled over every month with counts; a period recorded only as
+    // bare percentages falls back to their mean (and says so).
+    const avg=tot&&tot.d>0?tot.pct:(withVal.length?Math.round(withVal.reduce((s,r)=>s+r.value,0)/withVal.length*10)/10:null);
+    const avgPooled=!!(tot&&tot.d>0);
     const onTarget=withVal.filter(r=>higher?r.value>=bench:r.value<=bench).length;
     const tone=P.green;
+    const scopeLabel=hp.fallback||!hp.restricted?'Hospital audit':(chosen.length===1?chosen[0].name:chosen.length+' departments');
     const th={textAlign:'left',padding:'7px 9px',fontSize:9.5,textTransform:'uppercase',letterSpacing:'.3px',color:P.muted,fontWeight:700,borderBottom:'1px solid '+P.line,background:P.panel2};
     const thr={...th,textAlign:'right'};
     const tdc={padding:'5px 9px',fontSize:11,color:P.ink2,borderBottom:'1px solid '+P.line2};
     const tdr={...tdc,textAlign:'right',fontFamily:MONO};
+    const tdt={...tdr,fontWeight:700,color:P.ink,background:P.panel2,borderTop:'1px solid '+P.line};
+    const band=HHX.improveBand(bench);
 
     if(part==='overview'){
       const st=whoStat(latest?latest.value:null);
       const cards=[
         ['Latest'+(latest?(' · '+latest.label):''), latest&&latest.value!=null?latest.value+'%':'—', st.color, st.label],
-        ['Average', avg!=null?avg+'%':'—', P.blue, withVal.length+' month'+(withVal.length!==1?'s':'')+' reported'],
-        ['Benchmark', (higher?'≥ ':'≤ ')+bench+'%', P.violet, 'WHO compliant target'],
+        [avgPooled?'Period compliance':'Average', avg!=null?avg+'%':'—', P.blue, avgPooled?(tot.n.toLocaleString()+' of '+tot.d.toLocaleString()+' opportunities'):(withVal.length+' month'+(withVal.length!==1?'s':'')+' reported')],
+        ['Benchmark', (higher?'≥ ':'≤ ')+bench+'%', P.violet, 'Hospital target'],
         ['Months on target', onTarget+'/'+withVal.length, (withVal.length&&onTarget===withVal.length)?P.green:P.amber, 'within the period'],
       ];
       const chartRows=withVal.map(r=>({mon:r.label, val:r.value}));
       const chartEl=chartRows.length
         ? (typeof window.AreaTargetChart==='function'
-            ? window.AreaTargetChart({data:chartRows, x:'mon', y:'val', target:bench, height:205, color:tone, flat:true})
-            : (typeof window.LineChart==='function' ? window.LineChart({data:chartRows, x:'mon', y:'val', height:205, color:tone, area:true, flat:true}) : null))
+            ? React.createElement(window.AreaTargetChart,{data:chartRows, x:'mon', y:'val', target:bench, height:205, color:tone, flat:true})
+            : (typeof window.LineChart==='function' ? React.createElement(window.LineChart,{data:chartRows, x:'mon', y:'val', height:205, color:tone, area:true, flat:true}) : null))
         : <div style={{padding:'22px 0',display:'grid',placeItems:'center',color:P.faint,fontSize:12}}>No hand-hygiene data in this period</div>;
       return (
         <div className="qc-rpage" style={{position:'relative'}}>
@@ -3077,11 +3136,11 @@ function QCReportBuilder({depts}){
             <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
               <span style={{width:30,height:30,borderRadius:8,background:tone+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={tone}/></span>
               <div style={{fontWeight:700,fontSize:15,color:P.ink}}>Hand Hygiene Compliance</div>
-              <span className="tag">WHO 5 Moments · {primary.d.name}</span>
+              <span className="tag">WHO 5 Moments · {scopeLabel}</span>
               <span style={{flex:1}}/>
               <span style={{background:st.color+'1c',color:st.color,padding:'3px 10px',borderRadius:20,fontWeight:700,fontSize:11.5}}>{st.label}</span>
             </div>
-            <KpiCards cards={cards} tone={tone}/>
+            {sections.kpis!==false&&<KpiCards cards={cards} tone={tone}/>}
             <div style={{margin:'4px 0 8px'}}>
               <div style={uSub}>Monthly compliance trend (%) · target {higher?'≥':'≤'} {bench}%</div>
               {chartEl}
@@ -3092,12 +3151,20 @@ function QCReportBuilder({depts}){
               </tr></thead>
               <tbody>{series.map(r=>{ const s=whoStat(r.value); return (
                 <tr key={r.m[0]}>
-                  <td style={{...tdc,fontWeight:600,color:P.ink}}>{r.m[1]}</td>
+                  <td style={{...tdc,fontWeight:600,color:P.ink}}>{r.m[1]}{r.pctOnly&&<span style={{marginLeft:5,fontSize:9,color:P.faint}} title="Only a percentage is on record — no counts">% only</span>}</td>
                   <td style={tdr}>{r.num!=null?r.num.toLocaleString():'—'}</td>
                   <td style={tdr}>{r.den!=null?r.den.toLocaleString():'—'}</td>
                   <td style={{...tdr,fontWeight:700,color:r.value==null?P.faint:P.ink}}>{r.value!=null?r.value+'%':'—'}</td>
                   <td style={{textAlign:'center',padding:'4px 6px'}}><span style={{display:'inline-block',padding:'2px 8px',borderRadius:20,background:s.bg,color:s.color,fontWeight:700,fontSize:10}}>{s.label}</span></td>
-                </tr>); })}</tbody>
+                </tr>); })}
+                {avgPooled&&(()=>{ const s=whoStat(tot.pct); return (
+                <tr>
+                  <td style={{...tdt,textAlign:'left'}}>Period total</td>
+                  <td style={tdt}>{tot.n.toLocaleString()}</td><td style={tdt}>{tot.d.toLocaleString()}</td>
+                  <td style={tdt}>{tot.pct!=null?tot.pct+'%':'—'}</td>
+                  <td style={{...tdt,textAlign:'center'}}><span style={{display:'inline-block',padding:'2px 8px',borderRadius:20,background:s.bg,color:s.color,fontWeight:700,fontSize:10}}>{s.label}</span></td>
+                </tr>); })()}
+              </tbody>
             </table>
             {/* authorisation now shown on the cover page only */}
           </div>
@@ -3105,35 +3172,18 @@ function QCReportBuilder({depts}){
         </div>
       );
     }
-    // breakdown page — staff groups (latest month with group data) + by-department
-    const gMonth=(()=>{ for(let i=pMonths.length-1;i>=0;i--){ const mk=pMonths[i][0]; const g=pind.mGroups&&pind.mGroups[mk]; if(g&&Object.keys(g).some(k=>g[k]!=null&&g[k]!=='')) return pMonths[i]; } return null; })();
-    const GROUP_KEYS=[['nurse','Nurse'],['doctor','Doctor'],['pca','PCA'],['other','Other']];
-    // Department-wise audit rows captured on the SUBMISSION (ind.mDeptBreakdown[month] =
-    // [{dept, g:{nurse:{n,d},…}}]) — the only place dept-wise HH lives when the audit is
-    // recorded on the hospital-wide indicator; latest reported month on the axis wins.
-    const bdSrc=(()=>{ for(let i=pMonths.length-1;i>=0;i--){ const mk=pMonths[i][0];
-      for(const h of hh){ const b=h.ind.mDeptBreakdown&&h.ind.mDeptBreakdown[mk]; if(Array.isArray(b)&&b.length) return {month:pMonths[i], rows:b}; } }
-      return null; })();
-    const bdTot=g=>GROUP_KEYS.reduce((a,[k])=>{ const x=(g||{})[k]||{}; return {n:a.n+(Number(x.n)||0), d:a.d+(Number(x.d)||0)}; },{n:0,d:0});
-    const bdRows=bdSrc?bdSrc.rows.map(r=>{ const t=bdTot(r.g); return {label:r.dept||'—', g:r.g||{}, n:t.n, d:t.d, value:t.d>0?Math.round(t.n/t.d*10000)/100:null}; })
+    // breakdown page — staff groups + every department, pooled over the WHOLE period, plus
+    // the latest audited month's department detail.
+    const GROUP_KEYS=HHX.GROUPS;
+    const useAll=!!hp.restricted;
+    const rowsP=hp.rows.map(r=>({label:r.name||'—', n:r.total.n, d:r.total.d, value:r.total.pct, self:r.selfReported})).filter(r=>r.d>0)
+      .sort((a,b)=>(b.value==null?-1:b.value)-(a.value==null?-1:a.value));
+    const groupRows=hp.groups.map(g=>({label:g.label, n:g.total.n, d:g.total.d, value:g.total.pct}));
+    // the latest month with audit rows: per-department detail by staff group
+    let bdMonth=null; for(let i=pMonths.length-1;i>=0&&!bdMonth;i--){ const mk=pMonths[i][0]; if(hp.rows.some(r=>r.cells[mk]&&r.cells[mk].src==='audit')) bdMonth=pMonths[i]; }
+    const bdRows=bdMonth?hp.rows.filter(r=>r.cells[bdMonth[0]]&&(r.cells[bdMonth[0]].src==='audit'||r.cells[bdMonth[0]].src==='not-audited')).map(r=>{ const c=r.cells[bdMonth[0]]; return {label:r.name, g:r.groups[bdMonth[0]]||{}, n:c.n||0, d:c.d||0, value:c.pct}; })
       .sort((a,b)=>(b.value==null?-1:b.value)-(a.value==null?-1:a.value)):[];
-    let groupRows=gMonth?GROUP_KEYS.map(([k,lbl])=>{ const gN=(pind.mGroups[gMonth[0]]||{}); const gD=(pind.mGroupsDen&&pind.mGroupsDen[gMonth[0]])||{}; const nn=Number(gN[k])||0, dd=Number(gD[k])||0; return {label:lbl,n:nn,d:dd,value:dd>0?Math.round(nn/dd*10000)/100:null}; }).filter(r=>r.d>0||r.n>0):[];
-    // No indicator-level staff-group entries? Pool them from the dept-wise audit rows.
-    if(!groupRows.length&&bdSrc){
-      groupRows=GROUP_KEYS.map(([k,lbl])=>{ let n=0,d=0; bdSrc.rows.forEach(r=>{ const x=(r.g||{})[k]||{}; n+=Number(x.n)||0; d+=Number(x.d)||0; }); return {label:lbl,n,d,value:d>0?Math.round(n/d*10000)/100:null}; }).filter(r=>r.d>0||r.n>0);
-    }
-    // Group ALL hand-hygiene indicators by department, then take each department's compliance
-    // at its latest reported month — pooled Σnum/Σden when every reporting indicator has a
-    // denominator, else the mean — so a department with >1 HH indicator isn't misrepresented.
-    const deptGroups={}; hh.forEach(h=>{ (deptGroups[h.d.key]=deptGroups[h.d.key]||{name:h.d.name, inds:[]}).inds.push(h.ind); });
-    const deptLatest=inds=>{ for(let i=pMonths.length-1;i>=0;i--){ const mk=pMonths[i][0];
-      let num=0,den=0,ndCount=0,total=0; const comps=[];
-      inds.forEach(ind=>{ const v=monthRaw(ind,mk); if(v==null) return; total++; comps.push(v);
-        const nn=ind.mNum&&ind.mNum[mk], dd=ind.mDen&&ind.mDen[mk];
-        if(nn!=null&&nn!==''&&dd!=null&&dd!==''&&Number(dd)>0){ num+=Number(nn); den+=Number(dd); ndCount++; } });
-      if(total){ const value=(ndCount===total&&den>0)?Math.round(num/den*10000)/100:Math.round(comps.reduce((s,x)=>s+x,0)/comps.length*100)/100; return {month:pMonths[i], value}; } }
-      return null; };
-    const deptRows=Object.keys(deptGroups).map(k=>{ const g=deptGroups[k]; const dl=deptLatest(g.inds); return dl?{label:(g.name||'').slice(0,20), value:dl.value, month:dl.month[1].split(' ')[0]}:null; }).filter(Boolean).sort((a,b)=>b.value-a.value);
+    const bdTot=bdMonth?(()=>{ const x=ser[pMonths.indexOf(bdMonth)]||{}; return {n:x.n, d:x.d, value:x.pct}; })():null;
     return (
       <div className="qc-rpage" style={{position:'relative'}}>
         {sections.watermark&&<QCWatermark text={confidential?'CONFIDENTIAL':orgName}/>}
@@ -3141,24 +3191,48 @@ function QCReportBuilder({depts}){
         <div style={{marginTop:18}}>
           <div className="qc-band" style={{display:'flex',alignItems:'center',gap:9,marginBottom:12}}>
             <span style={{width:30,height:30,borderRadius:8,background:P.blue+'1c',display:'grid',placeItems:'center',flexShrink:0}}><DocIc c={P.blue}/></span>
-            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>Hand Hygiene — breakdown{bdSrc?(' · '+bdSrc.month[1]):gMonth?(' · '+gMonth[1]):''}</div>
+            <div style={{fontWeight:700,fontSize:15,color:P.ink}}>Hand Hygiene — breakdown · {rangeLabel}</div>
             <span style={{flex:1}}/><span className="tag">by staff group &amp; department</span>
           </div>
           {groupRows.length>0&&(
             <div style={{marginBottom:16}}>
-              <div style={uSub}>Compliance by staff group (%)</div>
-              {typeof window.BarChart==='function'&&window.BarChart({data:groupRows.map(r=>({label:r.label,val:r.value||0})), x:'label', y:'val', height:175, color:P.blue, flat:true})}
+              <div style={uSub}>Compliance by staff group (%) · whole period</div>
+              {typeof window.BarChart==='function'&&React.createElement(window.BarChart,{data:groupRows.map(r=>({label:r.label,val:r.value||0})), x:'label', y:'val', height:175, color:P.blue, flat:true})}
               <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',marginTop:8,fontSize:11}}>
                 <thead><tr><th style={th}>Staff group</th><th style={thr}>Compliant</th><th style={thr}>Opportunities</th><th style={thr}>Compliance</th></tr></thead>
                 <tbody>{groupRows.map(r=>{ const s=whoStat(r.value); return (
                   <tr key={r.label}><td style={{...tdc,fontWeight:600,color:P.ink}}>{r.label}</td><td style={tdr}>{r.n.toLocaleString()}</td><td style={tdr}>{r.d.toLocaleString()}</td><td style={{...tdr,fontWeight:700,color:s.color}}>{r.value!=null?r.value+'%':'—'}</td></tr>
-                ); })}</tbody>
+                ); })}
+                  {(()=>{ const n=groupRows.reduce((a,r)=>a+r.n,0), d=groupRows.reduce((a,r)=>a+r.d,0); const v=HHX.pctOf(n,d); return (
+                  <tr><td style={{...tdt,textAlign:'left'}}>All staff</td><td style={tdt}>{n.toLocaleString()}</td><td style={tdt}>{d.toLocaleString()}</td><td style={tdt}>{v!=null?v+'%':'—'}</td></tr>); })()}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {rowsP.length>0&&(
+            <div style={{marginBottom:16}}>
+              <div style={uSub}>Compliance by department · {rangeLabel} · pooled compliant / observed moments</div>
+              <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',marginTop:6,fontSize:10.5}}>
+                <thead><tr><th style={th}>Department</th><th style={thr}>Compliant</th><th style={thr}>Opportunities</th><th style={thr}>Compliance</th><th style={{...th,textAlign:'center'}}>Status</th></tr></thead>
+                <tbody>{rowsP.map(r=>{ const s=whoStat(r.value); return (
+                  <tr key={r.label}>
+                    <td style={{...tdc,fontWeight:600,color:P.ink}}>{r.label}{r.self&&<span style={{marginLeft:5,fontSize:9,color:P.amber}} title="Includes the department's own figures for a month the audit did not cover">self-reported</span>}</td>
+                    <td style={tdr}>{r.n.toLocaleString()}</td><td style={tdr}>{r.d.toLocaleString()}</td>
+                    <td style={{...tdr,fontWeight:700,color:r.value==null?P.faint:P.ink}}>{r.value!=null?r.value+'%':'—'}</td>
+                    <td style={{textAlign:'center',padding:'4px 6px'}}><span style={{display:'inline-block',padding:'2px 8px',borderRadius:20,background:s.bg,color:s.color,fontWeight:700,fontSize:9.5}}>{s.label}</span></td>
+                  </tr>); })}
+                  {tot&&tot.d>0&&(()=>{ const s=whoStat(tot.pct); return (
+                  <tr><td style={{...tdt,textAlign:'left'}}>{useAll?'Total':'Hospital total (audit)'}</td><td style={tdt}>{tot.n.toLocaleString()}</td><td style={tdt}>{tot.d.toLocaleString()}</td><td style={tdt}>{tot.pct!=null?tot.pct+'%':'—'}</td>
+                    <td style={{...tdt,textAlign:'center'}}><span style={{display:'inline-block',padding:'2px 8px',borderRadius:20,background:s.bg,color:s.color,fontWeight:700,fontSize:9.5}}>{s.label}</span></td></tr>); })()}
+                  {!useAll&&hp.hasSelfReported&&hp.totalAll.d>0&&(
+                  <tr><td style={{...tdc,fontWeight:700}}>Incl. department self-reports</td><td style={tdr}>{hp.totalAll.n.toLocaleString()}</td><td style={tdr}>{hp.totalAll.d.toLocaleString()}</td><td style={{...tdr,fontWeight:700}}>{hp.totalAll.pct!=null?hp.totalAll.pct+'%':'—'}</td><td/></tr>)}
+                </tbody>
               </table>
             </div>
           )}
           {bdRows.length>0&&(
             <div style={{marginBottom:16}}>
-              <div style={uSub}>Department-wise audit · {bdSrc.month[1]} · compliant / observed moments (WHO 5 Moments)</div>
+              <div style={uSub}>Department-wise audit · {bdMonth[1]} · compliant / observed moments (WHO 5 Moments)</div>
               <table className="qc-rpt-tbl" style={{borderCollapse:'collapse',width:'100%',marginTop:6,fontSize:10.5}}>
                 <thead><tr>
                   <th style={th}>Department</th>
@@ -3172,21 +3246,23 @@ function QCReportBuilder({depts}){
                     <td style={{...tdr,fontWeight:600}}>{r.d>0?r.n+'/'+r.d:'—'}</td>
                     <td style={{...tdr,fontWeight:700,color:r.value==null?P.faint:P.ink}}>{r.value!=null?r.value+'%':'—'}</td>
                     <td style={{textAlign:'center',padding:'4px 6px'}}><span style={{display:'inline-block',padding:'2px 8px',borderRadius:20,background:s.bg,color:s.color,fontWeight:700,fontSize:9.5}}>{r.value==null?'Not audited':s.label}</span></td>
-                  </tr>); })}</tbody>
+                  </tr>); })}
+                  {bdTot&&bdTot.d>0&&(
+                  <tr><td style={{...tdt,textAlign:'left'}}>Total</td>
+                    {GROUP_KEYS.map(([k])=>{ let nn=0,dd=0; bdRows.forEach(r=>{ const x=r.g[k]||{}; nn+=Number(x.n)||0; dd+=Number(x.d)||0; }); return <td key={k} style={tdt}>{(nn||dd)?nn+'/'+dd:'—'}</td>; })}
+                    <td style={tdt}>{bdTot.n+'/'+bdTot.d}</td><td style={tdt}>{bdTot.value!=null?bdTot.value+'%':'—'}</td><td style={tdt}/></tr>)}
+                </tbody>
               </table>
             </div>
           )}
-          {(()=>{ // dept compliance chart — audit breakdown first, per-dept HH indicators as fallback
-            const audited=bdRows.filter(r=>r.value!=null);
-            const src=audited.length?audited.map(r=>({label:(r.label||'').slice(0,20),val:r.value})):deptRows.map(r=>({label:r.label,val:r.value}));
-            return src.length>1&&(
-              <div style={{marginBottom:14}}>
-                <div style={uSub}>Compliance by department ({audited.length?bdSrc.month[1]:'latest reported month'}, %)</div>
-                {typeof window.BarChart==='function'&&window.BarChart({data:src, x:'label', y:'val', height:Math.max(170,src.length*26), color:P.violet, flat:true})}
-              </div>
-            ); })()}
+          {rowsP.length>1&&(
+            <div style={{marginBottom:14}}>
+              <div style={uSub}>Compliance by department ({rangeLabel}, %)</div>
+              {typeof window.BarChart==='function'&&React.createElement(window.BarChart,{data:rowsP.map(r=>({label:(r.label||'').slice(0,20),val:r.value})), x:'label', y:'val', height:Math.max(170,rowsP.length*26), color:P.violet, flat:true})}
+            </div>
+          )}
           <div style={{background:'#eef8fc',border:'1px solid #cfe6f7',borderRadius:9,padding:'10px 13px',fontSize:11,color:P.blue700||P.blue}}>
-            <b>Interpretation (WHO):</b> ≥ {bench}% compliant · 75–{bench-1}% needs improvement (re-audit within 2 weeks) · &lt; 75% unacceptable (escalate). Reference: WHO (2009) Guidelines on Hand Hygiene in Health Care.
+            <b>Interpretation:</b> ≥ {bench}% compliant{band?(' · '+band+' needs improvement (re-audit within 2 weeks)'):''} · &lt; {band?Math.min(75,bench):bench}% unacceptable (escalate). Reference: WHO (2009) Guidelines on Hand Hygiene in Health Care.
           </div>
         </div>
         <Footer n={n} total={total}/>
@@ -3312,7 +3388,7 @@ function QCReportBuilder({depts}){
       else{F('bold',7.5,RGB.muted);doc.text('NO DATA',PW-M,y+2,{align:'right'});}
       y+=18;
       const kp=qcDeptKpis(d,pMonths).map(k=>({label:k[0],value:k[1],tone:hex2rgb(k[2]),foot:k[3]}));
-      y=kpiRow(y,kp);
+      if(sections.kpis) y=kpiRow(y,kp);   // the KPI-cards toggle, as on screen
       // dept-level zero-defect % series — same metric/series the on-screen Summary page charts.
       // A single-indicator dept plots that indicator's real values instead (qcSoleReportedInd),
       // matching the on-screen chart so the exported PDF is not a flat data-hiding aggregate.
@@ -3365,8 +3441,12 @@ function QCReportBuilder({depts}){
     const QC_PY_TYPES=['summary','detail','compare','handhygiene'];
     const QC_PY_STYLES=['bar3d','bar','line','area','combo','grouped','stacked','pct','horizontal','donut'];
     const qcAdvanced=['ragHeatmap','deptRanking','benchmarkCompare','indTrend','periodCompare','pendingData','incidentAppendix','standardsRefs','toc','watermark'].some(k=>sections[k]);
+    // Python draws no incident cards and no executive summary on the Hand Hygiene / Comparison
+    // pages: with those sections on, the browser export (which does) builds the PDF instead,
+    // so nothing on screen goes missing from the download.
+    const qcPyGaps = !!(sections.incidents || sections.indicatorDetail) || (!!sections.execSummary && (reportType==='handhygiene'||reportType==='compare'));
     const qcCanServer = QC_PY_TYPES.indexOf(reportType)>=0
-      && chartStyles.every(s=>QC_PY_STYLES.indexOf(s)>=0) && !qcAdvanced;
+      && chartStyles.every(s=>QC_PY_STYLES.indexOf(s)>=0) && !qcAdvanced && !qcPyGaps;
     if(window.__UNICO_SERVER_PDF__!==false && qcCanServer){
       setExporting(true); setNote(null);
       try{
@@ -3375,7 +3455,10 @@ function QCReportBuilder({depts}){
             benchmark:ind.benchmark,benchmarkValue:ind.benchmarkValue,goalDirection:ind.goalDirection,
             numeratorDef:ind.numeratorDef,denominatorDef:ind.denominatorDef,formulaText:formulaText(ind),
             indSec:(c?((HQI_SECN[c[0]]||'')+' ('+c+')'):catOf(ind.name)),
-            months:ind.months,mNum:ind.mNum,mDen:ind.mDen,quarters:ind.quarters,quartersByFy:ind.quartersByFy}; };
+            months:ind.months,mNum:ind.mNum,mDen:ind.mDen,quarters:ind.quarters,quartersByFy:ind.quartersByFy,
+            // hand-hygiene audit detail, staff groups, start / not-observed / audit-copy marks
+            mDeptBreakdown:ind.mDeptBreakdown,mGroups:ind.mGroups,mGroupsDen:ind.mGroupsDen,
+            mNotObserved:ind.mNotObserved,mFromAudit:ind.mFromAudit,startMonth:ind.startMonth}; };
         const secLabelOf=d=>{ const lead=qcLeadIndicator(d,pMonths); const code=lead?stdMatch(lead.name):null;
           return code?(HQI_SECN[code[0]]||code):(lead?catOf(lead.name):'Quality'); };
         const liteDept=d=>({key:d.key,name:d.name,secLabel:secLabelOf(d),indicators:(d.indicators||[]).map(liteInd)});
@@ -3398,7 +3481,13 @@ function QCReportBuilder({depts}){
             showCover:!!sections.cover, showSig:!!sections.signatures, rangeLabel,
             genDate:new Date().toLocaleDateString('en-US'), sig, fy, fyLabel:fyLabelOf(fy), sections,
             chartStyles, execSummary:es.text, execTone:es.tone },
-          depts: chosen.map(liteDept), allDepts: (depts||[]).map(liteDept), pMonths };
+          depts: chosen.map(liteDept), allDepts: (depts||[]).map(liteDept), pMonths,
+          // The hand-hygiene figures exactly as the preview pooled them (qcHHPool), so the PDF
+          // can never show a different hospital total from the screen.
+          hh: reportType==='handhygiene' ? (()=>{ const hp=qcHHPool(chosen, depts, pMonths); if(!hp||!window.UNICO_HH) return null; const HHX=window.UNICO_HH;
+            return { bench:hp.bench, restricted:!!hp.restricted, fallback:!!hp.fallback, source:hp.source, series:HHX.series(hp), total:HHX.totalOf(hp),
+              groups:hp.groups.map(g=>({label:g.label,n:g.total.n,d:g.total.d,pct:g.total.pct})),
+              rows:hp.rows.filter(r=>r.total.d>0).map(r=>({name:r.name,n:r.total.n,d:r.total.d,pct:r.total.pct,self:!!r.selfReported})) }; })() : null };
         const res=await fetch('/api/report-pdf',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(model)});
         // localhost:8080 (no Vercel router) returns index.html 200 — the content-type guard
         // rejects that so we cleanly fall through to the JS vector/raster export below.

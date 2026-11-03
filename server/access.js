@@ -243,6 +243,8 @@ async function forRequest(req) {
     perms,
     departments: Array.isArray(u.departments) ? u.departments : [],
     qualityAreas: Array.isArray(u.qualityAreas) ? u.qualityAreas : [],
+    // Hospital-wide quality submitter: every CURRENT area, not the list saved with the account.
+    allQualityAreas: u.allQualityAreas === true,
     staffScope: cleanStaffScope(u.staffScope),
     staffId: (u.staffId === 0 || u.staffId) ? u.staffId : null,
     staffEmpId: u.staffEmpId ? String(u.staffEmpId).trim() : '',
@@ -308,17 +310,30 @@ function cleanSubmitKinds(v) {
    the unit's staff and staff requests are the Duty Roster and Staff Management modules.
    `dsScreens` absent = the defaults below, so an account saved before the checklist
    existed keeps what it had. */
-const DS_SCREENS = ['missing', 'status', 'quality', 'patient', 'history'];   // 'quick' (Quick entry) removed 2026-09-23
+const DS_SCREENS = ['missing', 'status', 'quality', 'patient', 'history', 'hh'];   // 'quick' (Quick entry) removed 2026-09-23
+/* Screens that are never a default: an administrator ticks them for the person. 'hh' is the
+   read-only Hand Hygiene screen (the hospital audit's totals). It is granted per PERSON —
+   anyone it is ticked for sees the same hospital figures — and a hospital-wide submitter
+   always has it, because they are the ones who enter that audit. */
+const DS_OPT_IN = ['hh'];
 function cleanDsScreens(v) {
   if (!Array.isArray(v)) return null;
   return DS_SCREENS.filter((s) => v.indexOf(s) >= 0);
 }
-// The screens this account may open (legacy portal and administrators: all of them).
+function hhScreenOn(access) {
+  if (!access) return false;
+  if (access.unrestricted || access.allQualityAreas === true) return true;
+  const picked = cleanDsScreens(access.dsScreens);
+  return !!picked && picked.indexOf('hh') >= 0;
+}
+// The screens this account may open (legacy portal and administrators: all the regular
+// ones; the opt-in screens only as granted).
 function dsScreensOf(access) {
-  if (!access || access.unrestricted || isPortal(access)) return DS_SCREENS.slice();
+  const optIn = (list) => list.filter((s) => DS_OPT_IN.indexOf(s) < 0).concat(hhScreenOn(access) ? ['hh'] : []);
+  if (!access || access.unrestricted || isPortal(access)) return optIn(DS_SCREENS.slice());
   const kinds = cleanSubmitKinds(access.submitKinds);
-  return cleanDsScreens(access.dsScreens) || DS_SCREENS.filter((s) =>
-    (s !== 'patient' || kinds.patient) && (s !== 'quality' && s !== 'status' || kinds.quality));
+  return optIn(cleanDsScreens(access.dsScreens) || DS_SCREENS.filter((s) =>
+    (s !== 'patient' || kinds.patient) && (s !== 'quality' && s !== 'status' || kinds.quality)));
 }
 const mayOpenDsScreen = (access, screen) => dsScreensOf(access).indexOf(screen) >= 0;
 // May this account send data of this kind ('patient' | 'quality')? Administrators, the Data
@@ -914,7 +929,7 @@ module.exports = {
   PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster,
   LEGACY_SUBMIT_ROLES, submitsData, dataScoped, isUnitLead, phoneRoleOf, CONSOLE_MODULES,
   SUBMIT_KINDS, cleanSubmitKinds, maySubmitKind,
-  DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen,
+  DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen, hhScreenOn,
   ACCESS_MODULES, ACTIONS, PERM_RANK, STAFF_SCOPES, cleanStaffScope,
   ROSTER_SCOPES, cleanRosterScope, rosterDeptNames, rosterVisible,
   KEY_MODULE, moduleOfKey,

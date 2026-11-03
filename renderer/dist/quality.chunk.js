@@ -1437,7 +1437,7 @@ function monthStatus(ind, mk) {
   return qStatus(ind, monthRaw(ind, mk));
 }
 function qtrSrc(ind, fy) {
-  return fy != null && ind && ind.quartersByFy && ind.quartersByFy[fy] ? ind.quartersByFy[fy] : ind && ind.quarters || {};
+  return fy != null ? ind && ind.quartersByFy && ind.quartersByFy[fy] || {} : ind && ind.quarters || {};
 }
 function qtrRaw(ind, Q, fy) {
   const v = qtrSrc(ind, fy)[Q];
@@ -3491,8 +3491,8 @@ function QCScorecard({
       const breaches = inds.reduce((a, i) => a + countBreaches(i, MONTHS), 0);
       const rep = st.ok + st.breach;
       const brRate = rep ? st.breach / rep : 0;
-      const status = d.status || (st.breach === 0 ? 'Excellent' : brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Very Good');
-      const sc = statusColorFor(status);
+      const status = !rep ? 'No data' : d.status || (st.breach === 0 ? 'Excellent' : brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Very Good');
+      const sc = !rep ? P.faint : statusColorFor(status);
       return {
         key: d.key,
         name: d.name,
@@ -3500,13 +3500,14 @@ function QCScorecard({
         withData,
         breaches,
         breachColor: breaches > 0 ? P.rose : P.ink2,
-        rate: st.rate,
+        rate: rep ? st.rate : 0,
+        reported: rep > 0,
         status,
         statusColor: sc,
         statusBg: sc + '1c',
-        barColor: st.rate >= 95 ? P.green : st.rate >= 85 ? P.teal : st.rate >= 70 ? P.amber : P.rose
+        barColor: !rep ? P.faint : st.rate >= 95 ? P.green : st.rate >= 85 ? P.teal : st.rate >= 70 ? P.amber : P.rose
       };
-    }).sort((a, b) => b.rate - a.rate);
+    }).sort((a, b) => (b.reported ? 1 : 0) - (a.reported ? 1 : 0) || b.rate - a.rate);
   }, [depts, fy]);
   const th = {
     padding: '10px 12px',
@@ -3685,12 +3686,12 @@ function QCScorecard({
     style: {
       fontFamily: MONO,
       fontWeight: 600,
-      color: P.ink,
+      color: r.reported ? P.ink : P.faint,
       fontSize: '11.5px',
       width: '38px',
       textAlign: 'right'
     }
-  }, r.rate, "%"))), React.createElement("td", {
+  }, r.reported ? r.rate + '%' : '—'))), React.createElement("td", {
     style: {
       padding: '10px 16px',
       textAlign: 'center'
@@ -3739,7 +3740,8 @@ function QCTrends({
       h: x.v == null ? 0 : Math.max(2, Math.round(x.v / maxV * 100)),
       color: x.s === 'breach' ? P.rose : x.s === 'ok' ? P.green : '#c4ccd6'
     }));
-    const avg = nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100 : '—';
+    const pa = qcAnnualCell(tInd, MONTHS);
+    const avg = pa.rep && pa.isRate ? pa.value : nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length * 100) / 100 : '—';
     return {
       name: tInd.name,
       unit: tInd.unit,
@@ -4225,7 +4227,7 @@ function QCSpark({
     mx = Math.max(...nums),
     rng = mx - mn || 1;
   const pts = vals.map((v, i) => ({
-    x: i / (months.length - 1) * w,
+    x: (months.length > 1 ? i / (months.length - 1) : 0.5) * w,
     y: v == null ? null : h - 2 - (v - mn) / rng * (h - 4)
   }));
   const path = pts.filter(p => p.y != null).map((p, i) => (i ? 'L' : 'M') + p.x.toFixed(1) + ' ' + p.y.toFixed(1)).join(' ');
@@ -4479,6 +4481,59 @@ const QC_TEMPLATES = {
       signatures: 1
     }
   },
+  infection: {
+    label: 'Infection Control',
+    type: 'heatmap',
+    allDepts: true,
+    title: 'Infection Prevention & Control Report',
+    indMatch: /hands*hygiene|cauti|catheter-associated|clabsi|central line|vap|ventilator-associated|surgical site|ssi|needles*stick|sharps/i,
+    sec: {
+      execSummary: 1,
+      kpis: 1,
+      chart: 0,
+      breachDonut: 0,
+      table: 1,
+      incidents: 1,
+      indicatorDetail: 0,
+      ragHeatmap: 0,
+      deptRanking: 0,
+      benchmarkCompare: 0,
+      indTrend: 0,
+      incidentAppendix: 1,
+      standardsRefs: 1,
+      cover: 1,
+      toc: 0,
+      periodCompare: 0,
+      watermark: 1,
+      signatures: 1
+    }
+  },
+  handhygiene: {
+    label: 'Hand Hygiene audit',
+    type: 'handhygiene',
+    allDepts: true,
+    title: 'Hand Hygiene Compliance Report',
+    sec: {
+      execSummary: 0,
+      kpis: 1,
+      chart: 1,
+      breachDonut: 0,
+      table: 1,
+      incidents: 0,
+      indicatorDetail: 0,
+      ragHeatmap: 0,
+      deptRanking: 0,
+      benchmarkCompare: 0,
+      indTrend: 0,
+      incidentAppendix: 0,
+      standardsRefs: 0,
+      cover: 1,
+      toc: 0,
+      periodCompare: 0,
+      watermark: 1,
+      signatures: 1
+    }
+  },
   full: {
     label: 'Full Detailed',
     type: 'detail',
@@ -4588,12 +4643,19 @@ function qcLeadIndicator(d, months) {
 }
 function qcDeptStatus(d, months) {
   const st = deptStat(d, months);
-  const brRate = st.ok + st.breach ? st.breach / (st.ok + st.breach) : 0;
+  if (!(st.ok + st.breach)) return {
+    status: 'No data',
+    color: P.faint,
+    st,
+    reported: false
+  };
+  const brRate = st.breach / (st.ok + st.breach);
   const status = brRate > 0.16 ? 'Needs Improvement' : brRate > 0.06 ? 'Good' : 'Excellent';
   return {
     status,
     color: statusColorFor(status),
-    st
+    st,
+    reported: true
   };
 }
 function qcIndSeries(d, months) {
@@ -4860,7 +4922,9 @@ function qcIndKpis(ind, months) {
     cards.push(['Total events', hasEv ? String(ev) : '—', P.blue, hasEv ? 'numerator sum over period' : 'no event counts recorded']);
     cards.push(['Peak (worst)', peak == null ? '—' : fmtVal(ind, peak), P.amber, 'worst month']);
   } else {
-    cards.push(['Average', avg == null ? '—' : fmtVal(ind, avg), P.blue, 'mean over period']);
+    const pa = isRateF ? qcAnnualCell(ind, months) : null;
+    const pv = pa && pa.rep ? pa.value : avg;
+    cards.push([pa && pa.pooled ? 'Period value' : 'Average', pv == null ? '—' : fmtVal(ind, pv), P.blue, pa && pa.pooled ? 'pooled over period' : 'mean over period']);
     cards.push(['Worst', peak == null ? '—' : fmtVal(ind, peak), P.amber, higher ? 'lowest month' : 'highest month']);
   }
   cards.push(['Off Benchmark', String(countBreaches(ind, months)), countBreaches(ind, months) > 0 ? P.rose : P.green, 'months off benchmark']);
@@ -4888,7 +4952,8 @@ function qcAnnualCell(ind, months) {
     num = 0,
     den = 0,
     valSum = 0,
-    nRep = 0;
+    nRep = 0,
+    nND = 0;
   const axis = months || MONTHS;
   const qHasMonth = {};
   axis.forEach(m => {
@@ -4915,6 +4980,7 @@ function qcAnnualCell(ind, months) {
       if (n != null && n !== '' && d != null && d !== '') {
         num += Number(n) || 0;
         den += Number(d) || 0;
+        nND++;
       }
     } else sum += Number(v) || 0;
   });
@@ -4927,15 +4993,17 @@ function qcAnnualCell(ind, months) {
     num: 0,
     den: 0
   };
-  const value = rate ? den > 0 ? window.qiFormulaCompute(ind.formula || 'pct', num, den) : nRep ? Math.round(valSum / nRep * 100) / 100 : 0 : sum;
+  const pooled = rate && den > 0 && nND === nRep;
+  const value = rate ? pooled ? window.qiFormulaCompute(ind.formula || 'pct', num, den) : nRep ? Math.round(valSum / nRep * 100) / 100 : 0 : sum;
   return {
     rep: true,
     status: anyBreach ? 'breach' : 'ok',
     value,
     count: rate ? 0 : sum,
     isRate: rate,
-    num,
-    den
+    num: pooled ? num : 0,
+    den: pooled ? den : 0,
+    pooled
   };
 }
 function QCHeatGrid({
@@ -5180,12 +5248,39 @@ function qcTrendArrow(delta, higherBetter) {
     txt: (up ? '+' : '') + Math.round(delta * 100) / 100
   };
 }
+function qcWithoutAuditCopies(chosen) {
+  const HHX = window.UNICO_HH;
+  if (!HHX || !(chosen || []).some(d => HHX.isHospital(d))) return chosen;
+  return chosen.map(d => {
+    if (HHX.isHospital(d)) return d;
+    let changed = false;
+    const inds = (d.indicators || []).map(ind => {
+      const fa = ind.mFromAudit;
+      if (!fa || !Object.keys(fa).length) return ind;
+      changed = true;
+      const c = Object.assign({}, ind);
+      ['months', 'mNum', 'mDen'].forEach(k => {
+        if (c[k]) {
+          c[k] = Object.assign({}, c[k]);
+          Object.keys(fa).forEach(m => {
+            if (fa[m]) delete c[k][m];
+          });
+        }
+      });
+      delete c.quartersByFy;
+      return c;
+    });
+    return changed ? Object.assign({}, d, {
+      indicators: inds
+    }) : d;
+  });
+}
 function qcAggStat(chosen, months) {
   let ok = 0,
     breach = 0,
     na = 0,
     inds = 0;
-  chosen.forEach(d => {
+  qcWithoutAuditCopies(chosen).forEach(d => {
     inds += (d.indicators || []).length;
     const s = deptStat(d, months);
     ok += s.ok;
@@ -5862,25 +5957,20 @@ function qcCapaMap() {
     return {};
   }
 }
-function qcHHOf(chosen, depts, months) {
-  const isHH = ind => /hand\s*hygiene/i.test(ind && ind.name || '') && (ind.formula === 'pct' || ind.formula === 'direct' || isPctInd(ind));
-  const hh = [];
-  (chosen || []).forEach(d => (d.indicators || []).forEach(ind => {
-    if (isHH(ind)) hh.push({
-      d,
-      ind
+function qcHHPool(chosen, depts, months) {
+  const HH = window.UNICO_HH;
+  if (!HH) return null;
+  const keys = (months || []).map(m => Array.isArray(m) ? m[0] : m);
+  let r = HH.build(depts, keys, {
+    only: (chosen || []).map(d => d.key)
+  });
+  if (!HH.series(r).some(x => x.pct != null)) {
+    const all = HH.build(depts, keys);
+    if (all.source && HH.series(all).some(x => x.pct != null)) r = Object.assign(all, {
+      fallback: true
     });
-  }));
-  if (!hh.some(h => hasData(h.ind, months))) {
-    const seen = new Set(hh.map(h => h.ind));
-    (depts || []).forEach(d => (d.indicators || []).forEach(ind => {
-      if (isHH(ind) && !seen.has(ind) && hasData(ind, months)) hh.push({
-        d,
-        ind
-      });
-    }));
   }
-  return hh;
+  return r;
 }
 function QCReportBuilder({
   depts
@@ -5994,7 +6084,16 @@ function QCReportBuilder({
       Object.keys(t.sec).forEach(k => o[k] = !!t.sec[k]);
       return o;
     });
-    setIndMode('all');
+    if (t.allDepts) setSelectedDepts(allKeys.slice());
+    if (t.title) setHdrTitle(t.title);
+    if (t.indMatch) {
+      const keys = [];
+      depts.forEach(d => (d.indicators || []).forEach(i => {
+        if (t.indMatch.test(i.name || '')) keys.push(d.key + '::' + i.id);
+      }));
+      setIndSel(new Set(keys));
+      setIndMode(keys.length ? 'custom' : 'all');
+    } else setIndMode('all');
     setReportType(t.type);
     setPageIdx(0);
     setActiveTemplate(id);
@@ -6129,7 +6228,12 @@ function QCReportBuilder({
       base = a >= 0 && b >= 0 ? MONTHS.slice(Math.min(a, b), Math.max(a, b) + 1) : MONTHS;
     } else base = MONTHS;
     if (!base.length) return base;
-    const has = m => chosen.some(d => (d.indicators || []).some(ind => qcCellVal(ind, m) != null));
+    const hhAxis = reportType === 'handhygiene' ? qcHHPool(chosen, depts, base) : null;
+    const has = hhAxis ? m => {
+      const i = base.indexOf(m);
+      const x = window.UNICO_HH.series(hhAxis)[i];
+      return !!x && x.pct != null;
+    } : m => chosen.some(d => (d.indicators || []).some(ind => qcCellVal(ind, m) != null));
     let lo = 0,
       hi = base.length - 1;
     while (lo < hi && !has(base[lo])) lo++;
@@ -6157,26 +6261,15 @@ function QCReportBuilder({
     });else if (reportType === 'heatmap') base = chosen.length ? [{
       kind: 'heatmap'
     }] : [];else if (reportType === 'handhygiene') {
-      const hh = qcHHOf(chosen, depts, pMonths);
+      const hp = qcHHPool(chosen, depts, pMonths);
       base = chosen.length ? [{
         kind: 'hh',
         part: 'overview'
       }] : [];
-      if (hh.length) {
-        const hasGroups = hh.some(h => {
-          const g = h.ind.mGroups || {};
-          return Object.keys(g).some(k => g[k] && Object.keys(g[k]).length);
-        });
-        const hasDeptBd = hh.some(h => {
-          const b = h.ind.mDeptBreakdown || {};
-          return Object.keys(b).some(k => Array.isArray(b[k]) && b[k].length);
-        });
-        const deptCount = new Set(hh.map(h => h.d.key)).size;
-        if (hasGroups || hasDeptBd || deptCount > 1) base.push({
-          kind: 'hh',
-          part: 'breakdown'
-        });
-      }
+      if (hp && (hp.groups.length || hp.rows.filter(r => r.total.d > 0 || r.selfReported).length > 1)) base.push({
+        kind: 'hh',
+        part: 'breakdown'
+      });
     } else if (reportType === 'monthly') base = chosen.length ? pMonths.map(m => ({
       kind: 'monthly',
       month: m
@@ -7054,7 +7147,17 @@ function QCReportBuilder({
         });
         let totTxt = '—',
           totColor = P.ink2;
-        if (anyCount) {
+        const hhRow = /hands*hygiene/i.test(name) && window.UNICO_HH;
+        if (hhRow) {
+          const HHX = window.UNICO_HH;
+          const t = HHX.totalOf(HHX.build(depts, pMonths.map(x => x[0]), {
+            only: chosen.map(d => d.key)
+          }));
+          if (t && t.d > 0 && rateInd) {
+            totTxt = fmtVal(rateInd, t.pct);
+            totColor = P.ink2;
+          }
+        } else if (anyCount) {
           totTxt = String(tot);
           totColor = tot > 0 ? P.rose : P.ink2;
         } else if (anyRate && den > 0 && rateInd) {
@@ -7337,7 +7440,14 @@ function QCReportBuilder({
         });
         let totTxt = '—',
           totColor = P.ink2;
-        if (anyCount) {
+        const hhRow = /hands*hygiene/i.test(name) && window.UNICO_HH;
+        if (hhRow) {
+          const HHX = window.UNICO_HH;
+          const x = HHX.series(HHX.build(depts, [m[0]], {
+            only: chosen.map(d => d.key)
+          }))[0];
+          if (x && x.pct != null && rateInd) totTxt = fmtVal(rateInd, x.pct);
+        } else if (anyCount) {
           totTxt = String(tot);
           totColor = tot > 0 ? P.rose : P.ink2;
         } else if (anyRate && den > 0 && rateInd) {
@@ -7440,13 +7550,13 @@ function QCReportBuilder({
         status: s.status,
         color: s.color,
         breaches: s.st.breach,
-        rate: s.st.rate,
+        rate: s.reported ? s.st.rate : null,
         inds: (d.indicators || []).length
       };
     });
     const hbar = rows.map(r => ({
-      label: r.d.name,
-      value: r.rate,
+      label: r.d.name + (r.rate == null ? ' (no data)' : ''),
+      value: r.rate || 0,
       color: r.color
     })).sort((a, b) => b.value - a.value);
     return React.createElement("div", {
@@ -7548,9 +7658,9 @@ function QCReportBuilder({
           textAlign: 'center',
           fontFamily: MONO,
           fontWeight: 600,
-          color: r.rate >= 90 ? P.green : r.rate >= 70 ? P.amber : P.rose
+          color: r.rate == null ? P.faint : r.rate >= 90 ? P.green : r.rate >= 70 ? P.amber : P.rose
         }
-      }, r.rate, "%"), React.createElement("td", {
+      }, r.rate == null ? '—' : r.rate + '%'), React.createElement("td", {
         style: {
           padding: '7px 10px',
           textAlign: 'center',
@@ -8140,11 +8250,12 @@ function QCReportBuilder({
     }));
     const plans = [];
     chosen.forEach(d => (d.indicators || []).forEach(ind => {
-      let lastQ = null;
-      QORDER.forEach(Q => {
-        if (qtrRaw(ind, Q, fy) != null) lastQ = Q;
+      let lastV = null;
+      pMonths.forEach(m => {
+        const v = qcCellVal(ind, m);
+        if (v != null) lastV = v;
       });
-      const lastBreach = lastQ != null && qtrStatus(ind, lastQ, fy) === 'breach';
+      const lastBreach = lastV != null && qStatus(ind, lastV) === 'breach';
       const nB = countBreaches(ind, pMonths);
       if (!(lastBreach || nB >= 3)) return;
       plans.push({
@@ -8390,8 +8501,10 @@ function QCReportBuilder({
     lead
   }) {
     const part = page.part || 'overview';
-    const hh = qcHHOf(chosen, depts, pMonths);
-    if (!hh.length) return React.createElement("div", {
+    const HHX = window.UNICO_HH;
+    const hp = qcHHPool(chosen, depts, pMonths);
+    const ser = hp && HHX ? HHX.series(hp) : [];
+    if (!hp || !hp.source && !hp.rows.length || !ser.some(x => x.pct != null || x.d != null)) return React.createElement("div", {
       className: "qc-rpage",
       style: {
         position: 'relative'
@@ -8417,79 +8530,51 @@ function QCReportBuilder({
         maxWidth: 460,
         margin: '0 auto'
       }
-    }, "No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) records for ", fyLabelOf(fy), ". Record hand hygiene in Quality Data \u2014 or switch the year above \u2014 then regenerate.")), React.createElement(Footer, {
+    }, "No hand hygiene data was found in the selected departments or in the hospital-wide (Overall Hospital) audit for ", fyLabelOf(fy), ". Record hand hygiene in Quality Data \u2014 or switch the year above \u2014 then regenerate.")), React.createElement(Footer, {
       n: n,
       total: total
     }));
-    const reportedCount = ind => pMonths.reduce((s, m) => s + (monthRaw(ind, m[0]) != null ? 1 : 0), 0);
-    let primary = hh.find(h => /overall|hospital/i.test((h.d.name || '') + ' ' + (h.ind.name || '')));
-    if (!primary) primary = hh.slice().sort((a, b) => reportedCount(b.ind) - reportedCount(a.ind))[0];
-    const pind = primary.ind;
-    const bench = pind.benchmarkValue != null && pind.benchmarkValue !== '' ? Number(pind.benchmarkValue) : 90;
+    const bench = hp.bench;
     const higher = true;
-    const whoStat = pct => pct == null ? {
-      label: '—',
-      color: P.faint,
-      bg: '#f4f6f9'
-    } : pct >= bench ? {
-      label: 'Compliant',
-      color: P.green,
-      bg: '#e7f6ed'
-    } : pct >= 75 ? {
-      label: 'Needs improvement',
-      color: P.amber,
-      bg: '#fff5e6'
-    } : {
-      label: 'Unacceptable',
-      color: P.rose,
-      bg: '#fbe9ec'
+    const whoStat = pct => {
+      const s = HHX.status(pct, bench);
+      return !s ? {
+        label: '—',
+        color: P.faint,
+        bg: '#f4f6f9'
+      } : s.key === 'ok' ? {
+        label: s.label,
+        color: P.green,
+        bg: '#e7f6ed'
+      } : s.key === 'warn' ? {
+        label: s.label,
+        color: P.amber,
+        bg: '#fff5e6'
+      } : {
+        label: s.label,
+        color: P.rose,
+        bg: '#fbe9ec'
+      };
     };
-    const monthAgg = m => {
-      let num = 0,
-        den = 0,
-        ndCount = 0,
-        total = 0;
-      const comps = [];
-      hh.forEach(({
-        ind
-      }) => {
-        const v = monthRaw(ind, m[0]);
-        if (v == null) return;
-        total++;
-        comps.push(v);
-        const nn = ind.mNum && ind.mNum[m[0]],
-          dd = ind.mDen && ind.mDen[m[0]];
-        if (nn != null && nn !== '' && dd != null && dd !== '' && Number(dd) > 0) {
-          num += Number(nn);
-          den += Number(dd);
-          ndCount++;
-        }
-      });
-      if (!total) return {
-        value: null,
-        num: null,
-        den: null
-      };
-      if (ndCount === total && den > 0) return {
-        value: Math.round(num / den * 10000) / 100,
-        num,
-        den
-      };
+    const series = pMonths.map((m, i) => {
+      const x = ser[i] || {};
       return {
-        value: Math.round(comps.reduce((s, x) => s + x, 0) / comps.length * 100) / 100,
-        num: null,
-        den: null
+        m,
+        label: m[1].split(' ')[0],
+        value: x.pct != null ? x.pct : null,
+        num: x.d != null ? x.n : null,
+        den: x.d != null ? x.d : null,
+        pctOnly: !!x.pctOnly
       };
-    };
-    const series = pMonths.map(m => Object.assign({
-      m,
-      label: m[1].split(' ')[0]
-    }, monthAgg(m)));
+    });
     const withVal = series.filter(r => r.value != null);
     const latest = withVal.length ? withVal[withVal.length - 1] : null;
-    const avg = withVal.length ? Math.round(withVal.reduce((s, r) => s + r.value, 0) / withVal.length * 10) / 10 : null;
+    const tot = HHX.totalOf(hp);
+    const avg = tot && tot.d > 0 ? tot.pct : withVal.length ? Math.round(withVal.reduce((s, r) => s + r.value, 0) / withVal.length * 10) / 10 : null;
+    const avgPooled = !!(tot && tot.d > 0);
     const onTarget = withVal.filter(r => higher ? r.value >= bench : r.value <= bench).length;
     const tone = P.green;
+    const scopeLabel = hp.fallback || !hp.restricted ? 'Hospital audit' : chosen.length === 1 ? chosen[0].name : chosen.length + ' departments';
     const th = {
       textAlign: 'left',
       padding: '7px 9px',
@@ -8516,14 +8601,22 @@ function QCReportBuilder({
       textAlign: 'right',
       fontFamily: MONO
     };
+    const tdt = {
+      ...tdr,
+      fontWeight: 700,
+      color: P.ink,
+      background: P.panel2,
+      borderTop: '1px solid ' + P.line
+    };
+    const band = HHX.improveBand(bench);
     if (part === 'overview') {
       const st = whoStat(latest ? latest.value : null);
-      const cards = [['Latest' + (latest ? ' · ' + latest.label : ''), latest && latest.value != null ? latest.value + '%' : '—', st.color, st.label], ['Average', avg != null ? avg + '%' : '—', P.blue, withVal.length + ' month' + (withVal.length !== 1 ? 's' : '') + ' reported'], ['Benchmark', (higher ? '≥ ' : '≤ ') + bench + '%', P.violet, 'WHO compliant target'], ['Months on target', onTarget + '/' + withVal.length, withVal.length && onTarget === withVal.length ? P.green : P.amber, 'within the period']];
+      const cards = [['Latest' + (latest ? ' · ' + latest.label : ''), latest && latest.value != null ? latest.value + '%' : '—', st.color, st.label], [avgPooled ? 'Period compliance' : 'Average', avg != null ? avg + '%' : '—', P.blue, avgPooled ? tot.n.toLocaleString() + ' of ' + tot.d.toLocaleString() + ' opportunities' : withVal.length + ' month' + (withVal.length !== 1 ? 's' : '') + ' reported'], ['Benchmark', (higher ? '≥ ' : '≤ ') + bench + '%', P.violet, 'Hospital target'], ['Months on target', onTarget + '/' + withVal.length, withVal.length && onTarget === withVal.length ? P.green : P.amber, 'within the period']];
       const chartRows = withVal.map(r => ({
         mon: r.label,
         val: r.value
       }));
-      const chartEl = chartRows.length ? typeof window.AreaTargetChart === 'function' ? window.AreaTargetChart({
+      const chartEl = chartRows.length ? typeof window.AreaTargetChart === 'function' ? React.createElement(window.AreaTargetChart, {
         data: chartRows,
         x: 'mon',
         y: 'val',
@@ -8531,7 +8624,7 @@ function QCReportBuilder({
         height: 205,
         color: tone,
         flat: true
-      }) : typeof window.LineChart === 'function' ? window.LineChart({
+      }) : typeof window.LineChart === 'function' ? React.createElement(window.LineChart, {
         data: chartRows,
         x: 'mon',
         y: 'val',
@@ -8605,7 +8698,7 @@ function QCReportBuilder({
         }
       }, "Hand Hygiene Compliance"), React.createElement("span", {
         className: "tag"
-      }, "WHO 5 Moments \xB7 ", primary.d.name), React.createElement("span", {
+      }, "WHO 5 Moments \xB7 ", scopeLabel), React.createElement("span", {
         style: {
           flex: 1
         }
@@ -8618,7 +8711,7 @@ function QCReportBuilder({
           fontWeight: 700,
           fontSize: 11.5
         }
-      }, st.label)), React.createElement(KpiCards, {
+      }, st.label)), sections.kpis !== false && React.createElement(KpiCards, {
         cards: cards,
         tone: tone
       }), React.createElement("div", {
@@ -8658,7 +8751,14 @@ function QCReportBuilder({
             fontWeight: 600,
             color: P.ink
           }
-        }, r.m[1]), React.createElement("td", {
+        }, r.m[1], r.pctOnly && React.createElement("span", {
+          style: {
+            marginLeft: 5,
+            fontSize: 9,
+            color: P.faint
+          },
+          title: "Only a percentage is on record \u2014 no counts"
+        }, "% only")), React.createElement("td", {
           style: tdr
         }, r.num != null ? r.num.toLocaleString() : '—'), React.createElement("td", {
           style: tdr
@@ -8684,129 +8784,78 @@ function QCReportBuilder({
             fontSize: 10
           }
         }, s.label)));
-      })))), React.createElement(Footer, {
+      }), avgPooled && (() => {
+        const s = whoStat(tot.pct);
+        return React.createElement("tr", null, React.createElement("td", {
+          style: {
+            ...tdt,
+            textAlign: 'left'
+          }
+        }, "Period total"), React.createElement("td", {
+          style: tdt
+        }, tot.n.toLocaleString()), React.createElement("td", {
+          style: tdt
+        }, tot.d.toLocaleString()), React.createElement("td", {
+          style: tdt
+        }, tot.pct != null ? tot.pct + '%' : '—'), React.createElement("td", {
+          style: {
+            ...tdt,
+            textAlign: 'center'
+          }
+        }, React.createElement("span", {
+          style: {
+            display: 'inline-block',
+            padding: '2px 8px',
+            borderRadius: 20,
+            background: s.bg,
+            color: s.color,
+            fontWeight: 700,
+            fontSize: 10
+          }
+        }, s.label)));
+      })()))), React.createElement(Footer, {
         n: n,
         total: total
       }));
     }
-    const gMonth = (() => {
-      for (let i = pMonths.length - 1; i >= 0; i--) {
-        const mk = pMonths[i][0];
-        const g = pind.mGroups && pind.mGroups[mk];
-        if (g && Object.keys(g).some(k => g[k] != null && g[k] !== '')) return pMonths[i];
-      }
-      return null;
-    })();
-    const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
-    const bdSrc = (() => {
-      for (let i = pMonths.length - 1; i >= 0; i--) {
-        const mk = pMonths[i][0];
-        for (const h of hh) {
-          const b = h.ind.mDeptBreakdown && h.ind.mDeptBreakdown[mk];
-          if (Array.isArray(b) && b.length) return {
-            month: pMonths[i],
-            rows: b
-          };
-        }
-      }
-      return null;
-    })();
-    const bdTot = g => GROUP_KEYS.reduce((a, [k]) => {
-      const x = (g || {})[k] || {};
+    const GROUP_KEYS = HHX.GROUPS;
+    const useAll = !!hp.restricted;
+    const rowsP = hp.rows.map(r => ({
+      label: r.name || '—',
+      n: r.total.n,
+      d: r.total.d,
+      value: r.total.pct,
+      self: r.selfReported
+    })).filter(r => r.d > 0).sort((a, b) => (b.value == null ? -1 : b.value) - (a.value == null ? -1 : a.value));
+    const groupRows = hp.groups.map(g => ({
+      label: g.label,
+      n: g.total.n,
+      d: g.total.d,
+      value: g.total.pct
+    }));
+    let bdMonth = null;
+    for (let i = pMonths.length - 1; i >= 0 && !bdMonth; i--) {
+      const mk = pMonths[i][0];
+      if (hp.rows.some(r => r.cells[mk] && r.cells[mk].src === 'audit')) bdMonth = pMonths[i];
+    }
+    const bdRows = bdMonth ? hp.rows.filter(r => r.cells[bdMonth[0]] && (r.cells[bdMonth[0]].src === 'audit' || r.cells[bdMonth[0]].src === 'not-audited')).map(r => {
+      const c = r.cells[bdMonth[0]];
       return {
-        n: a.n + (Number(x.n) || 0),
-        d: a.d + (Number(x.d) || 0)
-      };
-    }, {
-      n: 0,
-      d: 0
-    });
-    const bdRows = bdSrc ? bdSrc.rows.map(r => {
-      const t = bdTot(r.g);
-      return {
-        label: r.dept || '—',
-        g: r.g || {},
-        n: t.n,
-        d: t.d,
-        value: t.d > 0 ? Math.round(t.n / t.d * 10000) / 100 : null
+        label: r.name,
+        g: r.groups[bdMonth[0]] || {},
+        n: c.n || 0,
+        d: c.d || 0,
+        value: c.pct
       };
     }).sort((a, b) => (b.value == null ? -1 : b.value) - (a.value == null ? -1 : a.value)) : [];
-    let groupRows = gMonth ? GROUP_KEYS.map(([k, lbl]) => {
-      const gN = pind.mGroups[gMonth[0]] || {};
-      const gD = pind.mGroupsDen && pind.mGroupsDen[gMonth[0]] || {};
-      const nn = Number(gN[k]) || 0,
-        dd = Number(gD[k]) || 0;
+    const bdTot = bdMonth ? (() => {
+      const x = ser[pMonths.indexOf(bdMonth)] || {};
       return {
-        label: lbl,
-        n: nn,
-        d: dd,
-        value: dd > 0 ? Math.round(nn / dd * 10000) / 100 : null
+        n: x.n,
+        d: x.d,
+        value: x.pct
       };
-    }).filter(r => r.d > 0 || r.n > 0) : [];
-    if (!groupRows.length && bdSrc) {
-      groupRows = GROUP_KEYS.map(([k, lbl]) => {
-        let n = 0,
-          d = 0;
-        bdSrc.rows.forEach(r => {
-          const x = (r.g || {})[k] || {};
-          n += Number(x.n) || 0;
-          d += Number(x.d) || 0;
-        });
-        return {
-          label: lbl,
-          n,
-          d,
-          value: d > 0 ? Math.round(n / d * 10000) / 100 : null
-        };
-      }).filter(r => r.d > 0 || r.n > 0);
-    }
-    const deptGroups = {};
-    hh.forEach(h => {
-      (deptGroups[h.d.key] = deptGroups[h.d.key] || {
-        name: h.d.name,
-        inds: []
-      }).inds.push(h.ind);
-    });
-    const deptLatest = inds => {
-      for (let i = pMonths.length - 1; i >= 0; i--) {
-        const mk = pMonths[i][0];
-        let num = 0,
-          den = 0,
-          ndCount = 0,
-          total = 0;
-        const comps = [];
-        inds.forEach(ind => {
-          const v = monthRaw(ind, mk);
-          if (v == null) return;
-          total++;
-          comps.push(v);
-          const nn = ind.mNum && ind.mNum[mk],
-            dd = ind.mDen && ind.mDen[mk];
-          if (nn != null && nn !== '' && dd != null && dd !== '' && Number(dd) > 0) {
-            num += Number(nn);
-            den += Number(dd);
-            ndCount++;
-          }
-        });
-        if (total) {
-          const value = ndCount === total && den > 0 ? Math.round(num / den * 10000) / 100 : Math.round(comps.reduce((s, x) => s + x, 0) / comps.length * 100) / 100;
-          return {
-            month: pMonths[i],
-            value
-          };
-        }
-      }
-      return null;
-    };
-    const deptRows = Object.keys(deptGroups).map(k => {
-      const g = deptGroups[k];
-      const dl = deptLatest(g.inds);
-      return dl ? {
-        label: (g.name || '').slice(0, 20),
-        value: dl.value,
-        month: dl.month[1].split(' ')[0]
-      } : null;
-    }).filter(Boolean).sort((a, b) => b.value - a.value);
+    })() : null;
     return React.createElement("div", {
       className: "qc-rpage",
       style: {
@@ -8844,7 +8893,7 @@ function QCReportBuilder({
         fontSize: 15,
         color: P.ink
       }
-    }, "Hand Hygiene \u2014 breakdown", bdSrc ? ' · ' + bdSrc.month[1] : gMonth ? ' · ' + gMonth[1] : ''), React.createElement("span", {
+    }, "Hand Hygiene \u2014 breakdown \xB7 ", rangeLabel), React.createElement("span", {
       style: {
         flex: 1
       }
@@ -8856,7 +8905,7 @@ function QCReportBuilder({
       }
     }, React.createElement("div", {
       style: uSub
-    }, "Compliance by staff group (%)"), typeof window.BarChart === 'function' && window.BarChart({
+    }, "Compliance by staff group (%) \xB7 whole period"), typeof window.BarChart === 'function' && React.createElement(window.BarChart, {
       data: groupRows.map(r => ({
         label: r.label,
         val: r.value || 0
@@ -8903,13 +8952,142 @@ function QCReportBuilder({
           color: s.color
         }
       }, r.value != null ? r.value + '%' : '—'));
-    })))), bdRows.length > 0 && React.createElement("div", {
+    }), (() => {
+      const n = groupRows.reduce((a, r) => a + r.n, 0),
+        d = groupRows.reduce((a, r) => a + r.d, 0);
+      const v = HHX.pctOf(n, d);
+      return React.createElement("tr", null, React.createElement("td", {
+        style: {
+          ...tdt,
+          textAlign: 'left'
+        }
+      }, "All staff"), React.createElement("td", {
+        style: tdt
+      }, n.toLocaleString()), React.createElement("td", {
+        style: tdt
+      }, d.toLocaleString()), React.createElement("td", {
+        style: tdt
+      }, v != null ? v + '%' : '—'));
+    })()))), rowsP.length > 0 && React.createElement("div", {
       style: {
         marginBottom: 16
       }
     }, React.createElement("div", {
       style: uSub
-    }, "Department-wise audit \xB7 ", bdSrc.month[1], " \xB7 compliant / observed moments (WHO 5 Moments)"), React.createElement("table", {
+    }, "Compliance by department \xB7 ", rangeLabel, " \xB7 pooled compliant / observed moments"), React.createElement("table", {
+      className: "qc-rpt-tbl",
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        marginTop: 6,
+        fontSize: 10.5
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "Department"), React.createElement("th", {
+      style: thr
+    }, "Compliant"), React.createElement("th", {
+      style: thr
+    }, "Opportunities"), React.createElement("th", {
+      style: thr
+    }, "Compliance"), React.createElement("th", {
+      style: {
+        ...th,
+        textAlign: 'center'
+      }
+    }, "Status"))), React.createElement("tbody", null, rowsP.map(r => {
+      const s = whoStat(r.value);
+      return React.createElement("tr", {
+        key: r.label
+      }, React.createElement("td", {
+        style: {
+          ...tdc,
+          fontWeight: 600,
+          color: P.ink
+        }
+      }, r.label, r.self && React.createElement("span", {
+        style: {
+          marginLeft: 5,
+          fontSize: 9,
+          color: P.amber
+        },
+        title: "Includes the department's own figures for a month the audit did not cover"
+      }, "self-reported")), React.createElement("td", {
+        style: tdr
+      }, r.n.toLocaleString()), React.createElement("td", {
+        style: tdr
+      }, r.d.toLocaleString()), React.createElement("td", {
+        style: {
+          ...tdr,
+          fontWeight: 700,
+          color: r.value == null ? P.faint : P.ink
+        }
+      }, r.value != null ? r.value + '%' : '—'), React.createElement("td", {
+        style: {
+          textAlign: 'center',
+          padding: '4px 6px'
+        }
+      }, React.createElement("span", {
+        style: {
+          display: 'inline-block',
+          padding: '2px 8px',
+          borderRadius: 20,
+          background: s.bg,
+          color: s.color,
+          fontWeight: 700,
+          fontSize: 9.5
+        }
+      }, s.label)));
+    }), tot && tot.d > 0 && (() => {
+      const s = whoStat(tot.pct);
+      return React.createElement("tr", null, React.createElement("td", {
+        style: {
+          ...tdt,
+          textAlign: 'left'
+        }
+      }, useAll ? 'Total' : 'Hospital total (audit)'), React.createElement("td", {
+        style: tdt
+      }, tot.n.toLocaleString()), React.createElement("td", {
+        style: tdt
+      }, tot.d.toLocaleString()), React.createElement("td", {
+        style: tdt
+      }, tot.pct != null ? tot.pct + '%' : '—'), React.createElement("td", {
+        style: {
+          ...tdt,
+          textAlign: 'center'
+        }
+      }, React.createElement("span", {
+        style: {
+          display: 'inline-block',
+          padding: '2px 8px',
+          borderRadius: 20,
+          background: s.bg,
+          color: s.color,
+          fontWeight: 700,
+          fontSize: 9.5
+        }
+      }, s.label)));
+    })(), !useAll && hp.hasSelfReported && hp.totalAll.d > 0 && React.createElement("tr", null, React.createElement("td", {
+      style: {
+        ...tdc,
+        fontWeight: 700
+      }
+    }, "Incl. department self-reports"), React.createElement("td", {
+      style: tdr
+    }, hp.totalAll.n.toLocaleString()), React.createElement("td", {
+      style: tdr
+    }, hp.totalAll.d.toLocaleString()), React.createElement("td", {
+      style: {
+        ...tdr,
+        fontWeight: 700
+      }
+    }, hp.totalAll.pct != null ? hp.totalAll.pct + '%' : '—'), React.createElement("td", null))))), bdRows.length > 0 && React.createElement("div", {
+      style: {
+        marginBottom: 16
+      }
+    }, React.createElement("div", {
+      style: uSub
+    }, "Department-wise audit \xB7 ", bdMonth[1], " \xB7 compliant / observed moments (WHO 5 Moments)"), React.createElement("table", {
       className: "qc-rpt-tbl",
       style: {
         borderCollapse: 'collapse',
@@ -8976,30 +9154,46 @@ function QCReportBuilder({
           fontSize: 9.5
         }
       }, r.value == null ? 'Not audited' : s.label)));
-    })))), (() => {
-      const audited = bdRows.filter(r => r.value != null);
-      const src = audited.length ? audited.map(r => ({
+    }), bdTot && bdTot.d > 0 && React.createElement("tr", null, React.createElement("td", {
+      style: {
+        ...tdt,
+        textAlign: 'left'
+      }
+    }, "Total"), GROUP_KEYS.map(([k]) => {
+      let nn = 0,
+        dd = 0;
+      bdRows.forEach(r => {
+        const x = r.g[k] || {};
+        nn += Number(x.n) || 0;
+        dd += Number(x.d) || 0;
+      });
+      return React.createElement("td", {
+        key: k,
+        style: tdt
+      }, nn || dd ? nn + '/' + dd : '—');
+    }), React.createElement("td", {
+      style: tdt
+    }, bdTot.n + '/' + bdTot.d), React.createElement("td", {
+      style: tdt
+    }, bdTot.value != null ? bdTot.value + '%' : '—'), React.createElement("td", {
+      style: tdt
+    }))))), rowsP.length > 1 && React.createElement("div", {
+      style: {
+        marginBottom: 14
+      }
+    }, React.createElement("div", {
+      style: uSub
+    }, "Compliance by department (", rangeLabel, ", %)"), typeof window.BarChart === 'function' && React.createElement(window.BarChart, {
+      data: rowsP.map(r => ({
         label: (r.label || '').slice(0, 20),
         val: r.value
-      })) : deptRows.map(r => ({
-        label: r.label,
-        val: r.value
-      }));
-      return src.length > 1 && React.createElement("div", {
-        style: {
-          marginBottom: 14
-        }
-      }, React.createElement("div", {
-        style: uSub
-      }, "Compliance by department (", audited.length ? bdSrc.month[1] : 'latest reported month', ", %)"), typeof window.BarChart === 'function' && window.BarChart({
-        data: src,
-        x: 'label',
-        y: 'val',
-        height: Math.max(170, src.length * 26),
-        color: P.violet,
-        flat: true
-      }));
-    })(), React.createElement("div", {
+      })),
+      x: 'label',
+      y: 'val',
+      height: Math.max(170, rowsP.length * 26),
+      color: P.violet,
+      flat: true
+    })), React.createElement("div", {
       style: {
         background: '#eef8fc',
         border: '1px solid #cfe6f7',
@@ -9008,7 +9202,7 @@ function QCReportBuilder({
         fontSize: 11,
         color: P.blue700 || P.blue
       }
-    }, React.createElement("b", null, "Interpretation (WHO):"), " \u2265 ", bench, "% compliant \xB7 75\u2013", bench - 1, "% needs improvement (re-audit within 2 weeks) \xB7 < 75% unacceptable (escalate). Reference: WHO (2009) Guidelines on Hand Hygiene in Health Care.")), React.createElement(Footer, {
+    }, React.createElement("b", null, "Interpretation:"), " \u2265 ", bench, "% compliant", band ? ' · ' + band + ' needs improvement (re-audit within 2 weeks)' : '', " \xB7 < ", band ? Math.min(75, bench) : bench, "% unacceptable (escalate). Reference: WHO (2009) Guidelines on Hand Hygiene in Health Care.")), React.createElement(Footer, {
       n: n,
       total: total
     }));
@@ -9341,7 +9535,7 @@ function QCReportBuilder({
         tone: hex2rgb(k[2]),
         foot: k[3]
       }));
-      y = kpiRow(y, kp);
+      if (sections.kpis) y = kpiRow(y, kp);
       if (sections.chart !== false) {
         const sole = qcSoleReportedInd(d, pMonths);
         const rows = (sole ? qcChartRows(sole, pMonths) : qcDeptSummaryRows(d, pMonths)).filter(r => r.has);
@@ -9413,7 +9607,8 @@ function QCReportBuilder({
     const QC_PY_TYPES = ['summary', 'detail', 'compare', 'handhygiene'];
     const QC_PY_STYLES = ['bar3d', 'bar', 'line', 'area', 'combo', 'grouped', 'stacked', 'pct', 'horizontal', 'donut'];
     const qcAdvanced = ['ragHeatmap', 'deptRanking', 'benchmarkCompare', 'indTrend', 'periodCompare', 'pendingData', 'incidentAppendix', 'standardsRefs', 'toc', 'watermark'].some(k => sections[k]);
-    const qcCanServer = QC_PY_TYPES.indexOf(reportType) >= 0 && chartStyles.every(s => QC_PY_STYLES.indexOf(s) >= 0) && !qcAdvanced;
+    const qcPyGaps = !!(sections.incidents || sections.indicatorDetail) || !!sections.execSummary && (reportType === 'handhygiene' || reportType === 'compare');
+    const qcCanServer = QC_PY_TYPES.indexOf(reportType) >= 0 && chartStyles.every(s => QC_PY_STYLES.indexOf(s) >= 0) && !qcAdvanced && !qcPyGaps;
     if (window.__UNICO_SERVER_PDF__ !== false && qcCanServer) {
       setExporting(true);
       setNote(null);
@@ -9437,7 +9632,13 @@ function QCReportBuilder({
             mNum: ind.mNum,
             mDen: ind.mDen,
             quarters: ind.quarters,
-            quartersByFy: ind.quartersByFy
+            quartersByFy: ind.quartersByFy,
+            mDeptBreakdown: ind.mDeptBreakdown,
+            mGroups: ind.mGroups,
+            mGroupsDen: ind.mGroupsDen,
+            mNotObserved: ind.mNotObserved,
+            mFromAudit: ind.mFromAudit,
+            startMonth: ind.startMonth
           };
         };
         const secLabelOf = d => {
@@ -9500,7 +9701,33 @@ function QCReportBuilder({
           },
           depts: chosen.map(liteDept),
           allDepts: (depts || []).map(liteDept),
-          pMonths
+          pMonths,
+          hh: reportType === 'handhygiene' ? (() => {
+            const hp = qcHHPool(chosen, depts, pMonths);
+            if (!hp || !window.UNICO_HH) return null;
+            const HHX = window.UNICO_HH;
+            return {
+              bench: hp.bench,
+              restricted: !!hp.restricted,
+              fallback: !!hp.fallback,
+              source: hp.source,
+              series: HHX.series(hp),
+              total: HHX.totalOf(hp),
+              groups: hp.groups.map(g => ({
+                label: g.label,
+                n: g.total.n,
+                d: g.total.d,
+                pct: g.total.pct
+              })),
+              rows: hp.rows.filter(r => r.total.d > 0).map(r => ({
+                name: r.name,
+                n: r.total.n,
+                d: r.total.d,
+                pct: r.total.pct,
+                self: !!r.selfReported
+              }))
+            };
+          })() : null
         };
         const res = await fetch('/api/report-pdf', {
           method: 'POST',

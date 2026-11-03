@@ -77,7 +77,7 @@ const UNICO_MODULE_VIEWS = {
   perf:   ['perfHome','perfForm','perfPrint','perfAchievements','perfIncidents','perfCompare','perfRisk','perfBoard'],
   attrition:['perfAttrition'],
   roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
-  datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory'],
+  datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory','dsHandHygiene'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
 /* Data Submission's screens — each its own route and its own sidebar sub-item, and each
@@ -90,19 +90,33 @@ const UNICO_DS_SCREENS = [
   ['missing','dsMissing','Missing data'], ['status','dsStatus','Submission status'],
   ['quality','dsQuality','Quality data'], ['patient','dsPatient','Patient statistics'],
   ['history','dsHistory','My submissions'],
+  // Read-only: the hospital hand-hygiene audit's totals. Never a default — ticked per person
+  // in Access Control (server/access.js DS_OPT_IN / hhScreenOn) — and always on for a
+  // hospital-wide submitter, who enters that audit.
+  ['hh','dsHandHygiene','Hand Hygiene'],
 ];
+const UNICO_DS_OPT_IN=['hh'];
+function unicoHhScreenOn(){
+  const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
+  // No signed-in user = the open local-PC mode, where the server answers as an administrator.
+  if(!u) return true;
+  if(u.role==='Administrator' || u.allQualityAreas===true) return true;
+  return Array.isArray(u.dsScreens) && u.dsScreens.indexOf('hh')>=0;
+}
 function unicoDsScreens(){
   const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
   const all=UNICO_DS_SCREENS.map(s=>s[0]);
-  if(!u || u.role==='Administrator' || ['collector','incharge','nurse','pca'].indexOf(u.role)>=0) return all;
+  const optIn=(list)=>list.filter(s=>UNICO_DS_OPT_IN.indexOf(s)<0).concat(unicoHhScreenOn()?['hh']:[]);
+  if(!u || u.role==='Administrator' || ['collector','incharge','nurse','pca'].indexOf(u.role)>=0) return optIn(all);
   const k=u.submitKinds||{};
   const list=Array.isArray(u.dsScreens) ? all.filter(s=>u.dsScreens.indexOf(s)>=0)
     : all.filter(s=>(s!=='patient'||k.patient!==false) && ((s!=='quality'&&s!=='status')||k.quality!==false));
   // A screen with nothing in it is not offered: no assigned departments → no patient
-  // statistics; no quality areas → no quality data / submission status.
+  // statistics; no quality areas → no quality data / submission status. Hand Hygiene needs
+  // neither — it reads the hospital audit.
   const hasDepts=Array.isArray(u.departments)&&u.departments.length>0;
   const hasAreas=!!u.allQualityAreas||(Array.isArray(u.qualityAreas)&&u.qualityAreas.length>0);
-  return list.filter(s=>(s!=='patient'||hasDepts)&&((s!=='quality'&&s!=='status')||hasAreas));
+  return optIn(list).filter(s=>(s!=='patient'||hasDepts)&&((s!=='quality'&&s!=='status')||hasAreas));
 }
 const unicoDsViewOf=(screen)=>{ const r=UNICO_DS_SCREENS.find(s=>s[0]===screen); return r?r[1]:'dsHome'; };
 const unicoDsScreenOf=(view)=>{ const r=UNICO_DS_SCREENS.find(s=>s[1]===view); return r?r[0]:null; };
@@ -1051,4 +1065,4 @@ Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, M
   UNICO_ACCESS_MODULES, unicoAccessModuleOf, unicoAllowedModules, unicoCanAccessModule, unicoCanAccessView, unicoFirstAllowedHome,
   unicoCan, unicoModuleLevel, unicoUserPerms, unicoRefreshPerms });
 // Data Submission screens: read by app.jsx (routes) and data-collection.jsx (the screens).
-Object.assign(window,{ UNICO_DS_SCREENS, unicoDsScreens, unicoDsViewOf, unicoDsScreenOf });
+Object.assign(window,{ UNICO_DS_SCREENS, unicoDsScreens, unicoDsViewOf, unicoDsScreenOf, unicoHhScreenOn });

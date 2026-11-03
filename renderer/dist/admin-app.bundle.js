@@ -12857,7 +12857,9 @@
     const catalog = {};
     const breach = Z();
     const hh = Z(),
-      hhN = Z();
+      hhN = Z(),
+      hhNum = Z(),
+      hhDen = Z();
     areas.forEach(a => {
       const sh = shortOfId(a.deptId) || a.key;
       const acc = RAGD[sh] || [0, 0, 0];
@@ -12899,6 +12901,12 @@
           if (/hand hygiene/i.test(ind.name)) {
             hh[i] += vv;
             hhN[i]++;
+            const nn = Number((ind.mNum || {})[mm.key]),
+              dd = Number((ind.mDen || {})[mm.key]);
+            if (isFinite(nn) && dd > 0) {
+              hhNum[i] += nn;
+              hhDen[i] += dd;
+            }
           }
         });
       });
@@ -12913,7 +12921,7 @@
       amber
     };
     out.breachSeries = breach;
-    out.hhSeries = hh.map((v, i) => hhN[i] ? Math.round(v / hhN[i]) : 0);
+    out.hhSeries = hh.map((v, i) => hhDen[i] > 0 ? Math.round(hhNum[i] / hhDen[i] * 100) : hhN[i] ? Math.round(v / hhN[i]) : 0);
     out.IND_CATALOG = Object.values(catalog);
     out.movers = null;
     out.INCIDENTS = (L.incidents || []).map(x => [x.ref, x.deptName || shortOfId(x.dept) || '—', x.type, x.severity, x.description, x.status || 'Open', x.id]);

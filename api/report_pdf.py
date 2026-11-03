@@ -1317,9 +1317,11 @@ def _q_month_ended(mk):
 
 
 def _qtr_src(ind, fy):
+    # A year reads only its own rollup. The flat "quarters" are the old Jun–May fiscal quarters
+    # with no year (quality-console.jsx qtrSrc): they must not be painted onto a calendar year.
     qbf = ind.get("quartersByFy") or {}
-    if fy is not None and str(fy) in qbf:
-        return qbf[str(fy)]
+    if fy is not None:
+        return qbf.get(str(fy)) or qbf.get(fy) or {}
     return ind.get("quarters") or {}
 
 
@@ -1573,25 +1575,173 @@ def _quality_period(axis, period):
     return list(axis)
 
 
-def _qc_hh_of(chosen, all_depts, months):
-    out = []
+# ---- Hand-hygiene pooling: Python twin of renderer/unico/hh-pool.js -------------------------
+# The hospital audit (Overall Hospital → Hand Hygiene, mNum/mDen + mDeptBreakdown) counted ONCE.
+# A department's own reading counts only for a month the audit did not cover; in the hospital
+# view it is left out of the headline total (exactly what the infection-control nurse entered).
+# The browser sends its own pooled figures (model["hh"]); this is used when the PDF is built
+# straight from the database.
+_HH_GROUPS = [("nurse", "Nurse"), ("doctor", "Doctor"), ("pca", "PCA"), ("other", "Other")]
+_HH_ALIAS = {
+    "endoscopy": "endoscopic suite", "level 10 ward": "ipd cabin level 10", "level 9 ward": "ipd cabin level 9",
+    "labour / delivery / recovery": "labour , delivery & recovery room", "ct ot": "ctvs ot", "ct icu": "ctvs icu",
+    "emergency medicine": "emergency room", "home care": "family medicine",
+}
 
-    def is_hh(ind):
-        nm = (ind.get("name") or "").lower()
-        return _is_pct_ind(ind) and ("hygiene" in nm or ("hand" in nm and "hygien" in nm))
 
-    for d in chosen:
-        for ind in d.get("indicators", []):
-            if is_hh(ind) and any(_month_raw(ind, m[0]) is not None for m in months):
-                out.append({"d": d, "ind": ind})
-    if not out:
-        for d in all_depts:
-            for ind in d.get("indicators", []):
-                nm = ((d.get("name") or "") + " " + (ind.get("name") or "")).lower()
-                if _is_pct_ind(ind) and ("hygiene" in nm or "hand" in nm or "overall" in nm or "hospital" in nm):
-                    if any(_month_raw(ind, m[0]) is not None for m in months):
-                        out.append({"d": d, "ind": ind})
+def _hh_norm(s):
+    return re.sub(r"\s+", " ", str(s or "").strip().lower())
+
+
+def _hh_canon(s):
+    n = _hh_norm(s)
+    return _HH_ALIAS.get(n, n)
+
+
+def _hh_is(ind):
+    return bool(re.search(r"hand\s*hygiene", (ind or {}).get("name") or "", re.I))
+
+
+def _hh_is_hospital(d):
+    return (d.get("deptId") == "__hospital__" or d.get("_id") == "__hospital__" or _hh_norm(d.get("key")) == "overall hospital")
+
+
+def _hh_pct(n, d):
+    return round(n / d * 10000) / 100 if d and d > 0 else None
+
+
+def _hh_num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _hh_source(depts):
+    best, best_score = None, 0
+    for d in depts or []:
+        for ind in d.get("indicators", []) or []:
+            if not _hh_is(ind):
+                continue
+            bd = bool(ind.get("mDeptBreakdown"))
+            score = (4 if _hh_is_hospital(d) else 0) + (2 if bd else 0) + (1 if re.search(r"overall|hospital", ind.get("name") or "", re.I) else 0)
+            if score >= 2 and score > best_score:
+                best, best_score = (d, ind), score
+    return best
+
+
+def _hh_match(row_name, depts):
+    c = _hh_canon(row_name)
+    for d in depts or []:
+        if _hh_is_hospital(d):
+            continue
+        if c in (_hh_canon(d.get("name")), _hh_canon(d.get("qualityName")), _hh_canon(d.get("key"))) or _hh_norm(d.get("key")) == _hh_norm(row_name):
+            return d
+    return None
+
+
+def _hh_pool(chosen, all_depts, months):
+    """Returns {bench, restricted, series:[{m,n,d,pct,pctOnly}], total, groups, rows} or None."""
+    keys = [m[0] if isinstance(m, (list, tuple)) else m for m in (months or [])]
+    src = _hh_source(all_depts)
+    s_dep, s_ind = (src if src else (None, None))
+    chosen_keys = set(str(d.get("key")) for d in (chosen or []))
+    restricted = bool(chosen_keys) and not (s_dep is not None and str(s_dep.get("key")) in chosen_keys)
+
+    def build(restrict):
+        keep = (lambda k: (not restrict) or k in chosen_keys)
+        bd = (s_ind or {}).get("mDeptBreakdown") or {}
+        rows = {}
+        groups = {k: {"n": 0.0, "d": 0.0} for k, _ in _HH_GROUPS}
+        series = []
+        for m in keys:
+            an = ad = on = od = 0.0
+            audited = False
+            covered = set()
+            for r in (bd.get(m) or []):
+                if not r:
+                    continue
+                dep = _hh_match(r.get("dept"), all_depts)
+                key = str(dep.get("key")) if dep else "audit:" + _hh_canon(r.get("dept"))
+                if not keep(key):
+                    continue
+                g = r.get("g") or {}
+                tn = sum((_hh_num((g.get(k) or {}).get("n")) or 0) for k, _ in _HH_GROUPS)
+                td = sum((_hh_num((g.get(k) or {}).get("d")) or 0) for k, _ in _HH_GROUPS)
+                if td <= 0:
+                    continue
+                covered.add(key)
+                audited = True
+                an += tn
+                ad += td
+                row = rows.setdefault(key, {"name": dep.get("name") if dep else (r.get("dept") or "—"), "n": 0.0, "d": 0.0, "self": False})
+                row["n"] += tn
+                row["d"] += td
+                for k, _ in _HH_GROUPS:
+                    groups[k]["n"] += _hh_num((g.get(k) or {}).get("n")) or 0
+                    groups[k]["d"] += _hh_num((g.get(k) or {}).get("d")) or 0
+            for d in all_depts or []:
+                if s_dep is not None and d is s_dep:
+                    continue
+                key = str(d.get("key"))
+                if not keep(key) or key in covered:
+                    continue
+                for ind in d.get("indicators", []) or []:
+                    if not _hh_is(ind) or ind is s_ind or (ind.get("mFromAudit") or {}).get(m):
+                        continue
+                    nn = _hh_num((ind.get("mNum") or {}).get(m))
+                    dd = _hh_num((ind.get("mDen") or {}).get(m))
+                    if nn is not None and dd and dd > 0:
+                        on += nn
+                        od += dd
+                        row = rows.setdefault(key, {"name": d.get("name") or key, "n": 0.0, "d": 0.0, "self": True})
+                        row["n"] += nn
+                        row["d"] += dd
+                        row["self"] = True
+            n = d_ = pct = None
+            pct_only = False
+            if audited:
+                n, d_, pct = an, ad, _hh_pct(an, ad)
+            elif not restrict and s_ind is not None and _hh_num((s_ind.get("mNum") or {}).get(m)) is not None and (_hh_num((s_ind.get("mDen") or {}).get(m)) or 0) > 0:
+                n, d_ = _hh_num(s_ind["mNum"][m]), _hh_num(s_ind["mDen"][m])
+                pct = _hh_pct(n, d_)
+            elif not restrict and s_ind is not None and _hh_num((s_ind.get("months") or {}).get(m)) is not None:
+                pct, pct_only = _hh_num(s_ind["months"][m]), True
+            if restrict:   # a report on chosen departments: their audit rows + their own readings
+                tn, td = (n or 0) + on, (d_ or 0) + od
+                if td > 0:
+                    n, d_, pct = tn, td, _hh_pct(tn, td)
+            series.append({"m": m, "n": n, "d": d_, "pct": pct, "pctOnly": pct_only})
+        tn = sum(x["n"] for x in series if x["d"])
+        td = sum(x["d"] for x in series if x["d"])
+        bv = (s_ind or {}).get("benchmarkValue")
+        bench = _hh_num(bv) if _hh_num(bv) is not None else 80.0
+        return {
+            "bench": bench, "restricted": restrict, "series": series, "total": {"n": tn, "d": td, "pct": _hh_pct(tn, td)},
+            "groups": [{"label": lbl, "n": groups[k]["n"], "d": groups[k]["d"], "pct": _hh_pct(groups[k]["n"], groups[k]["d"])} for k, lbl in _HH_GROUPS if groups[k]["d"] > 0],
+            "rows": sorted(({"name": r["name"], "n": r["n"], "d": r["d"], "pct": _hh_pct(r["n"], r["d"]), "self": r["self"]} for r in rows.values() if r["d"] > 0), key=lambda r: -(r["pct"] or -1)),
+        }
+
+    out = build(restricted)
+    if restricted and not any(x["pct"] is not None for x in out["series"]):
+        alt = build(False)
+        if src and any(x["pct"] is not None for x in alt["series"]):
+            alt["fallback"] = True
+            out = alt
     return out
+
+
+def _hh_status(pct, bench):
+    """WHO-style band against the hospital target (hh-pool.js status)."""
+    if pct is None:
+        return None
+    low = min(75.0, bench)
+    if pct >= bench:
+        return "ok"
+    if pct >= low and low < bench:
+        return "warn"
+    return "bad"
+
 
 
 def _q_ind_series(d, months):
@@ -1705,7 +1855,9 @@ class QualityReport:
             self._compare_page()
         elif t == "detail":
             for d in self.depts:
-                inds = d.get("indicators", [])
+                # Only indicators with data in the period — the preview's rule; a page per empty
+                # indicator made the PDF far longer than the screen.
+                inds = [i for i in d.get("indicators", []) if _has_data(i, self.pmonths)]
                 if not inds:
                     self._new_if_needed()
                     self._dept_page(d)
@@ -2324,58 +2476,37 @@ class QualityReport:
     def _hh_page(self):
         p, C, M, CW, PW = self.p, self.C, self.M, self.CW, self.PW
         y = self._header()
-        hh = _qc_hh_of(self.depts, self.all_depts, self.pmonths)
-        if not hh:
+        # The browser's own pooled figures when sent (preview == PDF); else the same rule here.
+        hh = self.m.get("hh") or _hh_pool(self.depts, self.all_depts, self.pmonths)
+        ser = (hh or {}).get("series") or []
+        if not hh or not any(x.get("pct") is not None or x.get("d") is not None for x in ser):
             p.font("bold", 16, C["ink"])
             p.text("Hand Hygiene Compliance", M, y + 40)
             p.font("normal", 11, C["muted"])
-            p.text("No hand hygiene data found in the selected departments or hospital-wide records.", M, y + 62)
+            p.text("No hand hygiene data found in the selected departments or in the hospital-wide audit.", M, y + 62)
             return
-        primary = next((h for h in hh if re.search(r"overall|hospital", (h["d"].get("name", "") + " " + h["ind"].get("name", "")), re.I)), None)
-        if not primary:
-            primary = max(hh, key=lambda h: sum(1 for m in self.pmonths if _month_raw(h["ind"], m[0]) is not None))
-        pind = primary["ind"]
-        bv = pind.get("benchmarkValue")
-        bench = float(bv) if (bv is not None and bv != "") else 90
-
-        def month_agg(m):
-            num = den = ndc = tot = 0
-            comps = []
-            for h in hh:
-                v = _month_raw(h["ind"], m[0])
-                if v is None:
-                    continue
-                tot += 1
-                comps.append(v)
-                nn = (h["ind"].get("mNum") or {}).get(m[0])
-                dd = (h["ind"].get("mDen") or {}).get(m[0])
-                if nn not in (None, "") and dd not in (None, "") and float(dd) > 0:
-                    num += float(nn)
-                    den += float(dd)
-                    ndc += 1
-            if not tot:
-                return {"value": None, "num": None, "den": None}
-            if ndc == tot and den > 0:
-                return {"value": round(num / den * 10000) / 100, "num": num, "den": den}
-            return {"value": round(sum(comps) / len(comps) * 100) / 100, "num": None, "den": None}
-
-        series = [dict({"m": m, "label": m[1].split(" ")[0]}, **month_agg(m)) for m in self.pmonths]
+        bench = float(hh.get("bench") if hh.get("bench") is not None else 80)
+        by_key = {x.get("m"): x for x in ser}
+        series = []
+        for m in self.pmonths:
+            x = by_key.get(m[0]) or {}
+            series.append({"m": m, "label": m[1].split(" ")[0], "value": x.get("pct"),
+                           "num": x.get("n") if x.get("d") is not None else None, "den": x.get("d"), "pctOnly": x.get("pctOnly")})
         withval = [r for r in series if r["value"] is not None]
         latest = withval[-1] if withval else None
-        avg = round(sum(r["value"] for r in withval) / len(withval) * 10) / 10 if withval else None
+        tot = hh.get("total") or {}
+        pooled = bool(tot.get("d"))
+        # Period figure = Σcompliant ÷ Σopportunities; a bare-percentage period falls back to the mean.
+        avg = tot.get("pct") if pooled else (round(sum(r["value"] for r in withval) / len(withval) * 10) / 10 if withval else None)
         on_target = sum(1 for r in withval if r["value"] >= bench)
 
         def who(pct):
-            if pct is None:
+            s = _hh_status(pct, bench)
+            if s is None:
                 return ("—", C["faint"])
-            if pct >= bench:
-                return ("Compliant", C["green"])
-            if pct >= 75:
-                return ("Needs improvement", C["amber"])
-            return ("Unacceptable", C["rose"])
+            return {"ok": ("Compliant", C["green"]), "warn": ("Needs improvement", C["amber"]), "bad": ("Unacceptable", C["rose"])}[s]
 
         st_label, st_col = who(latest["value"] if latest else None)
-        # band
         p.circle(M + 8, y + 6, 7, hx("#e6f3ea"))
         p.font("bold", 14, C["ink"])
         p.text("Hand Hygiene Compliance", M + 22, y + 10)
@@ -2386,51 +2517,92 @@ class QualityReport:
             {"label": "Latest" + (" · " + latest["label"] if latest else ""),
              "value": (str(latest["value"]) + "%") if (latest and latest["value"] is not None) else "—", "tone": st_col, "toneVal": True,
              "foot": st_label},
-            {"label": "Average", "value": (str(avg) + "%") if avg is not None else "—", "tone": C["blue"],
-             "foot": "%d month%s reported" % (len(withval), "" if len(withval) == 1 else "s")},
-            {"label": "Benchmark", "value": "≥ %s%%" % bench_i, "tone": C["violet"], "foot": "WHO compliant target"},
+            {"label": "Period compliance" if pooled else "Average", "value": (str(avg) + "%") if avg is not None else "—", "tone": C["blue"],
+             "foot": ("%s of %s opportunities" % (fmt(tot.get("n")), fmt(tot.get("d")))) if pooled else ("%d month%s reported" % (len(withval), "" if len(withval) == 1 else "s"))},
+            {"label": "Benchmark", "value": "≥ %s%%" % bench_i, "tone": C["violet"], "foot": "Hospital target"},
             {"label": "Months on target", "value": "%d/%d" % (on_target, len(withval)),
              "tone": C["green"] if (withval and on_target == len(withval)) else C["amber"], "toneVal": True, "foot": "within the period"},
         ]
-        y = self._kpi_row(y, cards)
+        if self.sections.get("kpis", True) is not False:
+            y = self._kpi_row(y, cards)
         p.font("bold", 8, C["ink2"])
         p.text("MONTHLY COMPLIANCE TREND (%%) · TARGET ≥ %s%%" % bench_i, M, y + 2)
         chart_rows = [{"mon": r["label"], "val": r["value"]} for r in withval]
         y = self._hh_chart(y + 8, chart_rows, bench, C["green"])
-        # table
-        heads = ["Month", "Compliant", "Opportunities", "Compliance", "Status"]
-        nameW = CW * 0.30
-        rest = (CW - nameW) / 4
-        widths = [nameW, rest, rest, rest, rest]
-        xs = []
-        ax = M
-        for w in widths:
-            xs.append(ax)
-            ax += w
-        headH = 16
-        p.rect(M, y, CW, headH, C["panel2"])
-        p.font("bold", 8, C["muted"])
-        for i, hd in enumerate(heads):
-            al = None if i == 0 else ("center" if i == 4 else "right")
-            tx = xs[i] + 6 if i == 0 else (xs[i] + widths[i] / 2 if i == 4 else xs[i] + widths[i] - 6)
-            p.text(hd.upper(), tx, y + 11, al)
-        y += headH
-        for r in series:
-            if y + 15 > self.PH - 40:
+
+        def table(y, heads, rows, total=None):
+            nameW = CW * 0.34
+            rest = (CW - nameW) / (len(heads) - 1)
+            widths = [nameW] + [rest] * (len(heads) - 1)
+            xs, ax = [], M
+            for w in widths:
+                xs.append(ax)
+                ax += w
+            if y + 32 > self.PH - 40:
                 y = self._new_page()
+            p.rect(M, y, CW, 16, C["panel2"])
+            p.font("bold", 8, C["muted"])
+            for i, hd in enumerate(heads):
+                tx = xs[i] + 6 if i == 0 else xs[i] + widths[i] - 6
+                p.text(hd.upper(), tx, y + 11, None if i == 0 else "right")
+            y += 16
+            for k, cells in enumerate(rows + ([total] if total else [])):
+                if y + 15 > self.PH - 40:
+                    y = self._new_page()
+                is_tot = total is not None and k == len(rows)
+                if is_tot:
+                    p.rect(M, y, CW, 15, C["panel2"])
+                for i, (txt, col) in enumerate(cells):
+                    p.font("bold" if (i == 0 or is_tot or i == len(cells) - 1) else "normal", 8.5, col or (C["ink"] if i == 0 else C["ink2"]))
+                    p.text(str(txt), xs[i] + 6 if i == 0 else xs[i] + widths[i] - 6, y + 10, None if i == 0 else "right")
+                y += 15
+                p.line(M, y, M + CW, y, C["line2"], 0.35)
+            return y + 8
+
+        pc = lambda v: (str(v) + "%") if v is not None else "—"
+        rows = []
+        for r in series:
             lbl, col = who(r["value"])
-            p.font("bold", 8.5, C["ink"])
-            p.text(r["m"][1], xs[0] + 6, y + 10)
-            p.font("normal", 8.5, C["ink2"])
-            p.text(fmt(r["num"]) if r["num"] is not None else "—", xs[1] + widths[1] - 6, y + 10, "right")
-            p.text(fmt(r["den"]) if r["den"] is not None else "—", xs[2] + widths[2] - 6, y + 10, "right")
-            p.font("bold", 8.5, C["ink"] if r["value"] is not None else C["faint"])
-            p.text((str(r["value"]) + "%") if r["value"] is not None else "—", xs[3] + widths[3] - 6, y + 10, "right")
-            p.font("bold", 7.5, col)
-            p.text(lbl, xs[4] + widths[4] / 2, y + 10, "center")
-            y += 15
-            p.line(M, y, M + CW, y, C["line2"], 0.35)
-        return y
+            rows.append([(r["m"][1] + (" (% only)" if r.get("pctOnly") else ""), None), (fmt(r["num"]) if r["num"] is not None else "—", None),
+                         (fmt(r["den"]) if r["den"] is not None else "—", None), (pc(r["value"]), None), (lbl, col)])
+        total_row = None
+        if pooled:
+            lbl, col = who(tot.get("pct"))
+            total_row = [("Period total", None), (fmt(tot.get("n")), None), (fmt(tot.get("d")), None), (pc(tot.get("pct")), None), (lbl, col)]
+        y = table(y + 6, ["Month", "Compliant", "Opportunities", "Compliance", "Status"], rows, total_row)
+
+        # Breakdown: staff groups and every department over the whole period, with totals.
+        groups = hh.get("groups") or []
+        if groups:
+            p.font("bold", 8, C["ink2"])
+            if y + 40 > self.PH - 40:
+                y = self._new_page()
+            p.text("COMPLIANCE BY STAFF GROUP · WHOLE PERIOD", M, y + 4)
+            gn = sum(g.get("n") or 0 for g in groups)
+            gd = sum(g.get("d") or 0 for g in groups)
+            g_rows = [[(g["label"], None), (fmt(g.get("n")), None), (fmt(g.get("d")), None), (pc(g.get("pct")), who(g.get("pct"))[1])] for g in groups]
+            y = table(y + 10, ["Staff group", "Compliant", "Opportunities", "Compliance"], g_rows,
+                      [("All staff", None), (fmt(gn), None), (fmt(gd), None), (pc(round(gn / gd * 10000) / 100 if gd else None), None)])
+        drows = hh.get("rows") or []
+        if drows:
+            p.font("bold", 8, C["ink2"])
+            if y + 40 > self.PH - 40:
+                y = self._new_page()
+            p.text("COMPLIANCE BY DEPARTMENT · WHOLE PERIOD (POOLED)", M, y + 4)
+            d_rows = [[((r.get("name") or "—")[:34] + (" *" if r.get("self") else ""), None), (fmt(r.get("n")), None), (fmt(r.get("d")), None), (pc(r.get("pct")), who(r.get("pct"))[1])] for r in drows]
+            y = table(y + 10, ["Department", "Compliant", "Opportunities", "Compliance"], d_rows,
+                      [("Total" if hh.get("restricted") else "Hospital total (audit)", None), (fmt(tot.get("n")), None), (fmt(tot.get("d")), None), (pc(tot.get("pct")), None)] if pooled else None)
+            if any(r.get("self") for r in drows):
+                p.font("normal", 7.5, C["muted"])
+                p.text("* includes the department's own figures for a month the hospital audit did not cover.", M, y)
+                y += 12
+        band = None if not (min(75.0, bench) < bench) else "%s–%s%%" % (int(min(75.0, bench)), (int(bench) - 1) if bench == int(bench) else round(bench - 0.1, 1))
+        if y + 20 > self.PH - 40:
+            y = self._new_page()
+        p.font("normal", 7.5, C["muted"])
+        p.text("Interpretation: ≥ %s%% compliant%s · below %s%% unacceptable (escalate). WHO (2009) Guidelines on Hand Hygiene in Health Care."
+               % (bench_i, (" · " + band + " needs improvement (re-audit within 2 weeks)") if band else "", int(min(75.0, bench)) if band else bench_i), M, y + 4)
+        return y + 14
 
     def _hh_chart(self, y, rows, bench, tone, hgt=150):
         p, C, M, CW = self.p, self.C, self.M, self.CW
@@ -2482,9 +2654,14 @@ class QualityReport:
         for d in self.depts:
             ds = _qc_dept_status(d, self.pmonths)
             rows.append({"d": d, "st": ds["st"], "status": ds["status"]})
-        hbar = sorted([{"label": r["d"].get("key") or r["d"].get("name"), "value": r["st"]["rate"],
+        # Bars carry the department NAME (the key is an internal id), and a department with
+        # nothing reported is drawn empty and marked, never as a full 100% bar.
+        def rep_of(r):
+            return (r["st"]["ok"] + r["st"]["breach"]) > 0
+        hbar = sorted([{"label": (r["d"].get("name") or r["d"].get("key") or "—") + ("" if rep_of(r) else " (no data)"),
+                        "value": r["st"]["rate"] if rep_of(r) else 0, "rep": rep_of(r),
                         "color": Q_PAL[(ord((r["d"].get("key") or "x")[0]) % len(Q_PAL))]} for r in rows],
-                      key=lambda x: -x["value"])
+                      key=lambda x: (not x["rep"], -x["value"]))
         # zero-defect % bars
         mxb = max([1] + [b["value"] for b in hbar])
         for b in hbar:
@@ -2498,7 +2675,7 @@ class QualityReport:
             if b["value"] > 0:
                 p.rect(tx, y + 1.5, max(4, twd * (b["value"] / mxb)), 13, hx(b["color"]), 4)
             p.font("bold", 9, C["ink"])
-            p.text("%d%%" % b["value"], M + CW, y + 11, "right")
+            p.text(("%d%%" % b["value"]) if b["rep"] else "—", M + CW, y + 11, "right")
             y += 22
         y += 10
         # table
@@ -2518,7 +2695,7 @@ class QualityReport:
             tx = xs[i] + 6 if i == 0 else xs[i] + widths[i] - 6
             p.text(hd.upper(), tx, y + 11, al)
         y += 16
-        for r in sorted(rows, key=lambda r: -r["st"]["rate"]):
+        for r in sorted(rows, key=lambda r: ((r["st"]["ok"] + r["st"]["breach"]) == 0, -r["st"]["rate"])):
             if y + 15 > self.PH - 40:
                 y = self._new_page()
             st = r["st"]
@@ -2601,11 +2778,67 @@ def resolve_model(body):
     return build_model_from_params(body)
 
 
+# ---- sign-in check (Vercel) ------------------------------------------------------------
+# On Vercel /api/report-pdf reaches this function directly, never the Express login gate, so
+# it checks the console's own session cookie (unico_session, an HS256 JWT signed with the same
+# JWT_SECRET — server/auth.js). With REQUIRE_AUTH on, an unsigned request is refused, and the
+# two modes that reach beyond the posted model (rendering posted HTML; reading the whole
+# quality / statistics collections from MongoDB by parameters) are for administrators only.
+def _b64url_decode(seg):
+    import base64
+    seg = seg + "=" * (-len(seg) % 4)
+    return base64.urlsafe_b64decode(seg.encode("ascii"))
+
+
+def _session_claims(headers):
+    import hmac
+    import hashlib
+    import time
+    secret = os.environ.get("JWT_SECRET") or ""
+    token = ""
+    auth = headers.get("Authorization") or ""
+    if auth.lower().startswith("bearer "):
+        token = auth[7:].strip()
+    if not token:
+        for part in (headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == "unico_session":
+                token = v.strip()
+    if not token or not secret:
+        return None
+    try:
+        h, pl, sig = token.split(".")
+        if json.loads(_b64url_decode(h)).get("alg") != "HS256":
+            return None
+        want = hmac.new(secret.encode("utf-8"), (h + "." + pl).encode("ascii"), hashlib.sha256).digest()
+        if not hmac.compare_digest(want, _b64url_decode(sig)):
+            return None
+        claims = json.loads(_b64url_decode(pl))
+        if claims.get("exp") and float(claims["exp"]) < time.time():
+            return None
+        return claims
+    except Exception:
+        return None
+
+
+def _auth_error(headers, body):
+    """None when the request may proceed, else (status, message)."""
+    if str(os.environ.get("REQUIRE_AUTH") or "").lower() != "true":
+        return None
+    claims = _session_claims(headers)
+    if not claims:
+        return (401, "Sign in to download reports.")
+    resolved = "depts" in body or "doc" in body
+    if (body.get("mode") == "html" or not resolved) and claims.get("role") != "Administrator":
+        return (403, "Only an administrator can use this PDF mode.")
+    return None
+
+
 class handler(BaseHTTPRequestHandler):
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # Same-origin only: the console calls this from its own pages. The old "*" let any
+        # site post here from a signed-in user's browser.
+        pass
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -2617,6 +2850,15 @@ class handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b"{}"
             body = json.loads(raw or b"{}")
+            denied = _auth_error(self.headers, body)
+            if denied:
+                msg = json.dumps({"error": denied[1]}).encode("utf-8")
+                self.send_response(denied[0])
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(msg)))
+                self.end_headers()
+                self.wfile.write(msg)
+                return
             pdf = build_from_body(body)
         except Exception as exc:  # never 500 silently — return a readable error
             import traceback

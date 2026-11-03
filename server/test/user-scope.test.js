@@ -571,6 +571,16 @@ async function call(route, { params = {}, body = {} } = {}) {
     assert.deepEqual(acc.dsScreensOf(picked), ['missing', 'quality'], 'roster / staff screens are not part of Data Submission');
     assert.equal(acc.maySubmitKind(picked, 'patient'), false, 'no patient screen, no patient submissions');
     assert.equal(acc.maySubmitKind(picked, 'quality'), true);
+    // Hand Hygiene: granted per PERSON, never a default — and always on for a hospital-wide submitter.
+    assert.equal(acc.hhScreenOn(U({ datasubmit: ['view'] })), false, 'not a default screen');
+    assert.equal(acc.hhScreenOn(U({ datasubmit: ['view'] }, { allQualityAreas: true })), true, 'hospital-wide submitter enters the audit, so sees it');
+    const hhPicked = U({ datasubmit: ['view'] }, { dsScreens: ['hh'] });
+    assert.equal(acc.hhScreenOn(hhPicked), true, 'ticked for a ward user');
+    assert.deepEqual(acc.dsScreensOf(hhPicked), ['hh'], 'only the granted screen');
+    assert.equal(acc.maySubmitKind(U({ datasubmit: ['view', 'add'] }, { dsScreens: ['hh'] }), 'quality'), false, 'Hand Hygiene alone sends nothing');
+    assert.deepEqual(acc.dsScreensOf({ unrestricted: false, role: 'collector' }), ['missing', 'status', 'quality', 'patient', 'history'], 'legacy portal: regular screens, no Hand Hygiene');
+    assert.deepEqual(acc.dsScreensOf({ unrestricted: false, role: 'collector', dsScreens: ['hh'] }).slice(-1), ['hh'], 'legacy portal can be given Hand Hygiene');
+    assert.equal(acc.hhScreenOn({ unrestricted: true }), true, 'administrators');
     // Sending is the ADD action: a view-only Data Submission holder reads its screens but sends nothing.
     assert.equal(acc.maySubmitKind(U({ datasubmit: ['view'] }), 'quality'), false, 'view-only Data Submission cannot send');
     assert.equal(acc.maySubmitKind(U({ datasubmit: ['view', 'edit'] }), 'patient'), false, 'edit without add cannot send new data');

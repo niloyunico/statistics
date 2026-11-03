@@ -618,5 +618,54 @@ const quality = async (payload) => (await dc.submitQuality(Object.assign({ area:
     await approve(a.id);
     assert.equal(ind('nsi').months['Aug-26'], null, 'a future headcount cannot compute a past reading'); }
 
+  // Hand hygiene: a compliant count above the observed count is refused, total and per cell.
+  reset();
+  await assert.rejects(() => quality({ month: 'Jul-26', indicatorId: 'hh', entryMode: 'rate', formula: 'pct', num: 12, den: 10 }), /cannot be more than the observed/);
+  await assert.rejects(() => quality({ month: 'Jul-26', indicatorId: 'hh', entryMode: 'rate', formula: 'pct', num: 9, den: 20,
+    deptBreakdown: [{ dept: 'ICU', g: { nurse: { n: 6, d: 5 }, doctor: { n: 3, d: 15 } } }] }), /ICU · nurse/);
+  { const ok = await quality({ month: 'Jul-26', indicatorId: 'hh', entryMode: 'rate', formula: 'pct', num: 9, den: 20, deptBreakdown: [{ dept: 'ICU', g: { nurse: { n: 5, d: 5 }, doctor: { n: 4, d: 15 } } }] });
+    assert.ok(ok && ok.id, 'a valid audit is accepted'); }
+
+  // An incident-driven count follows the incident list when it is edited.
+  reset();
+  { const inc = (n) => ({ patientName: 'P' + n, uhid: 'U' + n, details: 'fall ' + n });
+    const a = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 2, incidents: [inc(1), inc(2)] });
+    const r = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { incidents: [inc(1), inc(2), inc(3)] } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(sub(a.id).value, 3, 'adding an incident raises the count');
+    const r2 = await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { incidents: [inc(1)] } });
+    assert.equal(r2.status, 200);
+    assert.equal(sub(a.id).value, 1, 'removing incidents lowers it'); }
+  // …but a count that never matched its list (an old plain count) is left alone.
+  reset();
+  { const a = await quality({ month: 'Jul-26', indicatorId: 'falls', value: 4, incidents: [{ patientName: 'X', details: 'only one written up' }] });
+    await call('PATCH /api/submissions/:id', { params: { id: a.id }, body: { incidents: [{ patientName: 'X', details: 'edited' }] } });
+    assert.equal(sub(a.id).value, 4); }
+
+  // The open month window: nothing later than the latest open month is accepted from a held sender.
+  reset();
+  { const open = dc.latestOpenMonth(new Date(Date.UTC(2026, 10, 3, 6)));   // 3 Nov 2026, Dhaka
+    assert.equal(open, 'Oct-26');
+    assert.equal(dc.latestOpenMonth(new Date(Date.UTC(2026, 10, 29, 6))), 'Nov-26', 'final two days open the current month');
+    assert.equal(dc.latestOpenMonth(new Date(Date.UTC(2027, 0, 5, 6))), 'Dec-26', 'January reports December of the year before');
+    const far = 'Dec-' + String((new Date().getFullYear() + 1) % 100).padStart(2, '0');
+    await assert.rejects(() => dc.submitQuality({ area: 'ICU', month: far, indicatorId: 'falls', value: 1 }, { submittedBy: 'nurse', enforceCollection: true }), /not open yet/);
+    const adminFuture = await dc.submitQuality({ area: 'ICU', month: far, indicatorId: 'falls', value: 1 }, { submittedBy: 'admin' });
+    assert.ok(adminFuture.submission, 'an administrator is not held to the window'); }
+
+  // A count indicator keeps the optional denominator a collector typed.
+  reset();
+  { const a = await quality({ month: 'Jul-26', indicatorId: 'falls', entryMode: 'rate', formula: 'rate1000', num: 2, den: 400 });
+    await approve(a.id);
+    assert.equal(ind('falls').months['Jul-26'], 2, 'stored as a count');
+    assert.equal(ind('falls').mDen['Jul-26'], 400, 'the patient-days are kept'); }
+
+  // Headline status follows the newest calendar year, not the old fixed fiscal quarters.
+  reset();
+  { const h = ind('hh'); Object.assign(h, { benchmarkValue: 80, goalDirection: 'higher_is_better', mNum: { 'Jul-26': 9 }, mDen: { 'Jul-26': 10 }, months: { 'Jul-26': 90 } });
+    dc.recomputeQuarters(h);
+    assert.equal(h.status, 'ok');
+    assert.equal(h.quarterStatusByFy['2026'].Q3, 'ok'); }
+
   console.log('Approval integrity regression checks passed.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -15,48 +15,72 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       window.UI && window.UI.toast && window.UI.toast(m, t);
     } catch (e) {}
   };
-  const dcApi = {
-    get: url => fetch(url, {
-      headers: {
+  function dcFetchJson(url, init) {
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), 45000) : null;
+    const opts = Object.assign({}, init || {}, {
+      headers: Object.assign({
         accept: 'application/json'
-      }
-    }).then(r => r.json()),
-    post: (url, body) => fetch(url, {
+      }, init && init.headers || {})
+    }, ctl ? {
+      signal: ctl.signal
+    } : {});
+    return fetch(url, opts).then(r => {
+      if (r.status === 401 || r.redirected) return {
+        ok: false,
+        code: 'session',
+        error: 'Your session has expired. Sign in again — your entries are still on this screen.'
+      };
+      return r.json().catch(() => ({
+        ok: false,
+        error: 'The server did not answer properly (HTTP ' + r.status + '). Check My submissions before trying again.'
+      }));
+    }).catch(e => ({
+      ok: false,
+      error: e && e.name === 'AbortError' ? 'The server took too long to answer. Check My submissions before trying again.' : 'Could not reach the server — check the connection and try again.'
+    })).then(r => {
+      if (timer) clearTimeout(timer);
+      return r;
+    });
+  }
+  const dcApi = {
+    get: url => dcFetchJson(url),
+    post: (url, body) => dcFetchJson(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json'
       },
       body: JSON.stringify(body || {})
-    }).then(r => r.json()).then(r => {
+    }).then(r => {
       if (r.ok && url.indexOf('/api/submissions') === 0) {
         dcInvalidateSubs();
         window.dispatchEvent(new Event('unico:data-refreshed'));
       }
       return r;
     }),
-    patch: (url, body) => fetch(url, {
+    patch: (url, body) => dcFetchJson(url, {
       method: 'PATCH',
       headers: {
         'content-type': 'application/json'
       },
       body: JSON.stringify(body || {})
-    }).then(r => r.json()).then(r => {
+    }).then(r => {
       if (r.ok && url.indexOf('/api/submissions') === 0) {
         dcInvalidateSubs();
         window.dispatchEvent(new Event('unico:data-refreshed'));
       }
       return r;
     }),
-    del: url => fetch(url, {
+    del: url => dcFetchJson(url, {
       method: 'DELETE'
-    }).then(r => r.json()),
-    put: (url, body) => fetch(url, {
+    }),
+    put: (url, body) => dcFetchJson(url, {
       method: 'PUT',
       headers: {
         'content-type': 'application/json'
       },
       body: JSON.stringify(body || {})
-    }).then(r => r.json())
+    })
   };
   async function dcQualityPost(body) {
     const controller = new AbortController();
@@ -108,14 +132,17 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     _dcPromiseGen = gen;
     _dcAllPromise = (async () => {
       const rows = new Map();
-      let offset = 0;
+      let offset = 0,
+        hhCover = null;
       do {
         const r = await dcApi.get('/api/submissions?status=all&limit=1000&offset=' + offset);
         if (!r || !r.ok) throw new Error(r && r.error || 'Could not load submission history');
         (r.submissions || []).forEach(s => rows.set(s.id, s));
+        if (r.hhCover) hhCover = r.hhCover;
         offset = r.nextOffset;
       } while (offset != null);
       const list = [...rows.values()];
+      if (hhCover) list.hhCover = hhCover;
       if (gen === _dcGen) {
         _dcAllCache = list;
         _dcAllAt = Date.now();
@@ -439,12 +466,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }
     return out;
   };
-  const dcDefaultMonth = () => {
-    const d = new Date();
-    d.setDate(1);
-    d.setMonth(d.getMonth() - 1);
-    return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0');
-  };
+  const dcDefaultMonth = () => dcSubmissionWindow().current;
+  const dcLastDueMonth = () => dcSubmissionWindow().previous;
   function dcSubmissionWindow(now = new Date()) {
     const parts = new Intl.DateTimeFormat('en-GB', {
       timeZone: 'Asia/Dhaka',
@@ -463,7 +486,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const current = latest;
     return {
       current,
-      latest
+      latest,
+      previous
     };
   }
   function defaultMonthFor() {
@@ -1465,7 +1489,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       onChange: e => set({
         allQualityAreas: e.target.checked
       })
-    }), "Hospital-wide \u2014 every quality area (e.g. Infection Control)"), !val.allQualityAreas && React.createElement("div", {
+    }), "Hospital-wide \u2014 every quality area, incl. Overall Hospital (e.g. the Infection Control nurse)"), !val.allQualityAreas && React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
@@ -3199,7 +3223,10 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     } : x));
     const delIncident = i => setIncidents(a => a.filter((_, j) => j !== i));
     const autoCount = isIncidentType;
-    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : autoCount ? incidents.length : Number(directNum) || 0;
+    const recordedIncs = curInd && curInd.incidents && Array.isArray(curInd.incidents[month]) ? curInd.incidents[month].length : 0;
+    const legacyCount = autoCount && curInd && !recordedIncs ? Number(isRate ? (curInd.mNum || {})[month] : (curInd.months || {})[month]) : NaN;
+    const keepLegacy = autoCount && numMode === 'direct' && incidents.length === 0 && legacyCount > 0;
+    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : autoCount ? keepLegacy ? legacyCount : incidents.length : Number(directNum) || 0;
     const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
@@ -3308,7 +3335,21 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         setNumMode('dept');
       }
       const denThisMonth = curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '' ? curInd.mDen[month] : null;
-      const denCarry = denAdminOnly && denThisMonth == null && curInd.mDen ? Object.keys(curInd.mDen).map(k => curInd.mDen[k]).filter(v => v != null && v !== '').pop() : null;
+      const denCarry = denAdminOnly && denThisMonth == null && curInd.mDen ? (() => {
+        const r0 = dcMonthRank(month);
+        let best = null,
+          bestR = -Infinity;
+        Object.keys(curInd.mDen).forEach(k => {
+          const v = curInd.mDen[k],
+            r = dcMonthRank(k);
+          if (v == null || v === '' || r == null || r0 != null && r >= r0) return;
+          if (r > bestR) {
+            bestR = r;
+            best = v;
+          }
+        });
+        return best;
+      })() : null;
       setDen(denThisMonth != null ? String(denThisMonth) : denCarry != null ? String(denCarry) : '');
       const cp = curInd.capa && curInd.capa[month];
       setCapa(cp && typeof cp === 'object' ? {
@@ -3416,12 +3457,50 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         failSubmit('Pick a month');
         return;
       }
+      if (curInd && !isNew && dcPortalUser()) {
+        const st = dcIndicatorStart(area, curInd, []);
+        if (st && dcMonthRank(st) != null && dcMonthRank(st) > dcMonthRank(month)) {
+          failSubmit((area && area.name || 'This area') + ' reports this indicator from ' + monthLabel(st) + ' — nothing is due for ' + monthLabel(month) + '.');
+          return;
+        }
+      }
       if (notObserved && !noReason.trim()) {
         failSubmit('Please say WHY it was not observed this month.');
         return;
       }
       if (!notObserved && numMode === 'direct' && !autoCount && String(directNum == null ? '' : directNum).trim() === '') {
         failSubmit('Enter ' + numLabel + ' — type 0 if there were none this month');
+        return;
+      }
+      if (!notObserved && isRate && (numMode === 'group' || numMode === 'dept')) {
+        const typedV = v => String(v == null ? '' : v).trim() !== '';
+        const cells = numMode === 'group' ? GROUP_KEYS.map(([k, lbl]) => ({
+          where: lbl,
+          n: groups[k],
+          d: groupsDen[k]
+        })) : [].concat.apply([], deptRows.map(r => GROUP_KEYS.map(([k, lbl]) => ({
+          where: (r.dept || 'Row') + ' · ' + lbl,
+          n: r.g && r.g[k] && r.g[k].n,
+          d: r.g && r.g[k] && r.g[k].d
+        }))));
+        const blankNum = cells.find(c => !typedV(c.n) && Number(c.d) > 0);
+        if (blankNum) {
+          failSubmit(blankNum.where + ': enter the ' + numLabel.toLowerCase() + ' count — type 0 if none were compliant.');
+          return;
+        }
+        const blankDen = cells.find(c => typedV(c.n) && Number(c.n) > 0 && !typedV(c.d));
+        if (blankDen) {
+          failSubmit(blankDen.where + ': enter the ' + denLabel.toLowerCase() + ' as well.');
+          return;
+        }
+        const over = cells.find(c => Number(c.n) > Number(c.d || 0));
+        if (over) {
+          failSubmit(over.where + ': ' + numLabel.toLowerCase() + ' (' + over.n + ') cannot be more than ' + denLabel.toLowerCase() + ' (' + (over.d || 0) + ').');
+          return;
+        }
+      }
+      if (!notObserved && formula === 'pct' && numMode === 'direct' && !denLockedForCollector && Number(directNum) > Number(den || 0) && Number(den) > 0) {
+        failSubmit(numLabel + ' (' + directNum + ') cannot be more than ' + denLabel.toLowerCase() + ' (' + den + ') for a percentage.');
         return;
       }
       if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
@@ -4152,7 +4231,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         lineHeight: 1,
         color: nothingEntered ? 'var(--rose)' : 'var(--ink)'
       }
-    }, nothingEntered ? '—' : incidents.length), React.createElement("div", {
+    }, nothingEntered ? '—' : numerator), React.createElement("div", {
       style: {
         flex: '1 1 200px',
         minWidth: 0
@@ -4185,7 +4264,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         color: 'var(--muted)',
         marginTop: 2
       }
-    }, nothingEntered ? 'Nothing entered yet — log each incident, or confirm there were none.' : incidents.length ? 'Auto — one per incident logged below, with patient & CAPA detail.' : 'Zero confirmed — no incidents this month.')), isHandHygiene && React.createElement("div", {
+    }, nothingEntered ? 'Nothing entered yet — log each incident, or confirm there were none.' : incidents.length ? 'Auto — one per incident logged below, with patient & CAPA detail.' : keepLegacy ? 'Recorded as ' + legacyCount + ' with no incident list on record — that count is kept. Logging an incident replaces it with the number logged.' : 'Zero confirmed — no incidents this month.')), isHandHygiene && React.createElement("div", {
       className: "seg"
     }, React.createElement("button", {
       className: numMode === 'group' ? 'on' : '',
@@ -5445,6 +5524,18 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const setInc = (i, k, v) => setIncidents(a => a.map((x, j) => j === i ? Object.assign({}, x, {
       [k]: v
     }) : x));
+    const incCount0 = Number(isRate ? s.num : s.value);
+    const incDriven = s.type === 'quality' && !hasDeptBreak && !hasGrp && (Array.isArray(s.incidents) && s.incidents.length > 0 && incCount0 === s.incidents.filter(dcIncidentFilled).length || !(incCount0 > 0));
+    const incTouched = React.useRef(false);
+    useEffect(() => {
+      if (!incTouched.current) {
+        incTouched.current = true;
+        return;
+      }
+      if (!incDriven) return;
+      const c = incidents.filter(dcIncidentFilled).length;
+      if (isRate) setQnum(c);else setQval(c);
+    }, [incidents]);
     const INC_FIELDS = [['uhid', 'UHID'], ['patientName', 'Patient name'], ['diagnosis', 'Diagnosis'], ['details', 'What happened'], ['finding', 'Root cause / finding'], ['corrective', 'Corrective action'], ['preventive', 'Preventive action']];
     const when = ts => {
       try {
@@ -8190,7 +8281,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   }
   function reportedRecords() {
     const out = [];
-    const liveDepts = dcAllDepts();
+    const kinds = (typeof window !== 'undefined' && window.__UNICO_USER__ || {}).submitKinds || {};
+    const liveDepts = kinds.patient === false ? [] : dcAllDepts();
     liveDepts.forEach(d => (d.series || []).forEach(r => {
       const values = {};
       Object.keys(r).forEach(k => {
@@ -8207,11 +8299,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         submittedAt: null
       });
     }));
-    const liveAreas = window.qualityData ? window.qualityData() : [];
+    const liveAreas = kinds.quality === false ? [] : window.qualityData ? window.qualityData() : [];
     const has = (o, m) => !!o && o[m] != null && o[m] !== '';
     liveAreas.forEach(a => (a.indicators || []).forEach(ind => {
       const ms = new Set([].concat(Object.keys(ind.months || {}), Object.keys(ind.mNum || {}), Object.keys(ind.mNotObserved || {}), Object.keys(ind.incidents || {})));
       ms.forEach(m => {
+        if (ind.mFromAudit && ind.mFromAudit[m]) return;
         const notObserved = !!(ind.mNotObserved && ind.mNotObserved[m]);
         const incs = ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
         if (!has(ind.months, m) && !has(ind.mNum, m) && !notObserved && !incs) return;
@@ -9321,7 +9414,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   };
   const CP_NAV_HOME = ['home', 'Dashboard', 'M3 11l9-8 9 8v9a2 2 0 01-2 2h-4v-7H9v7H5a2 2 0 01-2-2z'];
   const CP_NAV_STAFFREQ = ['requests', 'Add nurse / PCA', 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M19 8v6M22 11h-6'];
-  const CP_NAV_COLLECT = [['missing', 'Missing data', 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01'], ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'], ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'], ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16']];
+  const CP_NAV_COLLECT = [['missing', 'Missing data', 'M12 2a10 10 0 100 20 10 10 0 000-20zM12 7v6M12 17h.01'], ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'], ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'], ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16'], ['hh', 'Hand Hygiene', 'M7 11V6a2 2 0 014 0v5M11 10V4a2 2 0 014 0v6M15 10V6a2 2 0 014 0v7a7 7 0 01-7 7h-1a7 7 0 01-6.2-3.8L3 12.6a1.8 1.8 0 013-1.9L7 12']];
   const CP_NAV_UNIT = [['history', 'My submissions', 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7'], ['roster', 'Duty roster', 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4M8 13h3M13 13h3'], ['profile', 'My profile', 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0'], ['dept', 'Department & staff', 'M4 4h16v16H4zM4 9h16M9 4v16']];
   const CP_ICON = (d, s, c) => React.createElement("svg", {
     width: s || 17,
@@ -9375,7 +9468,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   function cpSubmissionStatus(subs, area, ind, month) {
     const matching = (subs || []).filter(s => s.type === 'quality' && s.status !== 'withdrawn' && s.area === area && s.month === month && (s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase()));
     const latest = matching.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0];
-    if (latest && latest.status === 'pending') return 'pending';
+    if (latest && (latest.status === 'pending' || latest.status === 'approving')) return 'pending';
     if (ind.mNotObserved && ind.mNotObserved[month]) return 'notobs';
     if (cpHasData(ind, month)) return 'recorded';
     const approved = matching.find(s => s.status === 'approved');
@@ -9564,7 +9657,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     return ix;
   };
   const dcSubIsInd = (s, ind) => s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase();
-  const dcYearStart = () => 'Jan-' + dcDefaultMonth().split('-')[1];
+  const dcYearStart = () => 'Jan-' + dcLastDueMonth().split('-')[1];
   const dcEarlierMonth = (a, b) => {
     const ra = dcMonthRank(a),
       rb = dcMonthRank(b);
@@ -9602,7 +9695,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     return nm && ind && ind.id && nm[ind.id] || null;
   };
   const dcDueMonths = fromMonth => {
-    const last = dcDefaultMonth();
+    const last = dcLastDueMonth();
     const lr = dcMonthRank(last);
     let r = dcMonthRank(fromMonth);
     if (r == null) return [last];
@@ -9614,7 +9707,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const mr = dcMonthRank(m);
     if (mr == null) return false;
     const sr = dcMonthRank(start);
-    return mr >= (sr == null ? dcMonthRank(dcDefaultMonth()) : sr);
+    return mr >= (sr == null ? dcMonthRank(dcLastDueMonth()) : sr);
   };
   const dcPatientStart = (dept, subs, deptStart) => {
     if (!dept) return null;
@@ -9629,7 +9722,44 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     (dcSubsIndex(subs).pDept.get(dept.id) || []).forEach(s => see(s.month));
     return best == null ? dcYearStart() : dcEarlierMonth(dcMonthKey(best), dcYearStart());
   };
-  const dcQStatus = (subs, areaKey, ind, m) => cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
+  const _dcHHCover = new WeakMap();
+  const dcHHAuditCover = subs => {
+    const arr = Array.isArray(subs) ? subs : [];
+    if (_dcHHCover.has(arr)) return _dcHHCover.get(arr);
+    const out = new Map();
+    const HH = window.UNICO_HH;
+    if (HH && Array.isArray(arr.hhCover)) {
+      const areas = window.qualityData ? window.qualityData() : [];
+      arr.hhCover.forEach(c => (c.depts || []).forEach(nm => {
+        const a = HH.matchDept(nm, areas);
+        if (!a) return;
+        if (!out.has(c.month)) out.set(c.month, new Set());
+        out.get(c.month).add(a.key);
+      }));
+    }
+    const inflight = HH ? arr.filter(s => s && s.type === 'quality' && (s.status === 'pending' || s.status === 'approving') && Array.isArray(s.deptBreakdown) && s.deptBreakdown.length && /hand\s*hygiene/i.test(String(s.indicatorName || '') + ' ' + String(s.indicatorId || '').replace(/-/g, ' '))) : [];
+    if (inflight.length) {
+      const areas = window.qualityData ? window.qualityData() : [];
+      inflight.forEach(s => s.deptBreakdown.forEach(r => {
+        const t = HH.GROUPS.reduce((n, [k]) => n + (Number((r && r.g || {})[k] && r.g[k].d) || 0), 0);
+        if (!(t > 0)) return;
+        const a = HH.matchDept(r && r.dept, areas);
+        if (!a) return;
+        if (!out.has(s.month)) out.set(s.month, new Set());
+        out.get(s.month).add(a.key);
+      }));
+    }
+    _dcHHCover.set(arr, out);
+    return out;
+  };
+  const dcQStatus = (subs, areaKey, ind, m) => {
+    const st = cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
+    if ((st === 'none' || st === 'rejected') && ind && /hand\s*hygiene/i.test(ind.name || '')) {
+      const cov = dcHHAuditCover(subs).get(m);
+      if (cov && cov.has(areaKey)) return 'pending';
+    }
+    return st;
+  };
   const dcPatientState = (subs, dept, m) => {
     if ((dept.months || []).indexOf(m) >= 0) return 'recorded';
     const list = (dcSubsIndex(subs).p.get(dept.id + '|' + m) || []).filter(s => s.status !== 'withdrawn');
@@ -10267,6 +10397,639 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       whiteSpace: 'nowrap'
     };
   };
+  const HH_TONE = {
+    ok: ['#12776c', 'rgba(58,181,167,.15)'],
+    warn: ['#9a5b00', 'rgba(224,138,30,.16)'],
+    bad: ['#a92c42', 'rgba(210,58,82,.13)']
+  };
+  const hhFmtN = v => v == null ? '—' : Number(v).toLocaleString();
+  const hhFmtP = v => v == null ? '—' : Math.round(v * 10) / 10 + '%';
+  function DcHandHygiene() {
+    const HH = window.UNICO_HH;
+    const [year, setYear] = useState(null);
+    const [res, setRes] = useState(null);
+    const [err, setErr] = useState('');
+    const [busy, setBusy] = useState(true);
+    const [rev, setRev] = useState(0);
+    useEffect(() => {
+      const h = () => setRev(r => r + 1);
+      window.addEventListener('unico:data-refreshed', h);
+      return () => window.removeEventListener('unico:data-refreshed', h);
+    }, []);
+    useEffect(() => {
+      let dead = false;
+      setBusy(true);
+      fetch('/api/hand-hygiene' + (year ? '?year=' + year : ''), {
+        headers: {
+          accept: 'application/json'
+        }
+      }).then(r => {
+        if (r.status === 401 || r.redirected) throw new Error('Your session has expired. Sign in again.');
+        return r.json().catch(() => {
+          throw new Error('The server did not return the hand hygiene totals.');
+        });
+      }).then(r => {
+        if (dead) return;
+        if (!r.ok) {
+          setErr(r.error || 'Could not load hand hygiene totals.');
+          setRes(null);
+        } else {
+          setErr('');
+          setRes(r);
+          if (!year) setYear(r.year);
+        }
+      }).catch(e => {
+        if (!dead) {
+          setErr(e.message || 'Could not load hand hygiene totals.');
+          setRes(null);
+        }
+      }).then(() => {
+        if (!dead) setBusy(false);
+      });
+      return () => {
+        dead = true;
+      };
+    }, [year, rev]);
+    const bench = res ? res.bench : 80;
+    const stat = p => HH ? HH.status(p, bench) : null;
+    const chip = (p, extra) => {
+      const s = stat(p);
+      if (!s) return React.createElement("span", {
+        style: {
+          color: '#9aa6b5',
+          fontSize: 11
+        }
+      }, extra || '—');
+      const t = HH_TONE[s.key];
+      return React.createElement("span", {
+        style: {
+          display: 'inline-block',
+          padding: '2px 9px',
+          borderRadius: 20,
+          background: t[1],
+          color: t[0],
+          fontWeight: 700,
+          fontSize: 10.5,
+          whiteSpace: 'nowrap'
+        }
+      }, s.label);
+    };
+    const pctCell = p => {
+      const s = stat(p);
+      return {
+        fontWeight: 700,
+        color: s ? HH_TONE[s.key][0] : '#9aa6b5'
+      };
+    };
+    const pendingOf = m => (res && res.pending || []).filter(p => p.month === m);
+    const shown = res ? res.months.filter(x => x.pct != null || x.d != null || pendingOf(x.m).length) : [];
+    const withVal = shown.filter(x => x.pct != null);
+    const deptShown = res ? shown.filter(x => res.rows.some(r => r.cells[x.m] && r.cells[x.m].src !== 'not-audited')) : [];
+    const latest = withVal.length ? withVal[withVal.length - 1] : null;
+    const onTarget = withVal.filter(x => x.pct >= bench).length;
+    const band = HH ? HH.improveBand(bench) : null;
+    const th = {
+      textAlign: 'left',
+      padding: '8px 10px',
+      fontSize: 10,
+      textTransform: 'uppercase',
+      letterSpacing: '.3px',
+      color: '#6c7a8c',
+      fontWeight: 700,
+      borderBottom: '1px solid rgba(125,145,180,.25)',
+      whiteSpace: 'nowrap',
+      background: 'rgba(240,246,252,.9)'
+    };
+    const thr = Object.assign({}, th, {
+      textAlign: 'right'
+    });
+    const td = {
+      padding: '7px 10px',
+      fontSize: 12,
+      color: '#2b3747',
+      borderBottom: '1px solid rgba(125,145,180,.14)',
+      whiteSpace: 'nowrap'
+    };
+    const tdr = Object.assign({}, td, {
+      textAlign: 'right',
+      fontVariantNumeric: 'tabular-nums'
+    });
+    const tdTot = Object.assign({}, tdr, {
+      fontWeight: 800,
+      background: 'rgba(0,144,202,.06)'
+    });
+    const card = Object.assign({}, CP_CARD, {
+      padding: '16px 18px',
+      marginBottom: 14
+    });
+    const scroll = {
+      overflowX: 'auto',
+      WebkitOverflowScrolling: 'touch',
+      margin: '0 -4px',
+      padding: '0 4px'
+    };
+    const sub = {
+      fontSize: 13.5,
+      fontWeight: 800,
+      color: '#16202e',
+      marginBottom: 3
+    };
+    const note = {
+      fontSize: 11.5,
+      color: '#6c7a8c',
+      marginBottom: 10
+    };
+    const ml = m => {
+      const p = String(m).split('-');
+      return p[0] + ' ' + (p[1] ? '20' + p[1] : '');
+    };
+    const tableRows = () => {
+      const head = ['Department'].concat(deptShown.reduce((a, x) => a.concat([ml(x.m) + ' compliant', ml(x.m) + ' opportunities', ml(x.m) + ' %']), [])).concat(['Period compliant', 'Period opportunities', 'Period %']);
+      const body = res.rows.map(r => [r.name + (r.selfReported ? ' (self-reported)' : '')].concat(deptShown.reduce((a, x) => {
+        const c = r.cells[x.m];
+        return a.concat(c && c.d != null ? [c.n, c.d, c.pct] : ['', '', c && c.pct != null ? c.pct : '']);
+      }, [])).concat([r.total.n, r.total.d, r.total.pct]));
+      const tot = ['Hospital total (audit)'].concat(deptShown.reduce((a, x) => a.concat([x.n == null ? '' : x.n, x.d == null ? '' : x.d, x.pct == null ? '' : x.pct]), [])).concat([res.total.n, res.total.d, res.total.pct]);
+      const all = res.hasSelfReported ? [['Incl. department self-reports'].concat(deptShown.reduce((a, x) => a.concat([x.nAll == null ? '' : x.nAll, x.dAll == null ? '' : x.dAll, x.pctAll == null ? '' : x.pctAll]), [])).concat([res.totalAll.n, res.totalAll.d, res.totalAll.pct])] : [];
+      return [head].concat(body, [tot], all);
+    };
+    const downloadCsv = () => {
+      if (!res) return;
+      const esc = v => {
+        const s = v == null ? '' : String(v);
+        return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+      };
+      const rows = tableRows();
+      rows.push([]);
+      rows.push(['Staff group'].concat(deptShown.map(x => ml(x.m) + ' %')).concat(['Period compliant', 'Period opportunities', 'Period %']));
+      res.groups.forEach(g => rows.push([g.label].concat(deptShown.map(x => g.cells[x.m] ? g.cells[x.m].pct : '')).concat([g.total.n, g.total.d, g.total.pct])));
+      const blob = new Blob(['﻿' + rows.map(r => r.map(esc).join(',')).join('\r\n')], {
+        type: 'text/csv;charset=utf-8'
+      });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'hand-hygiene-' + res.year + '.csv';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 500);
+    };
+    const printPage = () => {
+      if (!res) return;
+      const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;'
+      })[c]);
+      const cellTxt = c => c && c.d > 0 ? esc(c.n + '/' + c.d) + '<br><b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.pct != null ? '<b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.src === 'not-audited' ? 'n/a' : '—';
+      const monthsHead = deptShown.map(x => '<th>' + esc(ml(x.m)) + '</th>').join('');
+      const deptRows = res.rows.map(r => '<tr><td>' + esc(r.name) + (r.selfReported ? ' <i>(self-reported)</i>' : '') + '</td>' + deptShown.map(x => '<td class="r">' + cellTxt(r.cells[x.m]) + '</td>').join('') + '<td class="r">' + cellTxt(r.total) + '</td></tr>').join('');
+      const totRow = '<tr class="t"><td>Hospital total (audit)</td>' + deptShown.map(x => '<td class="r">' + cellTxt(x.d != null ? {
+        n: x.n,
+        d: x.d,
+        pct: x.pct
+      } : {
+        pct: x.pct
+      }) + '</td>').join('') + '<td class="r">' + cellTxt(res.total) + '</td></tr>';
+      const allRow = res.hasSelfReported ? '<tr class="t2"><td>Incl. department self-reports</td>' + deptShown.map(x => '<td class="r">' + cellTxt(x.dAll != null ? {
+        n: x.nAll,
+        d: x.dAll,
+        pct: x.pctAll
+      } : {
+        pct: x.pctAll
+      }) + '</td>').join('') + '<td class="r">' + cellTxt(res.totalAll) + '</td></tr>' : '';
+      const grpRows = res.groups.map(g => '<tr><td>' + esc(g.label) + '</td>' + deptShown.map(x => '<td class="r">' + cellTxt(g.cells[x.m]) + '</td>').join('') + '<td class="r">' + cellTxt(g.total) + '</td></tr>').join('');
+      const html = '<!doctype html><html><head><meta charset="utf-8"><title>Hand Hygiene ' + res.year + '</title><style>body{font:12px/1.4 Arial,sans-serif;color:#16202e;margin:18px}h1{font-size:18px;margin:0 0 2px}h2{font-size:14px;margin:18px 0 6px}.m{color:#5b6878;margin-bottom:10px}table{border-collapse:collapse;width:100%;font-size:10.5px}th,td{border:1px solid #cdd6e0;padding:4px 6px;text-align:left;vertical-align:top}th{background:#eef4fa}.r{text-align:right}.t td{background:#e3f1f8;font-weight:700}.t2 td{background:#f4f8fb}@media print{@page{size:landscape;margin:12mm}}</style></head><body>' + '<h1>Hand Hygiene Compliance — ' + esc(res.year) + '</h1><div class="m">Hospital audit (WHO 5 Moments) · ' + esc(res.source && res.source.name || '') + ' · target ≥ ' + esc(bench) + '% · compliant / observed opportunities, pooled. Printed ' + esc(new Date().toLocaleString()) + '</div>' + '<h2>By department</h2><table><thead><tr><th>Department</th>' + monthsHead + '<th>Period</th></tr></thead><tbody>' + deptRows + totRow + allRow + '</tbody></table>' + (grpRows ? '<h2>By staff group</h2><table><thead><tr><th>Staff group</th>' + monthsHead + '<th>Period</th></tr></thead><tbody>' + grpRows + '</tbody></table>' : '') + '<script>window.onload=function(){window.print();}<\/script></body></html>';
+      const w = window.open('', '_blank');
+      if (!w) {
+        toast('Allow pop-ups for this site to print.', 'error');
+        return;
+      }
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
+    };
+    const btn = {
+      border: '1px solid rgba(125,145,180,.4)',
+      background: '#fff',
+      color: '#2b3747',
+      padding: '7px 13px',
+      borderRadius: 9,
+      fontSize: 12,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit'
+    };
+    const header = React.createElement("div", {
+      style: Object.assign({}, card, {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap'
+      })
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 38,
+        height: 38,
+        borderRadius: 11,
+        background: 'rgba(0,144,202,.13)',
+        color: '#0072a3',
+        flexShrink: 0
+      }
+    }, CP_ICON('M7 11V6a2 2 0 014 0v5M11 10V4a2 2 0 014 0v6M15 10V6a2 2 0 014 0v7a7 7 0 01-7 7h-1a7 7 0 01-6.2-3.8L3 12.6a1.8 1.8 0 013-1.9L7 12', 19)), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: '1 1 220px'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 16,
+        fontWeight: 800,
+        color: '#16202e'
+      }
+    }, "Hand Hygiene Compliance"), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, "Hospital audit \xB7 every department and staff group \xB7 target \u2265 ", bench, "%")), React.createElement("label", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        fontSize: 12,
+        color: '#3c4858',
+        fontWeight: 600
+      }
+    }, "Year", React.createElement("select", {
+      value: year || '',
+      onChange: e => setYear(parseInt(e.target.value, 10)),
+      style: {
+        font: 'inherit',
+        padding: '6px 8px',
+        borderRadius: 8,
+        border: '1px solid rgba(125,145,180,.45)',
+        background: '#fff'
+      }
+    }, (res && res.years || (year ? [year] : [])).map(y => React.createElement("option", {
+      key: y,
+      value: y
+    }, y)))), React.createElement("button", {
+      type: "button",
+      style: btn,
+      disabled: !res,
+      onClick: downloadCsv
+    }, "Download CSV"), React.createElement("button", {
+      type: "button",
+      style: btn,
+      disabled: !res,
+      onClick: printPage
+    }, "Print / PDF"));
+    if (busy && !res) return React.createElement("div", {
+      style: {
+        maxWidth: 1240,
+        margin: '0 auto'
+      }
+    }, header, React.createElement("div", {
+      style: Object.assign({}, card, {
+        color: '#6c7a8c',
+        fontSize: 13
+      })
+    }, "Loading hand hygiene totals\u2026"));
+    if (err) return React.createElement("div", {
+      style: {
+        maxWidth: 1240,
+        margin: '0 auto'
+      }
+    }, header, React.createElement("div", {
+      style: Object.assign({}, card, {
+        borderLeft: '4px solid #d23a52',
+        color: '#a92c42',
+        fontSize: 13
+      })
+    }, err));
+    if (!res || !res.source) return React.createElement("div", {
+      style: {
+        maxWidth: 1240,
+        margin: '0 auto'
+      }
+    }, header, React.createElement("div", {
+      style: Object.assign({}, card, {
+        color: '#6c7a8c',
+        fontSize: 13
+      })
+    }, "No hand hygiene audit is on record yet. It appears here once the hospital audit (Overall Hospital \u2192 Hand Hygiene) has been submitted and approved."));
+    const kpi = (label, value, foot, tone) => React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        padding: '13px 15px',
+        flex: '1 1 170px',
+        minWidth: 0
+      })
+    }, React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: '#6c7a8c',
+        textTransform: 'uppercase',
+        letterSpacing: '.4px'
+      }
+    }, label), React.createElement("div", {
+      style: {
+        fontSize: 24,
+        fontWeight: 800,
+        color: tone || '#16202e',
+        margin: '3px 0 2px',
+        fontVariantNumeric: 'tabular-nums'
+      }
+    }, value), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, foot));
+    const tTone = p => {
+      const s = stat(p);
+      return s ? HH_TONE[s.key][0] : null;
+    };
+    const chartRows = withVal.map(x => ({
+      mon: x.m.split('-')[0],
+      val: x.pct
+    }));
+    const chart = chartRows.length > 1 && (typeof window.AreaTargetChart === 'function' ? React.createElement(window.AreaTargetChart, {
+      data: chartRows,
+      x: 'mon',
+      y: 'val',
+      target: bench,
+      height: 200,
+      color: '#0090ca',
+      flat: true
+    }) : typeof window.LineChart === 'function' ? React.createElement(window.LineChart, {
+      data: chartRows,
+      x: 'mon',
+      y: 'val',
+      height: 200,
+      color: '#0090ca',
+      area: true,
+      flat: true
+    }) : null);
+    const cellEl = c => c && c.d > 0 ? React.createElement("span", {
+      title: c.n + ' compliant of ' + c.d + ' observed'
+    }, React.createElement("span", {
+      style: pctCell(c.pct)
+    }, hhFmtP(c.pct)), React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 10.5,
+        color: '#8592a3'
+      }
+    }, c.n, "/", c.d)) : c && c.pct != null ? React.createElement("span", {
+      title: "Percentage only \u2014 no counts on record",
+      style: pctCell(c.pct)
+    }, hhFmtP(c.pct)) : c && c.src === 'not-audited' ? React.createElement("span", {
+      style: {
+        color: '#9aa6b5',
+        fontSize: 11
+      }
+    }, "not audited") : React.createElement("span", {
+      style: {
+        color: '#c2cad4'
+      }
+    }, "\u2014");
+    return React.createElement("div", {
+      style: {
+        maxWidth: 1240,
+        margin: '0 auto'
+      }
+    }, header, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 12,
+        flexWrap: 'wrap',
+        marginBottom: 14
+      }
+    }, kpi('Hospital compliance ' + res.year, hhFmtP(res.total.pct), res.total.d ? hhFmtN(res.total.n) + ' of ' + hhFmtN(res.total.d) + ' opportunities' : 'no counts on record', tTone(res.total.pct)), kpi('Latest month', latest ? hhFmtP(latest.pct) : '—', latest ? ml(latest.m) + (latest.d ? ' · ' + latest.n + '/' + latest.d : ' · % only') : 'nothing reported', latest && tTone(latest.pct)), kpi('Months on target', withVal.length ? onTarget + '/' + withVal.length : '—', 'at or above ' + bench + '%', withVal.length && onTarget === withVal.length ? '#12776c' : '#9a5b00'), kpi('Departments audited', String(res.rows.filter(r => r.total.d > 0).length), res.groups.length ? res.groups.length + ' staff groups' : 'no staff-group detail')), chart && React.createElement("div", {
+      style: card
+    }, React.createElement("div", {
+      style: sub
+    }, "Monthly compliance (%)"), React.createElement("div", {
+      style: note
+    }, "Hospital total each month \xB7 target \u2265 ", bench, "%"), chart), React.createElement("div", {
+      style: card
+    }, React.createElement("div", {
+      style: sub
+    }, "Hospital total by month"), React.createElement("div", {
+      style: note
+    }, "Pooled: compliant moments \xF7 observed opportunities across every audited department."), React.createElement("div", {
+      style: scroll
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        minWidth: 560
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "Month"), React.createElement("th", {
+      style: thr
+    }, "Compliant"), React.createElement("th", {
+      style: thr
+    }, "Opportunities"), React.createElement("th", {
+      style: thr
+    }, "Compliance"), React.createElement("th", {
+      style: th
+    }, "Status"))), React.createElement("tbody", null, shown.map(x => {
+      const pend = pendingOf(x.m);
+      return React.createElement("tr", {
+        key: x.m
+      }, React.createElement("td", {
+        style: Object.assign({}, td, {
+          fontWeight: 700
+        })
+      }, monthLabel(x.m)), React.createElement("td", {
+        style: tdr
+      }, hhFmtN(x.n)), React.createElement("td", {
+        style: tdr
+      }, hhFmtN(x.d)), React.createElement("td", {
+        style: Object.assign({}, tdr, pctCell(x.pct))
+      }, hhFmtP(x.pct)), React.createElement("td", {
+        style: td
+      }, chip(x.pct, pend.length ? '' : 'not reported'), x.pctOnly && React.createElement("span", {
+        title: "Only a percentage is on record for this month \u2014 no compliant / opportunity counts",
+        style: {
+          marginLeft: 6,
+          fontSize: 10.5,
+          color: '#8592a3'
+        }
+      }, "% only"), pend.length > 0 && React.createElement("span", {
+        style: {
+          marginLeft: 6,
+          display: 'inline-block',
+          padding: '2px 8px',
+          borderRadius: 20,
+          background: 'rgba(224,138,30,.16)',
+          color: '#9a5b00',
+          fontWeight: 700,
+          fontSize: 10.5
+        }
+      }, "awaiting approval")));
+    }), shown.length > 0 && React.createElement("tr", null, React.createElement("td", {
+      style: Object.assign({}, tdTot, {
+        textAlign: 'left'
+      })
+    }, res.year, " total"), React.createElement("td", {
+      style: tdTot
+    }, hhFmtN(res.total.n)), React.createElement("td", {
+      style: tdTot
+    }, hhFmtN(res.total.d)), React.createElement("td", {
+      style: Object.assign({}, tdTot, pctCell(res.total.pct))
+    }, hhFmtP(res.total.pct)), React.createElement("td", {
+      style: Object.assign({}, tdTot, {
+        textAlign: 'left'
+      })
+    }, chip(res.total.pct))), !shown.length && React.createElement("tr", null, React.createElement("td", {
+      colSpan: 5,
+      style: Object.assign({}, td, {
+        color: '#6c7a8c'
+      })
+    }, "Nothing reported for ", res.year, ".")))))), res.rows.length > 0 && deptShown.length > 0 && React.createElement("div", {
+      style: card
+    }, React.createElement("div", {
+      style: sub
+    }, "By department"), React.createElement("div", {
+      style: note
+    }, "Each cell: compliance, then compliant / observed. \"Period\" pools every month shown.", res.hasSelfReported ? ' Departments marked self-reported sent their own figures for a month the audit did not cover; they are added only in the last row.' : ''), React.createElement("div", {
+      style: scroll
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        minWidth: 300 + deptShown.length * 86
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: Object.assign({}, th, {
+        position: 'sticky',
+        left: 0,
+        zIndex: 1
+      })
+    }, "Department"), deptShown.map(x => React.createElement("th", {
+      key: x.m,
+      style: thr
+    }, ml(x.m))), React.createElement("th", {
+      style: thr
+    }, "Period"))), React.createElement("tbody", null, res.rows.map(r => React.createElement("tr", {
+      key: r.key
+    }, React.createElement("td", {
+      style: Object.assign({}, td, {
+        fontWeight: 600,
+        position: 'sticky',
+        left: 0,
+        background: '#fbfdff'
+      })
+    }, r.name, r.selfReported && React.createElement("span", {
+      title: "Includes the department's own figures for a month the audit did not cover",
+      style: {
+        marginLeft: 6,
+        fontSize: 10,
+        color: '#9a5b00',
+        fontWeight: 700
+      }
+    }, "self-reported")), deptShown.map(x => React.createElement("td", {
+      key: x.m,
+      style: tdr
+    }, cellEl(r.cells[x.m]))), React.createElement("td", {
+      style: Object.assign({}, tdr, {
+        background: 'rgba(240,246,252,.7)'
+      })
+    }, cellEl(r.total.d > 0 ? r.total : null)))), React.createElement("tr", null, React.createElement("td", {
+      style: Object.assign({}, tdTot, {
+        textAlign: 'left',
+        position: 'sticky',
+        left: 0
+      })
+    }, "Hospital total"), deptShown.map(x => React.createElement("td", {
+      key: x.m,
+      style: tdTot
+    }, cellEl(x.d != null ? {
+      n: x.n,
+      d: x.d,
+      pct: x.pct
+    } : {
+      pct: x.pct
+    }))), React.createElement("td", {
+      style: tdTot
+    }, cellEl(res.total.d > 0 ? res.total : null))), res.hasSelfReported && React.createElement("tr", null, React.createElement("td", {
+      style: Object.assign({}, td, {
+        fontWeight: 700,
+        position: 'sticky',
+        left: 0,
+        background: '#f4f8fb'
+      })
+    }, "Incl. department self-reports"), deptShown.map(x => React.createElement("td", {
+      key: x.m,
+      style: Object.assign({}, tdr, {
+        background: '#f4f8fb'
+      })
+    }, cellEl(x.dAll != null ? {
+      n: x.nAll,
+      d: x.dAll,
+      pct: x.pctAll
+    } : {
+      pct: x.pctAll
+    }))), React.createElement("td", {
+      style: Object.assign({}, tdr, {
+        background: '#f4f8fb'
+      })
+    }, cellEl(res.totalAll.d > 0 ? res.totalAll : null))))))), res.groups.length > 0 && React.createElement("div", {
+      style: card
+    }, React.createElement("div", {
+      style: sub
+    }, "By staff group"), React.createElement("div", {
+      style: note
+    }, "Nurses, doctors, PCAs and others across every audited department."), React.createElement("div", {
+      style: scroll
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%',
+        minWidth: 240 + deptShown.length * 86
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "Staff group"), deptShown.map(x => React.createElement("th", {
+      key: x.m,
+      style: thr
+    }, ml(x.m))), React.createElement("th", {
+      style: thr
+    }, "Period"), React.createElement("th", {
+      style: th
+    }, "Status"))), React.createElement("tbody", null, res.groups.map(g => React.createElement("tr", {
+      key: g.key
+    }, React.createElement("td", {
+      style: Object.assign({}, td, {
+        fontWeight: 600
+      })
+    }, g.label), deptShown.map(x => React.createElement("td", {
+      key: x.m,
+      style: tdr
+    }, cellEl(g.cells[x.m]))), React.createElement("td", {
+      style: Object.assign({}, tdr, {
+        background: 'rgba(240,246,252,.7)'
+      })
+    }, cellEl(g.total)), React.createElement("td", {
+      style: td
+    }, chip(g.total.pct)))))))), React.createElement("div", {
+      style: Object.assign({}, card, {
+        fontSize: 11.5,
+        color: '#3c4858',
+        background: 'rgba(236,247,255,.7)'
+      })
+    }, React.createElement("b", null, "How to read this:"), " \u2265 ", bench, "% compliant", band ? ' · ' + band + ' needs improvement (re-audit within 2 weeks)' : '', " \xB7 below ", band ? Math.min(75, bench) : bench, "% unacceptable (escalate). Figures come from the approved hospital audit; months still awaiting approval are flagged and show once approved. Reference: WHO (2009) Guidelines on Hand Hygiene in Health Care."));
+  }
   function CollectorRoster() {
     const R = window.UNICO_ROSTER;
     const [scope, setScope] = useState(null);
@@ -15616,7 +16379,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         fontSize: 11.5,
         color: '#6c7a8c'
       }
-    }, "Counted through ", monthLabel(dcDefaultMonth()), " \xB7 ", shown.length, " shown")), subs === null ? React.createElement("div", {
+    }, "Counted through ", monthLabel(dcLastDueMonth()), " \xB7 ", shown.length, " shown")), subs === null ? React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         padding: 24,
         color: '#6c7a8c'
@@ -15638,7 +16401,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         fontSize: 12.5,
         color: '#6c7a8c'
       }
-    }, "Every month owed through ", monthLabel(dcDefaultMonth()), " has been sent or is on record.")) : shown.length === 0 ? React.createElement("div", {
+    }, "Every month owed through ", monthLabel(dcLastDueMonth()), " has been sent or is on record.")) : shown.length === 0 ? React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         padding: 22,
         textAlign: 'center',
@@ -16439,6 +17202,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const areas = useMemo(() => kinds.quality === false ? [] : dcSendAreas(window.qualityData ? window.qualityData() : []), [dataRev, kinds.quality, collRev]);
     const hasPatient = depts.length > 0;
     const hasQuality = areas.some(a => a && a.indicators && a.indicators.length);
+    const hhOn = !!(window.unicoHhScreenOn && window.unicoHhScreenOn());
     const inCharge = user.role === 'incharge' || user.unitLead === true;
     const [viewState, setView] = useState(props && props.initialView || (inCharge ? 'home' : hasQuality ? 'status' : 'patient'));
     const view = embedded && props.view ? props.view : viewState;
@@ -16582,11 +17346,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       quality: 'Quality data',
       patient: 'Patient statistics',
       history: 'My submissions',
+      hh: 'Hand Hygiene',
       roster: 'Duty roster',
       profile: 'My profile',
       dept: 'Department & staff'
     }[view] || 'Submission status';
-    const collectNav = CP_NAV_COLLECT.filter(([v]) => v === 'missing' ? hasPatient || hasQuality : v === 'patient' ? hasPatient : hasQuality);
+    const collectNav = CP_NAV_COLLECT.filter(([v]) => v === 'hh' ? hhOn : v === 'missing' ? hasPatient || hasQuality : v === 'patient' ? hasPatient : hasQuality);
     const dl = cpDeadline(month);
     const lateMs = dl ? Date.now() - dl.getTime() : 0;
     const overdueDays = lateMs > 0 && (subCount.missing > 0 || subCount.statGap > 0) ? Math.ceil(lateMs / 864e5) : 0;
@@ -16751,7 +17516,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         boxShadow: '0 8px 20px rgba(210,58,82,.3)'
       }
     }, "Submit missing data")))));
-    const screens = React.createElement(React.Fragment, null, !hasPatient && !hasQuality && React.createElement("div", {
+    const screens = React.createElement(React.Fragment, null, !hasPatient && !hasQuality && view !== 'hh' && React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         maxWidth: 620,
         margin: '40px auto',
@@ -16840,7 +17605,16 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         month: jump && jump.dept ? jump.month : null,
         from: jump && jump.from
       }
-    })), view === 'history' && React.createElement("div", {
+    })), view === 'hh' && (hhOn ? React.createElement(DcHandHygiene, null) : React.createElement("div", {
+      style: Object.assign({}, CP_CARD, {
+        maxWidth: 620,
+        margin: '40px auto',
+        padding: 30,
+        textAlign: 'center',
+        fontSize: 13,
+        color: '#6c7a8c'
+      })
+    }, "Hand Hygiene has not been given to your account. Ask an administrator to tick it for you in Access Control.")), view === 'history' && React.createElement("div", {
       style: {
         maxWidth: 1240,
         margin: '0 auto'

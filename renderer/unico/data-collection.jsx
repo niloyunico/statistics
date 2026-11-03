@@ -12,14 +12,29 @@
   const Ic = window.Ic, I = window.I, SectionTitle = window.SectionTitle;
   const toast = (m, t) => { try { window.UI && window.UI.toast && window.UI.toast(m, t); } catch (e) {} };
 
+  /* Every call answers {ok:false, error} in words instead of failing: an expired session (401,
+     or a redirect to the sign-in page), an HTML error page, a dropped connection or a hung
+     request all used to surface as a bare "Could not save". */
+  function dcFetchJson(url, init) {
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = ctl ? setTimeout(() => ctl.abort(), 45000) : null;
+    const opts = Object.assign({}, init || {}, { headers: Object.assign({ accept: 'application/json' }, (init && init.headers) || {}) }, ctl ? { signal: ctl.signal } : {});
+    return fetch(url, opts)
+      .then((r) => {
+        if (r.status === 401 || r.redirected) return { ok: false, code: 'session', error: 'Your session has expired. Sign in again — your entries are still on this screen.' };
+        return r.json().catch(() => ({ ok: false, error: 'The server did not answer properly (HTTP ' + r.status + '). Check My submissions before trying again.' }));
+      })
+      .catch((e) => ({ ok: false, error: e && e.name === 'AbortError' ? 'The server took too long to answer. Check My submissions before trying again.' : 'Could not reach the server — check the connection and try again.' }))
+      .then((r) => { if (timer) clearTimeout(timer); return r; });
+  }
   const dcApi = {
-    get: (url) => fetch(url, { headers: { accept: 'application/json' } }).then((r) => r.json()),
-    post: (url, body) => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { dcInvalidateSubs(); window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
+    get: (url) => dcFetchJson(url),
+    post: (url, body) => dcFetchJson(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { dcInvalidateSubs(); window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
     // An edit changes the submission lists too (and an approved edit changes live data), so it
     // must drop the cached history exactly like a POST does, or every list keeps the old row.
-    patch: (url, body) => fetch(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { dcInvalidateSubs(); window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
-    del: (url) => fetch(url, { method: 'DELETE' }).then((r) => r.json()),
-    put: (url, body) => fetch(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json()),
+    patch: (url, body) => dcFetchJson(url, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => { if (r.ok && url.indexOf('/api/submissions') === 0) { dcInvalidateSubs(); window.dispatchEvent(new Event('unico:data-refreshed')); } return r; }),
+    del: (url) => dcFetchJson(url, { method: 'DELETE' }),
+    put: (url, body) => dcFetchJson(url, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }),
   };
 
   // Shared, de-duped fetch of ALL submissions. The Review's Coverage panel, Collector
@@ -60,14 +75,17 @@
     const gen = _dcGen; _dcPromiseGen = gen;
     _dcAllPromise = (async () => {
       const rows = new Map();
-      let offset = 0;
+      let offset = 0, hhCover = null;
       do {
         const r = await dcApi.get('/api/submissions?status=all&limit=1000&offset=' + offset);
         if (!r || !r.ok) throw new Error((r && r.error) || 'Could not load submission history');
         (r.submissions || []).forEach(s => rows.set(s.id, s));
+        if (r.hhCover) hhCover = r.hhCover;
         offset = r.nextOffset;
       } while (offset != null);
       const list = [...rows.values()];
+      // Departments a pending hospital hand-hygiene audit covers (scoped accounts; see dcQStatus).
+      if (hhCover) list.hhCover = hhCover;
       if (gen === _dcGen) { _dcAllCache = list; _dcAllAt = Date.now(); }
       return list;
     })().finally(() => { _dcAllPromise = null; });
@@ -292,9 +310,14 @@
   // A wide list of month keys (several fiscal years each way) so the reporting-month
   // dropdown isn't limited to the current FY — any month / year is selectable.
   const dcWideMonths = () => { const out = []; for (let yy = 24; yy <= 32; yy++) { MONS_ABBR.forEach((m) => out.push(m + '-' + String(yy).padStart(2, '0'))); } return out; }; // 2024 → 2032 (covers 2030+)
-  // Default reporting month = the PREVIOUS completed calendar month (monthly reporting is
-  // retrospective — e.g. in July you report June). Computed from the clock, never hardcoded.
-  const dcDefaultMonth = () => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return MONS_ABBR[d.getMonth()] + '-' + String(d.getFullYear() % 100).padStart(2, '0'); };
+  // Two month rules, both on the hospital calendar (Asia/Dhaka — dcSubmissionWindow):
+  //   dcDefaultMonth  = the WORKING month every screen opens on: the previous month, and the
+  //                     current one during its final two days (the form's own default);
+  //   dcLastDueMonth  = the last COMPLETED month — what "Missing data" counts through.
+  // dcDefaultMonth used the device clock and ignored the two-day rule, so on the 30th the form
+  // opened on the current month while every other screen still showed the previous one.
+  const dcDefaultMonth = () => dcSubmissionWindow().current;
+  const dcLastDueMonth = () => dcSubmissionWindow().previous;
   // Report the previous month; the current month opens during its final two days.
   // Use the hospital calendar even when the user's device is in another timezone.
   function dcSubmissionWindow(now = new Date()) {
@@ -306,7 +329,7 @@
     const previous = key(year - (month === 0 ? 1 : 0), (month + 11) % 12);
     const latest = day >= days - 1 ? key(year, month) : previous;
     const current = latest;
-    return { current, latest };
+    return { current, latest, previous };
   }
   function defaultMonthFor() { return dcSubmissionWindow().current; }
   function dcSubmissionMonthOpts(starts, keep) {
@@ -740,7 +763,7 @@
         <Field label="Quality areas" hint="Auto-granted by the departments above (assign once). Tick extra areas below for custom access.">
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12.5, fontWeight: 600, color: 'var(--ink-2)', marginBottom: 9, cursor: 'pointer' }}>
             <input type="checkbox" checked={!!val.allQualityAreas} onChange={(e) => set({ allQualityAreas: e.target.checked })} />
-            Hospital-wide — every quality area (e.g. Infection Control)
+            Hospital-wide — every quality area, incl. Overall Hospital (e.g. the Infection Control nurse)
           </label>
           {!val.allQualityAreas && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
@@ -1559,10 +1582,16 @@
     // it fills in as incidents are added.
     const autoCount = isIncidentType;
 
+    // An older month recorded as a plain count with no incident list (e.g. "3") would reopen as
+    // 0 — the count is the number of incidents logged — so a denominator-only fix sent 3 → 0.
+    // Until an incident is logged, that recorded count stands.
+    const recordedIncs = curInd && curInd.incidents && Array.isArray(curInd.incidents[month]) ? curInd.incidents[month].length : 0;
+    const legacyCount = (autoCount && curInd && !recordedIncs) ? Number(isRate ? (curInd.mNum || {})[month] : (curInd.months || {})[month]) : NaN;
+    const keepLegacy = autoCount && numMode === 'direct' && incidents.length === 0 && legacyCount > 0;
     const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n
       // Every logged incident counts: a card left blank must be filled in or removed before
       // the month can be saved, so the count on screen is the count that is sent.
-      : autoCount ? incidents.length : (Number(directNum) || 0);
+      : autoCount ? (keepLegacy ? legacyCount : incidents.length) : (Number(directNum) || 0);
     // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
     // OPTIONALLY add one to compute a rate. In "By group" / "By department" modes the total
     // denominator is the sum of the group/matrix cells; "Direct value" uses the single field.
@@ -1626,8 +1655,13 @@
       // Admin-set denominators (e.g. NSI's total healthcare workers) carry forward the last
       // value recorded for ANY month, so the figure is always shown even in a fresh month.
       const denThisMonth = (curInd.mDen && curInd.mDen[month] != null && curInd.mDen[month] !== '') ? curInd.mDen[month] : null;
+      // The carried figure is the latest month BEFORE this one — the rule the server applies at
+      // approval. Taking the last key in storage order could pick a LATER month, so the preview
+      // disagreed with the rate that was then stored.
       const denCarry = (denAdminOnly && denThisMonth == null && curInd.mDen)
-        ? Object.keys(curInd.mDen).map((k) => curInd.mDen[k]).filter((v) => v != null && v !== '').pop()
+        ? (() => { const r0 = dcMonthRank(month); let best = null, bestR = -Infinity;
+            Object.keys(curInd.mDen).forEach((k) => { const v = curInd.mDen[k], r = dcMonthRank(k); if (v == null || v === '' || r == null || (r0 != null && r >= r0)) return; if (r > bestR) { bestR = r; best = v; } });
+            return best; })()
         : null;
       setDen(denThisMonth != null ? String(denThisMonth) : (denCarry != null ? String(denCarry) : ''));
       const cp = curInd.capa && curInd.capa[month];
@@ -1705,10 +1739,32 @@
       if (!indId) { failSubmit('Select an indicator'); return; }
       if (isNew && !newInd.name.trim()) { failSubmit('Enter the new indicator name'); return; }
       if (!month) { failSubmit('Pick a month'); return; }
+      // A unit whose start month is still ahead: the picker can only offer the latest open
+      // month, which the server then refuses — say so here instead.
+      if (curInd && !isNew && dcPortalUser()) {
+        const st = dcIndicatorStart(area, curInd, []);
+        if (st && dcMonthRank(st) != null && dcMonthRank(st) > dcMonthRank(month)) { failSubmit(((area && area.name) || 'This area') + ' reports this indicator from ' + monthLabel(st) + ' — nothing is due for ' + monthLabel(month) + '.'); return; }
+      }
       if (notObserved && !noReason.trim()) { failSubmit('Please say WHY it was not observed this month.'); return; }
       // A forgotten numerator is not a measured zero: `Number('') || 0` sent a 0% breach as
       // genuine data — exactly what "Not observed" exists to prevent. A typed 0 stays valid.
       if (!notObserved && numMode === 'direct' && !autoCount && String(directNum == null ? '' : directNum).trim() === '') { failSubmit('Enter ' + numLabel + ' — type 0 if there were none this month'); return; }
+      // Breakdown grids (staff group / department × group): a cell with observed opportunities
+      // but a BLANK compliant count went out as 0 compliant — a false 0% — and a compliant
+      // count above the observed one made a >100% month. A wholly blank row = not audited.
+      if (!notObserved && isRate && (numMode === 'group' || numMode === 'dept')) {
+        const typedV = (v) => String(v == null ? '' : v).trim() !== '';
+        const cells = numMode === 'group'
+          ? GROUP_KEYS.map(([k, lbl]) => ({ where: lbl, n: groups[k], d: groupsDen[k] }))
+          : [].concat.apply([], deptRows.map((r) => GROUP_KEYS.map(([k, lbl]) => ({ where: (r.dept || 'Row') + ' · ' + lbl, n: r.g && r.g[k] && r.g[k].n, d: r.g && r.g[k] && r.g[k].d }))));
+        const blankNum = cells.find((c) => !typedV(c.n) && Number(c.d) > 0);
+        if (blankNum) { failSubmit(blankNum.where + ': enter the ' + numLabel.toLowerCase() + ' count — type 0 if none were compliant.'); return; }
+        const blankDen = cells.find((c) => typedV(c.n) && Number(c.n) > 0 && !typedV(c.d));
+        if (blankDen) { failSubmit(blankDen.where + ': enter the ' + denLabel.toLowerCase() + ' as well.'); return; }
+        const over = cells.find((c) => Number(c.n) > Number(c.d || 0));
+        if (over) { failSubmit(over.where + ': ' + numLabel.toLowerCase() + ' (' + over.n + ') cannot be more than ' + denLabel.toLowerCase() + ' (' + (over.d || 0) + ').'); return; }
+      }
+      if (!notObserved && formula === 'pct' && numMode === 'direct' && !denLockedForCollector && Number(directNum) > Number(den || 0) && Number(den) > 0) { failSubmit(numLabel + ' (' + directNum + ') cannot be more than ' + denLabel.toLowerCase() + ' (' + den + ') for a percentage.'); return; }
       if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
         // Zero-exposure month (e.g. "no surgical discharges"): 0 events over an EXPLICIT 0
         // denominator is a legitimate report — only refuse when events exist without a base,
@@ -1961,7 +2017,7 @@
                 <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '11px 13px', display: 'flex', flexDirection: 'column', gap: 10, ...(need(autoCount && numMode === 'direct' && nothingEntered) || {}) }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px 12px', flexWrap: 'wrap' }}>
                     {autoCount && numMode === 'direct' && (
-                      <span className="num" style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: nothingEntered ? 'var(--rose)' : 'var(--ink)' }}>{nothingEntered ? '—' : incidents.length}</span>
+                      <span className="num" style={{ fontSize: 32, fontWeight: 700, lineHeight: 1, color: nothingEntered ? 'var(--rose)' : 'var(--ink)' }}>{nothingEntered ? '—' : numerator}</span>
                     )}
                     <div style={{ flex: '1 1 200px', minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -1972,6 +2028,7 @@
                         <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 2 }}>
                           {nothingEntered ? 'Nothing entered yet — log each incident, or confirm there were none.'
                             : incidents.length ? 'Auto — one per incident logged below, with patient & CAPA detail.'
+                              : keepLegacy ? ('Recorded as ' + legacyCount + ' with no incident list on record — that count is kept. Logging an incident replaces it with the number logged.')
                               : 'Zero confirmed — no incidents this month.'}
                         </div>
                       )}
@@ -2424,6 +2481,19 @@
       setVals(m.values); setTarget(id);
     };
     const setInc = (i, k, v) => setIncidents((a) => a.map((x, j) => (j === i ? Object.assign({}, x, { [k]: v }) : x)));
+    // An incident-type count IS the number of incidents logged. Adding or removing one here left
+    // the count as it was, so the figure and the list disagreed once saved. Follows the list when
+    // the count was incident-driven (it matched the list, or nothing was counted yet).
+    const incCount0 = Number(isRate ? s.num : s.value);
+    const incDriven = s.type === 'quality' && !hasDeptBreak && !hasGrp
+      && ((Array.isArray(s.incidents) && s.incidents.length > 0 && incCount0 === s.incidents.filter(dcIncidentFilled).length) || !(incCount0 > 0));
+    const incTouched = React.useRef(false);
+    useEffect(() => {
+      if (!incTouched.current) { incTouched.current = true; return; }
+      if (!incDriven) return;
+      const c = incidents.filter(dcIncidentFilled).length;
+      if (isRate) setQnum(c); else setQval(c);
+    }, [incidents]);
     const INC_FIELDS = [['uhid', 'UHID'], ['patientName', 'Patient name'], ['diagnosis', 'Diagnosis'], ['details', 'What happened'], ['finding', 'Root cause / finding'], ['corrective', 'Corrective action'], ['preventive', 'Preventive action']];
     const when = (ts) => { try { return ts ? new Date(ts).toLocaleString() : '—'; } catch (e) { return '—'; } };
     const Meta = ({ label, value }) => (
@@ -3379,18 +3449,24 @@
   // "My data" so the records match what the month dropdown flags as "reported".
   function reportedRecords() {
     const out = [];
-    const liveDepts = dcAllDepts();
+    // Only the kinds this person sends (Access Control → Data Submission): a quality-only
+    // submitter's list was filled with every department's patient statistics.
+    const kinds = ((typeof window !== 'undefined' && window.__UNICO_USER__) || {}).submitKinds || {};
+    const liveDepts = kinds.patient === false ? [] : dcAllDepts();
     liveDepts.forEach((d) => (d.series || []).forEach((r) => {
       const values = {}; Object.keys(r).forEach((k) => { if (k !== 'month' && k !== 'full') values[k] = r[k]; });
       out.push({ id: 'rec-p-' + d.id + '-' + r.month, type: 'patient', department: d.id, departmentName: d.name, month: r.month, values, status: 'reported', submittedAt: null });
     }));
-    const liveAreas = (window.qualityData ? window.qualityData() : []);
+    const liveAreas = kinds.quality === false ? [] : (window.qualityData ? window.qualityData() : []);
     // One row per indicator × MONTH with data. The old rows read the legacy fixed-FY
     // `ind.quarters` (Jun-25…May-26, no year), so nothing from Jun-26 on ever appeared.
     const has = (o, m) => !!o && o[m] != null && o[m] !== '';
     liveAreas.forEach((a) => (a.indicators || []).forEach((ind) => {
       const ms = new Set([].concat(Object.keys(ind.months || {}), Object.keys(ind.mNum || {}), Object.keys(ind.mNotObserved || {}), Object.keys(ind.incidents || {})));
       ms.forEach((m) => {
+        // A month copied in from the hospital hand-hygiene audit is on screen only — it is the
+        // audit's record, listed once under Overall Hospital, not a department submission.
+        if (ind.mFromAudit && ind.mFromAudit[m]) return;
         const notObserved = !!(ind.mNotObserved && ind.mNotObserved[m]);
         const incs = ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
         if (!has(ind.months, m) && !has(ind.mNum, m) && !notObserved && !incs) return;
@@ -3820,6 +3896,8 @@
     ['status', 'Submission status', 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z'],
     ['quality', 'Quality data', 'M22 12h-4l-3 8-4-16-3 8H2'],
     ['patient', 'Patient statistics', 'M4 4h16v16H4zM4 9h16M9 4v16'],
+    // Read-only hospital hand-hygiene totals — only for people it is granted to (unicoHhScreenOn).
+    ['hh', 'Hand Hygiene', 'M7 11V6a2 2 0 014 0v5M11 10V4a2 2 0 014 0v6M15 10V6a2 2 0 014 0v7a7 7 0 01-7 7h-1a7 7 0 01-6.2-3.8L3 12.6a1.8 1.8 0 013-1.9L7 12'],
   ];
   const CP_NAV_UNIT = [
     ['history', 'My submissions', 'M6 2h9l5 5v15H6zM15 2v5h5M9 13h7M9 17h7'],
@@ -3854,7 +3932,8 @@
     const matching = (subs || []).filter(s => s.type === 'quality' && s.status !== 'withdrawn' && s.area === area && s.month === month &&
       (s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase()));
     const latest = matching.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0];
-    if (latest && latest.status === 'pending') return 'pending';
+    // 'approving' = mid-approval: it was sent, so it is never "missing".
+    if (latest && (latest.status === 'pending' || latest.status === 'approving')) return 'pending';
     if (ind.mNotObserved && ind.mNotObserved[month]) return 'notobs';
     if (cpHasData(ind, month)) return 'recorded';
     // Collector snapshots deliberately omit readings. The review record still proves
@@ -4006,7 +4085,7 @@
   // With no start month set, counting begins in January of the current reporting year (or at
   // the first data, when that is earlier). Starting at the first data hid real gaps: nothing
   // before a department's first reading was ever "missing" (ER Jan–Mar looked complete).
-  const dcYearStart = () => 'Jan-' + dcDefaultMonth().split('-')[1];
+  const dcYearStart = () => 'Jan-' + dcLastDueMonth().split('-')[1];
   const dcEarlierMonth = (a, b) => {
     const ra = dcMonthRank(a), rb = dcMonthRank(b);
     if (ra == null) return rb == null ? null : b;
@@ -4037,7 +4116,7 @@
   };
   // Every month key from `fromMonth` through the last COMPLETED month, oldest first.
   const dcDueMonths = (fromMonth) => {
-    const last = dcDefaultMonth(); const lr = dcMonthRank(last);
+    const last = dcLastDueMonth(); const lr = dcMonthRank(last);
     let r = dcMonthRank(fromMonth);
     if (r == null) return [last];
     const out = [];
@@ -4048,7 +4127,7 @@
   const dcMonthDue = (start, m) => {
     const mr = dcMonthRank(m); if (mr == null) return false;
     const sr = dcMonthRank(start);
-    return mr >= (sr == null ? dcMonthRank(dcDefaultMonth()) : sr);
+    return mr >= (sr == null ? dcMonthRank(dcLastDueMonth()) : sr);
   };
   const dcPatientStart = (dept, subs, deptStart) => {
     if (!dept) return null;
@@ -4060,7 +4139,48 @@
     (dcSubsIndex(subs).pDept.get(dept.id) || []).forEach((s) => see(s.month));
     return best == null ? dcYearStart() : dcEarlierMonth(dcMonthKey(best), dcYearStart());
   };
-  const dcQStatus = (subs, areaKey, ind, m) => cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
+  /* A department's hand hygiene is reported THROUGH the hospital audit (one submission with a
+     row per department). Once approved, quality-store copies the rows in, so the month reads
+     as recorded; while the audit is still pending, the department's own HH looked "missing"
+     and its collector was chased for figures already sent. month → Set(area keys) covered by
+     an in-flight hospital audit, built once per submissions array. */
+  const _dcHHCover = new WeakMap();
+  const dcHHAuditCover = (subs) => {
+    const arr = Array.isArray(subs) ? subs : [];
+    if (_dcHHCover.has(arr)) return _dcHHCover.get(arr);
+    const out = new Map(); const HH = window.UNICO_HH;
+    // A scoped account never receives the hospital audit itself — only the server's cover
+    // list (month + audited department names, no figures).
+    if (HH && Array.isArray(arr.hhCover)) {
+      const areas = window.qualityData ? window.qualityData() : [];
+      arr.hhCover.forEach((c) => (c.depts || []).forEach((nm) => {
+        const a = HH.matchDept(nm, areas); if (!a) return;
+        if (!out.has(c.month)) out.set(c.month, new Set());
+        out.get(c.month).add(a.key);
+      }));
+    }
+    const inflight = HH ? arr.filter((s) => s && s.type === 'quality' && (s.status === 'pending' || s.status === 'approving') && Array.isArray(s.deptBreakdown) && s.deptBreakdown.length && /hand\s*hygiene/i.test(String(s.indicatorName || '') + ' ' + String(s.indicatorId || '').replace(/-/g, ' '))) : [];
+    if (inflight.length) {
+      const areas = window.qualityData ? window.qualityData() : [];
+      inflight.forEach((s) => s.deptBreakdown.forEach((r) => {
+        const t = HH.GROUPS.reduce((n, [k]) => n + (Number(((r && r.g) || {})[k] && r.g[k].d) || 0), 0);
+        if (!(t > 0)) return;   // a 0/0 row = not audited that month
+        const a = HH.matchDept(r && r.dept, areas); if (!a) return;
+        if (!out.has(s.month)) out.set(s.month, new Set());
+        out.get(s.month).add(a.key);
+      }));
+    }
+    _dcHHCover.set(arr, out);
+    return out;
+  };
+  const dcQStatus = (subs, areaKey, ind, m) => {
+    const st = cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
+    if ((st === 'none' || st === 'rejected') && ind && /hand\s*hygiene/i.test(ind.name || '')) {
+      const cov = dcHHAuditCover(subs).get(m);
+      if (cov && cov.has(areaKey)) return 'pending';
+    }
+    return st;
+  };
   // Patient statistics for one department-month: 'recorded' | 'pending' | 'rejected' | 'none'.
   const dcPatientState = (subs, dept, m) => {
     if ((dept.months || []).indexOf(m) >= 0) return 'recorded';
@@ -4363,6 +4483,226 @@
     const t = CP_ROS_STATUS[st] || CP_ROS_STATUS.draft;
     return { fontSize: 10.5, fontWeight: 700, padding: '3px 11px', borderRadius: 12, color: t[1], background: t[1] + '1a', whiteSpace: 'nowrap' };
   };
+  /* ---- Hand Hygiene (read-only) ----
+     The hospital hand-hygiene audit's totals: every department × month, the staff groups and
+     the hospital total, pooled Σcompliant ÷ Σopportunities by the shared rule (hh-pool.js,
+     served by /api/hand-hygiene). It is a screen GRANTED PER PERSON (Access Control → Data
+     Submission → Viewing → Hand Hygiene), so anyone it is given to sees the same figures;
+     a hospital-wide submitter always has it. */
+  const HH_TONE = { ok: ['#12776c', 'rgba(58,181,167,.15)'], warn: ['#9a5b00', 'rgba(224,138,30,.16)'], bad: ['#a92c42', 'rgba(210,58,82,.13)'] };
+  const hhFmtN = (v) => (v == null ? '—' : Number(v).toLocaleString());
+  const hhFmtP = (v) => (v == null ? '—' : (Math.round(v * 10) / 10) + '%');
+  function DcHandHygiene() {
+    const HH = window.UNICO_HH;
+    const [year, setYear] = useState(null);
+    const [res, setRes] = useState(null);
+    const [err, setErr] = useState('');
+    const [busy, setBusy] = useState(true);
+    const [rev, setRev] = useState(0);
+    useEffect(() => { const h = () => setRev((r) => r + 1); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
+    useEffect(() => {
+      let dead = false; setBusy(true);
+      fetch('/api/hand-hygiene' + (year ? '?year=' + year : ''), { headers: { accept: 'application/json' } })
+        .then((r) => { if (r.status === 401 || r.redirected) throw new Error('Your session has expired. Sign in again.'); return r.json().catch(() => { throw new Error('The server did not return the hand hygiene totals.'); }); })
+        .then((r) => { if (dead) return; if (!r.ok) { setErr(r.error || 'Could not load hand hygiene totals.'); setRes(null); } else { setErr(''); setRes(r); if (!year) setYear(r.year); } })
+        .catch((e) => { if (!dead) { setErr(e.message || 'Could not load hand hygiene totals.'); setRes(null); } })
+        .then(() => { if (!dead) setBusy(false); });
+      return () => { dead = true; };
+    }, [year, rev]);
+
+    const bench = res ? res.bench : 80;
+    const stat = (p) => (HH ? HH.status(p, bench) : null);
+    const chip = (p, extra) => { const s = stat(p); if (!s) return <span style={{ color: '#9aa6b5', fontSize: 11 }}>{extra || '—'}</span>;
+      const t = HH_TONE[s.key]; return <span style={{ display: 'inline-block', padding: '2px 9px', borderRadius: 20, background: t[1], color: t[0], fontWeight: 700, fontSize: 10.5, whiteSpace: 'nowrap' }}>{s.label}</span>; };
+    const pctCell = (p) => { const s = stat(p); return { fontWeight: 700, color: s ? HH_TONE[s.key][0] : '#9aa6b5' }; };
+    const pendingOf = (m) => (res && res.pending || []).filter((p) => p.month === m);
+    // Only the months that hold something (a reading, or a pending submission) — a wide year
+    // of empty columns hid the few audited ones.
+    const shown = res ? res.months.filter((x) => x.pct != null || x.d != null || pendingOf(x.m).length) : [];
+    const withVal = shown.filter((x) => x.pct != null);
+    // Department / staff-group columns: only months that hold department figures (older months
+    // carry just the hospital percentage, which made a run of empty columns).
+    const deptShown = res ? shown.filter((x) => res.rows.some((r) => r.cells[x.m] && r.cells[x.m].src !== 'not-audited')) : [];
+    const latest = withVal.length ? withVal[withVal.length - 1] : null;
+    const onTarget = withVal.filter((x) => x.pct >= bench).length;
+    const band = HH ? HH.improveBand(bench) : null;
+
+    const th = { textAlign: 'left', padding: '8px 10px', fontSize: 10, textTransform: 'uppercase', letterSpacing: '.3px', color: '#6c7a8c', fontWeight: 700, borderBottom: '1px solid rgba(125,145,180,.25)', whiteSpace: 'nowrap', background: 'rgba(240,246,252,.9)' };
+    const thr = Object.assign({}, th, { textAlign: 'right' });
+    const td = { padding: '7px 10px', fontSize: 12, color: '#2b3747', borderBottom: '1px solid rgba(125,145,180,.14)', whiteSpace: 'nowrap' };
+    const tdr = Object.assign({}, td, { textAlign: 'right', fontVariantNumeric: 'tabular-nums' });
+    const tdTot = Object.assign({}, tdr, { fontWeight: 800, background: 'rgba(0,144,202,.06)' });
+    const card = Object.assign({}, CP_CARD, { padding: '16px 18px', marginBottom: 14 });
+    const scroll = { overflowX: 'auto', WebkitOverflowScrolling: 'touch', margin: '0 -4px', padding: '0 4px' };
+    const sub = { fontSize: 13.5, fontWeight: 800, color: '#16202e', marginBottom: 3 };
+    const note = { fontSize: 11.5, color: '#6c7a8c', marginBottom: 10 };
+    const ml = (m) => { const p = String(m).split('-'); return p[0] + ' ' + (p[1] ? '20' + p[1] : ''); };
+
+    // CSV (opens in Excel) and a clean print page (the browser's "Save as PDF").
+    const tableRows = () => {
+      const head = ['Department'].concat(deptShown.reduce((a, x) => a.concat([ml(x.m) + ' compliant', ml(x.m) + ' opportunities', ml(x.m) + ' %']), [])).concat(['Period compliant', 'Period opportunities', 'Period %']);
+      const body = res.rows.map((r) => [r.name + (r.selfReported ? ' (self-reported)' : '')].concat(deptShown.reduce((a, x) => { const c = r.cells[x.m]; return a.concat(c && c.d != null ? [c.n, c.d, c.pct] : ['', '', c && c.pct != null ? c.pct : '']); }, [])).concat([r.total.n, r.total.d, r.total.pct]));
+      const tot = ['Hospital total (audit)'].concat(deptShown.reduce((a, x) => a.concat([x.n == null ? '' : x.n, x.d == null ? '' : x.d, x.pct == null ? '' : x.pct]), [])).concat([res.total.n, res.total.d, res.total.pct]);
+      const all = res.hasSelfReported ? [['Incl. department self-reports'].concat(deptShown.reduce((a, x) => a.concat([x.nAll == null ? '' : x.nAll, x.dAll == null ? '' : x.dAll, x.pctAll == null ? '' : x.pctAll]), [])).concat([res.totalAll.n, res.totalAll.d, res.totalAll.pct])] : [];
+      return [head].concat(body, [tot], all);
+    };
+    const downloadCsv = () => {
+      if (!res) return;
+      const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+      const rows = tableRows();
+      rows.push([]); rows.push(['Staff group'].concat(deptShown.map((x) => ml(x.m) + ' %')).concat(['Period compliant', 'Period opportunities', 'Period %']));
+      res.groups.forEach((g) => rows.push([g.label].concat(deptShown.map((x) => (g.cells[x.m] ? g.cells[x.m].pct : ''))).concat([g.total.n, g.total.d, g.total.pct])));
+      const blob = new Blob(['﻿' + rows.map((r) => r.map(esc).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'hand-hygiene-' + res.year + '.csv';
+      document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    };
+    const printPage = () => {
+      if (!res) return;
+      const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+      const cellTxt = (c) => (c && c.d > 0 ? esc(c.n + '/' + c.d) + '<br><b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.pct != null ? '<b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.src === 'not-audited' ? 'n/a' : '—');
+      const monthsHead = deptShown.map((x) => '<th>' + esc(ml(x.m)) + '</th>').join('');
+      const deptRows = res.rows.map((r) => '<tr><td>' + esc(r.name) + (r.selfReported ? ' <i>(self-reported)</i>' : '') + '</td>' + deptShown.map((x) => '<td class="r">' + cellTxt(r.cells[x.m]) + '</td>').join('') + '<td class="r">' + cellTxt(r.total) + '</td></tr>').join('');
+      const totRow = '<tr class="t"><td>Hospital total (audit)</td>' + deptShown.map((x) => '<td class="r">' + cellTxt(x.d != null ? { n: x.n, d: x.d, pct: x.pct } : { pct: x.pct }) + '</td>').join('') + '<td class="r">' + cellTxt(res.total) + '</td></tr>';
+      const allRow = res.hasSelfReported ? '<tr class="t2"><td>Incl. department self-reports</td>' + deptShown.map((x) => '<td class="r">' + cellTxt(x.dAll != null ? { n: x.nAll, d: x.dAll, pct: x.pctAll } : { pct: x.pctAll }) + '</td>').join('') + '<td class="r">' + cellTxt(res.totalAll) + '</td></tr>' : '';
+      const grpRows = res.groups.map((g) => '<tr><td>' + esc(g.label) + '</td>' + deptShown.map((x) => '<td class="r">' + cellTxt(g.cells[x.m]) + '</td>').join('') + '<td class="r">' + cellTxt(g.total) + '</td></tr>').join('');
+      const html = '<!doctype html><html><head><meta charset="utf-8"><title>Hand Hygiene ' + res.year + '</title><style>body{font:12px/1.4 Arial,sans-serif;color:#16202e;margin:18px}h1{font-size:18px;margin:0 0 2px}h2{font-size:14px;margin:18px 0 6px}.m{color:#5b6878;margin-bottom:10px}table{border-collapse:collapse;width:100%;font-size:10.5px}th,td{border:1px solid #cdd6e0;padding:4px 6px;text-align:left;vertical-align:top}th{background:#eef4fa}.r{text-align:right}.t td{background:#e3f1f8;font-weight:700}.t2 td{background:#f4f8fb}@media print{@page{size:landscape;margin:12mm}}</style></head><body>'
+        + '<h1>Hand Hygiene Compliance — ' + esc(res.year) + '</h1><div class="m">Hospital audit (WHO 5 Moments) · ' + esc((res.source && res.source.name) || '') + ' · target ≥ ' + esc(bench) + '% · compliant / observed opportunities, pooled. Printed ' + esc(new Date().toLocaleString()) + '</div>'
+        + '<h2>By department</h2><table><thead><tr><th>Department</th>' + monthsHead + '<th>Period</th></tr></thead><tbody>' + deptRows + totRow + allRow + '</tbody></table>'
+        + (grpRows ? '<h2>By staff group</h2><table><thead><tr><th>Staff group</th>' + monthsHead + '<th>Period</th></tr></thead><tbody>' + grpRows + '</tbody></table>' : '')
+        + '<script>window.onload=function(){window.print();}<\/script></body></html>';
+      const w = window.open('', '_blank');
+      if (!w) { toast('Allow pop-ups for this site to print.', 'error'); return; }
+      w.document.open(); w.document.write(html); w.document.close();
+    };
+
+    const btn = { border: '1px solid rgba(125,145,180,.4)', background: '#fff', color: '#2b3747', padding: '7px 13px', borderRadius: 9, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' };
+    const header = (
+      <div style={Object.assign({}, card, { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' })}>
+        <span style={{ display: 'inline-grid', placeItems: 'center', width: 38, height: 38, borderRadius: 11, background: 'rgba(0,144,202,.13)', color: '#0072a3', flexShrink: 0 }}>{CP_ICON('M7 11V6a2 2 0 014 0v5M11 10V4a2 2 0 014 0v6M15 10V6a2 2 0 014 0v7a7 7 0 01-7 7h-1a7 7 0 01-6.2-3.8L3 12.6a1.8 1.8 0 013-1.9L7 12', 19)}</span>
+        <div style={{ minWidth: 0, flex: '1 1 220px' }}>
+          <div style={{ fontSize: 16, fontWeight: 800, color: '#16202e' }}>Hand Hygiene Compliance</div>
+          <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>Hospital audit · every department and staff group · target ≥ {bench}%</div>
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#3c4858', fontWeight: 600 }}>Year
+          <select value={year || ''} onChange={(e) => setYear(parseInt(e.target.value, 10))} style={{ font: 'inherit', padding: '6px 8px', borderRadius: 8, border: '1px solid rgba(125,145,180,.45)', background: '#fff' }}>
+            {((res && res.years) || (year ? [year] : [])).map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+        </label>
+        <button type="button" style={btn} disabled={!res} onClick={downloadCsv}>Download CSV</button>
+        <button type="button" style={btn} disabled={!res} onClick={printPage}>Print / PDF</button>
+      </div>
+    );
+    if (busy && !res) return <div style={{ maxWidth: 1240, margin: '0 auto' }}>{header}<div style={Object.assign({}, card, { color: '#6c7a8c', fontSize: 13 })}>Loading hand hygiene totals…</div></div>;
+    if (err) return <div style={{ maxWidth: 1240, margin: '0 auto' }}>{header}<div style={Object.assign({}, card, { borderLeft: '4px solid #d23a52', color: '#a92c42', fontSize: 13 })}>{err}</div></div>;
+    if (!res || !res.source) return <div style={{ maxWidth: 1240, margin: '0 auto' }}>{header}<div style={Object.assign({}, card, { color: '#6c7a8c', fontSize: 13 })}>No hand hygiene audit is on record yet. It appears here once the hospital audit (Overall Hospital → Hand Hygiene) has been submitted and approved.</div></div>;
+
+    const kpi = (label, value, foot, tone) => (
+      <div style={Object.assign({}, CP_CARD, { padding: '13px 15px', flex: '1 1 170px', minWidth: 0 })}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: '#6c7a8c', textTransform: 'uppercase', letterSpacing: '.4px' }}>{label}</div>
+        <div style={{ fontSize: 24, fontWeight: 800, color: tone || '#16202e', margin: '3px 0 2px', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+        <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>{foot}</div>
+      </div>
+    );
+    const tTone = (p) => { const s = stat(p); return s ? HH_TONE[s.key][0] : null; };
+    const chartRows = withVal.map((x) => ({ mon: x.m.split('-')[0], val: x.pct }));
+    const chart = chartRows.length > 1 && (typeof window.AreaTargetChart === 'function'
+      // As ELEMENTS, not function calls: a chart's own hooks must not join this component's.
+      ? React.createElement(window.AreaTargetChart, { data: chartRows, x: 'mon', y: 'val', target: bench, height: 200, color: '#0090ca', flat: true })
+      : typeof window.LineChart === 'function' ? React.createElement(window.LineChart, { data: chartRows, x: 'mon', y: 'val', height: 200, color: '#0090ca', area: true, flat: true }) : null);
+    const cellEl = (c) => (c && c.d > 0
+      ? <span title={c.n + ' compliant of ' + c.d + ' observed'}><span style={pctCell(c.pct)}>{hhFmtP(c.pct)}</span><span style={{ display: 'block', fontSize: 10.5, color: '#8592a3' }}>{c.n}/{c.d}</span></span>
+      : c && c.pct != null ? <span title="Percentage only — no counts on record" style={pctCell(c.pct)}>{hhFmtP(c.pct)}</span>
+      : c && c.src === 'not-audited' ? <span style={{ color: '#9aa6b5', fontSize: 11 }}>not audited</span> : <span style={{ color: '#c2cad4' }}>—</span>);
+
+    return (
+      <div style={{ maxWidth: 1240, margin: '0 auto' }}>
+        {header}
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+          {kpi('Hospital compliance ' + res.year, hhFmtP(res.total.pct), res.total.d ? hhFmtN(res.total.n) + ' of ' + hhFmtN(res.total.d) + ' opportunities' : 'no counts on record', tTone(res.total.pct))}
+          {kpi('Latest month', latest ? hhFmtP(latest.pct) : '—', latest ? ml(latest.m) + (latest.d ? ' · ' + latest.n + '/' + latest.d : ' · % only') : 'nothing reported', latest && tTone(latest.pct))}
+          {kpi('Months on target', withVal.length ? onTarget + '/' + withVal.length : '—', 'at or above ' + bench + '%', withVal.length && onTarget === withVal.length ? '#12776c' : '#9a5b00')}
+          {kpi('Departments audited', String(res.rows.filter((r) => r.total.d > 0).length), res.groups.length ? res.groups.length + ' staff groups' : 'no staff-group detail')}
+        </div>
+
+        {chart && <div style={card}><div style={sub}>Monthly compliance (%)</div><div style={note}>Hospital total each month · target ≥ {bench}%</div>{chart}</div>}
+
+        <div style={card}>
+          <div style={sub}>Hospital total by month</div>
+          <div style={note}>Pooled: compliant moments ÷ observed opportunities across every audited department.</div>
+          <div style={scroll}><table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 560 }}>
+            <thead><tr><th style={th}>Month</th><th style={thr}>Compliant</th><th style={thr}>Opportunities</th><th style={thr}>Compliance</th><th style={th}>Status</th></tr></thead>
+            <tbody>
+              {shown.map((x) => { const pend = pendingOf(x.m); return (
+                <tr key={x.m}>
+                  <td style={Object.assign({}, td, { fontWeight: 700 })}>{monthLabel(x.m)}</td>
+                  <td style={tdr}>{hhFmtN(x.n)}</td><td style={tdr}>{hhFmtN(x.d)}</td>
+                  <td style={Object.assign({}, tdr, pctCell(x.pct))}>{hhFmtP(x.pct)}</td>
+                  <td style={td}>{chip(x.pct, pend.length ? '' : 'not reported')}
+                    {x.pctOnly && <span title="Only a percentage is on record for this month — no compliant / opportunity counts" style={{ marginLeft: 6, fontSize: 10.5, color: '#8592a3' }}>% only</span>}
+                    {pend.length > 0 && <span style={{ marginLeft: 6, display: 'inline-block', padding: '2px 8px', borderRadius: 20, background: 'rgba(224,138,30,.16)', color: '#9a5b00', fontWeight: 700, fontSize: 10.5 }}>awaiting approval</span>}
+                  </td>
+                </tr>); })}
+              {shown.length > 0 && <tr><td style={Object.assign({}, tdTot, { textAlign: 'left' })}>{res.year} total</td><td style={tdTot}>{hhFmtN(res.total.n)}</td><td style={tdTot}>{hhFmtN(res.total.d)}</td><td style={Object.assign({}, tdTot, pctCell(res.total.pct))}>{hhFmtP(res.total.pct)}</td><td style={Object.assign({}, tdTot, { textAlign: 'left' })}>{chip(res.total.pct)}</td></tr>}
+              {!shown.length && <tr><td colSpan={5} style={Object.assign({}, td, { color: '#6c7a8c' })}>Nothing reported for {res.year}.</td></tr>}
+            </tbody>
+          </table></div>
+        </div>
+
+        {res.rows.length > 0 && deptShown.length > 0 && (
+          <div style={card}>
+            <div style={sub}>By department</div>
+            <div style={note}>Each cell: compliance, then compliant / observed. "Period" pools every month shown.{res.hasSelfReported ? ' Departments marked self-reported sent their own figures for a month the audit did not cover; they are added only in the last row.' : ''}</div>
+            <div style={scroll}><table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 300 + deptShown.length * 86 }}>
+              <thead><tr><th style={Object.assign({}, th, { position: 'sticky', left: 0, zIndex: 1 })}>Department</th>{deptShown.map((x) => <th key={x.m} style={thr}>{ml(x.m)}</th>)}<th style={thr}>Period</th></tr></thead>
+              <tbody>
+                {res.rows.map((r) => (
+                  <tr key={r.key}>
+                    <td style={Object.assign({}, td, { fontWeight: 600, position: 'sticky', left: 0, background: '#fbfdff' })}>{r.name}{r.selfReported && <span title="Includes the department's own figures for a month the audit did not cover" style={{ marginLeft: 6, fontSize: 10, color: '#9a5b00', fontWeight: 700 }}>self-reported</span>}</td>
+                    {deptShown.map((x) => <td key={x.m} style={tdr}>{cellEl(r.cells[x.m])}</td>)}
+                    <td style={Object.assign({}, tdr, { background: 'rgba(240,246,252,.7)' })}>{cellEl(r.total.d > 0 ? r.total : null)}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td style={Object.assign({}, tdTot, { textAlign: 'left', position: 'sticky', left: 0 })}>Hospital total</td>
+                  {deptShown.map((x) => <td key={x.m} style={tdTot}>{cellEl(x.d != null ? { n: x.n, d: x.d, pct: x.pct } : { pct: x.pct })}</td>)}
+                  <td style={tdTot}>{cellEl(res.total.d > 0 ? res.total : null)}</td>
+                </tr>
+                {res.hasSelfReported && (
+                  <tr>
+                    <td style={Object.assign({}, td, { fontWeight: 700, position: 'sticky', left: 0, background: '#f4f8fb' })}>Incl. department self-reports</td>
+                    {deptShown.map((x) => <td key={x.m} style={Object.assign({}, tdr, { background: '#f4f8fb' })}>{cellEl(x.dAll != null ? { n: x.nAll, d: x.dAll, pct: x.pctAll } : { pct: x.pctAll })}</td>)}
+                    <td style={Object.assign({}, tdr, { background: '#f4f8fb' })}>{cellEl(res.totalAll.d > 0 ? res.totalAll : null)}</td>
+                  </tr>
+                )}
+              </tbody>
+            </table></div>
+          </div>
+        )}
+
+        {res.groups.length > 0 && (
+          <div style={card}>
+            <div style={sub}>By staff group</div>
+            <div style={note}>Nurses, doctors, PCAs and others across every audited department.</div>
+            <div style={scroll}><table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 240 + deptShown.length * 86 }}>
+              <thead><tr><th style={th}>Staff group</th>{deptShown.map((x) => <th key={x.m} style={thr}>{ml(x.m)}</th>)}<th style={thr}>Period</th><th style={th}>Status</th></tr></thead>
+              <tbody>{res.groups.map((g) => (
+                <tr key={g.key}>
+                  <td style={Object.assign({}, td, { fontWeight: 600 })}>{g.label}</td>
+                  {deptShown.map((x) => <td key={x.m} style={tdr}>{cellEl(g.cells[x.m])}</td>)}
+                  <td style={Object.assign({}, tdr, { background: 'rgba(240,246,252,.7)' })}>{cellEl(g.total)}</td>
+                  <td style={td}>{chip(g.total.pct)}</td>
+                </tr>))}</tbody>
+            </table></div>
+          </div>
+        )}
+
+        <div style={Object.assign({}, card, { fontSize: 11.5, color: '#3c4858', background: 'rgba(236,247,255,.7)' })}>
+          <b>How to read this:</b> ≥ {bench}% compliant{band ? ' · ' + band + ' needs improvement (re-audit within 2 weeks)' : ''} · below {band ? Math.min(75, bench) : bench}% unacceptable (escalate). Figures come from the approved hospital audit; months still awaiting approval are flagged and show once approved. Reference: WHO (2009) Guidelines on Hand Hygiene in Health Care.
+        </div>
+      </div>
+    );
+  }
+
   function CollectorRoster() {
     const R = window.UNICO_ROSTER;
     const [scope, setScope] = useState(null);        // { units, can } from the server
@@ -6324,14 +6664,14 @@ function StaffPrintOptions({role,onDone}){
             {units.map((u) => <option key={u} value={u}>{u}</option>)}
           </select>
           <span style={{ flex: 1 }} />
-          <span style={{ fontSize: 11.5, color: '#6c7a8c' }}>Counted through {monthLabel(dcDefaultMonth())} · {shown.length} shown</span>
+          <span style={{ fontSize: 11.5, color: '#6c7a8c' }}>Counted through {monthLabel(dcLastDueMonth())} · {shown.length} shown</span>
         </div>
 
         {subs === null ? <div style={Object.assign({}, CP_CARD, { padding: 24, color: '#6c7a8c' })}>Loading your missing data…</div>
           : rows.length === 0 ? (
             <div style={Object.assign({}, CP_CARD, { padding: 28, textAlign: 'center' })}>
               <div style={{ fontSize: 15, fontWeight: 700, color: '#1f9d57', marginBottom: 4 }}>Nothing is missing</div>
-              <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Every month owed through {monthLabel(dcDefaultMonth())} has been sent or is on record.</div>
+              <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Every month owed through {monthLabel(dcLastDueMonth())} has been sent or is on record.</div>
             </div>
           ) : shown.length === 0 ? <div style={Object.assign({}, CP_CARD, { padding: 22, textAlign: 'center', color: '#6c7a8c', fontSize: 12.5 })}>Nothing missing for this filter.</div>
             : monthKeys.map((mk) => {
@@ -6635,6 +6975,8 @@ function StaffPrintOptions({role,onDone}){
     const areas = useMemo(() => (kinds.quality === false ? [] : dcSendAreas(window.qualityData ? window.qualityData() : [])), [dataRev, kinds.quality, collRev]);
     const hasPatient = depts.length > 0;
     const hasQuality = areas.some((a) => a && a.indicators && a.indicators.length);
+    // Hand Hygiene is granted per person (Access Control), not derived from what they send.
+    const hhOn = !!(window.unicoHhScreenOn && window.unicoHhScreenOn());
 
     // An in-charge is a collector who also runs a ward: same data scoping, more of the
     // ward's own screens. The role decides which, and it is the SERVER's role claim --
@@ -6732,8 +7074,8 @@ function StaffPrintOptions({role,onDone}){
     const clearMissAlert = () => { try { sessionStorage.removeItem(missAlertKey); } catch (e) { /* ignore */ } };
     const missRows = (subCount.missingRows || []).slice().sort((a, b) => b.rank - a.rank);
     const missByMonth = []; missRows.forEach((r) => { const g = missByMonth.find((x) => x.month === r.month); if (g) g.rows.push(r); else missByMonth.push({ month: r.month, rows: [r] }); });
-    const crumb = ({ missing: 'Missing data', home: 'Dashboard', unit: "My unit's staff", requests: 'Add nurse / PCA', status: 'Submission status', quick: 'Quick entry', quality: 'Quality data', patient: 'Patient statistics', history: 'My submissions', roster: 'Duty roster', profile: 'My profile', dept: 'Department & staff' })[view] || 'Submission status';
-    const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'missing' ? (hasPatient || hasQuality) : v === 'patient' ? hasPatient : hasQuality));
+    const crumb = ({ missing: 'Missing data', home: 'Dashboard', unit: "My unit's staff", requests: 'Add nurse / PCA', status: 'Submission status', quick: 'Quick entry', quality: 'Quality data', patient: 'Patient statistics', history: 'My submissions', hh: 'Hand Hygiene', roster: 'Duty roster', profile: 'My profile', dept: 'Department & staff' })[view] || 'Submission status';
+    const collectNav = CP_NAV_COLLECT.filter(([v]) => (v === 'hh' ? hhOn : v === 'missing' ? (hasPatient || hasQuality) : v === 'patient' ? hasPatient : hasQuality));
     const dl = cpDeadline(month);
     // Overdue only while something is still owed, and from the first second past the deadline
     // (Math.floor read day 1 as on schedule). Missing statistics count too, or a
@@ -6775,7 +7117,7 @@ function StaffPrintOptions({role,onDone}){
     );
     const screens = (
       <React.Fragment>
-            {!hasPatient && !hasQuality && (
+            {!hasPatient && !hasQuality && view !== 'hh' && (
               <div style={Object.assign({}, CP_CARD, { maxWidth: 620, margin: '40px auto', padding: 30, textAlign: 'center' })}>
                 <div style={{ fontSize: 15, fontWeight: 700, color: '#16202e', marginBottom: 6 }}>Nothing is assigned to you yet</div>
                 <div style={{ fontSize: 12.5, color: '#6c7a8c' }}>Your administrator has not given you a department or quality area to report on. Once they do, it appears here.</div>
@@ -6796,6 +7138,7 @@ function StaffPrintOptions({role,onDone}){
             {view === 'status' && hasQuality && <CollectorDash depts={depts} areas={areas} month={month} setMonth={setMonth} onNav={go} onFill={fillFor} user={user} can={(v) => (v === 'patient' ? hasPatient : v === 'quality' ? hasQuality : true) && screenOk(v)} />}
             {view === 'quality' && hasQuality && <div style={{ maxWidth: 1080, margin: '0 auto' }}><DataQualityForm key={jump ? jump.area + '/' + jump.indicatorId + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'q'} prefill={{ responsible: user.name, area: jump && jump.area, indicatorId: jump && jump.indicatorId, month: jump && jump.month, from: jump && jump.from }} /></div>}
             {view === 'patient' && hasPatient && <div style={{ maxWidth: 900, margin: '0 auto' }}><DataPatientForm key={jump && jump.dept ? 'p/' + jump.dept + '/' + jump.month + '/' + (jump.from ? jump.from.id : '') : 'p'} depts={depts} prefill={{ responsible: user.name, dept: jump && jump.dept, month: jump && jump.dept ? jump.month : null, from: jump && jump.from }} /></div>}
+            {view === 'hh' && (hhOn ? <DcHandHygiene /> : <div style={Object.assign({}, CP_CARD, { maxWidth: 620, margin: '40px auto', padding: 30, textAlign: 'center', fontSize: 13, color: '#6c7a8c' })}>Hand Hygiene has not been given to your account. Ask an administrator to tick it for you in Access Control.</div>)}
             {view === 'history' && <div style={{ maxWidth: 1240, margin: '0 auto' }}><CollectorHistory month={month} onFixQuality={fillFor} onFixPatient={fillStat} /></div>}
             {view === 'roster' && <CollectorRoster />}
             {view === 'profile' && <CollectorProfile user={user} onNav={go} />}

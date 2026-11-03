@@ -16525,6 +16525,9 @@
         dcEvidence: false
       });
       if (s.demo) return local('sent');
+      if (mi > DC_CUR && TODAY < DC_DUE_DAY - 1) return this.setState({
+        dcToast: DC_MONTHS[mi].long + ' is not open yet — it opens on ' + (DC_DUE_DAY - 1) + ' ' + MON3[M] + '.'
+      });
       if (this._dcBusy) return;
       this._dcBusy = true;
       this.setState(st => ({
@@ -16618,7 +16621,8 @@
       const units = boot.units || [];
       const dept = unit ? unit.short || unit.name : units.length ? 'All units' : '—';
       const isRealIncharge = bu.isIncharge === true || (bu.role || me.role) === 'incharge';
-      const qAreas = !unit && !s.demo && (bu.role || me.role) === 'collector' ? live.quality || [] : [];
+      const areaReporter = (bu.role || me.role) === 'collector' || me.allQualityAreas === true || bu.allQualityAreas === true || Array.isArray(me.qualityAreas) && me.qualityAreas.length > 0;
+      const qAreas = !unit && !s.demo && areaReporter ? live.quality || [] : [];
       const qArea = qAreas.find(a => String(a.key) === String(s.dcAreaSel)) || qAreas[0] || null;
       const unitChip = unit ? (unit.short || unit.name) + (units.length > 1 ? ' ▾' : '') : qArea ? (qArea.name || qArea.key) + (qAreas.length > 1 ? ' ▾' : '') : units.length ? 'Choose a unit ▾' : 'No unit assigned';
       const pickUnit = () => {
@@ -18886,7 +18890,7 @@
           if (navigator.clipboard) navigator.clipboard.writeText(srReview.map(r => r.label + ': ' + r.v).join('\n')).catch(() => {});
           this.toastMsg('Shift report copied', 'exportToast');
         },
-        dcDueLabel: dcMonth === DC_CUR ? `Due ${DC_DUE_DAY} ${MON3[M]} · ${DC_DUE_DAY - TODAY} days left` : dcMonth < DC_CUR ? 'Closed month · corrections only' : 'Not open yet',
+        dcDueLabel: dcMonth === DC_CUR ? `Due ${DC_DUE_DAY} ${MON3[M]} · ${DC_DUE_DAY - TODAY} days left` : dcMonth < DC_CUR ? 'Closed month · corrections only' : TODAY >= DC_DUE_DAY - 1 ? 'Open early · final two days of the month' : 'Not open yet',
         dcDueStyle: `font-size:11px;font-weight:700;color:${dcMonth === DC_CUR ? DC_DUE_DAY - TODAY <= 5 ? '#b32e2e' : '#b8650a' : '#7d8ea8'}`,
         dcPrevMonth: () => this.setState({
           dcMonth: Math.max(0, dcMonth - 1)

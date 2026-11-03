@@ -2164,8 +2164,10 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     if(editing&&Array.isArray(initial.dsScreens)) return initial.dsScreens.slice();
     const k=(editing&&initial.submitKinds)||{};
     const lead=!!(editing&&(initial.role==='incharge'||initial.unitLead===true));
-    return DS_ALL.filter(s=>(s!=='patient'||k.patient!==false)&&((s!=='quality'&&s!=='status')||k.quality!==false)&&(lead||DS_UNIT.indexOf(s)<0));
+    // Hand Hygiene is never a default: it is given to a person on purpose (server DS_OPT_IN).
+    return DS_ALL.filter(s=>s!=='hh'&&(s!=='patient'||k.patient!==false)&&((s!=='quality'&&s!=='status')||k.quality!==false)&&(lead||DS_UNIT.indexOf(s)<0));
   });
+  const hhInitial=!!(editing&&Array.isArray(initial.dsScreens)&&initial.dsScreens.indexOf('hh')>=0);
   const hasScreen=(s)=>dsScreens.indexOf(s)>=0;
   const toggleScreen=(s)=>setDsScreens(l=>l.indexOf(s)>=0?l.filter(x=>x!==s):DS_ALL.filter(x=>x===s||l.indexOf(x)>=0));
   const submitKinds={patient:hasScreen('patient'),quality:hasScreen('quality')||hasScreen('status')};
@@ -2327,6 +2329,9 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
         payload.departments=sp.departments; payload.allQualityAreas=sp.allQualityAreas;
         payload.customQualityAreas=sp.customQualityAreas; payload.qualityIndicators=sp.qualityIndicators;
       }
+      // An old-portal account opens every regular screen anyway; the only screen it can be
+      // given is Hand Hygiene. Sent only when that tick changed, so unrelated saves leave it.
+      if(isColl&&collects&&hasScreen('hh')!==hhInitial) payload.dsScreens=hasScreen('hh')?['hh']:[];
       if(!isAdmin&&!isColl){
         // Row-level staff scope. `departments` is only sent for plain Users — for a
         // collector it is their collection assignment and must not be overwritten here.
@@ -2378,15 +2383,18 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
             <button type="button" className="btn sm" onClick={()=>setDsScreens(DS_ALL.filter(s=>unitLead||DS_UNIT.indexOf(s)<0))}>All</button>
             <button type="button" className="btn sm" onClick={()=>setDsScreens([])}>None</button>
           </div>
-          {[['Submitting data',['missing','status','quality','patient','history']]].map(([grp,ids])=>(
+          {[['Submitting data',['missing','status','quality','patient','history']],['Viewing',['hh']]].map(([grp,ids])=>(
             <div key={grp} style={{marginBottom:8}}>
-              <div style={{fontSize:10,fontWeight:700,color:'var(--faint)',textTransform:'uppercase',letterSpacing:.5,marginBottom:5}}>{grp}</div>
+              <div style={{fontSize:10,fontWeight:700,color:'var(--faint)',textTransform:'uppercase',letterSpacing:.5,marginBottom:5}}>{grp}{grp==='Viewing'&&<span style={{textTransform:'none',letterSpacing:0,fontWeight:500,marginLeft:6}}>· read-only, hospital-wide — anyone ticked sees the same figures</span>}</div>
               <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
                 {ids.map(id=>{ const row=(window.UNICO_DS_SCREENS||[]).find(x=>x[0]===id); if(!row) return null;
-                  const needLead=DS_UNIT.indexOf(id)>=0&&!unitLead; const on=hasScreen(id)&&!needLead; return (
-                  <button key={id} type="button" disabled={needLead} onClick={()=>toggleScreen(id)} aria-pressed={on}
-                    title={needLead?'Turn on “Runs this unit” below first':''}
-                    style={{display:'inline-flex',alignItems:'center',gap:6,font:'inherit',cursor:needLead?'not-allowed':'pointer',padding:'6px 11px',borderRadius:8,fontSize:12,fontWeight:600,opacity:needLead?.45:1,
+                  const needLead=DS_UNIT.indexOf(id)>=0&&!unitLead;
+                  // A hospital-wide submitter enters the hand-hygiene audit, so always sees its totals.
+                  const hhLocked=id==='hh'&&!!(scope&&scope.allQualityAreas);
+                  const on=(hasScreen(id)||hhLocked)&&!needLead; return (
+                  <button key={id} type="button" disabled={needLead||hhLocked} onClick={()=>toggleScreen(id)} aria-pressed={on}
+                    title={needLead?'Turn on “Runs this unit” below first':hhLocked?'Included with hospital-wide access (they enter the audit)':id==='hh'?'The hospital hand-hygiene audit: every department, staff group and the hospital total':''}
+                    style={{display:'inline-flex',alignItems:'center',gap:6,font:'inherit',cursor:(needLead||hhLocked)?'not-allowed':'pointer',padding:'6px 11px',borderRadius:8,fontSize:12,fontWeight:600,opacity:needLead?.45:1,
                       border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--ink-2)'}}>
                     <span style={{width:13,height:13,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
                     {row[2]}
@@ -2415,6 +2423,21 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
           </div>
         </div>
       )}
+      {isColl&&collects&&(()=>{ const hhLocked=!!(scope&&scope.allQualityAreas); const on=hasScreen('hh')||hhLocked; return (
+        <div style={{display:'flex',alignItems:'flex-start',gap:10,margin:'4px 0 12px',padding:'10px 12px',borderRadius:9,border:'1px solid '+(on?'var(--blue-100)':'var(--line)'),background:on?'var(--blue-50)':'#fff'}}>
+          <button type="button" role="switch" aria-checked={on} disabled={hhLocked} onClick={()=>toggleScreen('hh')}
+            style={{flexShrink:0,marginTop:1,width:34,height:19,borderRadius:10,border:0,padding:2,cursor:hhLocked?'not-allowed':'pointer',background:on?'var(--blue)':'#c9d2de',transition:'background .15s'}}>
+            <span style={{display:'block',width:15,height:15,borderRadius:'50%',background:'#fff',transform:on?'translateX(15px)':'none',transition:'transform .15s'}}/>
+          </button>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:12,fontWeight:700,color:'var(--ink)'}}>Hand Hygiene screen</div>
+            <div style={{fontSize:10.5,color:'var(--muted)',marginTop:2}}>{hhLocked
+              ?'Included — a hospital-wide submitter enters the hand-hygiene audit, so always sees its totals.'
+              :on?'On — they see the hospital hand-hygiene audit: every department, staff group and the hospital total (read-only).'
+              :'Off — tick to let them see the hospital hand-hygiene totals (read-only).'}</div>
+          </div>
+        </div>
+      ); })()}
       <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>The departments they report, the quality areas those give (plus any extra), and optionally which indicators. Saved with the account and shown in <b>Indicator Access</b>.</div>
       {!ScopeEditor ? (
         <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px'}}>The data collection module is not loaded, so the scope cannot be edited here. The current assignment is kept when you save.</div>

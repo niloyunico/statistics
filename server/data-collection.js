@@ -83,14 +83,18 @@ function recomputeQuarters(ind) {
   const quarters = Object.assign({}, ind.quarters || {});
   const quarterStatus = {};
   Object.keys(QUARTER_MONTHS).forEach((q) => {
-    const ms = QUARTER_MONTHS[q];
+    // Not-observed months are not readings (quality-store.js skips them the same way).
+    const ms = QUARTER_MONTHS[q].filter((m) => !(ind.mNotObserved || {})[m]);
     let val = null;
     if (f && f !== 'direct') {
       const needDen = f !== 'count';
       const haveMonths = ms.some((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || (ind.mDen && ind.mDen[m] != null && ind.mDen[m] !== '')));
       if (haveMonths) {
-        const num = ms.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
-        const den = ms.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
+        // Only COMPLETE months: a month with a denominator but no numerator added its
+        // opportunities with nothing compliant, dragging the quarter down.
+        const complete = ms.filter((m) => ind.mNum && ind.mNum[m] != null && ind.mNum[m] !== '' && (!needDen || Number((ind.mDen || {})[m]) > 0));
+        const num = complete.reduce((s, m) => s + (Number((ind.mNum || {})[m]) || 0), 0);
+        const den = complete.reduce((s, m) => s + (Number((ind.mDen || {})[m]) || 0), 0);
         val = (needDen && !den) ? null : qiFormulaCompute(f, num, den);
       } else {
         const n = (ind.qNum || {})[q];
@@ -113,14 +117,20 @@ function recomputeQuarters(ind) {
   });
   ind.quarters = quarters;
   ind.quarterStatus = quarterStatus;
-  const present = Object.keys(quarterStatus);
-  ind.status = present.some((q) => quarterStatus[q] === 'breach') ? 'breach' : (present.some((q) => quarterStatus[q] === 'ok') ? 'ok' : 'n-a');
   const fys = fysInInd(ind);
   if (fys.length) {
     const byFy = {};
     fys.forEach((fy) => { byFy[fy] = computeQuartersFor(ind, fyQuarterMonths(fy)); });
     ind.quartersByFy = byFy;
   }
+  // The headline status follows the NEWEST calendar year's quarters. It used to come only from
+  // the fixed Jun-25…May-26 quarters above, so it never moved once that year had passed.
+  const newest = fys.length ? Math.max.apply(null, fys) : null;
+  const yq = newest != null ? (ind.quartersByFy[newest] || {}) : null;
+  const statusOf = yq && Object.keys(yq).length ? Object.keys(yq).reduce((o, q) => (o[q] = indStatus(ind, yq[q]), o), {}) : quarterStatus;
+  if (newest != null) ind.quarterStatusByFy = Object.assign({}, ind.quarterStatusByFy || {}, { [newest]: statusOf });
+  const present = Object.keys(statusOf);
+  ind.status = present.some((q) => statusOf[q] === 'breach') ? 'breach' : (present.some((q) => statusOf[q] === 'ok') ? 'ok' : 'n-a');
   return ind;
 }
 
@@ -540,6 +550,23 @@ async function registerCollector(input) {
 }
 
 // Verified login scope for a username (role + assigned departments/areas).
+/* Retired indicator ids still sitting in saved allow-lists. 'ind-hh-from-audit' was the
+   browser-made hand-hygiene clone; scripts/unify-hand-hygiene.js merged hand hygiene onto
+   'ind-hand-hygiene-compliance' but never remapped it (its test was /hand-hygiene/), so an
+   assignment holding only the old id refused every hand-hygiene send for that area. Mapped
+   here at READ time — nothing stored is rewritten. */
+const RETIRED_INDICATOR_IDS = { 'ind-hh-from-audit': 'ind-hand-hygiene-compliance' };
+function aliasIndicatorIds(qi) {
+  const out = {};
+  Object.keys(qi || {}).forEach((k) => {
+    const list = qi[k];
+    if (!Array.isArray(list)) { out[k] = list; return; }
+    const ids = list.map(String);
+    ids.forEach((id) => { const to = RETIRED_INDICATOR_IDS[id]; if (to && ids.indexOf(to) < 0) ids.push(to); });
+    out[k] = ids;
+  });
+  return out;
+}
 async function getUserScope(username) {
   if (!username) return null;
   const users = await getUsers();
@@ -547,7 +574,7 @@ async function getUserScope(username) {
   if (!u) return null;
   const perms = (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null;
   const unitLead = u.role === 'incharge' || ((u.role || 'User') === 'User' && u.unitLead === true && !!perms && Array.isArray(perms.datasubmit) && perms.datasubmit.length > 0);
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: unitLead, unitLead, rosterEdit: u.rosterEdit === true, enterDen: u.enterDen === true, submitKinds: accessRoles.cleanSubmitKinds(u.submitKinds), dsScreens: accessRoles.cleanDsScreens ? accessRoles.cleanDsScreens(u.dsScreens) : null, responsibleId: u.responsibleId || null, departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}, perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: unitLead, unitLead, rosterEdit: u.rosterEdit === true, enterDen: u.enterDen === true, submitKinds: accessRoles.cleanSubmitKinds(u.submitKinds), dsScreens: accessRoles.cleanDsScreens ? accessRoles.cleanDsScreens(u.dsScreens) : null, responsibleId: u.responsibleId || null, departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: aliasIndicatorIds((u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}), perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
 }
 
 async function deleteResponsible(id) {
@@ -761,15 +788,30 @@ async function buildQualitySpec(payload) {
   if (benchmarkValue == null || benchmarkValue === '') benchmarkValue = (found && found.benchmarkValue != null) ? found.benchmarkValue : null;
   if ((benchmarkValue == null || benchmarkValue === '') && benchStr) { const bm = String(benchStr).match(/-?\d+(?:\.\d+)?/); if (bm) benchmarkValue = Number(bm[0]); }
   benchmarkValue = (benchmarkValue == null || benchmarkValue === '' || isNaN(Number(benchmarkValue))) ? null : Number(benchmarkValue);
+  // Compliant ≤ observed. A percentage above 100 (a typo in one cell of the hand-hygiene grid)
+  // used to be stored as it came.
+  const groupsIn = sanitizeGroupMap(payload && payload.groups), groupsDenIn = sanitizeGroupMap(payload && payload.groupsDen);
+  const deptBreakdownIn = sanitizeDeptBreakdown(payload && payload.deptBreakdown);
+  const pctLike = entryMode === 'rate' && (formulaIn === 'pct' || (!rateFormulas.includes(formulaIn) && mult === 100));
+  if (pctLike && !notObserved) {
+    const over = (n, d, where) => { if (Number(n) > Number(d || 0)) throw httpError(400, where + ': the compliant count (' + n + ') cannot be more than the observed count (' + (Number(d) || 0) + ').'); };
+    if (num != null && Number(den) > 0) over(num, den, 'Total');   // den 0 = admin-owned, filled at approval
+    if (groupsIn && groupsDenIn) Object.keys(groupsIn).forEach((k) => over(groupsIn[k], groupsDenIn[k], k));
+    (deptBreakdownIn || []).forEach((r) => Object.keys(r.g || {}).forEach((k) => over(r.g[k].n, r.g[k].d, (r.dept || 'A department') + ' · ' + k)));
+  }
+  // Direction: the request's, else the indicator's, else read from the benchmark sign — a
+  // new "≥ 90 %" indicator defaulted to lower-is-better, so 60 % read as on target.
+  const goalDirection = (payload && payload.goalDirection) || (found && found.goalDirection)
+    || (/[≥>]/.test(String(benchStr)) ? 'higher_is_better' : 'lower_is_better');
   return {
     type: 'quality', area, areaName: doc.name || area, indicatorId: indId, indicatorName: indName, capa, incidents,
     // Optional numerator breakdown by staff group (Nurse / Doctor / Other).
-    groups: sanitizeGroupMap(payload && payload.groups),
-    groupsDen: sanitizeGroupMap(payload && payload.groupsDen),
-    deptBreakdown: sanitizeDeptBreakdown(payload && payload.deptBreakdown),
+    groups: groupsIn,
+    groupsDen: groupsDenIn,
+    deptBreakdown: deptBreakdownIn,
     isNewIndicator: isNew, valueType: (payload && payload.valueType) || (found && found.valueType) || 'Count',
     benchmark: benchStr, benchmarkValue: benchmarkValue,
-    goalDirection: (payload && payload.goalDirection) || (found && found.goalDirection) || 'lower_is_better',
+    goalDirection,
     // calculation definition (named inputs + unit) so the rich entry form persists
     formula: entryMode === 'rate'
       ? (rateFormulas.includes(formulaIn) ? formulaIn : (mult === 1000 ? 'rate1000' : (mult === 1 ? 'avg' : 'pct')))
@@ -904,7 +946,10 @@ async function qSetIndicatorIf(key, orig, ind) {
 function alignToIndicator(spec, ind) {
   if (!(ind && ind.formula === 'count' && spec.entryMode === 'rate')) return;
   const n = (spec.num != null && spec.num !== '') ? spec.num : spec.value;
-  Object.assign(spec, { entryMode: 'count', formula: 'count', value: (n == null || n === '') ? null : Number(n), num: null, den: null });
+  // The optional denominator a collector typed (the form showed a rate from it) is kept as the
+  // month's denominator; only the stored VALUE follows the indicator's count definition.
+  const d = Number(spec.den);
+  Object.assign(spec, { entryMode: 'count', formula: 'count', value: (n == null || n === '') ? null : Number(n), num: null, den: null, countDen: d > 0 ? d : null });
 }
 function mergeQuality(orig, spec) {
   let ind = orig ? Object.assign({}, orig) : null;
@@ -942,6 +987,7 @@ function mergeQuality(orig, spec) {
     recomputeQuarters(ind);
     return ind;
   }
+  if (spec.countDen > 0) ind.mDen = Object.assign({}, ind.mDen || {}, { [spec.month]: spec.countDen });
   // A real reading supersedes any earlier "Not observed" mark for the month.
   if (ind.mNotObserved && ind.mNotObserved[spec.month]) { ind.mNotObserved = Object.assign({}, ind.mNotObserved); delete ind.mNotObserved[spec.month]; }
   if (Array.isArray(spec.incidents)) ind.incidents = Object.assign({}, ind.incidents || {}, { [spec.month]: spec.incidents });
@@ -1419,6 +1465,31 @@ async function rejectSubmission(id, by, reason) {
   return { ok: true, submission: upd };
 }
 
+/* Hand-hygiene submissions still in flight (pending / mid-approval): [{area, month, status}].
+   The Hand Hygiene screen badges those months "awaiting approval" — flags only, never the
+   figures, since nothing pending is on record yet. */
+function hhAuditCover(subs) {
+  const out = {};
+  (subs || []).forEach((s) => {
+    if (!s || s.type !== 'quality' || !(s.status === 'pending' || s.status === 'approving') || !Array.isArray(s.deptBreakdown)) return;
+    if (!/hands*hygiene/i.test(String(s.indicatorName || '') + ' ' + String(s.indicatorId || '').replace(/-/g, ' '))) return;
+    s.deptBreakdown.forEach((r) => {
+      const g = (r && r.g) || {};
+      const d = Object.keys(g).reduce((n, k) => n + (Number(g[k] && g[k].d) || 0), 0);
+      if (!(d > 0) || !r.dept) return;
+      (out[s.month] = out[s.month] || new Set()).add(String(r.dept));
+    });
+  });
+  return Object.keys(out).map((m) => ({ month: m, depts: [...out[m]] }));
+}
+async function pendingHandHygiene() {
+  const isHH = (s) => /hand\s*hygiene/i.test(String(s.indicatorName || '')) || /hand-hygiene|^ind-hh-/i.test(String(s.indicatorId || ''));
+  const c = await col('submissions');
+  const rows = c
+    ? await c.find({ type: 'quality', status: { $in: ['pending', 'approving'] } }, { projection: { area: 1, month: 1, status: 1, indicatorId: 1, indicatorName: 1 } }).toArray()
+    : mem.submissions.filter((s) => s.type === 'quality' && (s.status === 'pending' || s.status === 'approving'));
+  return rows.filter(isHH).map((s) => ({ area: s.area, month: s.month, status: s.status }));
+}
 async function getSubmissions(query) {
   const status = query && query.status && query.status !== 'all' ? String(query.status) : null;
   const n = Math.min(Math.max(parseInt(query && query.limit, 10) || 200, 1), 1000);
@@ -1716,7 +1787,24 @@ async function saveCollectionSettings(deptId, body, by) {
 }
 // A collector may not report a month before the department's start, or an indicator the
 // administrator marked not measured for that department. (Admins can still backfill.)
+/* The latest month a submitter may send — the client's dcSubmissionWindow, on the hospital
+   calendar: the previous month, or the current one during its final two days. The forms
+   offered only that window, but the server took any well-formed month, so the phone app
+   (and any other client) could send an unfinished month on any day. */
+const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+function latestOpenMonth(now) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Dhaka', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(now || new Date());
+  const part = (t) => Number(parts.find((x) => x.type === t).value);
+  const y = part('year'), m = part('month') - 1, d = part('day');
+  const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  const key = (yy, mm) => MON3[mm] + '-' + String(yy % 100).padStart(2, '0');
+  return d >= days - 1 ? key(y, m) : key(y - (m === 0 ? 1 : 0), (m + 11) % 12);
+}
 async function refuseOutsideCollection(spec) {
+  const open = latestOpenMonth();
+  if (spec && spec.month && monthRank(spec.month) > monthRank(open)) {
+    const e = new Error(spec.month + ' is not open yet — data for a month can be sent from its final two days (the latest open month is ' + open + ').'); e.status = 400; throw e;
+  }
   const c = await col('departments'); if (!c) return;
   const d = spec.type === 'patient' ? await c.findOne({ _id: String(spec.department) }) : await c.findOne({ 'quality.key': String(spec.area) });
   const set = (d && d.collection) || {};
@@ -1893,21 +1981,26 @@ function mount(app, opts) {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
       const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
-      let subs, nextOffset;
+      let subs, nextOffset, hhCover = null;
       if (isPortalReq(req)) {
         // Collectors only see submissions they made or that touch their assignments — and the
         // scope filter must run BEFORE the page is cut. Paging the hospital-wide list first
         // meant a phone asking for "the newest 300" got the newest 300 of EVERYONE's, so a
         // collector's own July rows fell off the page and showed as "Not submitted".
-        const scoped = await filterSubmissionsForUser(req, await everySubmission(req.query.status));
+        const every = await everySubmission(req.query.status);
+        const scoped = await filterSubmissionsForUser(req, every);
         subs = scoped.slice(offset, offset + limit);
         nextOffset = offset + limit < scoped.length ? offset + limit : null;
+        // Departments covered by a hospital hand-hygiene audit still awaiting approval — month
+        // and department names only, no figures. A department's HH is reported THROUGH that
+        // audit, so it must not show as "missing" to its own collector meanwhile.
+        if (!offset) hhCover = hhAuditCover(every);
       } else {
         subs = await getSubmissions(req.query);
         nextOffset = subs.length === limit ? offset + limit : null;
       }
       res.set('Cache-Control', 'no-store');
-      res.json({ ok: true, submissions: subs, nextOffset });
+      res.json(Object.assign({ ok: true, submissions: subs, nextOffset }, hhCover ? { hhCover } : {}));
     } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.get('/api/submissions/stats', guard, async (req, res) => {
@@ -2131,7 +2224,26 @@ function mount(app, opts) {
         if (Array.isArray(b.incidents)) {
           const IF = ['uhid', 'patientName', 'age', 'gender', 'diagnosis', 'incidentDate', 'admissionDate', 'procedureDate', 'victimName', 'victimId', 'department', 'details', 'finding', 'corrective', 'preventive', 'remark'];
           patch.incidents = b.incidents.map((x) => { const o = {}; IF.forEach((k) => { if (x && x[k] != null && x[k] !== '') o[k] = String(x[k]); }); return o; }).filter((o) => Object.keys(o).length);
+          // An incident-type count IS the number logged: adding / removing one here left the
+          // count unchanged, so the figure and the list disagreed on approval. Follows the list
+          // when the count was incident-driven (it matched the old list, or nothing was counted).
+          const rateSub2 = s.entryMode === 'rate' || ['pct', 'rate100', 'rate1000', 'avg'].includes(s.formula);
+          const old = Number(rateSub2 ? s.num : s.value);
+          const oldList = Array.isArray(s.incidents) ? s.incidents.filter(incidentFilled).length : 0;
+          const breakdown = (Array.isArray(s.deptBreakdown) && s.deptBreakdown.length) || (s.groups && Object.keys(s.groups).length);
+          if (!breakdown && ((oldList > 0 && old === oldList) || !(old > 0))) {
+            const c = patch.incidents.length;
+            if (rateSub2) {
+              patch.num = c;
+              const d = Number(patch.den != null ? patch.den : s.den) || 0, mlt = Number(s.mult) || 100;
+              patch.value = d > 0 ? Math.round((c / d) * mlt * 100) / 100 : (c > 0 ? null : 0);
+            } else patch.value = c;
+            if (s.notObserved && c > 0) patch.notObserved = false;
+          }
         }
+        // Compliant ≤ observed in an edited hand-hygiene style breakdown.
+        if (patch.deptBreakdown) patch.deptBreakdown.forEach((r) => Object.keys(r.g || {}).forEach((k) => { if (r.g[k].n > r.g[k].d) throw httpError(400, (r.dept || 'A department') + ' · ' + k + ': the compliant count (' + r.g[k].n + ') cannot be more than the observed count (' + r.g[k].d + ').'); }));
+        if (patch.groups && patch.groupsDen) Object.keys(patch.groups).forEach((k) => { if (Number(patch.groups[k]) > Number(patch.groupsDen[k] || 0) && (s.formula === 'pct')) throw httpError(400, k + ': the compliant count cannot be more than the observed count.'); });
       }
       let updated;
       if (resend) {
@@ -2276,5 +2388,5 @@ module.exports = {
   addDepartmentField, removeDepartmentField, getCollectionSettings, saveCollectionSettings,
   createFieldRequest, listFieldRequests, decideFieldRequest,
   // exported so a repair script can re-apply an approval through the SAME code path
-  applyQuality,
+  applyQuality, pendingHandHygiene, latestOpenMonth,
 };

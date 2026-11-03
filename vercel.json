@@ -12,6 +12,7 @@
         "maxDuration": 60,
         "includeFiles": [
           "renderer/index.html",
+          "renderer/unico/hh-pool.js",
           "server/seed/**",
           "server/meds-index/**",
           "server/h360/logo.png",

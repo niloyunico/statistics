@@ -66,7 +66,16 @@ if (!process.env.VERCEL) {
   app.get('/api/report-pdf', (req, res) => {
     res.json({ ok: true, engine: 'python-bridge', python: PY_BIN, ready: PY_BIN === 'python' || fs.existsSync(PY_BIN) });
   });
-  app.post('/api/report-pdf', express.json({ limit: '48mb' }), (req, res) => {
+  // Signed-in only. The two modes that reach beyond what the browser sends — rendering
+  // arbitrary posted HTML, and reading the WHOLE quality/statistics collections from the
+  // database by parameters — are for administrators; everyone else posts the resolved model
+  // the report builder already scoped for them.
+  app.post('/api/report-pdf', express.json({ limit: '48mb' }), session.requireApi, access.attach, (req, res) => {
+    const b = req.body || {};
+    const resolved = ('depts' in b) || ('doc' in b);
+    if ((b.mode === 'html' || !resolved) && !(req.access && req.access.unrestricted)) {
+      return res.status(403).json({ ok: false, error: 'Only an administrator can use this PDF mode.' });
+    }
     const bin = PY_BIN;
     let cp;
     try { cp = spawn(bin, [PY_SCRIPT], { cwd: path.join(__dirname, '..') }); }
@@ -285,7 +294,7 @@ async function serveIndex(req, res) {
   // shows each user only their own data.
   let scopeUser = scopeRes || null;
   if (scopeUser && access.PORTAL_ROLES.indexOf(scopeUser.role) >= 0) {
-    const qa = scopeUser.qualityAreas || [];
+    const qa = scopeAreaKeys(scopeUser, qualRes);
     // departments the collector can report = explicit list ∪ areas-mapped-back-to-depts
     // ∪ all (hospital-wide), so a quality-only / hospital-wide person still gets depts.
     const daSet = effectiveDeptIds(scopeUser, deptMap);
@@ -359,7 +368,7 @@ async function serveIndex(req, res) {
         if (held || !access.can(a, 'quality', 'view')) {
           quality = scopeQualityList(qualRes || [], scopeUser);
           const qi = (scopeUser.qualityIndicators && typeof scopeUser.qualityIndicators === 'object') ? scopeUser.qualityIndicators : {};
-          const qov = scopeQualityOverlay(raw['unico_quality_v2'], scopeUser.qualityAreas || [], qi);
+          const qov = scopeQualityOverlay(raw['unico_quality_v2'], scopeAreaKeys(scopeUser, qualRes), qi);
           if (qov && qov['unico_quality_v2']) snap['unico_quality_v2'] = qov['unico_quality_v2']; else delete snap['unico_quality_v2'];
           if (snap['unico_capa_v1'] != null) {
             const c = scopeCapaOverlay(snap['unico_capa_v1'], scopeUser);
@@ -748,7 +757,7 @@ app.locals.scopeSubmitterData = async (a, req, data) => {
     }
     if (out.unico_quality_v2 != null) {
       const qi = (scope.qualityIndicators && typeof scope.qualityIndicators === 'object') ? scope.qualityIndicators : {};
-      const qov = scopeQualityOverlay(out.unico_quality_v2, scope.qualityAreas || [], qi);
+      const qov = scopeQualityOverlay(out.unico_quality_v2, scope.allQualityAreas ? scopeAreaKeys(scope, await getQuality()) : (scope.qualityAreas || []), qi);
       if (qov && qov.unico_quality_v2 != null) out.unico_quality_v2 = qov.unico_quality_v2; else delete out.unico_quality_v2;
     }
     if (out.unico_store_v3 != null) {
@@ -775,9 +784,16 @@ async function collectorScope(req, mod) {
     return await dataCollection.getUserScope(req.user.sub);
   } catch (e) { return null; }
 }
+/* The quality areas a scope covers. A hospital-wide submitter (allQualityAreas) covers every
+   CURRENT area: the qualityAreas list is only a snapshot taken when the account was saved,
+   so an area added later was accepted by the server but never shown in their forms. */
+function scopeAreaKeys(scope, quality) {
+  if (scope && scope.allQualityAreas) return (quality || []).map((q) => q && q.key).filter((k) => k != null);
+  return (scope && scope.qualityAreas) || [];
+}
 // Area + per-indicator narrowing — same rules as serveIndex's snapshot scoping.
 function scopeQualityList(quality, scope) {
-  const qa = scope.qualityAreas || [];
+  const qa = scopeAreaKeys(scope, quality);
   const qi = (scope.qualityIndicators && typeof scope.qualityIndicators === 'object') ? scope.qualityIndicators : {};
   return (quality || []).filter((q) => qa.includes(q.key)).map((q) => {
     const allow = qi[q.key];
@@ -865,7 +881,7 @@ app.get('/api/quality', session.requireApi, access.requirePerm('quality', 'view'
       // so an open collector portal reflects admin changes on live refresh
       try {
         const qi = (scope.qualityIndicators && typeof scope.qualityIndicators === 'object') ? scope.qualityIndicators : {};
-        const qov = scopeQualityOverlay((await getAppData()).data['unico_quality_v2'], scope.qualityAreas || [], qi);
+        const qov = scopeQualityOverlay((await getAppData()).data['unico_quality_v2'], scopeAreaKeys(scope, quality), qi);
         if (qov && qov['unico_quality_v2']) out.overlay = { unico_quality_v2: qov['unico_quality_v2'] };
       } catch (e) { }
     }
@@ -873,6 +889,46 @@ app.get('/api/quality', session.requireApi, access.requirePerm('quality', 'view'
     res.json(out);
   }
   catch (e) { res.status(500).json({ ok: false, error: 'Could not load quality indicators.' }); }
+});
+
+/* Hand Hygiene — the hospital audit's totals (Data Submission → Hand Hygiene).
+   Read-only and HOSPITAL-WIDE by design: whoever holds the screen (ticked per person in
+   Access Control, or a hospital-wide submitter) sees the same figures, whatever quality
+   areas they submit for. A Quality console viewer may read it too. Pooling is the shared
+   rule in renderer/unico/hh-pool.js, so this and every report agree. */
+const HH_POOL = require('../renderer/unico/hh-pool.js');
+app.get('/api/hand-hygiene', session.requireApi, access.attach, async (req, res) => {
+  try {
+    const a = req.access;
+    if (!(access.hhScreenOn(a) || access.can(a, 'quality', 'view'))) {
+      return res.status(403).json({ ok: false, code: 'hh-not-granted', error: 'Hand Hygiene has not been given to your account. Ask an administrator to tick "Hand Hygiene" for you in Access Control.' });
+    }
+    const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const quality = await getQuality();
+    let map = null; try { map = await deptmap.get(); } catch (e) { }
+    // Show each area under its one canonical name (the client does the same via DEPTMAP);
+    // qualityName keeps the area's own name, which the audit rows were filed under.
+    const depts = (quality || []).map((q) => {
+      const nm = map && q.deptId && map.byId[q.deptId] && map.byId[q.deptId].name;
+      return (nm && nm !== q.name) ? Object.assign({}, q, { name: nm, qualityName: q.name }) : q;
+    });
+    // Years that hold any hand-hygiene reading, newest first.
+    const years = new Set();
+    depts.forEach((d) => (d.indicators || []).forEach((ind) => {
+      if (!HH_POOL.isHHInd(ind)) return;
+      ['months', 'mNum', 'mDeptBreakdown'].forEach((f) => Object.keys(ind[f] || {}).forEach((k) => { const y = parseInt(String(k).split('-')[1], 10); if (!isNaN(y)) years.add(2000 + y); }));
+    }));
+    const yearList = [...years].sort((x, y) => y - x);
+    const now = new Date();
+    let year = parseInt(req.query.year, 10);
+    if (!(year >= 2000 && year <= 2100)) year = yearList[0] || now.getFullYear();
+    const yy = String(year % 100).padStart(2, '0');
+    const months = MON.map((m) => m + '-' + yy);
+    const out = HH_POOL.build(depts, months);
+    let pending = [];
+    try { pending = (await dataCollection.pendingHandHygiene()).filter((p) => months.indexOf(p.month) >= 0); } catch (e) { }
+    res.json(Object.assign({ ok: true, year: year, years: yearList.length ? yearList : [year], pending: pending }, out));
+  } catch (e) { res.status(500).json({ ok: false, error: 'Could not load hand hygiene totals.' }); }
 });
 
 // Database keep-alive: one tiny write per day so Atlas does not pause the cluster for

@@ -77,6 +77,13 @@ async function update(n, id, patch) {
   if (c) { await c.updateOne({ _id: id }, { $set: patch }); return outDoc(await c.findOne({ _id: id })); }
   const x = memList(n).find((y) => y.id === id); if (x) Object.assign(x, patch); return x || null;
 }
+// Writes only while the stored row still matches `cond` (e.g. still pending); null when it no
+// longer does — two decisions on one row can then never both land.
+async function updateIf(n, id, cond, patch) {
+  const c = await col(n);
+  if (c) { const r = await c.updateOne(Object.assign({ _id: id }, cond), { $set: patch }); return r.matchedCount ? outDoc(await c.findOne({ _id: id })) : null; }
+  const x = memList(n).find((y) => y.id === id && Object.keys(cond).every((k) => y[k] === cond[k])); if (x) Object.assign(x, patch); return x || null;
+}
 async function upsert(n, id, doc) {
   const c = await col(n);
   if (c) { await c.updateOne({ _id: id }, { $set: doc }, { upsert: true }); return outDoc(await c.findOne({ _id: id })); }
@@ -610,7 +617,18 @@ function mount(app, opts) {
       const date = s(b.date, 10); if (!dateOK(date)) return fail(res, 400, 'A date is required.');
       const counts = {}; COUNT_KEYS.forEach((k) => { counts[k] = num(obj(b.counts)[k], 0, 100000); });
       const notes = { obs: s(obj(b.notes).obs, 2000), issues: s(obj(b.notes).issues, 2000), handover: s(obj(b.notes).handover, 2000) };
-      const rec = await insert('shiftReports', { dept, date, shift: s(b.shift, 10) || 'M4', counts, notes, by: { username: ctx.username, name: ctx.name, role: roleLabel(ctx.role) }, status: 'Submitted', createdAt: nowMs() });
+      const shift = s(b.shift, 10) || 'M4';
+      // One report per unit + date + shift. Every send used to insert another row, so a double
+      // tap or a resend after "Returned" left duplicates for the manager to approve one by one.
+      // An open (submitted / returned) report is updated in place; an approved one is final.
+      const same = (await list('shiftReports', { dept, date, shift }, { createdAt: -1 }, 5)) || [];
+      if (same.some((r) => r.status === 'Approved')) return fail(res, 409, 'The ' + shift + ' report for ' + ctx.deptName(dept) + ' on ' + date + ' is already approved. Ask a manager to return it to change it.');
+      const by = { username: ctx.username, name: ctx.name, role: roleLabel(ctx.role) };
+      const open = same.find((r) => r.status === 'Submitted' || r.status === 'Returned');
+      const rec = open
+        ? (await updateIf('shiftReports', open.id, { status: open.status }, { counts, notes, by, status: 'Submitted', resubmittedAt: nowMs(), decidedBy: null, decidedAt: null, reason: '' }))
+        : await insert('shiftReports', { dept, date, shift, counts, notes, by, status: 'Submitted', createdAt: nowMs() });
+      if (!rec) return fail(res, 409, 'This report was just decided by a manager — refresh and check it before sending again.');
       log(req, 'shift_report_submitted', ctx.deptName(dept) + ' · ' + date + ' · ' + rec.shift, `${counts.adm} adm · ${counts.nvd + counts.cs} deliveries`);
       res.json({ ok: true, report: rec });
     } catch (e) { fail(res, 500, 'Could not submit the report.'); }
@@ -620,7 +638,11 @@ function mount(app, opts) {
       const ctx = req.ctx; if (!canApproveShift(ctx)) return fail(res, 403, 'Manager or administrator access required.');
       const r = await getOne('shiftReports', s(req.params.id, 80)); if (!r) return fail(res, 404, 'Report not found.');
       const status = obj(req.body).status === 'Returned' ? 'Returned' : 'Approved';
-      const rec = await update('shiftReports', r.id, { status, decidedBy: { username: ctx.username, name: ctx.name }, decidedAt: nowMs(), reason: s(obj(req.body).reason, 500) });
+      // Decide only a report still waiting: approve and return used to cross, and a decided
+      // report could be decided again, silently replacing the first decision.
+      if (r.status !== 'Submitted') return fail(res, 409, 'This report is already ' + String(r.status || 'decided').toLowerCase() + ' — refresh to see it.');
+      const rec = await updateIf('shiftReports', r.id, { status: 'Submitted' }, { status, decidedBy: { username: ctx.username, name: ctx.name }, decidedAt: nowMs(), reason: s(obj(req.body).reason, 500) });
+      if (!rec) return fail(res, 409, 'Someone else decided this report just now — refresh to see it.');
       log(req, 'shift_report_' + status.toLowerCase(), ctx.deptName(r.dept) + ' · ' + r.date + ' · ' + r.shift); res.json({ ok: true, report: rec });
     } catch (e) { fail(res, 500, 'Server error.'); }
   });

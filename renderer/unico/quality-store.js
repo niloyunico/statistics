@@ -297,29 +297,15 @@
   // reports read one connected dataset.
   function applyHHDeptBreakdown(list) {
     try {
-      const isHH = (ind) => /hand\s*hygiene/i.test((ind && ind.name) || '');
-      let src = null;
-      list.forEach((d) => (d.indicators || []).forEach((ind) => {
-        if (isHH(ind) && ind.mDeptBreakdown && Object.keys(ind.mDeptBreakdown).length) {
-          if (!src || /overall|hospital/i.test(d.name + ' ' + ind.name)) src = { dep: d, ind: ind };
-        }
-      }));
+      // One shared rule (hh-pool.js) picks the hospital audit and maps audit names to areas.
+      const HH = window.UNICO_HH;
+      if (!HH) return list;
+      const isHH = HH.isHHInd;
+      const src = HH.findSource(list);
       if (!src) return list;
-      const normN = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      // The hand-hygiene audit stored each dept's rows under its ORIGINAL name; several
-      // depts were later renamed to their canonical Quality name, which broke the plain
-      // name match (a renamed dept silently stopped receiving its audited compliance).
-      // Map the old audit names -> canonical so those departments match again.
-      const HH_DEPT_ALIAS = {
-        'endoscopy': 'endoscopic suite',
-        'level 10 ward': 'ipd cabin level 10',
-        'level 9 ward': 'ipd cabin level 9',
-        'labour / delivery / recovery': 'labour , delivery & recovery room',
-        'ct ot': 'ctvs ot',
-        'ct icu': 'ctvs icu',
-      };
-      const canonDept = (s) => { const n = normN(s); return HH_DEPT_ALIAS[n] || n; };
+      const normN = HH.normN, canonDept = HH.canonDept;
       const bd = src.ind.mDeptBreakdown;
+      if (!bd || !Object.keys(bd).length) return list;
       return list.map((d) => {
         if (d === src.dep) return d;
         const idx = (d.indicators || []).findIndex(isHH);
@@ -332,10 +318,10 @@
         const hh = idx >= 0 ? d.indicators[idx] : {
           id: 'ind-hh-from-audit', name: 'Hand Hygiene Compliance', formula: 'pct', unit: '%', valueType: '%',
           numLabel: src.ind.numLabel || 'Compliant moments', denLabel: src.ind.denLabel || 'Observed moments',
-          benchmark: src.ind.benchmark || '≥ 90 %', benchmarkValue: (src.ind.benchmarkValue != null ? src.ind.benchmarkValue : 90),
+          benchmark: src.ind.benchmark || '≥ 80 %', benchmarkValue: HH.benchOf(src.ind),
           goalDirection: 'higher_is_better', months: {}, mNum: {}, mDen: {},
         };
-        let months = null, mNum = null, mDen = null;
+        let months = null, mNum = null, mDen = null, fromAudit = null;
         Object.keys(bd).forEach((mk) => {
           const rows = bd[mk]; if (!Array.isArray(rows)) return;
           // Match by canonical name (alias-mapped) OR by the dept's stable key, so a
@@ -346,13 +332,16 @@
           if (!(den > 0)) return; // this dept was not audited that month (0/0 row)
           const own = (hh.mNum && hh.mNum[mk] != null && hh.mNum[mk] !== '') || (hh.months && hh.months[mk] != null && hh.months[mk] !== '');
           if (own) return;
-          if (!months) { months = Object.assign({}, hh.months || {}); mNum = Object.assign({}, hh.mNum || {}); mDen = Object.assign({}, hh.mDen || {}); }
+          if (!months) { months = Object.assign({}, hh.months || {}); mNum = Object.assign({}, hh.mNum || {}); mDen = Object.assign({}, hh.mDen || {}); fromAudit = Object.assign({}, hh.mFromAudit || {}); }
           // fill BOTH shapes: months (formula 'direct' reads it) and mNum/mDen ('pct' reads those)
           months[mk] = Math.round((n / den) * 10000) / 100;
           mNum[mk] = n; mDen[mk] = den;
+          // Tag the copied month: pooling (UNICO_HH.build) and every hospital total must count
+          // the audit once, not again through this department's copy of it.
+          fromAudit[mk] = true;
         });
         if (!months) return d;
-        const patched = Object.assign({}, hh, { months: months, mNum: mNum, mDen: mDen, hhFromAudit: true });
+        const patched = Object.assign({}, hh, { months: months, mNum: mNum, mDen: mDen, mFromAudit: fromAudit, hhFromAudit: true });
         // refresh the per-year quarter rollups so quarter-based views see the filled months
         const fys = fysInInd(patched);
         if (fys.length) { const byFy = {}; fys.forEach((fy) => { byFy[fy] = computeQuartersFor(patched, fyQuarterMonths(fy)); }); patched.quartersByFy = byFy; }

@@ -744,6 +744,9 @@
       const s = this.state, mi = clamp(s.dcMonth, 0, DC_MONTHS.length - 1), at = dayStamp();
       const local = (status, extra) => this.setState({ dcSubs: Object.assign({}, s.dcSubs, { [mi]: Object.assign({}, s.dcSubs[mi] || {}, { [item.id]: Object.assign({ status, num: x.num, den: x.den, vals: x.vals, at, note: x.note, reason: null, reviewer: '' }, extra || {}) }) }), dcFormSent: true, dcCorr: '', dcEvidence: false });
       if (s.demo) return local('sent');
+      // The current month opens in its final two days (the console's dcSubmissionWindow; the
+      // server refuses anything later too). Before that it is "Not open yet".
+      if (mi > DC_CUR && TODAY < DC_DUE_DAY - 1) return this.setState({ dcToast: DC_MONTHS[mi].long + ' is not open yet — it opens on ' + (DC_DUE_DAY - 1) + ' ' + MON3[M] + '.' });
       // One send at a time: a double tap created two pending submissions. The instance flag
       // closes the gap before the busy state has rendered.
       if (this._dcBusy) return;
@@ -784,7 +787,10 @@
       // A collector scoped only to quality areas (qualityAreas / allQualityAreas, no unit) got an
       // empty dashboard: their items come from the server-scoped /api/quality areas instead,
       // stepped through with the same unit chip.
-      const qAreas = !unit && !s.demo && (bu.role || me.role) === 'collector' ? (live.quality || []) : [];
+      // Not only the old 'collector' role: a normal account holding Data Submission with quality
+      // areas (or hospital-wide) is the same reporter. /api/quality already scopes the list.
+      const areaReporter = (bu.role || me.role) === 'collector' || me.allQualityAreas === true || bu.allQualityAreas === true || (Array.isArray(me.qualityAreas) && me.qualityAreas.length > 0);
+      const qAreas = !unit && !s.demo && areaReporter ? (live.quality || []) : [];
       const qArea = qAreas.find((a) => String(a.key) === String(s.dcAreaSel)) || qAreas[0] || null;
       const unitChip = unit ? (unit.short || unit.name) + (units.length > 1 ? ' ▾' : '') : qArea ? (qArea.name || qArea.key) + (qAreas.length > 1 ? ' ▾' : '') : (units.length ? 'Choose a unit ▾' : 'No unit assigned');
       const pickUnit = () => { if (!unit && qAreas.length > 1) { const i = qAreas.indexOf(qArea); return this.setState({ dcAreaSel: qAreas[(i + 1) % qAreas.length].key }); } if (units.length <= 1) { if (!unit && units[0]) this.setUnit(units[0].id); return; } const i = units.findIndex((x) => unit && x.id === unit.id); this.setUnit(units[(i + 1) % units.length].id); };
@@ -1272,7 +1278,7 @@
         srNext: () => { if (s.srStep < SR_STEPS.length - 1) return this.setState({ srStep: s.srStep + 1 }); this.submitShiftReport({ dept: unit ? unit.id : undefined, date: todayIso, shift: s.srShift, counts: s.srVals, notes: s.srNotes }); },
         exportReport: () => { if (navigator.clipboard) navigator.clipboard.writeText(srReview.map((r) => r.label + ': ' + r.v).join('\n')).catch(() => {}); this.toastMsg('Shift report copied', 'exportToast'); },
         /* data collection */
-        dcDueLabel: dcMonth === DC_CUR ? `Due ${DC_DUE_DAY} ${MON3[M]} · ${DC_DUE_DAY - TODAY} days left` : dcMonth < DC_CUR ? 'Closed month · corrections only' : 'Not open yet', dcDueStyle: `font-size:11px;font-weight:700;color:${dcMonth === DC_CUR ? (DC_DUE_DAY - TODAY <= 5 ? '#b32e2e' : '#b8650a') : '#7d8ea8'}`,
+        dcDueLabel: dcMonth === DC_CUR ? `Due ${DC_DUE_DAY} ${MON3[M]} · ${DC_DUE_DAY - TODAY} days left` : dcMonth < DC_CUR ? 'Closed month · corrections only' : (TODAY >= DC_DUE_DAY - 1 ? 'Open early · final two days of the month' : 'Not open yet'), dcDueStyle: `font-size:11px;font-weight:700;color:${dcMonth === DC_CUR ? (DC_DUE_DAY - TODAY <= 5 ? '#b32e2e' : '#b8650a') : '#7d8ea8'}`,
         dcPrevMonth: () => this.setState({ dcMonth: Math.max(0, dcMonth - 1) }), dcNextMonth: () => this.setState({ dcMonth: Math.min(DC_MONTHS.length - 1, dcMonth + 1) }),
         dcDash: `${dcTotal ? dcSent / dcTotal * 194.8 : 0} 194.8`, dcPct: (dcTotal ? Math.round(dcSent / dcTotal * 100) : 0) + '%', dcSentCount: dcSent, dcTotal,
         dcStatusChips: ['All', 'Sent', 'Approved', 'Returned', 'Not submitted'].map((f) => { const n = f === 'All' ? dcItemsRaw.length : dcItemsRaw.filter((it) => dcFilterMap[f].includes(it.status)).length; const c = f === 'Approved' ? '#1d8f57' : f === 'Returned' ? '#b32e2e' : f === 'Sent' ? '#0072a3' : f === 'Not submitted' ? '#b8650a' : '#3c4858'; return { label: f, n, go: () => this.setState({ dcFilter: f }), dot: `width:7px;height:7px;border-radius:50%;background:${c}`, style: `display:inline-flex;align-items:center;gap:5px;border:1px solid ${s.dcFilter === f ? 'rgba(0,144,202,.5)' : 'rgba(125,145,180,.25)'};border-radius:999px;padding:4px 9px;font-size:11px;font-weight:600;cursor:pointer;background:${s.dcFilter === f ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.7)'};color:${s.dcFilter === f ? '#0072a3' : '#3c4858'}` }; }),

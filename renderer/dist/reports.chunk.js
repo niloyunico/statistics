@@ -4740,8 +4740,9 @@ function UserModal({
     if (editing && Array.isArray(initial.dsScreens)) return initial.dsScreens.slice();
     const k = editing && initial.submitKinds || {};
     const lead = !!(editing && (initial.role === 'incharge' || initial.unitLead === true));
-    return DS_ALL.filter(s => (s !== 'patient' || k.patient !== false) && (s !== 'quality' && s !== 'status' || k.quality !== false) && (lead || DS_UNIT.indexOf(s) < 0));
+    return DS_ALL.filter(s => s !== 'hh' && (s !== 'patient' || k.patient !== false) && (s !== 'quality' && s !== 'status' || k.quality !== false) && (lead || DS_UNIT.indexOf(s) < 0));
   });
+  const hhInitial = !!(editing && Array.isArray(initial.dsScreens) && initial.dsScreens.indexOf('hh') >= 0);
   const hasScreen = s => dsScreens.indexOf(s) >= 0;
   const toggleScreen = s => setDsScreens(l => l.indexOf(s) >= 0 ? l.filter(x => x !== s) : DS_ALL.filter(x => x === s || l.indexOf(x) >= 0));
   const submitKinds = {
@@ -4938,6 +4939,7 @@ function UserModal({
         payload.customQualityAreas = sp.customQualityAreas;
         payload.qualityIndicators = sp.qualityIndicators;
       }
+      if (isColl && collects && hasScreen('hh') !== hhInitial) payload.dsScreens = hasScreen('hh') ? ['hh'] : [];
       if (!isAdmin && !isColl) {
         payload.staffScope = staffScope;
         if (!submits) payload.departments = staffScope === 'departments' ? staffDepts : [];
@@ -5042,7 +5044,7 @@ function UserModal({
     type: "button",
     className: "btn sm",
     onClick: () => setDsScreens([])
-  }, "None")), [['Submitting data', ['missing', 'status', 'quality', 'patient', 'history']]].map(([grp, ids]) => React.createElement("div", {
+  }, "None")), [['Submitting data', ['missing', 'status', 'quality', 'patient', 'history']], ['Viewing', ['hh']]].map(([grp, ids]) => React.createElement("div", {
     key: grp,
     style: {
       marginBottom: 8
@@ -5056,7 +5058,14 @@ function UserModal({
       letterSpacing: .5,
       marginBottom: 5
     }
-  }, grp), React.createElement("div", {
+  }, grp, grp === 'Viewing' && React.createElement("span", {
+    style: {
+      textTransform: 'none',
+      letterSpacing: 0,
+      fontWeight: 500,
+      marginLeft: 6
+    }
+  }, "\xB7 read-only, hospital-wide \u2014 anyone ticked sees the same figures")), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 6,
@@ -5066,20 +5075,21 @@ function UserModal({
     const row = (window.UNICO_DS_SCREENS || []).find(x => x[0] === id);
     if (!row) return null;
     const needLead = DS_UNIT.indexOf(id) >= 0 && !unitLead;
-    const on = hasScreen(id) && !needLead;
+    const hhLocked = id === 'hh' && !!(scope && scope.allQualityAreas);
+    const on = (hasScreen(id) || hhLocked) && !needLead;
     return React.createElement("button", {
       key: id,
       type: "button",
-      disabled: needLead,
+      disabled: needLead || hhLocked,
       onClick: () => toggleScreen(id),
       "aria-pressed": on,
-      title: needLead ? 'Turn on “Runs this unit” below first' : '',
+      title: needLead ? 'Turn on “Runs this unit” below first' : hhLocked ? 'Included with hospital-wide access (they enter the audit)' : id === 'hh' ? 'The hospital hand-hygiene audit: every department, staff group and the hospital total' : '',
       style: {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
         font: 'inherit',
-        cursor: needLead ? 'not-allowed' : 'pointer',
+        cursor: needLead || hhLocked ? 'not-allowed' : 'pointer',
         padding: '6px 11px',
         borderRadius: 8,
         fontSize: 12,
@@ -5166,7 +5176,66 @@ function UserModal({
       color: dsScreens.length ? 'var(--muted)' : 'var(--rose)',
       fontWeight: dsScreens.length ? 400 : 600
     }
-  }, !dsScreens.length ? 'Tick at least one screen.' : 'They may send ' + [submitKinds.patient && 'patient statistics', submitKinds.quality && 'quality indicator data'].filter(Boolean).join(' and ') + (submitKinds.patient || submitKinds.quality ? '' : 'nothing (view only)') + '. The duty roster, their unit’s staff and nurse / PCA requests are the Duty Roster and Staff Management modules above.')), React.createElement("div", {
+  }, !dsScreens.length ? 'Tick at least one screen.' : 'They may send ' + [submitKinds.patient && 'patient statistics', submitKinds.quality && 'quality indicator data'].filter(Boolean).join(' and ') + (submitKinds.patient || submitKinds.quality ? '' : 'nothing (view only)') + '. The duty roster, their unit’s staff and nurse / PCA requests are the Duty Roster and Staff Management modules above.')), isColl && collects && (() => {
+    const hhLocked = !!(scope && scope.allQualityAreas);
+    const on = hasScreen('hh') || hhLocked;
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 10,
+        margin: '4px 0 12px',
+        padding: '10px 12px',
+        borderRadius: 9,
+        border: '1px solid ' + (on ? 'var(--blue-100)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff'
+      }
+    }, React.createElement("button", {
+      type: "button",
+      role: "switch",
+      "aria-checked": on,
+      disabled: hhLocked,
+      onClick: () => toggleScreen('hh'),
+      style: {
+        flexShrink: 0,
+        marginTop: 1,
+        width: 34,
+        height: 19,
+        borderRadius: 10,
+        border: 0,
+        padding: 2,
+        cursor: hhLocked ? 'not-allowed' : 'pointer',
+        background: on ? 'var(--blue)' : '#c9d2de',
+        transition: 'background .15s'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'block',
+        width: 15,
+        height: 15,
+        borderRadius: '50%',
+        background: '#fff',
+        transform: on ? 'translateX(15px)' : 'none',
+        transition: 'transform .15s'
+      }
+    })), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: 'var(--ink)'
+      }
+    }, "Hand Hygiene screen"), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginTop: 2
+      }
+    }, hhLocked ? 'Included — a hospital-wide submitter enters the hand-hygiene audit, so always sees its totals.' : on ? 'On — they see the hospital hand-hygiene audit: every department, staff group and the hospital total (read-only).' : 'Off — tick to let them see the hospital hand-hygiene totals (read-only).')));
+  })(), React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: 'var(--muted)',
