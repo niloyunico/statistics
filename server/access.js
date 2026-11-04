@@ -37,7 +37,9 @@ const { getUsers } = require('./db');
 // 'datasubmit' (Data Submission) and 'staffapp' (the phone staff app) replace the old
 // PORTAL roles: submitting data for chosen departments, and signing in to the staff app,
 // are modules a normal account is given, not separate kinds of account.
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp'];
+// 'mydept' (My Department): one department's figures, roster and basic staff list, read-only,
+// for the departments an administrator picks per person (users.myDepartments). Never a default.
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept'];
 
 // Escalating legacy level strings. The newer model stores an ARRAY of independently
 // granted actions (e.g. ['view','delete'] = delete without add); both are supported,
@@ -265,6 +267,8 @@ async function forRequest(req) {
     // written before the choice existed keeps what it could do).
     submitKinds: cleanSubmitKinds(u.submitKinds),
     dsScreens: cleanDsScreens(u.dsScreens),
+    // My Department: the departments this person may view there (meaningful with 'mydept').
+    myDepartments: Array.isArray(u.myDepartments) ? u.myDepartments.map(String) : [],
   };
 }
 
@@ -444,7 +448,13 @@ function portalVerification(v) {
       status: p.status || null, renewUpto: p.renewUpto || null, expired: !!p.expired } : null,
   };
 }
-function portalStaff(deptKeys, staff) {
+/* My Department's staff list: who works there and what they are, nothing more. A person may
+   hold this module without the staff register, so no contact, licence, health or HR detail
+   (and nothing from Performance) ever leaves the server through it. */
+const MYDEPT_STAFF_FIELDS = ['id', 'emp_id', 'name', 'designation', 'role', 'doj', 'current_department'];
+// `fields` narrows the record further (My Department); the default is the in-charge's list.
+function portalStaff(deptKeys, staff, fields) {
+  const thin = Array.isArray(fields);
   // The same vocabulary department scoping uses (scopedDeptNames/deptsOfStaff): ids,
   // names, the local spellings in DEPT_ALIASES and the Level-N rule. A plain normaliser
   // hid "Level-10", "Level 10" and "Emergency" from the in-charges of those units.
@@ -460,7 +470,8 @@ function portalStaff(deptKeys, staff) {
   if (!want.size) return [];
   return (staff || []).filter((p) => p && !p.former && deptsOfStaff(p).some((d) => want.has(d))).map((p) => {
     const out = {};
-    PORTAL_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) out[k] = p[k]; });
+    (thin ? fields : PORTAL_STAFF_FIELDS).forEach((k) => { if (p[k] !== undefined) out[k] = p[k]; });
+    if (thin) return out;
     // The register photo, as a bare { url } -- the same picture the phone app's unit
     // staff screen already shows an in-charge. Stored as a string or a { url, ... }
     // upload record; only the URL leaves the server.
@@ -471,6 +482,16 @@ function portalStaff(deptKeys, staff) {
     if (ver) out.licence_verified = ver;
     return out;
   });
+}
+
+/* The departments this account may open in My Department: null = every department (an
+   administrator), else the ones an administrator picked for the person — none at all
+   without the module. */
+function myDeptIds(access) {
+  if (!access) return [];
+  if (access.unrestricted) return null;
+  if (!can(access, 'mydept', 'view')) return [];
+  return Array.isArray(access.myDepartments) ? access.myDepartments.map(String) : [];
 }
 
 // Can this access perform `action` on module `mid`? Mirrors unicoCan() in ui.jsx.
@@ -926,7 +947,7 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent, rawBase) {
 }
 
 module.exports = {
-  PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster,
+  PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster, MYDEPT_STAFF_FIELDS, myDeptIds,
   LEGACY_SUBMIT_ROLES, submitsData, dataScoped, isUnitLead, phoneRoleOf, CONSOLE_MODULES,
   SUBMIT_KINDS, cleanSubmitKinds, maySubmitKind,
   DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen, hhScreenOn,

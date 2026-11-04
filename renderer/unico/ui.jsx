@@ -62,6 +62,9 @@ const UNICO_MODULES = [
   // Data Submission: reporting a unit's own figures — what the /collect portal used to be,
   // now a module any account can be given, for the departments set on that person.
   { id:'datasubmit',label:'Data Submission', short:'Submit',     icon:I.upload,home:'dsHome' },
+  // My Department: one department's figures, approved roster and basic staff list, read-only,
+  // for the departments an administrator picked for the person. Never a default.
+  { id:'mydept',  label:'My Department',      short:'My Dept',    icon:I.layers,home:'myDept' },
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
@@ -78,6 +81,7 @@ const UNICO_MODULE_VIEWS = {
   attrition:['perfAttrition'],
   roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
   datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory','dsHandHygiene'],
+  mydept: ['myDept'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
 /* Data Submission's screens — each its own route and its own sidebar sub-item, and each
@@ -133,7 +137,7 @@ function unicoModuleOf(view){
    they are never gated here. `modules` null/absent = unrestricted (legacy accounts
    keep full access until an admin assigns modules). ---- */
 // 'staffapp' is grantable too, but it is the phone app only — it has no screen in here.
-const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp'];
+const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp','mydept'];
 // The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
 // hub, so it is gated under 'users' rather than 'stats'.
 function unicoAccessModuleOf(view){
@@ -198,7 +202,7 @@ function unicoFirstAllowedHome(){
   // 'home' is not in this list on purpose: it is ungated, so unicoCanAccessView()
   // never sends anyone here looking for a fallback. This list answers a different
   // question — which WORKSPACE to open when a restricted account needs one.
-  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings']];
+  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings'],['mydept','myDept']];
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return homes[i][1]; }
   return null;
 }
@@ -364,6 +368,8 @@ const UNICO_WS = [
     // `always` = never gated by a module permission. Your own profile is not a
     // privilege, so every role sees this row (see unicoCanAccessView('profile')).
     { id:'profile',     label:'My Profile',      icon:I.user,   home:'profile',     on:v=>v==='profile', always:true },
+    // Gated by its own module ('mydept'): absent unless an administrator granted it.
+    { id:'mydept',      label:'My Department',   icon:I.layers, home:'myDept',      on:v=>v==='myDept' },
   ]},
   { sec:'Clinical', items:[
     { id:'departments', label:'Departments',     icon:I.layers, home:'departments', on:v=>unicoModuleOf(v)==='stats'&&['dashboard','settings','profile','home'].indexOf(v)<0 },
@@ -473,7 +479,7 @@ function unicoWorkspaceSub(view){
   // My Profile is its own thing, not a workspace: it has no sub-views. Without this
   // it inherited the Statistics sub-nav (unicoModuleOf falls back to 'stats' for any
   // view it does not recognise) and showed a stray "Compare" underneath.
-  if(view==='profile') return [];
+  if(view==='profile' || view==='myDept') return [];
   if(view==='settings' || mod==='users') return [];   // Settings uses its own internal tabs
   if(mod==='stats' && view!=='dashboard' && view!=='settings') return [
     { label:'Compare', view:'compare' },

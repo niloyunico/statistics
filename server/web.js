@@ -386,7 +386,8 @@ async function serveIndex(req, res) {
         staffScope: restricted ? restricted.staffScope : 'all', staffId: restricted ? restricted.staffId : null,
         photo: scopeUser.photo || null, email: scopeUser.email || null,
         phone: scopeUser.phone || null, designation: scopeUser.designation || null, title: scopeUser.title || null,
-        workDepartment: scopeUser.workDepartment || null }
+        workDepartment: scopeUser.workDepartment || null,
+        myDepartments: Array.isArray(scopeUser.myDepartments) ? scopeUser.myDepartments : [] }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
   // Canonical quality-formula master: the DB catalogue expanded to the
@@ -1059,6 +1060,10 @@ require('./duty-roster').mount(app, {
   requireRead: [session.requireApi, access.requirePerm('roster', 'view', { allowCollector: true })],
   requireWrite: [session.requireApi, rosterWriteGuard],
 });
+
+// My Department: a department's figures, approved roster and basic staff list for the
+// departments an administrator picked per person (module 'mydept'; print is its own grant).
+require('./my-department').mount(app, { requireApi: [session.requireApi] });
 
 // Medicine module: the Bangladesh drug index (21.7k brands / 1.7k generic monographs)
 // and the prescriptions written from it. Prescriptions carry patient names, UHIDs and

@@ -1886,6 +1886,8 @@ const USER_MODS=[
   ['quality','Quality','Clinical',''],
   ['supervisor','Supervisor Reports','Clinical',''],
   ['medicine','Medicine & Rx','Clinical',''],
+  // Read-only: View and Print only. Which departments is set per person below the grid.
+  ['mydept','My Department','Clinical','one department, read-only · departments set below'],
   ['datacol','Data Collection','Data',''],
   ['reports','Reports','Data',''],
   ['staff','Staff Management','Administer',''],
@@ -1910,6 +1912,8 @@ const PERM_RANK={none:0,view:1,edit:2,add:3,delete:4};
 // A legacy level string never granted it, so levelToActions() must not invent one.
 const PERM_ACTS=[['view','View'],['edit','Edit'],['add','Add'],['delete','Delete'],['print','Print']];
 const PERM_ORDER=['view','edit','add','delete','print'];
+// My Department is read-only: it can be opened and printed, nothing else (server MYDEPT_ACTIONS).
+const MYDEPT_ACTS=['view','print'];
 const PERM_LEVEL_ORDER=['view','edit','add','delete'];
 function levelToActions(lv){ const i=['none','view','edit','add','delete'].indexOf(lv); return i<=0?[]:PERM_LEVEL_ORDER.slice(0,i); }
 function asActions(v){ if(Array.isArray(v)) return PERM_ORDER.filter(a=>v.indexOf(a)>=0); return levelToActions(v||'none'); }
@@ -2175,6 +2179,9 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   const [appRole,setAppRole]=useState(editing&&(initial.role==='pca'||initial.appRole==='pca')?'pca':'nurse');
   const [staffId,setStaffId]=useState(editing&&(initial.staffId===0||initial.staffId)?initial.staffId:(editing&&initial.staffMatch&&initial.staffMatch.id!=null?initial.staffMatch.id:''));
   const [staffLinkDirty,setStaffLinkDirty]=useState(false);   // only a changed picker is saved
+  // My Department: which departments this person may view there (server users.myDepartments).
+  const [myDepts,setMyDepts]=useState(editing&&Array.isArray(initial.myDepartments)?initial.myDepartments.slice():[]);
+  const [myDeptQ,setMyDeptQ]=useState('');
   const allDepts=React.useMemo(()=>{
     try{ if(window.buildDepts){ const ov=JSON.parse(localStorage.getItem('unico_store_v3')||'{}')||{}; const m=window.buildDepts(ov);
       if(Array.isArray(m)&&m.length) return m.map(d=>({id:d.id,name:d.name})); } }catch(e){}
@@ -2182,6 +2189,17 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   },[]);
   const allStaff=React.useMemo(()=>{ const s=window.STAFF_SEED||window.__UNICO_STAFF__||[]; return Array.isArray(s)?s.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))):[]; },[]);
   const toggleDept=(id)=>setStaffDepts(ds=>ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds,id]);
+  // First grant of My Department: start from the department they already work in — their Data
+  // Submission departments, else the staff-scope departments, else their linked staff record's.
+  const myDeptGuess=()=>{
+    const own=((scope&&scope.departments)||[]).concat(staffDepts||[]).filter(id=>allDepts.some(d=>d.id===id));
+    if(own.length) return [...new Set(own)];
+    const rec=allStaff.find(x=>String(x.id)===String(staffId));
+    const sq=v=>String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+    const hit=rec&&allDepts.find(d=>sq(d.name)===sq(rec.current_department)||sq(d.id)===sq(rec.current_department));
+    return hit?[hit.id]:[];
+  };
+  const toggleMyDept=(id)=>setMyDepts(ds=>ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds,id]);
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=!isPortalAcct&&accessType==='full';
   const isColl=isPortalAcct;
@@ -2277,18 +2295,21 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     // Access Control lists every account — none of those is a harmless "view".
     // Those modules are LEFT as they are (not cleared): clearing Data Submission on Save also wiped
     // the person's departments / areas and switched off their Indicator Access record.
-    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
+    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol','mydept'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
   // Start from what another person holds. Copies the ticks only; their scope stays theirs.
   const copyAccess=(uname)=>{
     const src=(allUsers||[]).find(x=>x.username===uname); setCopyFrom(uname); if(!src) return;
-    if(src.role==='Administrator'){ setPerms(FULL_PERMS()); return; }
+    // My Department is never copied: it is granted to a person by hand, for their own departments.
+    if(src.role==='Administrator'){ setPerms(cur=>({...FULL_PERMS(),mydept:asActions(cur.mydept)})); return; }
     const p={...NONE_PERMS(),...(src.perms||{})};
-    setPerms(USER_MODS.reduce((m,[k])=>(m[k]=asActions(p[k]),m),{}));
+    setPerms(cur=>USER_MODS.reduce((m,[k])=>(m[k]=k==='mydept'?asActions(cur.mydept):asActions(p[k]),m),{}));
   };
   // Toggle one action for a module (independent). Granting edit/add/delete auto-adds view.
   // Data Submission exists to SEND: ticking it on from nothing grants view+edit+add, or the person
   // saw every form and each Submit was refused (sending = Add, fixing own = Edit). Untick to narrow.
-  const toggleAct=(mid,act)=>{ setPerms(p=>{ const cur=asActions(p[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
+  const toggleAct=(mid,act)=>{ if(mid==='mydept'&&MYDEPT_ACTS.indexOf(act)<0) return;
+    if(mid==='mydept'&&!asActions(perms.mydept).length&&!myDepts.length) setMyDepts(myDeptGuess());
+    setPerms(p=>{ const cur=asActions(p[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
     if(mid==='datasubmit'&&!cur.length&&act==='view') next=['view','edit','add'];
     if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); };
   const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); };
@@ -2305,6 +2326,25 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     const sendScope=collects&&!!ScopeEditor&&!!window.dcScopePayload&&!scopeLoadFailed;
     if(sendScope&&!scopeReady) return setErr('Still loading this account’s data collection scope — try again in a moment.');
     if(submits&&!dsScreens.length) return setErr('Data Submission: tick at least one screen they can open.');
+    // My Department hands over a unit's figures and staff list: departments are required, and a
+    // new grant (or more departments, or Print) is confirmed against exactly what they will see.
+    const mdActs=(!isAdmin&&!isColl)?asActions(perms.mydept):[];
+    if(mdActs.length&&!myDepts.length){ setSec('access'); return setErr('My Department: pick at least one department, or set it back to None.'); }
+    if(mdActs.length){
+      const was=editing?asActions(initial.perms&&initial.perms.mydept):[];
+      const wasDepts=(editing&&Array.isArray(initial.myDepartments))?initial.myDepartments:[];
+      const newDepts=myDepts.filter(id=>!was.length||wasDepts.indexOf(id)<0);
+      const newPrint=mdActs.indexOf('print')>=0&&was.indexOf('print')<0;
+      if(!was.length||newDepts.length||newPrint){
+        const nm=id=>(allDepts.find(d=>d.id===id)||{}).name||id;
+        const ok=await window.UI.confirm({ danger:true, confirmLabel:'Grant access',
+          title:'Give '+(name.trim()||username)+' My Department?',
+          message:(name.trim()||username)+' will see '+myDepts.map(nm).join(', ')+': patient statistics, quality indicators, the approved duty roster and the staff list (name, designation, employee no., joining date).'
+            +(mdActs.indexOf('print')>=0?' Print lets them take all of this out of the system on paper or as a PDF; every printout is recorded in the activity log.':' They can view it but not print it.')
+            +' Performance and appraisal records are never shown. Grant this only if they need it.' });
+        if(!ok) return;
+      }
+    }
     setBusy(true);
     try{
       const backendRole=isAdmin?'Administrator':(isPortalAcct?portalRole:'User');
@@ -2350,6 +2390,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
         // The link to the staff record is sent only when the picker was changed: saving
         // anything else used to clear it (staffId:null) whenever the scope was not "self" or
         // the record was missing from this administrator's own staff list.
+        payload.myDepartments=asActions(perms.mydept).length?myDepts:[];
         if(staffLinkDirty){ payload.staffId=staffId!==''?Number(staffId):null; const rec=allStaff.find(x=>String(x.id)===String(staffId)); payload.staffEmpId=(rec&&rec.emp_id)?rec.emp_id:''; }
       }
       // Sent only for the one role the toggle is shown for, so no other kind of account is
@@ -2569,7 +2610,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                   <span style={{flex:'1 1 140px',fontSize:12.5,color:'var(--ink-2)',fontWeight:600}}>{label}{where&&<span style={{display:'block',fontWeight:500,fontSize:10,color:'var(--faint)'}}>{where}</span>}</span>
                   <div style={{display:'flex',gap:6,flexShrink:0,flexWrap:'wrap'}}>
                     <button onClick={()=>clearMod(id)} style={{padding:'5px 12px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(none?'var(--muted)':'var(--line)'),background:none?'var(--panel-2)':'#fff',color:none?'var(--ink)':'var(--muted)'}}>None</button>
-                    {PERM_ACTS.map(([v,l])=>{ const on=acts.indexOf(v)>=0; const c=lvlColor[v]; return (
+                    {PERM_ACTS.filter(([v])=>id!=='mydept'||MYDEPT_ACTS.indexOf(v)>=0).map(([v,l])=>{ const on=acts.indexOf(v)>=0; const c=lvlColor[v]; return (
                       <button key={v} onClick={()=>toggleAct(id,v)} title={v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':v==='delete'?'Can delete':'Can print / save as PDF — take the record out of the system on paper'}
                         style={{display:'inline-flex',alignItems:'center',gap:6,padding:'5px 11px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?c:'var(--line)'),background:on?c:'#fff',color:on?'#fff':'var(--ink-2)'}}>
                         <span style={{width:13,height:13,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'#fff':'var(--line)'),background:on?'rgba(255,255,255,.25)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
@@ -2577,11 +2618,30 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                       </button>
                     );})}
                   </div>
+                  {id==='mydept'&&<div style={{flexBasis:'100%',fontSize:10.5,color:'#8a5a00',background:'#fff8e9',border:'1px solid #f1d49a',borderRadius:7,padding:'6px 9px'}}>Shows a department’s statistics, quality data, duty roster and staff list. Grant only to people who need it.</div>}
                 </div>
               );})}
               </React.Fragment>
               ))}
             </div>
+            {asActions(perms.mydept).length>0&&(()=>{
+              const needle=myDeptQ.trim().toLowerCase();
+              const list=allDepts.slice().sort((a,b)=>(myDepts.indexOf(b.id)>=0)-(myDepts.indexOf(a.id)>=0)||String(a.name).localeCompare(String(b.name)))
+                .filter(d=>!needle||(String(d.name)+' '+d.id).toLowerCase().indexOf(needle)>=0);
+              return (
+              <div style={{borderTop:'1px solid var(--line-2)',paddingTop:14,marginTop:14}}>
+                <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>My Department <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· which departments they may view{asActions(perms.mydept).indexOf('print')>=0?' and print':''}</span></div>
+                <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>They see each ticked department’s patient statistics, quality indicators, approved duty roster and staff list (name, designation, employee no., joining date). Never performance or appraisal records.</div>
+                <input value={myDeptQ} onChange={e=>setMyDeptQ(e.target.value)} placeholder="Search department…" style={{padding:'6px 9px',border:'1px solid var(--line)',borderRadius:7,fontSize:12,fontFamily:'inherit',marginBottom:8,width:'100%',maxWidth:260}}/>
+                <div style={{display:'flex',flexWrap:'wrap',gap:6,maxHeight:170,overflow:'auto'}}>
+                  {list.map(d=>{ const on=myDepts.indexOf(d.id)>=0; return (
+                    <button key={d.id} type="button" onClick={()=>toggleMyDept(d.id)}
+                      style={{padding:'5px 11px',borderRadius:16,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff',color:on?'#fff':'var(--ink-2)'}}>{d.name}</button>
+                  );})}
+                </div>
+                {!myDepts.length&&<div style={{fontSize:10.5,color:'var(--rose)',marginTop:6}}>Pick at least one department, or set My Department back to None.</div>}
+              </div>
+              ); })()}
           </div>
           )}
           {curSec==='data'&&collects&&scopeBlock}

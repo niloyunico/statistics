@@ -590,5 +590,17 @@ async function call(route, { params = {}, body = {} } = {}) {
     assert.equal(acc.submitScoped(U({ datasubmit: ['view', 'add'], datacol: ['view', 'add'] })), false, 'a reviewer who may add anywhere is not');
     assert.equal(acc.submitScoped(U({ staff: ['view'] })), false, 'non-submitter: nothing to scope'); }
 
+  // My Department: View and Print only, its departments saved with the account, never a default.
+  reset();
+  { colOf('users').docs.push({ username: 'zak', role: 'User', active: true, name: 'Zakir', perms: { stats: ['view'] } });
+    const r = await call('PATCH /api/users/:username', { params: { username: 'zak' }, body: { perms: { stats: ['view'], mydept: ['view', 'edit', 'delete', 'print'] }, myDepartments: ['sicu', 'sicu', ' micu '] } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(user('zak').perms.mydept, ['view', 'print'], 'edit / delete are dropped');
+    assert.deepEqual(user('zak').myDepartments, ['sicu', 'micu'], 'trimmed and deduplicated');
+    await call('PATCH /api/users/:username', { params: { username: 'zak' }, body: { perms: { stats: ['view'], mydept: 'delete' } } });
+    assert.deepEqual(user('zak').perms.mydept, ['view'], 'a legacy level string can only mean View');
+    await call('PATCH /api/users/:username', { params: { username: 'zak' }, body: { perms: { stats: ['view'] } } });
+    assert.equal(user('zak').perms.mydept, 'none', 'absent = None'); }
+
   console.log('user-scope tests: all passed');
 })().catch((e) => { console.error(e); process.exit(1); });

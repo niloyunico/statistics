@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=e48aeefb4f","quality":"/dist/quality.chunk.js?v=11e713403e","datacollection":"/dist/datacollection.chunk.js?v=bf15ede92e","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=397650cf60","quality":"/dist/quality.chunk.js?v=11e713403e","datacollection":"/dist/datacollection.chunk.js?v=bf15ede92e","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -10127,6 +10127,12 @@ const UNICO_MODULES = [{
   short: 'Submit',
   icon: I.upload,
   home: 'dsHome'
+}, {
+  id: 'mydept',
+  label: 'My Department',
+  short: 'My Dept',
+  icon: I.layers,
+  home: 'myDept'
 }];
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
@@ -10140,6 +10146,7 @@ const UNICO_MODULE_VIEWS = {
   attrition: ['perfAttrition'],
   roster: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint', 'rosterFullReview', 'manpower'],
   datasubmit: ['dsHome', 'dsMissing', 'dsStatus', 'dsQuality', 'dsPatient', 'dsHistory', 'dsHandHygiene'],
+  mydept: ['myDept'],
   medicine: ['medHome', 'medInfo', 'medBrowse', 'medBrand', 'medGeneric', 'medRxNew', 'medRxList', 'medRxPrint', 'medTemplates', 'medCatalog', 'medInteractions', 'medCalc', 'medAnalytics']
 };
 const UNICO_DS_SCREENS = [['missing', 'dsMissing', 'Missing data'], ['status', 'dsStatus', 'Submission status'], ['quality', 'dsQuality', 'Quality data'], ['patient', 'dsPatient', 'Patient statistics'], ['history', 'dsHistory', 'My submissions'], ['hh', 'dsHandHygiene', 'Hand Hygiene']];
@@ -10176,7 +10183,7 @@ function unicoModuleOf(view) {
   }
   return 'stats';
 }
-const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp'];
+const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept'];
 function unicoAccessModuleOf(view) {
   if (view === 'settings') return 'users';
   return unicoModuleOf(view);
@@ -10226,7 +10233,7 @@ function unicoAllowedModules() {
   return UNICO_ACCESS_MODULES.filter(m => unicoCan(m, 'view'));
 }
 function unicoFirstAllowedHome() {
-  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['datasubmit', 'dsHome'], ['perf', 'perfHome'], ['attrition', 'perfAttrition'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings']];
+  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['datasubmit', 'dsHome'], ['perf', 'perfHome'], ['attrition', 'perfAttrition'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings'], ['mydept', 'myDept']];
   for (let i = 0; i < homes.length; i++) {
     if (unicoCanAccessModule(homes[i][0])) return homes[i][1];
   }
@@ -10542,6 +10549,12 @@ const UNICO_WS = [{
     home: 'profile',
     on: v => v === 'profile',
     always: true
+  }, {
+    id: 'mydept',
+    label: 'My Department',
+    icon: I.layers,
+    home: 'myDept',
+    on: v => v === 'myDept'
   }]
 }, {
   sec: 'Clinical',
@@ -10699,7 +10712,7 @@ function wsHome(it) {
 function unicoWorkspaceSub(view) {
   const mod = unicoModuleOf(view);
   if (view === 'home') return [];
-  if (view === 'profile') return [];
+  if (view === 'profile' || view === 'myDept') return [];
   if (view === 'settings' || mod === 'users') return [];
   if (mod === 'stats' && view !== 'dashboard' && view !== 'settings') return [{
     label: 'Compare',
@@ -15857,6 +15870,646 @@ Object.assign(window, {
     }, "Records are maintained by Nursing Services. Contact your supervisor to correct any detail."))))));
   }
   window.HomeView = HomeView;
+})();
+})();
+;
+/* ===== my-department.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useMemo
+  } = React;
+  const MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const SECTIONS = [['patient', 'Patient statistics'], ['quality', 'Quality indicators'], ['roster', 'Duty roster'], ['staff', 'Staff list']];
+  const filled = v => v !== null && v !== '' && v !== undefined;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;'
+  })[c]);
+  const ml = m => {
+    const p = String(m).split('-');
+    return p[0] + ' ' + (p[1] ? '20' + p[1] : '');
+  };
+  async function api(url, opts) {
+    const r = await fetch(url, Object.assign({
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json'
+      }
+    }, opts || {}));
+    if (r.status === 401 || r.redirected) throw new Error('Your session has expired. Sign in again.');
+    const j = await r.json().catch(() => null);
+    if (!j) throw new Error('The server did not answer. Please try again.');
+    if (!j.ok) throw new Error(j.error || 'Something went wrong.');
+    return j;
+  }
+  const isPct = ind => /pct|percent/i.test(String(ind.formula || '')) || /%/.test(String(ind.unit || ''));
+  const mult = ind => {
+    const f = String(ind.formula || '');
+    return /1000/.test(f) ? 1000 : /100/.test(f) || isPct(ind) ? 100 : null;
+  };
+  function qValue(ind, m) {
+    if (filled((ind.months || {})[m])) return Number(ind.months[m]);
+    const n = (ind.num || {})[m],
+      d = (ind.den || {})[m],
+      k = mult(ind);
+    if (filled(n) && filled(d) && Number(d) > 0 && k) return Math.round(Number(n) / Number(d) * k * 100) / 100;
+    return filled(n) ? Number(n) : null;
+  }
+  const qFmt = (ind, v) => v == null ? '—' : Math.round(v * 100) / 100 + (isPct(ind) ? '%' : '');
+  function qStatus(ind, v) {
+    if (v == null || ind.benchmarkValue == null) return null;
+    return ind.goalDirection === 'higher_is_better' ? v >= ind.benchmarkValue ? 'ok' : 'bad' : v <= ind.benchmarkValue ? 'ok' : 'bad';
+  }
+  const qCell = (ind, m) => (ind.notObserved || {})[m] ? 'N/O' : qFmt(ind, qValue(ind, m));
+  function patientTable(p) {
+    const months = p.months.filter(m => p.rows[m] && Object.keys(p.rows[m]).some(k => filled(p.rows[m][k])));
+    const foot = p.cols.map(c => {
+      const vals = months.map(m => Number((p.rows[m] || {})[c.id])).filter(v => Number.isFinite(v));
+      if (!vals.length) return '';
+      const sum = vals.reduce((a, b) => a + b, 0);
+      return c.pct ? Math.round(sum / vals.length * 10) / 10 + '%' : Math.round(sum * 100) / 100;
+    });
+    return {
+      months,
+      foot
+    };
+  }
+  const pCell = (c, v) => filled(v) ? v + (c.pct ? '%' : '') : '—';
+  function rosterDays(r) {
+    return new Date(r.year, r.month + 1, 0).getDate();
+  }
+  function rosterPeople(r) {
+    const ids = r.order && r.order.length ? r.order : Object.keys(r.grid || {});
+    return ids.filter(id => r.grid && r.grid[id]).map(id => ({
+      id,
+      name: (r.names || {})[id] || id,
+      row: r.grid[id] || {}
+    }));
+  }
+  const shiftColor = code => {
+    const R = window.UNICO_ROSTER;
+    const b = R && R.bucketOf(code);
+    return R && b && R.BUCKET_COLOR[b] || '#64748b';
+  };
+  function printHtml(data, sections) {
+    const me = window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username) || '';
+    const sig = window.unicoSig ? window.unicoSig.load() : {};
+    let body = '';
+    if (sections.indexOf('patient') >= 0 && data.patient) {
+      const p = data.patient;
+      const t = patientTable(p);
+      body += '<h2>Patient statistics — ' + esc(data.year) + '</h2>' + (t.months.length ? '<table><thead><tr><th>Month</th>' + p.cols.map(c => '<th class="r">' + esc(c.label) + '</th>').join('') + '</tr></thead><tbody>' + t.months.map(m => '<tr><td>' + esc(ml(m)) + '</td>' + p.cols.map(c => '<td class="r">' + esc(pCell(c, p.rows[m][c.id])) + '</td>').join('') + '</tr>').join('') + '<tr class="t"><td>Total / average</td>' + t.foot.map(v => '<td class="r">' + esc(v) + '</td>').join('') + '</tr></tbody></table>' : '<p class="m">No figures recorded for ' + esc(data.year) + '.</p>');
+    }
+    if (sections.indexOf('quality') >= 0 && data.quality) {
+      const q = data.quality;
+      const months = data.patient && data.patient.months || MONS.map(m => m + '-' + String(data.year % 100).padStart(2, '0'));
+      const used = months.filter(m => q.indicators.some(i => qValue(i, m) != null || (i.notObserved || {})[m]));
+      body += '<h2>Quality indicators — ' + esc(q.name) + ' · ' + esc(data.year) + '</h2>' + (used.length ? '<table><thead><tr><th>Indicator</th><th>Target</th>' + used.map(m => '<th class="r">' + esc(MONS[MONS.indexOf(m.split('-')[0])]) + '</th>').join('') + '</tr></thead><tbody>' + q.indicators.map(i => '<tr><td>' + esc(i.name) + '</td><td>' + esc(i.benchmark || (i.benchmarkValue != null ? i.benchmarkValue : '')) + '</td>' + used.map(m => {
+        const s = qStatus(i, qValue(i, m));
+        return '<td class="r ' + (s || '') + '">' + esc(qCell(i, m)) + '</td>';
+      }).join('') + '</tr>').join('') + '</tbody></table><p class="m">N/O = not observed that month. Red = outside the target.</p>' : '<p class="m">No quality readings recorded for ' + esc(data.year) + '.</p>');
+    }
+    if (sections.indexOf('roster') >= 0) {
+      const r = data.roster;
+      if (!r) body += '<h2 class="pb">Duty roster — ' + esc(MONS[data.month]) + ' ' + esc(data.year) + '</h2><p class="m">No approved roster for this month.</p>';else {
+        const days = rosterDays(r);
+        const ppl = rosterPeople(r);
+        const d = Array.from({
+          length: days
+        }, (_, i) => i + 1);
+        body += '<h2 class="pb">Duty roster — ' + esc(MONS[r.month]) + ' ' + esc(r.year) + '</h2><table class="ros"><thead><tr><th>Name</th>' + d.map(x => '<th>' + x + '</th>').join('') + '</tr></thead><tbody>' + ppl.map(p => '<tr><td>' + esc(p.name) + '</td>' + d.map(x => '<td>' + esc(p.row[x] || '') + '</td>').join('') + '</tr>').join('') + '</tbody></table><p class="m">Prepared by ' + esc(r.preparedBy || '—') + ' · Checked by ' + esc(r.checkedBy || '—') + ' · Approved by ' + esc(r.approvedBy || '—') + '</p>';
+      }
+    }
+    if (sections.indexOf('staff') >= 0) {
+      const s = data.staff || [];
+      body += '<h2 class="pb">Staff list (' + s.length + ')</h2>' + (s.length ? '<table><thead><tr><th>#</th><th>Name</th><th>Designation</th><th>Employee no.</th><th>Joined</th></tr></thead><tbody>' + s.map((x, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.designation || x.role || '') + '</td><td>' + esc(x.emp_id || '') + '</td><td>' + esc(x.doj || '') + '</td></tr>').join('') + '</tbody></table>' : '<p class="m">No current staff recorded for this department.</p>');
+    }
+    const sigRow = ['prepared', 'reviewed', 'recommended', 'approved'].map(k => '<td><div class="sl"></div>' + esc(sig[k] || '') + '<br><span class="m">' + k.charAt(0).toUpperCase() + k.slice(1) + ' by</span></td>').join('');
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(data.dept.name) + ' — My Department</title><style>' + 'body{font:12px/1.4 Arial,sans-serif;color:#16202e;margin:18px}h1{font-size:18px;margin:0 0 2px}h2{font-size:14px;margin:18px 0 6px}.m{color:#5b6878}' + 'table{border-collapse:collapse;width:100%;font-size:10.5px}th,td{border:1px solid #cdd6e0;padding:4px 6px;text-align:left;vertical-align:top}th{background:#eef4fa}.r{text-align:right}' + '.t td{background:#e3f1f8;font-weight:700}.bad{color:#b4233c;font-weight:700}.ok{color:#14713f}.ros th,.ros td{padding:2px 3px;text-align:center;font-size:9px}.ros td:first-child{text-align:left;white-space:nowrap}' + '.sig{margin-top:28px;border:0}.sig td{border:0;width:25%;padding:0 10px;text-align:center}.sl{border-top:1px solid #16202e;margin:26px 0 4px}' + '@media print{@page{size:A4 landscape;margin:12mm}.pb{page-break-before:always}}</style></head><body>' + '<h1>UNICO Hospitals — ' + esc(data.dept.name) + '</h1><div class="m">My Department · ' + esc(data.year) + ' · printed by ' + esc(me) + ' on ' + esc(new Date().toLocaleString()) + '</div>' + body + '<table class="sig"><tr>' + sigRow + '</tr></table>' + '<script>window.onload=function(){window.print();}<\/script></body></html>';
+  }
+  function PrintDialog({
+    data,
+    onClose
+  }) {
+    const avail = SECTIONS.filter(([k]) => k !== 'patient' || data.patient).filter(([k]) => k !== 'quality' || data.quality);
+    const [pick, setPick] = useState(() => avail.map(([k]) => k));
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState('');
+    const toggle = k => setPick(p => p.indexOf(k) >= 0 ? p.filter(x => x !== k) : p.concat([k]));
+    const go = async () => {
+      if (!pick.length || busy) return;
+      setBusy(true);
+      setErr('');
+      const w = window.open('', '_blank');
+      try {
+        await api('/api/my-department/print', {
+          method: 'POST',
+          body: JSON.stringify({
+            dept: data.dept.id,
+            year: data.year,
+            month: data.month,
+            sections: pick
+          })
+        });
+        if (!w) {
+          setErr('Allow pop-ups for this site to print.');
+          setBusy(false);
+          return;
+        }
+        w.document.open();
+        w.document.write(printHtml(data, pick));
+        w.document.close();
+        onClose();
+      } catch (e) {
+        if (w) w.close();
+        setErr(e.message);
+        setBusy(false);
+      }
+    };
+    return React.createElement("div", {
+      onClick: e => {
+        if (e.target === e.currentTarget) onClose();
+      },
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(15,23,42,.45)',
+        zIndex: 400,
+        display: 'grid',
+        placeItems: 'center',
+        padding: 16
+      }
+    }, React.createElement("div", {
+      className: "card",
+      style: {
+        width: 'min(420px,100%)',
+        padding: 20
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        marginBottom: 4
+      }
+    }, "Print ", data.dept.name), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        marginBottom: 12
+      }
+    }, "Choose what goes on paper. Every printout is recorded in the activity log."), avail.map(([k, label]) => React.createElement("label", {
+      key: k,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '7px 0',
+        fontSize: 13,
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: pick.indexOf(k) >= 0,
+      onChange: () => toggle(k)
+    }), label, k === 'roster' && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "\xB7 ", MONS[data.month], " ", data.year))), err && React.createElement("div", {
+      style: {
+        color: 'var(--rose)',
+        fontSize: 12,
+        marginTop: 8
+      }
+    }, err), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'flex-end',
+        marginTop: 14,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      onClick: () => setPick(avail.map(([k]) => k))
+    }, "Select everything"), React.createElement("button", {
+      className: "btn sm",
+      onClick: onClose
+    }, "Cancel"), React.createElement("button", {
+      className: "btn pri sm",
+      disabled: !pick.length || busy,
+      onClick: go
+    }, busy ? 'Preparing…' : 'Print'))));
+  }
+  const th = {
+    textAlign: 'left',
+    padding: '8px 10px',
+    fontSize: 10.5,
+    textTransform: 'uppercase',
+    letterSpacing: '.3px',
+    color: 'var(--muted)',
+    fontWeight: 700,
+    borderBottom: '1px solid var(--line)',
+    whiteSpace: 'nowrap',
+    background: 'var(--blue-50)'
+  };
+  const thr = Object.assign({}, th, {
+    textAlign: 'right'
+  });
+  const td = {
+    padding: '7px 10px',
+    fontSize: 12.5,
+    color: 'var(--ink-2)',
+    borderBottom: '1px solid var(--line-2)',
+    whiteSpace: 'nowrap'
+  };
+  const tdr = Object.assign({}, td, {
+    textAlign: 'right',
+    fontVariantNumeric: 'tabular-nums'
+  });
+  const scroll = {
+    overflowX: 'auto',
+    WebkitOverflowScrolling: 'touch'
+  };
+  const Empty = ({
+    children
+  }) => React.createElement("div", {
+    style: {
+      padding: '22px 8px',
+      textAlign: 'center',
+      color: 'var(--muted)',
+      fontSize: 12.5
+    }
+  }, children);
+  function PatientTab({
+    p,
+    year
+  }) {
+    if (!p) return React.createElement(Empty, null, "This department reports quality indicators only.");
+    const t = patientTable(p);
+    if (!t.months.length) return React.createElement(Empty, null, "No patient statistics recorded for ", year, ".");
+    return React.createElement("div", {
+      style: scroll
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "Month"), p.cols.map(c => React.createElement("th", {
+      key: c.id,
+      style: thr
+    }, c.label)))), React.createElement("tbody", null, t.months.map(m => React.createElement("tr", {
+      key: m
+    }, React.createElement("td", {
+      style: td
+    }, ml(m)), p.cols.map(c => React.createElement("td", {
+      key: c.id,
+      style: tdr
+    }, pCell(c, p.rows[m][c.id]))))), React.createElement("tr", null, React.createElement("td", {
+      style: Object.assign({}, td, {
+        fontWeight: 800
+      })
+    }, "Total / average"), t.foot.map((v, i) => React.createElement("td", {
+      key: i,
+      style: Object.assign({}, tdr, {
+        fontWeight: 800,
+        background: 'var(--blue-50)'
+      })
+    }, v))))));
+  }
+  function QualityTab({
+    q,
+    months,
+    year
+  }) {
+    if (!q || !q.indicators.length) return React.createElement(Empty, null, "No quality indicators for this department.");
+    const used = months.filter(m => q.indicators.some(i => qValue(i, m) != null || (i.notObserved || {})[m]));
+    if (!used.length) return React.createElement(Empty, null, "No quality readings recorded for ", year, ".");
+    const tone = s => s === 'ok' ? {
+      color: '#14713f',
+      fontWeight: 700
+    } : s === 'bad' ? {
+      color: '#b4233c',
+      fontWeight: 700
+    } : {};
+    return React.createElement("div", {
+      style: scroll
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "Indicator"), React.createElement("th", {
+      style: th
+    }, "Target"), used.map(m => React.createElement("th", {
+      key: m,
+      style: thr
+    }, m.split('-')[0])))), React.createElement("tbody", null, q.indicators.map(i => React.createElement("tr", {
+      key: i.id
+    }, React.createElement("td", {
+      style: Object.assign({}, td, {
+        whiteSpace: 'normal',
+        minWidth: 200,
+        fontWeight: 600
+      })
+    }, i.name), React.createElement("td", {
+      style: Object.assign({}, td, {
+        color: 'var(--muted)'
+      })
+    }, i.benchmark || (i.benchmarkValue != null ? i.benchmarkValue : '—')), used.map(m => React.createElement("td", {
+      key: m,
+      style: Object.assign({}, tdr, tone(qStatus(i, qValue(i, m))))
+    }, qCell(i, m))))))), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 8
+      }
+    }, "Green = within target \xB7 red = outside target \xB7 N/O = not observed that month."));
+  }
+  function RosterTab({
+    r,
+    month,
+    year
+  }) {
+    if (!r) return React.createElement(Empty, null, "No approved duty roster for ", MONS[month], " ", year, ". Drafts and rosters awaiting sign-off are not shown.");
+    const days = rosterDays(r);
+    const ppl = rosterPeople(r);
+    const d = Array.from({
+      length: days
+    }, (_, i) => i + 1);
+    const cell = {
+      padding: '4px 3px',
+      fontSize: 10.5,
+      textAlign: 'center',
+      borderBottom: '1px solid var(--line-2)',
+      minWidth: 26
+    };
+    return React.createElement("div", null, React.createElement("div", {
+      style: scroll
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: Object.assign({}, th, {
+        position: 'sticky',
+        left: 0
+      })
+    }, "Name"), d.map(x => React.createElement("th", {
+      key: x,
+      style: Object.assign({}, th, {
+        textAlign: 'center',
+        padding: '6px 3px'
+      })
+    }, x)))), React.createElement("tbody", null, ppl.map(p => React.createElement("tr", {
+      key: p.id
+    }, React.createElement("td", {
+      style: Object.assign({}, td, {
+        position: 'sticky',
+        left: 0,
+        background: 'var(--card, #fff)',
+        fontWeight: 600
+      })
+    }, p.name), d.map(x => {
+      const c = p.row[x];
+      return React.createElement("td", {
+        key: x,
+        style: cell
+      }, c ? React.createElement("span", {
+        style: {
+          color: shiftColor(c),
+          fontWeight: 700
+        }
+      }, c) : '');
+    })))))), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 8
+      }
+    }, "Prepared by ", r.preparedBy || '—', " \xB7 Checked by ", r.checkedBy || '—', " \xB7 Approved by ", r.approvedBy || '—'));
+  }
+  function StaffTab({
+    s
+  }) {
+    if (!s || !s.length) return React.createElement(Empty, null, "No current staff recorded for this department.");
+    return React.createElement("div", {
+      style: scroll
+    }, React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        width: '100%'
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: th
+    }, "#"), React.createElement("th", {
+      style: th
+    }, "Name"), React.createElement("th", {
+      style: th
+    }, "Designation"), React.createElement("th", {
+      style: th
+    }, "Employee no."), React.createElement("th", {
+      style: th
+    }, "Joined"))), React.createElement("tbody", null, s.map((x, i) => React.createElement("tr", {
+      key: x.id || i
+    }, React.createElement("td", {
+      style: td
+    }, i + 1), React.createElement("td", {
+      style: Object.assign({}, td, {
+        fontWeight: 600
+      })
+    }, x.name), React.createElement("td", {
+      style: td
+    }, x.designation || x.role || '—'), React.createElement("td", {
+      style: td
+    }, x.emp_id || '—'), React.createElement("td", {
+      style: td
+    }, x.doj || '—'))))));
+  }
+  function MyDepartment() {
+    const now = new Date();
+    const [list, setList] = useState(null);
+    const [listErr, setListErr] = useState('');
+    const [dept, setDept] = useState('');
+    const [year, setYear] = useState(now.getFullYear());
+    const [month, setMonth] = useState(now.getMonth());
+    const [tab, setTab] = useState('patient');
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [printing, setPrinting] = useState(false);
+    useEffect(() => {
+      api('/api/my-department').then(j => {
+        setList(j.departments || []);
+        if ((j.departments || [])[0]) setDept(j.departments[0].id);
+      }).catch(e => {
+        setListErr(e.message);
+        setList([]);
+      });
+    }, []);
+    useEffect(() => {
+      if (!dept) return;
+      let dead = false;
+      setBusy(true);
+      api('/api/my-department/' + encodeURIComponent(dept) + '?year=' + year + '&month=' + month).then(j => {
+        if (!dead) {
+          setData(j);
+          setErr('');
+          if (!j.patient && tab === 'patient') setTab('quality');
+        }
+      }).catch(e => {
+        if (!dead) {
+          setErr(e.message);
+          setData(null);
+        }
+      }).then(() => {
+        if (!dead) setBusy(false);
+      });
+      return () => {
+        dead = true;
+      };
+    }, [dept, year, month]);
+    const years = useMemo(() => {
+      const y = now.getFullYear();
+      return [y, y - 1, y - 2, y - 3];
+    }, []);
+    const months = data && data.patient && data.patient.months || MONS.map(m => m + '-' + String(year % 100).padStart(2, '0'));
+    const sel = {
+      padding: '7px 10px',
+      borderRadius: 8,
+      border: '1px solid var(--line)',
+      background: '#fff',
+      fontFamily: 'inherit',
+      fontSize: 12.5,
+      color: 'var(--ink-2)'
+    };
+    const tabs = [['patient', 'Patient statistics'], ['quality', 'Quality indicators'], ['roster', 'Duty roster'], ['staff', 'Staff']];
+    if (list === null) return React.createElement("div", {
+      className: "card",
+      style: {
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026");
+    if (listErr) return React.createElement("div", {
+      className: "card",
+      style: {
+        color: 'var(--rose)'
+      }
+    }, listErr);
+    if (!list.length) return React.createElement("div", {
+      className: "card",
+      style: {
+        color: 'var(--muted)'
+      }
+    }, "No department has been set for you yet. Ask the administrator to choose your department in Access Control \u2192 My Department.");
+    return React.createElement("div", {
+      className: "grid",
+      style: {
+        gap: 14
+      }
+    }, React.createElement(SectionTitle, {
+      icon: I.layers,
+      title: 'My Department' + (data ? ' — ' + data.dept.name : ''),
+      sub: "Your department's figures, approved duty roster and staff list. Read-only.",
+      right: data && data.canPrint ? React.createElement("button", {
+        className: "btn pri sm",
+        onClick: () => setPrinting(true)
+      }, React.createElement(Ic, {
+        d: I.doc,
+        s: 13
+      }), "Print") : null
+    }), React.createElement("div", {
+      className: "card",
+      style: {
+        padding: '10px 14px',
+        display: 'flex',
+        gap: 10,
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }
+    }, list.length > 1 && React.createElement("select", {
+      style: sel,
+      value: dept,
+      onChange: e => setDept(e.target.value)
+    }, list.map(d => React.createElement("option", {
+      key: d.id,
+      value: d.id
+    }, d.name))), React.createElement("select", {
+      style: sel,
+      value: year,
+      onChange: e => setYear(Number(e.target.value))
+    }, years.map(y => React.createElement("option", {
+      key: y,
+      value: y
+    }, y))), tab === 'roster' && React.createElement("select", {
+      style: sel,
+      value: month,
+      onChange: e => setMonth(Number(e.target.value))
+    }, MONS.map((m, i) => React.createElement("option", {
+      key: m,
+      value: i
+    }, m))), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), busy && React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Loading\u2026")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap'
+      }
+    }, tabs.map(([k, label]) => React.createElement("button", {
+      key: k,
+      className: 'btn sm' + (tab === k ? ' pri' : ''),
+      onClick: () => setTab(k)
+    }, label))), React.createElement("div", {
+      className: "card",
+      style: {
+        padding: '14px 16px'
+      }
+    }, err ? React.createElement("div", {
+      style: {
+        color: 'var(--rose)',
+        fontSize: 12.5
+      }
+    }, err) : !data ? React.createElement(Empty, null, "Loading\u2026") : tab === 'patient' ? React.createElement(PatientTab, {
+      p: data.patient,
+      year: data.year
+    }) : tab === 'quality' ? React.createElement(QualityTab, {
+      q: data.quality,
+      months: months,
+      year: data.year
+    }) : tab === 'roster' ? React.createElement(RosterTab, {
+      r: data.roster,
+      month: data.month,
+      year: data.year
+    }) : React.createElement(StaffTab, {
+      s: data.staff
+    })), printing && data && React.createElement(PrintDialog, {
+      data: data,
+      onClose: () => setPrinting(false)
+    }));
+  }
+  window.MyDepartment = MyDepartment;
 })();
 })();
 ;
@@ -25772,6 +26425,9 @@ function App() {
     body = typeof ProfileView !== 'undefined' ? React.createElement(ProfileView, {
       setRoute: setRoute
     }) : null;
+  } else if (route.view === 'myDept') {
+    crumbs = ['UNICO', 'My Department'];
+    body = typeof MyDepartment !== 'undefined' ? React.createElement(MyDepartment, null) : null;
   } else if (route.view === 'settings') {
     crumbs = ['UNICO', 'Settings'];
     body = React.createElement(Settings, {

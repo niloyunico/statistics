@@ -4344,7 +4344,7 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
+const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
 const MOD_GROUPS = ['Clinical', 'Data', 'Administer', 'Phone'];
 const modsGrouped = list => MOD_GROUPS.map(g => [g, list.filter(m => m[2] === g)]).filter(([, ms]) => ms.length);
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
@@ -4357,6 +4357,7 @@ const PERM_RANK = {
 };
 const PERM_ACTS = [['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete'], ['print', 'Print']];
 const PERM_ORDER = ['view', 'edit', 'add', 'delete', 'print'];
+const MYDEPT_ACTS = ['view', 'print'];
 const PERM_LEVEL_ORDER = ['view', 'edit', 'add', 'delete'];
 function levelToActions(lv) {
   const i = ['none', 'view', 'edit', 'add', 'delete'].indexOf(lv);
@@ -4752,6 +4753,8 @@ function UserModal({
   const [appRole, setAppRole] = useState(editing && (initial.role === 'pca' || initial.appRole === 'pca') ? 'pca' : 'nurse');
   const [staffId, setStaffId] = useState(editing && (initial.staffId === 0 || initial.staffId) ? initial.staffId : editing && initial.staffMatch && initial.staffMatch.id != null ? initial.staffMatch.id : '');
   const [staffLinkDirty, setStaffLinkDirty] = useState(false);
+  const [myDepts, setMyDepts] = useState(editing && Array.isArray(initial.myDepartments) ? initial.myDepartments.slice() : []);
+  const [myDeptQ, setMyDeptQ] = useState('');
   const allDepts = React.useMemo(() => {
     try {
       if (window.buildDepts) {
@@ -4773,6 +4776,15 @@ function UserModal({
     return Array.isArray(s) ? s.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))) : [];
   }, []);
   const toggleDept = id => setStaffDepts(ds => ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds, id]);
+  const myDeptGuess = () => {
+    const own = (scope && scope.departments || []).concat(staffDepts || []).filter(id => allDepts.some(d => d.id === id));
+    if (own.length) return [...new Set(own)];
+    const rec = allStaff.find(x => String(x.id) === String(staffId));
+    const sq = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const hit = rec && allDepts.find(d => sq(d.name) === sq(rec.current_department) || sq(d.id) === sq(rec.current_department));
+    return hit ? [hit.id] : [];
+  };
+  const toggleMyDept = id => setMyDepts(ds => ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds, id]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const isAdmin = !isPortalAcct && accessType === 'full';
@@ -4873,23 +4885,28 @@ function UserModal({
   };
   const quickSet = kind => {
     setCopyFrom('');
-    if (kind === 'none') setPerms(NONE_PERMS());else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
+    if (kind === 'none') setPerms(NONE_PERMS());else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
   };
   const copyAccess = uname => {
     const src = (allUsers || []).find(x => x.username === uname);
     setCopyFrom(uname);
     if (!src) return;
     if (src.role === 'Administrator') {
-      setPerms(FULL_PERMS());
+      setPerms(cur => ({
+        ...FULL_PERMS(),
+        mydept: asActions(cur.mydept)
+      }));
       return;
     }
     const p = {
       ...NONE_PERMS(),
       ...(src.perms || {})
     };
-    setPerms(USER_MODS.reduce((m, [k]) => (m[k] = asActions(p[k]), m), {}));
+    setPerms(cur => USER_MODS.reduce((m, [k]) => (m[k] = k === 'mydept' ? asActions(cur.mydept) : asActions(p[k]), m), {}));
   };
   const toggleAct = (mid, act) => {
+    if (mid === 'mydept' && MYDEPT_ACTS.indexOf(act) < 0) return;
+    if (mid === 'mydept' && !asActions(perms.mydept).length && !myDepts.length) setMyDepts(myDeptGuess());
     setPerms(p => {
       const cur = asActions(p[mid]);
       let next = cur.indexOf(act) >= 0 ? cur.filter(a => a !== act) : [...cur, act];
@@ -4919,6 +4936,27 @@ function UserModal({
     const sendScope = collects && !!ScopeEditor && !!window.dcScopePayload && !scopeLoadFailed;
     if (sendScope && !scopeReady) return setErr('Still loading this account’s data collection scope — try again in a moment.');
     if (submits && !dsScreens.length) return setErr('Data Submission: tick at least one screen they can open.');
+    const mdActs = !isAdmin && !isColl ? asActions(perms.mydept) : [];
+    if (mdActs.length && !myDepts.length) {
+      setSec('access');
+      return setErr('My Department: pick at least one department, or set it back to None.');
+    }
+    if (mdActs.length) {
+      const was = editing ? asActions(initial.perms && initial.perms.mydept) : [];
+      const wasDepts = editing && Array.isArray(initial.myDepartments) ? initial.myDepartments : [];
+      const newDepts = myDepts.filter(id => !was.length || wasDepts.indexOf(id) < 0);
+      const newPrint = mdActs.indexOf('print') >= 0 && was.indexOf('print') < 0;
+      if (!was.length || newDepts.length || newPrint) {
+        const nm = id => (allDepts.find(d => d.id === id) || {}).name || id;
+        const ok = await window.UI.confirm({
+          danger: true,
+          confirmLabel: 'Grant access',
+          title: 'Give ' + (name.trim() || username) + ' My Department?',
+          message: (name.trim() || username) + ' will see ' + myDepts.map(nm).join(', ') + ': patient statistics, quality indicators, the approved duty roster and the staff list (name, designation, employee no., joining date).' + (mdActs.indexOf('print') >= 0 ? ' Print lets them take all of this out of the system on paper or as a PDF; every printout is recorded in the activity log.' : ' They can view it but not print it.') + ' Performance and appraisal records are never shown. Grant this only if they need it.'
+        });
+        if (!ok) return;
+      }
+    }
     setBusy(true);
     try {
       const backendRole = isAdmin ? 'Administrator' : isPortalAcct ? portalRole : 'User';
@@ -4954,6 +4992,7 @@ function UserModal({
           payload.rosterScope = rosterScope;
           payload.rosterDepartments = rosterScope === 'departments' ? rosterDepts : [];
         }
+        payload.myDepartments = asActions(perms.mydept).length ? myDepts : [];
         if (staffLinkDirty) {
           payload.staffId = staffId !== '' ? Number(staffId) : null;
           const rec = allStaff.find(x => String(x.id) === String(staffId));
@@ -5764,7 +5803,7 @@ function UserModal({
         background: none ? 'var(--panel-2)' : '#fff',
         color: none ? 'var(--ink)' : 'var(--muted)'
       }
-    }, "None"), PERM_ACTS.map(([v, l]) => {
+    }, "None"), PERM_ACTS.filter(([v]) => id !== 'mydept' || MYDEPT_ACTS.indexOf(v) >= 0).map(([v, l]) => {
       const on = acts.indexOf(v) >= 0;
       const c = lvlColor[v];
       return React.createElement("button", {
@@ -5801,8 +5840,92 @@ function UserModal({
         c: "#fff",
         sw: 3
       })), l);
-    })));
-  }))))), curSec === 'data' && collects && scopeBlock, curSec === 'data' && submits && React.createElement("div", {
+    })), id === 'mydept' && React.createElement("div", {
+      style: {
+        flexBasis: '100%',
+        fontSize: 10.5,
+        color: '#8a5a00',
+        background: '#fff8e9',
+        border: '1px solid #f1d49a',
+        borderRadius: 7,
+        padding: '6px 9px'
+      }
+    }, "Shows a department\u2019s statistics, quality data, duty roster and staff list. Grant only to people who need it."));
+  })))), asActions(perms.mydept).length > 0 && (() => {
+    const needle = myDeptQ.trim().toLowerCase();
+    const list = allDepts.slice().sort((a, b) => (myDepts.indexOf(b.id) >= 0) - (myDepts.indexOf(a.id) >= 0) || String(a.name).localeCompare(String(b.name))).filter(d => !needle || (String(d.name) + ' ' + d.id).toLowerCase().indexOf(needle) >= 0);
+    return React.createElement("div", {
+      style: {
+        borderTop: '1px solid var(--line-2)',
+        paddingTop: 14,
+        marginTop: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        marginBottom: 3
+      }
+    }, "My Department ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: 'var(--muted)',
+        fontSize: 11
+      }
+    }, "\xB7 which departments they may view", asActions(perms.mydept).indexOf('print') >= 0 ? ' and print' : '')), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginBottom: 9
+      }
+    }, "They see each ticked department\u2019s patient statistics, quality indicators, approved duty roster and staff list (name, designation, employee no., joining date). Never performance or appraisal records."), React.createElement("input", {
+      value: myDeptQ,
+      onChange: e => setMyDeptQ(e.target.value),
+      placeholder: "Search department\u2026",
+      style: {
+        padding: '6px 9px',
+        border: '1px solid var(--line)',
+        borderRadius: 7,
+        fontSize: 12,
+        fontFamily: 'inherit',
+        marginBottom: 8,
+        width: '100%',
+        maxWidth: 260
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        maxHeight: 170,
+        overflow: 'auto'
+      }
+    }, list.map(d => {
+      const on = myDepts.indexOf(d.id) >= 0;
+      return React.createElement("button", {
+        key: d.id,
+        type: "button",
+        onClick: () => toggleMyDept(d.id),
+        style: {
+          padding: '5px 11px',
+          borderRadius: 16,
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: 'pointer',
+          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+          background: on ? 'var(--blue)' : '#fff',
+          color: on ? '#fff' : 'var(--ink-2)'
+        }
+      }, d.name);
+    })), !myDepts.length && React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--rose)',
+        marginTop: 6
+      }
+    }, "Pick at least one department, or set My Department back to None."));
+  })()), curSec === 'data' && collects && scopeBlock, curSec === 'data' && submits && React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -9850,7 +9973,8 @@ const AC_SHORT = {
   roster: 'RO',
   users: 'AC',
   datasubmit: 'DS',
-  staffapp: 'SA'
+  staffapp: 'SA',
+  mydept: 'MD'
 };
 const AC_ACT_LETTER = {
   view: 'V',

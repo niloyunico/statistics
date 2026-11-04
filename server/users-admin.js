@@ -61,7 +61,9 @@ const mirrorFailed = (e) => { try { console.error('[users] responsible mirror fa
 // cleanPerms() dropped the key. Kept in step with access.ACCESS_MODULES.
 // 'datasubmit' + 'staffapp': submitting data for chosen departments and signing in to the
 // phone staff app are MODULES on a normal account now, not portal roles (access.js).
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp'];
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept'];
+// My Department is read-only: it can be opened and printed, nothing else.
+const MYDEPT_ACTIONS = ['view', 'print'];
 // Does a perms map grant Data Submission? Such an account carries a data-collection scope
 // (departments / areas / indicators), mirrored into `responsibles` like a collector's was.
 const holdsSubmit = (perms) => { const v = perms && perms.datasubmit; return Array.isArray(v) ? v.length > 0 : (!!v && v !== 'none'); };
@@ -251,7 +253,7 @@ const cleanRosterScope = access.cleanRosterScope;
 
 // Changing any of these must invalidate every token the account already holds —
 // otherwise a revoked permission stays live for the rest of the 12h token TTL.
-const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'unitLead', 'submitKinds', 'dsScreens', 'enterDen'];
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'unitLead', 'submitKinds', 'dsScreens', 'enterDen', 'myDepartments'];
 // Compare only what actually CHANGED. The update object always carries a few scope
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
@@ -304,9 +306,13 @@ function cleanPerms(v) {
         let acts = val.filter((a) => PERM_ACTIONS.includes(a));
         if (acts.some((a) => a !== 'view') && acts.indexOf('view') < 0) acts.push('view');
         acts = PERM_ACTIONS.filter((a) => acts.indexOf(a) >= 0);   // canonical order + dedupe
+        if (k === 'mydept') acts = acts.filter((a) => MYDEPT_ACTIONS.indexOf(a) >= 0);
         out[k] = acts.length ? acts : 'none';
       } else {
-        const lv = String(val || 'none'); if (PERM_LEVELS.includes(lv)) out[k] = lv;
+        const lv = String(val || 'none');
+        // A level string never meant "may print"; for My Department it can only mean View.
+        if (k === 'mydept') out[k] = lv !== 'none' && PERM_LEVELS.includes(lv) ? ['view'] : 'none';
+        else if (PERM_LEVELS.includes(lv)) out[k] = lv;
       }
     });
   }
@@ -357,6 +363,7 @@ function safe(u) {
     appRole: u.appRole === 'pca' ? 'pca' : 'nurse',
     submitKinds: access.cleanSubmitKinds(u.submitKinds),
     dsScreens: access.cleanDsScreens(u.dsScreens),
+    myDepartments: cleanMyDepts(u.myDepartments),
     // Which tier of the hierarchy this account sits at (see BUILTIN_TIERS). A ceiling,
     // not a grant: `perms` above is what the server enforces. null = a row written before
     // the hierarchy existed; readers resolve it to the widest console tier.
@@ -375,6 +382,8 @@ function safe(u) {
 }
 const norm = (s) => String(s || '').trim().toLowerCase();
 const cleanList = (v) => Array.isArray(v) ? v.map(x => String(x).trim()).filter(Boolean) : [];
+// My Department's departments: ids only, deduplicated and bounded.
+const cleanMyDepts = (v) => [...new Set(cleanList(v).map((x) => x.slice(0, 60)))].slice(0, 50);
 // Specific-indicator access map: { areaKey: [indicatorId,...] } — empty lists dropped.
 const cleanQI = (qi) => { const out = {}; if (!qi || typeof qi !== 'object' || Array.isArray(qi)) return out; Object.keys(qi).forEach(k => { const list = Array.isArray(qi[k]) ? qi[k].map(x => String(x).trim()).filter(Boolean) : []; if (list.length) out[String(k)] = list; }); return out; };
 
@@ -794,6 +803,8 @@ function mount(app, opts) {
         submitKinds: access.cleanSubmitKinds(b.submitKinds),
         // Data Submission: which of its screens they may open (null = the defaults).
         dsScreens: access.cleanDsScreens(b.dsScreens),
+        // My Department: which departments they may view there (with the 'mydept' module).
+        myDepartments: role === 'Administrator' ? [] : cleanMyDepts(b.myDepartments),
         passwordHash: await auth.hash(password),
         // Bumped whenever access changes; every issued token carries the value it was
         // signed with, so raising it signs the account out everywhere.
@@ -807,6 +818,8 @@ function mount(app, opts) {
       if (b.signoff !== undefined && (role === 'User' || role === 'Administrator')) doc.signoff = cleanSignoff(b.signoff);
       await users.insertOne(doc);
       activity.log(req, 'user_created', { target: username, detail: 'role: ' + role + ' · level: ' + level });
+      { const p = (doc.perms || {}).mydept;
+        if (Array.isArray(p) && p.length) activity.log(req, 'mydept_access', { target: username, detail: 'My Department: ' + p.join('+') + ' · ' + ((doc.myDepartments || []).join(', ') || 'no departments') }); }
       if (plan) {
         try { await dc().applyResponsibleSync(plan, doc, scope); }
         catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(doc) }); }
@@ -900,6 +913,7 @@ function mount(app, opts) {
         if (b.appRole !== undefined) set.appRole = b.appRole === 'pca' ? 'pca' : 'nurse';
         if (b.submitKinds !== undefined) set.submitKinds = access.cleanSubmitKinds(b.submitKinds);
         if (b.dsScreens !== undefined) set.dsScreens = access.cleanDsScreens(b.dsScreens);
+        if (b.myDepartments !== undefined) set.myDepartments = cleanMyDepts(b.myDepartments);
       }
 
       // Per-module access levels. Only the 'User' role carries a perms map; Administrators
@@ -941,6 +955,9 @@ function mount(app, opts) {
       access.invalidate(username); // drop the 15s permission cache for this account
       activity.log(req, 'user_updated', { target: username, detail: Object.keys(set).filter((k) => k !== 'updatedAt').join(', ') || 'no changes' });
       const after = Object.assign({}, u, set);
+      // My Department hands over a unit's figures and staff list: name what was granted.
+      const myDeptOf = (x) => { const p = (x.perms || {}).mydept; return (Array.isArray(p) ? p.join('+') : (p && p !== 'none' ? 'view' : 'none')) + ' · ' + ((x.myDepartments || []).join(', ') || 'no departments'); };
+      if (myDeptOf(after) !== myDeptOf(u)) activity.log(req, 'mydept_access', { target: username, detail: 'My Department: ' + myDeptOf(u) + ' → ' + myDeptOf(after) });
       if (plan && plan.responsibleId) {
         try { await dc().applyResponsibleSync(plan, after, scope); }
         catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(after) }); }

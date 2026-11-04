@@ -79,6 +79,7 @@ const MANIFEST = [
   { file: 'photo-picker.jsx', jsx: true },     // window.PhotoPicker — Cloudinary uploads (staff photos + account avatars)
   { file: 'profile.jsx', jsx: true },          // window.ProfileView — self-service 'My Profile' page (every role)
   { file: 'home.jsx', jsx: true },             // window.HomeView — the personal Home dashboard (every role)
+  { file: 'my-department.jsx', jsx: true },    // window.MyDepartment — one department's figures, roster, staff list (module 'mydept')
   { file: 'feedback.jsx', jsx: true },
   { file: 'dashboard.jsx', jsx: true },
   { file: 'department.jsx', jsx: true },

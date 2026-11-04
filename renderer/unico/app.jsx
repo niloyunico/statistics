@@ -216,6 +216,10 @@ function App(){
     // their own profile, whatever their module permissions are.
     crumbs=['UNICO','My Profile'];
     body= (typeof ProfileView!=='undefined') ? <ProfileView setRoute={setRoute}/> : null;
+  } else if(route.view==='myDept'){
+    // Gated by the 'mydept' module (unicoCanAccessView); the server checks it again.
+    crumbs=['UNICO','My Department'];
+    body= (typeof MyDepartment!=='undefined') ? <MyDepartment/> : null;
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
     body=<Settings depts={depts} store={store} setRoute={setRoute}/>;
