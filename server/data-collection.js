@@ -18,6 +18,7 @@ const auth = require('./auth');
 const session = require('./session');
 const deptmap = require('./deptmap');
 const activity = require('./activity-log');   // best-effort audit trail (never throws)
+const HH_POOL = require('../renderer/unico/hh-pool.js');   // the one hand-hygiene rule (shared with the browser)
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
@@ -161,6 +162,23 @@ function sanitizeDeptBreakdown(arr) {
     return { dept: String((r && r.dept) || '').slice(0, 80), g: gg };
   }).filter((r) => r.dept || Object.keys(r.g).some((k) => r.g[k].n || r.g[k].d));
   return out.length ? out : null;
+}
+// The departments an "Overall hospital" hand-hygiene audit covered: [area key…]. Shape only
+// here — checkCoveredDepts confirms each key is a real department area.
+function sanitizeCoveredDepts(arr) {
+  if (!Array.isArray(arr)) return null;
+  const out = [...new Set(arr.map((k) => String(k == null ? '' : k).trim().slice(0, 80)).filter(Boolean))].slice(0, 80);
+  return out.length ? out : null;
+}
+// Coverage belongs to the hospital audit only: a hand-hygiene indicator on the hospital area,
+// naming real department areas (never the hospital itself). Throws 400 otherwise.
+async function checkCoveredDepts(keys, areaKey, indName) {
+  const all = await qAllAreas();
+  const hosp = all.find((a) => String(a.key) === String(areaKey));
+  if (!hosp || !HH_POOL.isHospital(hosp) || !/hand\s*hygiene/i.test(String(indName || ''))) throw httpError(400, 'Covered departments can only be given for the hospital hand hygiene audit.');
+  const known = new Set(all.filter((a) => a.key && !HH_POOL.isHospital(a)).map((a) => String(a.key)));
+  const bad = keys.filter((k) => !known.has(k));
+  if (bad.length) throw httpError(400, 'Unknown department: ' + bad.join(', ') + '.');
 }
 function normResp(r) {
   if (!r) return null;
@@ -843,6 +861,8 @@ async function buildQualitySpec(payload) {
   // used to be stored as it came.
   const groupsIn = sanitizeGroupMap(payload && payload.groups), groupsDenIn = sanitizeGroupMap(payload && payload.groupsDen);
   const deptBreakdownIn = sanitizeDeptBreakdown(payload && payload.deptBreakdown);
+  const coveredDeptsIn = notObserved ? null : sanitizeCoveredDepts(payload && payload.coveredDepts);
+  if (coveredDeptsIn) await checkCoveredDepts(coveredDeptsIn, area, indName);
   const pctLike = entryMode === 'rate' && (formulaIn === 'pct' || (!rateFormulas.includes(formulaIn) && mult === 100));
   if (pctLike && !notObserved) {
     const over = (n, d, where) => { if (Number(n) > Number(d || 0)) throw httpError(400, where + ': the compliant count (' + n + ') cannot be more than the observed count (' + (Number(d) || 0) + ').'); };
@@ -860,6 +880,8 @@ async function buildQualitySpec(payload) {
     groups: groupsIn,
     groupsDen: groupsDenIn,
     deptBreakdown: deptBreakdownIn,
+    // "Overall hospital" hand hygiene: the departments that audit covered (no per-department figures).
+    coveredDepts: coveredDeptsIn,
     isNewIndicator: isNew, valueType: (payload && payload.valueType) || (found && found.valueType) || 'Count',
     benchmark: benchStr, benchmarkValue: benchmarkValue,
     goalDirection,
@@ -1034,7 +1056,7 @@ function mergeQuality(orig, spec) {
   if (spec.notObserved) {
     const mo = spec.month;
     ind.mNotObserved = Object.assign({}, ind.mNotObserved || {}, { [mo]: true });
-    ['months', 'mNum', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'incidents', 'capa'].forEach((k) => {
+    ['months', 'mNum', 'mGroups', 'mGroupsDen', 'mDeptBreakdown', 'mCovered', 'incidents', 'capa'].forEach((k) => {
       if (ind[k] && Object.prototype.hasOwnProperty.call(ind[k], mo)) { ind[k] = Object.assign({}, ind[k]); delete ind[k][mo]; }
     });
     ind.monthRemarks = Object.assign({}, ind.monthRemarks || {}, { [mo]: spec.remark || 'Not observed' });
@@ -1050,6 +1072,12 @@ function mergeQuality(orig, spec) {
   if (spec.groups) ind.mGroups = Object.assign({}, ind.mGroups || {}, { [spec.month]: spec.groups });
   if (spec.groupsDen) ind.mGroupsDen = Object.assign({}, ind.mGroupsDen || {}, { [spec.month]: spec.groupsDen });
   if (spec.deptBreakdown) ind.mDeptBreakdown = Object.assign({}, ind.mDeptBreakdown || {}, { [spec.month]: spec.deptBreakdown });
+  // A month's hospital audit is ONE report: entered by department OR as an overall total with
+  // the departments it covered. The new one replaces the other form — a breakdown left behind
+  // by an earlier report overrode the new totals in the hand-hygiene pool.
+  const dropMonth = (k) => { if (ind[k] && Object.prototype.hasOwnProperty.call(ind[k], spec.month)) { ind[k] = Object.assign({}, ind[k]); delete ind[k][spec.month]; } };
+  if (spec.coveredDepts) { ind.mCovered = Object.assign({}, ind.mCovered || {}, { [spec.month]: spec.coveredDepts }); dropMonth('mDeptBreakdown'); }
+  else if (spec.deptBreakdown) dropMonth('mCovered');
   // Monthly storage (no quarters). For rate/%, keep numerator/denominator per month.
   if (spec.entryMode === 'rate') {
     let num = spec.num;
@@ -1538,17 +1566,60 @@ async function rejectSubmission(id, by, reason) {
    figures, since nothing pending is on record yet. */
 function hhAuditCover(subs) {
   const out = {};
+  const add = (m, d) => (out[m] = out[m] || new Set()).add(String(d));
   (subs || []).forEach((s) => {
-    if (!s || s.type !== 'quality' || !(s.status === 'pending' || s.status === 'approving') || !Array.isArray(s.deptBreakdown)) return;
-    if (!/hands*hygiene/i.test(String(s.indicatorName || '') + ' ' + String(s.indicatorId || '').replace(/-/g, ' '))) return;
-    s.deptBreakdown.forEach((r) => {
+    if (!s || s.type !== 'quality' || !(s.status === 'pending' || s.status === 'approving')) return;
+    // (this read /hands*hygiene/ — no backslash — and never matched, so the list was always empty)
+    if (!/hand\s*hygiene/i.test(String(s.indicatorName || '') + ' ' + String(s.indicatorId || '').replace(/-/g, ' '))) return;
+    (Array.isArray(s.deptBreakdown) ? s.deptBreakdown : []).forEach((r) => {
       const g = (r && r.g) || {};
       const d = Object.keys(g).reduce((n, k) => n + (Number(g[k] && g[k].d) || 0), 0);
       if (!(d > 0) || !r.dept) return;
-      (out[s.month] = out[s.month] || new Set()).add(String(r.dept));
+      add(s.month, r.dept);
     });
+    (Array.isArray(s.coveredDepts) ? s.coveredDepts : []).forEach((k) => add(s.month, k));
   });
-  return Object.keys(out).map((m) => ({ month: m, depts: [...out[m]] }));
+  return Object.keys(out).map((m) => ({ month: m, depts: [...out[m]], state: 'pending' }));
+}
+// The APPROVED side of the same list: every month the hospital audit on record covered a
+// department (by-department rows or ticked departments). A scoped collector never receives the
+// hospital record itself, so without this their audited months read as "missing".
+async function hhRecordedCover() {
+  const all = await qAllAreas();
+  const src = HH_POOL.findSource(all);
+  if (!src) return [];
+  const ind = src.ind, months = new Set();
+  ['mCovered', 'mDeptBreakdown'].forEach((f) => Object.keys(ind[f] || {}).forEach((m) => months.add(m)));
+  const out = [];
+  months.forEach((m) => {
+    if (ind.mNotObserved && ind.mNotObserved[m]) return;
+    const keys = [...HH_POOL.coveredKeys(ind, m, all)];
+    if (keys.length) out.push({ month: m, depts: keys, state: 'recorded' });
+  });
+  return out;
+}
+/* Admin: set which departments an EXISTING month of the hospital hand-hygiene audit covered —
+   for months recorded as a hospital figure only (no department list), which left every
+   department's hand hygiene "missing". Coverage only: the month's figures are never touched.
+   An empty list clears the month's coverage. */
+async function setHandHygieneCoverage(month, keysIn) {
+  month = String(month || '').trim();
+  validateReportingMonth(month);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const all = await qAllAreas();
+    const src = HH_POOL.findSource(all);
+    if (!src || !HH_POOL.isHospital(src.dep)) throw httpError(404, 'The hospital hand hygiene audit was not found.');
+    const orig = src.ind;
+    const has = (o) => !!(o && o[month] != null && o[month] !== '');
+    if (!(has(orig.months) || has(orig.mNum))) throw httpError(400, 'No hospital hand hygiene figure is on record for ' + month + ' — submit the month first.');
+    if (orig.mDeptBreakdown && Array.isArray(orig.mDeptBreakdown[month]) && orig.mDeptBreakdown[month].length) throw httpError(409, month + ' was entered by department — its departments are already counted.');
+    const keys = sanitizeCoveredDepts(keysIn) || [];
+    if (keys.length) await checkCoveredDepts(keys, src.dep.key, orig.name);
+    const ind = Object.assign({}, orig, { mCovered: Object.assign({}, orig.mCovered || {}) });
+    if (keys.length) ind.mCovered[month] = keys; else delete ind.mCovered[month];
+    if (await qSetIndicatorIf(src.dep.key, orig, ind)) return { month, depts: keys };
+  }
+  throw httpError(409, 'The hand hygiene record was being updated by someone else — please save again.');
 }
 async function pendingHandHygiene() {
   const isHH = (s) => /hand\s*hygiene/i.test(String(s.indicatorName || '')) || /hand-hygiene|^ind-hh-/i.test(String(s.indicatorId || ''));
@@ -2081,7 +2152,7 @@ function mount(app, opts) {
         // Departments covered by a hospital hand-hygiene audit still awaiting approval — month
         // and department names only, no figures. A department's HH is reported THROUGH that
         // audit, so it must not show as "missing" to its own collector meanwhile.
-        if (!offset) hhCover = hhAuditCover(every);
+        if (!offset) { hhCover = hhAuditCover(every); try { hhCover = hhCover.concat(await hhRecordedCover()); } catch (e) { } }
         if (!offset) onRecord = await onRecordFlags(req);
       } else {
         subs = await getSubmissions(req.query);
@@ -2134,6 +2205,14 @@ function mount(app, opts) {
   });
   // Admin: manage quality departments / areas (create / rename / delete).
   // Per-department collection settings: start month + not-measured quality indicators.
+  app.put('/api/hand-hygiene/coverage', guard, adminOnly, async (req, res) => {
+    try {
+      const b = req.body || {};
+      const out = await setHandHygieneCoverage(b.month, Array.isArray(b.depts) ? b.depts : []);
+      activity.log(req, 'hh_coverage_set', { target: 'Hand Hygiene · ' + out.month, detail: out.depts.length ? out.depts.length + ' department(s) covered: ' + out.depts.join(', ') : 'Coverage cleared' });
+      res.json({ ok: true, coverage: out });
+    } catch (e) { res.status(e.status || 400).json({ ok: false, error: String(e.message || e) }); }
+  });
   app.get('/api/collection-settings', guard, async (req, res) => {
     try { res.set('Cache-Control', 'no-store').json({ ok: true, departments: await getCollectionSettings() }); }
     catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
@@ -2291,6 +2370,7 @@ function mount(app, opts) {
         if (s.notObserved && (patch.value != null || patch.num != null)) patch.notObserved = false;
         // Full breakdown edits: department × staff-group matrix, and/or staff-group totals.
         if (Array.isArray(b.deptBreakdown)) { const bd = sanitizeDeptBreakdown(b.deptBreakdown); if (bd) patch.deptBreakdown = bd; }
+        if (Array.isArray(b.coveredDepts)) { const cd = sanitizeCoveredDepts(b.coveredDepts); if (!cd) throw httpError(400, 'Tick at least one department this audit covered.'); await checkCoveredDepts(cd, s.area, s.indicatorName); patch.coveredDepts = cd; }
         if (b.groups) { const g = sanitizeGroupMap(b.groups); if (g) patch.groups = g; }
         if (b.groupsDen) { const gd = sanitizeGroupMap(b.groupsDen); if (gd) patch.groupsDen = gd; }
         if (b.remark != null) patch.remark = String(b.remark);
@@ -2378,7 +2458,7 @@ function mount(app, opts) {
       // Re-applying an APPROVED row to live data: only when its figures changed (a note fix must not
       // rewrite live data) and only when no NEWER approved report for the same target + month exists
       // — re-applying an old one put its stale figures back over the later correction.
-      const DATA_KEYS = s.type === 'patient' ? ['values'] : ['value', 'num', 'den', 'notObserved', 'groups', 'groupsDen', 'deptBreakdown', 'incidents', 'remark'];
+      const DATA_KEYS = s.type === 'patient' ? ['values'] : ['value', 'num', 'den', 'notObserved', 'groups', 'groupsDen', 'deptBreakdown', 'coveredDepts', 'incidents', 'remark'];
       const canon = (v) => (Array.isArray(v) ? v.map(canon) : (v && typeof v === 'object') ? Object.keys(v).sort().reduce((o, k) => (o[k] = canon(v[k]), o), {}) : (v == null ? null : v));
       const figuresChanged = DATA_KEYS.some((k) => Object.prototype.hasOwnProperty.call(patch, k) && JSON.stringify(canon(patch[k])) !== JSON.stringify(canon(s[k])));
       if (isAdmin && s.status === 'approved' && figuresChanged) {
@@ -2477,4 +2557,5 @@ module.exports = {
   createFieldRequest, listFieldRequests, decideFieldRequest,
   // exported so a repair script can re-apply an approval through the SAME code path
   applyQuality, pendingHandHygiene, latestOpenMonth,
+  mergeQuality, hhAuditCover, setHandHygieneCoverage,
 };

@@ -61,6 +61,21 @@
   }
 
   const sumG = (g) => GROUPS.reduce((a, [k]) => { const x = (g || {})[k] || {}; return { n: a.n + (Number(x.n) || 0), d: a.d + (Number(x.d) || 0) }; }, { n: 0, d: 0 });
+
+  /* The departments a hospital audit COVERED in month m: the ones it was entered for "By
+     department" (a row with observed > 0), plus the ones ticked when it was entered as an
+     "Overall hospital" total (mCovered[m] = [area key…], no per-department figures). Such a
+     department's hand hygiene is reported through the audit, so it is never "missing".
+     Returns a Set of area keys. */
+  function coveredKeys(sInd, m, depts) {
+    const out = new Set();
+    if (!sInd) return out;
+    const keys = sInd.mCovered && sInd.mCovered[m];
+    if (Array.isArray(keys)) keys.forEach((k) => { if (k != null && k !== '') out.add(String(k)); });
+    const rows = sInd.mDeptBreakdown && sInd.mDeptBreakdown[m];
+    if (Array.isArray(rows)) rows.forEach((r) => { if (!r || !(sumG(r.g).d > 0)) return; const dep = matchDept(r.dept, depts); if (dep) out.add(String(dep.key)); });
+    return out;
+  }
   const cell = (n, d, src) => ({ n: n, d: d, pct: pctOf(n, d), src: src });
 
   /* Shape for one series reader: the hospital view = the audit (n/d/pct); a view narrowed to
@@ -138,6 +153,18 @@
       });
     });
 
+    // 2b. departments ticked on an "Overall hospital" audit: covered, but no figures of their own
+    if (sInd && sInd.mCovered) {
+      months.forEach((m) => {
+        (Array.isArray(sInd.mCovered[m]) ? sInd.mCovered[m] : []).forEach((k) => {
+          const dep = (depts || []).find((d) => String(d.key) === String(k) && !isHospital(d));
+          if (!dep || !keep(String(dep.key))) return;
+          const row = rowFor(String(dep.key), dep.name, dep);
+          if (!row.cells[m]) row.cells[m] = { n: null, d: null, pct: null, src: 'covered' };
+        });
+      });
+    }
+
     const rows = Array.from(rowsByKey.values());
     // 3. per-month hospital totals
     const monthRows = months.map((m) => {
@@ -155,6 +182,8 @@
         nAll: dAll > 0 ? nAll : n, dAll: dAll > 0 ? dAll : d, pctAll: dAll > 0 ? pctOf(nAll, dAll) : pct,
         selfReported: od > 0,
         notObserved: !!(sInd && sInd.mNotObserved && sInd.mNotObserved[m]),
+        // the departments the audit covered this month (by department, or ticked)
+        coveredKeys: Array.from(coveredKeys(sInd, m, depts)),
       };
     });
 
@@ -220,7 +249,7 @@
     return low + '–' + hi + '%';
   }
 
-  const API = { GROUPS: GROUPS, DEFAULT_BENCH: DEFAULT_BENCH, HOSPITAL_ID: HOSPITAL_ID, DEPT_ALIAS: DEPT_ALIAS, normN: normN, canonDept: canonDept, isHHInd: isHHInd, isHospital: isHospital, benchOf: benchOf, findSource: findSource, matchDept: matchDept, pctOf: pctOf, build: build, series: series, totalOf: totalOf, status: status, improveBand: improveBand };
+  const API = { GROUPS: GROUPS, DEFAULT_BENCH: DEFAULT_BENCH, HOSPITAL_ID: HOSPITAL_ID, DEPT_ALIAS: DEPT_ALIAS, normN: normN, canonDept: canonDept, isHHInd: isHHInd, isHospital: isHospital, benchOf: benchOf, findSource: findSource, matchDept: matchDept, coveredKeys: coveredKeys, pctOf: pctOf, build: build, series: series, totalOf: totalOf, status: status, improveBand: improveBand };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   if (root) root.UNICO_HH = API;
 })(typeof window !== 'undefined' ? window : null);

@@ -186,6 +186,9 @@
     if (!me || me.role === 'Administrator' || DC_PORTAL_ROLES.indexOf(me.role) >= 0) return true;
     return dcCanAct(me.perms, 'datacol', 'add') || dcCanAct(me.perms, 'datasubmit', 'add');
   };
+  // A quality area's display name: its canonical department name, else the area's own name
+  // (the map returns the bare key for an area it does not know).
+  const dcAreaName = (a) => { const n = (window.DEPTMAP && window.DEPTMAP.nameFromQualityKey) ? window.DEPTMAP.nameFromQualityKey(a.key) : null; return (n && n !== a.key) ? n : (a.name || a.key); };
   const dcIsAdminUser = () => { const me = (typeof window !== 'undefined' && window.__UNICO_USER__) || null; return !me || me.role === 'Administrator'; };
   // Areas granted DIRECTLY to a responsible person (beyond department-derived / hospital-wide).
   // Older records lack the field: derive it from the stored union minus today's derived areas.
@@ -1445,6 +1448,9 @@
     const [groupsDen, setGroupsDen] = useState({ nurse: '', doctor: '', pca: '', other: '' });
     // "By department" = a department × staff-group matrix, each cell {n,d}. Rolls up.
     const [deptRows, setDeptRows] = useState([]); // [{ dept, g:{nurse:{n,d},doctor:{n,d},pca:{n,d},other:{n,d}} }]
+    // "Overall hospital" hand hygiene: the staff-group totals for the whole hospital, plus the
+    // departments that audit covered. null = every department that owes it this month (ticked).
+    const [coverSel, setCoverSel] = useState(null);
     const [directNum, setDirectNum] = useState('');
     // Optional observation + corrective / preventive action (CAPA) for the month.
     const [capa, setCapa] = useState({ finding: '', corrective: '', preventive: '' });
@@ -1524,6 +1530,8 @@
     const denDef = def.denominatorDef || (isRate ? ('Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.') : '');
     const indNameQ = (def.name || newInd.name) || 'Result';
     const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
+    // 'overall' (hospital hand hygiene) is entered exactly like 'group' — plus the covered departments.
+    const groupLike = numMode === 'group' || numMode === 'overall';
     const groupSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groups[k]) || 0), 0);
     const groupDenSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groupsDen[k]) || 0), 0);
     // "By department" mode: department × staff-group matrix (each cell num/den) rolls up.
@@ -1575,6 +1583,18 @@
     // A hospital-wide area (Overall Hospital): each incident records the department it
     // happened in, so incidence can still be reported by department (Reports → NSI incidence).
     const hospitalWide = !!area && (area.key === 'Overall Hospital' || area.deptId === '__hospital__' || /overall hospital/i.test(String(area.name || '')));
+    // The departments an "Overall hospital" audit can cover this month: every department that
+    // owes hand hygiene for it (has the indicator, measures it, has started reporting).
+    const hhCoverOpts = useMemo(() => {
+      const HH = window.UNICO_HH;
+      if (!(isHandHygiene && hospitalWide && HH)) return [];
+      return (areas || []).filter((a) => a && a.key && !HH.isHospital(a)).map((a) => {
+        const ind = (a.indicators || []).find(HH.isHHInd);
+        return ind && dcIndDue(a, ind, month, []) ? { key: String(a.key), name: dcAreaName(a) } : null;
+      }).filter(Boolean).sort((x, y) => String(x.name).localeCompare(String(y.name)));
+    }, [areas, isHandHygiene, hospitalWide, month, collRevQ]);
+    const coveredKeys = coverSel == null ? hhCoverOpts.map((o) => o.key) : hhCoverOpts.map((o) => o.key).filter((k) => coverSel.indexOf(k) >= 0);
+    const toggleCover = (k, on) => setCoverSel((cur) => { const base = cur == null ? hhCoverOpts.map((o) => o.key) : cur.slice(); const out = base.filter((x) => x !== k); if (on) out.push(k); return out; });
     const incidentDepts = useMemo(() => {
       const DM = window.DEPTMAP;
       const ids = (DM && DM.patientDeptIds) ? DM.patientDeptIds() : dcAllDepts().map((d) => d.id);
@@ -1595,14 +1615,14 @@
     const recordedIncs = curInd && curInd.incidents && Array.isArray(curInd.incidents[month]) ? curInd.incidents[month].length : 0;
     const legacyCount = (autoCount && curInd && !recordedIncs) ? Number(isRate ? (curInd.mNum || {})[month] : (curInd.months || {})[month]) : NaN;
     const keepLegacy = autoCount && numMode === 'direct' && incidents.length === 0 && legacyCount > 0;
-    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n
+    const numerator = groupLike ? groupSum : numMode === 'dept' ? deptTot.n
       // Every logged incident counts: a card left blank must be filled in or removed before
       // the month can be saved, so the count on screen is the count that is sent.
       : autoCount ? (keepLegacy ? legacyCount : incidents.length) : (Number(directNum) || 0);
     // Every indicator can take a denominator: rate indicators REQUIRE it; counts may
     // OPTIONALLY add one to compute a rate. In "By group" / "By department" modes the total
     // denominator is the sum of the group/matrix cells; "Direct value" uses the single field.
-    const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : (Number(den) || 0);
+    const denNum = groupLike ? groupDenSum : numMode === 'dept' ? deptTot.d : (Number(den) || 0);
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
     const rateUnit = (unitRaw && /per|%/.test(unitRaw)) ? unitRaw : (formula === 'pct' ? '%' : formula === 'avg' ? (unitRaw || 'average') : ('per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '')));
@@ -1621,7 +1641,7 @@
     const fromAppliedRef = React.useRef('');   // id of the rejected row already refilled
     useEffect(() => {
       const blankG = { nurse: '', doctor: '', pca: '', other: '' };
-      setRemark(''); setQReason('');
+      setRemark(''); setQReason(''); setCoverSel(null);
       const toG = (o) => ({ nurse: o && o.nurse != null ? String(o.nurse) : '', doctor: o && o.doctor != null ? String(o.doctor) : '', pca: o && o.pca != null ? String(o.pca) : '', other: o && o.other != null ? String(o.other) : '' });
       if (!curInd) { setGroups(blankG); setGroupsDen(blankG); setDeptRows([]); setDirectNum(''); setNumMode('direct'); setDen(''); setIncidents([]); setCapa({ finding: '', corrective: '', preventive: '' }); setNotObserved(false); setNoReason(''); return; }
       const wasNO = !!(curInd.mNotObserved && curInd.mNotObserved[month]);
@@ -1632,6 +1652,7 @@
       const g = curInd.mGroups && curInd.mGroups[month];
       const gd = curInd.mGroupsDen && curInd.mGroupsDen[month];
       const dep = curInd.mDeptBreakdown && curInd.mDeptBreakdown[month];
+      const cov = hospitalWide && curInd.mCovered && Array.isArray(curInd.mCovered[month]) && curInd.mCovered[month].length ? curInd.mCovered[month] : null;
       const cellStr = (row, k, f) => { const v = row && row.g && row.g[k] && row.g[k][f]; return v == null ? '' : String(v); };
       const toRow = (row) => ({ dept: (row && row.dept) || '', g: { nurse: { n: cellStr(row, 'nurse', 'n'), d: cellStr(row, 'nurse', 'd') }, doctor: { n: cellStr(row, 'doctor', 'n'), d: cellStr(row, 'doctor', 'd') }, pca: { n: cellStr(row, 'pca', 'n'), d: cellStr(row, 'pca', 'd') }, other: { n: cellStr(row, 'other', 'n'), d: cellStr(row, 'other', 'd') } } });
       // existing total numerator: rate → mNum[month]; count → months[month]
@@ -1645,6 +1666,10 @@
         setDirectNum(rawNum != null ? String(rawNum) : ''); setNumMode('direct');
       } else if (Array.isArray(dep) && dep.length) {
         setDeptRows(dep.map(toRow)); setNumMode('dept'); setGroups(blankG); setGroupsDen(blankG); setDirectNum('');
+      } else if (cov) {
+        // entered as an "Overall hospital" total: its staff groups and the departments it covered
+        setDeptRows([]); setGroups(g && typeof g === 'object' ? toG(g) : blankG); setGroupsDen(gd && typeof gd === 'object' ? toG(gd) : blankG);
+        setDirectNum(''); setCoverSel(cov.map(String)); setNumMode('overall');
       } else if (g && typeof g === 'object') {
         setDeptRows([]); setGroups(toG(g)); setGroupsDen(gd && typeof gd === 'object' ? toG(gd) : blankG);
         setDirectNum(''); setNumMode('group');
@@ -1689,6 +1714,7 @@
         else setRemark(fr.remark || '');
         const rateEntry = fr.entryMode === 'rate' || fr.num != null;
         if (Array.isArray(fr.deptBreakdown) && fr.deptBreakdown.length) { setDeptRows(fr.deptBreakdown.map(toRow)); setGroups(blankG); setGroupsDen(blankG); setDirectNum(''); setNumMode('dept'); }
+        else if (hospitalWide && Array.isArray(fr.coveredDepts) && fr.coveredDepts.length) { setDeptRows([]); setGroups(toG(fr.groups)); setGroupsDen(fr.groupsDen && typeof fr.groupsDen === 'object' ? toG(fr.groupsDen) : blankG); setDirectNum(''); setCoverSel(fr.coveredDepts.map(String)); setNumMode('overall'); }
         else if (fr.groups && typeof fr.groups === 'object') { setDeptRows([]); setGroups(toG(fr.groups)); setGroupsDen(fr.groupsDen && typeof fr.groupsDen === 'object' ? toG(fr.groupsDen) : blankG); setDirectNum(''); setNumMode('group'); }
         else if (!fr.notObserved) { setDeptRows([]); setGroups(blankG); setGroupsDen(blankG); setDirectNum(str(rateEntry ? fr.num : fr.value)); setNumMode('direct'); }
         if (!denLockedForCollector && !fr.notObserved) setDen(str(fr.den));
@@ -1759,9 +1785,10 @@
       // Breakdown grids (staff group / department × group): a cell with observed opportunities
       // but a BLANK compliant count went out as 0 compliant — a false 0% — and a compliant
       // count above the observed one made a >100% month. A wholly blank row = not audited.
-      if (!notObserved && isRate && (numMode === 'group' || numMode === 'dept')) {
+      if (!notObserved && numMode === 'overall' && !coveredKeys.length) { failSubmit('Tick the departments this hospital audit covered — at least one.'); return; }
+      if (!notObserved && isRate && (groupLike || numMode === 'dept')) {
         const typedV = (v) => String(v == null ? '' : v).trim() !== '';
-        const cells = numMode === 'group'
+        const cells = groupLike
           ? GROUP_KEYS.map(([k, lbl]) => ({ where: lbl, n: groups[k], d: groupsDen[k] }))
           : [].concat.apply([], deptRows.map((r) => GROUP_KEYS.map(([k, lbl]) => ({ where: (r.dept || 'Row') + ' · ' + lbl, n: r.g && r.g[k] && r.g[k].n, d: r.g && r.g[k] && r.g[k].d }))));
         const blankNum = cells.find((c) => !typedV(c.n) && Number(c.d) > 0);
@@ -1779,10 +1806,10 @@
         // In the breakdown modes the single den field is unused: there every denominator cell that
         // was filled must be a typed 0 (at least one typed), or a 0/0 Hand Hygiene month was refused.
         const typed = (v) => String(v == null ? '' : v).trim() !== '';
-        const denCells = numMode === 'group' ? GROUP_KEYS.map(([k]) => groupsDen[k])
+        const denCells = groupLike ? GROUP_KEYS.map(([k]) => groupsDen[k])
           : numMode === 'dept' ? [].concat.apply([], deptRows.map((r) => GROUP_KEYS.map(([k]) => r.g && r.g[k] && r.g[k].d))) : [den];
         const explicitZero = !(Number(numerator) > 0) && denCells.some(typed) && denCells.filter(typed).every((v) => Number(v) === 0);
-        if (!explicitZero) { failSubmit('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month')); return; }
+        if (!explicitZero) { failSubmit('Enter ' + denLabel + ' (denominator)' + (groupLike ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month')); return; }
       }
       if (hospitalWide && !notObserved && incidents.some((x) => dcIncidentFilled(x) && !x.department)) { failSubmit('Choose the department where each incident happened.'); return; }
       if (!notObserved && autoCount && numMode === 'direct') {
@@ -1817,8 +1844,10 @@
         // mistaken for a real reading when the admin approves it.
         notObserved: notObserved || undefined,
         value: (notObserved || computeAsRate) ? undefined : numerator, num: (!notObserved && computeAsRate) ? numerator : undefined, den: (!notObserved && computeAsRate) ? (denLockedForCollector ? undefined : denNum) : undefined,
-        groups: (!notObserved && numMode === 'group') ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
-        groupsDen: (!notObserved && numMode === 'group' && computeAsRate) ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
+        groups: (!notObserved && groupLike) ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
+        groupsDen: (!notObserved && groupLike && computeAsRate) ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
+        // "Overall hospital": the departments this audit covered — they then read as submitted.
+        coveredDepts: (!notObserved && numMode === 'overall') ? coveredKeys : undefined,
         deptBreakdown: (!notObserved && numMode === 'dept') ? deptRows.map((r) => ({ dept: r.dept || '', g: GROUP_KEYS.reduce((o, [k]) => (o[k] = { n: Number(r.g[k].n) || 0, d: Number(r.g[k].d) || 0 }, o), {}) })) : undefined,
         capa: (!notObserved && (capa.finding || capa.corrective || capa.preventive)) ? { finding: capa.finding, corrective: capa.corrective, preventive: capa.preventive } : undefined,
         // Per-incident reports (only those with something filled in). The server stores
@@ -1865,7 +1894,7 @@
     };
     // Nothing has been entered for this month yet — shown as "—", never as a confident 0.
     const nothingEntered = !notObserved && (
-      numMode === 'group' ? !GROUP_KEYS.some(([k]) => typedQ(groups[k]))
+      groupLike ? !GROUP_KEYS.some(([k]) => typedQ(groups[k]))
         : numMode === 'dept' ? !deptRows.some((r) => GROUP_KEYS.some(([k]) => typedQ(r.g[k].n)))
           : autoCount ? (incidents.length === 0 && !zeroOk)
             : !typedQ(directNum));
@@ -2047,6 +2076,7 @@
                         <button className={numMode === 'group' ? 'on' : ''} onClick={() => setNumMode('group')}>By group</button>
                         <button className={numMode === 'dept' ? 'on' : ''} onClick={() => { setNumMode('dept'); if (!isHandHygiene && deptRows.length === 0) setDeptRows([blankDeptRow()]); }}>By department</button>
                         <button className={numMode === 'direct' ? 'on' : ''} onClick={() => setNumMode('direct')}>Direct value</button>
+                        {hospitalWide && <button className={numMode === 'overall' ? 'on' : ''} onClick={() => setNumMode('overall')} title="The whole hospital's staff-group totals, and the departments this audit covered">Overall hospital</button>}
                       </div>
                     )}
                     {autoCount && numMode === 'direct' && (
@@ -2058,10 +2088,10 @@
                     )}
                   </div>
 
-                  {numMode === 'group' ? (
+                  {groupLike ? (
                     <>
                       <div style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-                        {isRate
+                        {numMode === 'overall' ? 'Enter the whole hospital’s ' + numLabel.toLowerCase() + ' and ' + denLabel.toLowerCase() + ' by staff group, then tick the departments this audit covered.' : isRate
                           ? ('Enter each staff group’s ' + numLabel.toLowerCase() + ' (numerator) and ' + denLabel.toLowerCase() + ' (denominator) — they add up to the totals.')
                           : ('Enter the ' + (numLabel || 'value').toLowerCase() + ' for each staff group — they add up to the total value.')}
                       </div>
@@ -2076,6 +2106,28 @@
                         <div style={{ fontSize: 11, color: 'var(--muted)', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                           <span>Total {numLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupSum}</b></span>
                           <span>Total {denLabel.toLowerCase()} = <b style={{ color: 'var(--ink-2)' }}>{groupDenSum}</b></span>
+                        </div>
+                      )}
+                      {numMode === 'overall' && (
+                        <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px', background: 'var(--panel-2)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--ink)' }}>Departments included in this audit{star}</div>
+                            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 9px', borderRadius: 999, background: 'var(--blue-50)', color: 'var(--blue-700)' }}>{coveredKeys.length} of {hhCoverOpts.length}</span>
+                            <span style={{ flex: 1 }} />
+                            <button type="button" className="btn sm" onClick={() => setCoverSel(null)}>Select all</button>
+                            <button type="button" className="btn sm" onClick={() => setCoverSel([])}>Clear</button>
+                          </div>
+                          <div style={{ fontSize: 11, color: 'var(--muted)' }}>Ticked departments show hand hygiene as submitted for {monthLabel(month)} — untick any the audit did not visit.</div>
+                          {hhCoverOpts.length ? (
+                            <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'repeat(auto-fill, minmax(200px, 1fr))', gap: '4px 12px' }}>
+                              {hhCoverOpts.map((o) => (
+                                <label key={o.key} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--ink-2)', padding: narrow ? '6px 0' : '3px 0', cursor: 'pointer' }}>
+                                  <input type="checkbox" checked={coveredKeys.indexOf(o.key) >= 0} onChange={(e) => toggleCover(o.key, e.target.checked)} style={{ width: 16, height: 16, flexShrink: 0 }} />
+                                  {o.name}
+                                </label>
+                              ))}
+                            </div>
+                          ) : <div style={{ fontSize: 12, color: 'var(--muted)' }}>No department owes hand hygiene for {monthLabel(month)}.</div>}
                         </div>
                       )}
                     </>
@@ -2448,6 +2500,16 @@
       ? GROUPS.reduce((o, [k]) => (o[k] = { n: (s.groups[k] != null ? s.groups[k] : ''), d: (s.groupsDen && s.groupsDen[k] != null ? s.groupsDen[k] : '') }, o), {})
       : null);
     const hasGrp = !!grp;
+    // "Overall hospital" hand hygiene: the departments the audit covered (area keys).
+    const [cover, setCover] = useState(() => (Array.isArray(s.coveredDepts) && s.coveredDepts.length ? s.coveredDepts.map(String) : null));
+    const hasCover = !!cover;
+    const coverOpts = useMemo(() => {
+      if (!hasCover) return [];
+      const HH = window.UNICO_HH;
+      const list = (window.qualityData ? window.qualityData() : []).filter((a) => a && a.key && HH && !HH.isHospital(a) && (a.indicators || []).some(HH.isHHInd)).map((a) => ({ key: String(a.key), name: dcAreaName(a) }));
+      (s.coveredDepts || []).forEach((k) => { if (!list.some((o) => o.key === String(k))) list.push({ key: String(k), name: String(k) }); });
+      return list.sort((x, y) => String(x.name).localeCompare(String(y.name)));
+    }, [hasCover]); // eslint-disable-line
     const setGrpCell = (k, f, v) => setGrp((g) => ({ ...g, [k]: { ...g[k], [f]: v } }));
     const grpTot = hasGrp ? GROUPS.reduce((acc, [k]) => { acc.n += Number(grp[k].n) || 0; acc.d += Number(grp[k].d) || 0; return acc; }, { n: 0, d: 0 }) : null;
     const effNum = hasDeptBreak ? breakTot.n : (hasGrp ? grpTot.n : qnum);
@@ -2516,6 +2578,7 @@
         if (isRate) { body.num = effNum; body.den = effDen; }        // totals derive from the breakdown
         if (hasDeptBreak) body.deptBreakdown = deptBreak;
         if (hasGrp) { body.groups = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}); if (isRate) body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}); }
+        if (hasCover) body.coveredDepts = cover;
         if (target && target !== s.area) { body.area = target; body.areaName = (areaOpts.find((a) => a.key === target) || {}).name || target; }
         if (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) body.incidents = incidents;
       }
@@ -2580,6 +2643,7 @@
           groups: hasGrp ? GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {}) : undefined,
           groupsDen: (hasGrp && isRate) ? GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {}) : undefined,
           deptBreakdown: hasDeptBreak ? deptBreak.map((r) => ({ dept: r.dept || '', g: GROUPS.reduce((o, [k]) => (o[k] = { n: Number(r.g[k].n) || 0, d: Number(r.g[k].d) || 0 }, o), {}) })) : undefined,
+          coveredDepts: hasCover ? cover : undefined,
           // [] when every incident on record was removed, so approval clears them (as the comparison shows).
           incidents: (incidents.length || (Array.isArray(s.incidents) && s.incidents.length)) ? incidents : undefined,
         }, common);
@@ -2759,6 +2823,23 @@
                           );
                         })}
                       </div>
+                    )}
+                  </div>
+                )}
+                {hasCover && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', textTransform: 'uppercase', letterSpacing: .4, marginBottom: 8 }}>Departments covered <span style={{ fontWeight: 500, color: 'var(--muted)', textTransform: 'none', letterSpacing: 0 }}>· {cover.length} — shown as submitted once approved</span></div>
+                    {editable ? (
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '3px 12px' }}>
+                        {coverOpts.map((o) => (
+                          <label key={o.key} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: 'var(--ink-2)', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={cover.indexOf(o.key) >= 0} onChange={(e) => setCover((c) => { const out = c.filter((x) => x !== o.key); if (e.target.checked) out.push(o.key); return out; })} style={{ width: 15, height: 15 }} />
+                            {o.name}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.6 }}>{coverOpts.filter((o) => cover.indexOf(o.key) >= 0).map((o) => o.name).join(', ') || '—'}</div>
                     )}
                   </div>
                 )}
@@ -3823,7 +3904,7 @@
     // neither recorded nor outstanding, so it gets its own tone instead of being counted
     // as a missing submission the collector is expected to chase.
     const notObs = (ind, m) => !!(ind && ind.mNotObserved && ind.mNotObserved[m]);
-    const statusOf = (areaKey, ind, m) => cpSubmissionStatus(subs, areaKey, ind, m);
+    const statusOf = (areaKey, ind, m) => dcQStatus(subs || [], areaKey, ind, m);
     const tone = { recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'], pending: ['#9a6b00', '#fff4e0', 'Pending'], notobs: ['#5b3fa8', '#f5f1fd', 'Not observed'], rejected: ['var(--rose)', 'var(--neg-bg)', 'Rejected'], none: ['var(--rose)', 'var(--neg-bg)', 'Not submitted'] };
     let totalInd = 0, rec = 0, pend = 0, notObservedCount = 0;
     areas.forEach((a) => a.indicators.forEach((ind) => { totalInd++; const s = statusOf(a.key, ind, month); if (s === 'recorded') rec++; else if (s === 'pending') pend++; else if (s === 'notobs') notObservedCount++; }));
@@ -4168,36 +4249,40 @@
     if (typed) { const pre = dept.id + '|'; typed.p.forEach((k) => { if (k.indexOf(pre) === 0) see(k.slice(pre.length)); }); }
     return best == null ? dcYearStart() : dcEarlierMonth(dcMonthKey(best), dcYearStart());
   };
-  /* A department's hand hygiene is reported THROUGH the hospital audit (one submission with a
-     row per department). Once approved, quality-store copies the rows in, so the month reads
-     as recorded; while the audit is still pending, the department's own HH looked "missing"
-     and its collector was chased for figures already sent. month → Set(area keys) covered by
-     an in-flight hospital audit, built once per submissions array. */
+  /* A department's hand hygiene is reported THROUGH the hospital audit, so its collector must
+     not be chased for figures already sent — pending or approved.
+     month → Map(area key → 'pending' | 'recorded'): the departments a hospital hand-hygiene
+     audit covers — by department (a row with observed > 0) or ticked on an "Overall hospital"
+     entry. 'recorded' wins over 'pending'. Sources: the server's list (a scoped account never
+     receives the hospital record), in-flight audit submissions, and the hospital record itself
+     when this account has it. Built once per submissions array. */
   const _dcHHCover = new WeakMap();
   const dcHHAuditCover = (subs) => {
     const arr = Array.isArray(subs) ? subs : [];
     if (_dcHHCover.has(arr)) return _dcHHCover.get(arr);
     const out = new Map(); const HH = window.UNICO_HH;
-    // A scoped account never receives the hospital audit itself — only the server's cover
-    // list (month + audited department names, no figures).
-    if (HH && Array.isArray(arr.hhCover)) {
-      const areas = window.qualityData ? window.qualityData() : [];
-      arr.hhCover.forEach((c) => (c.depts || []).forEach((nm) => {
-        const a = HH.matchDept(nm, areas); if (!a) return;
-        if (!out.has(c.month)) out.set(c.month, new Set());
-        out.get(c.month).add(a.key);
-      }));
-    }
-    const inflight = HH ? arr.filter((s) => s && s.type === 'quality' && (s.status === 'pending' || s.status === 'approving') && Array.isArray(s.deptBreakdown) && s.deptBreakdown.length && /hand\s*hygiene/i.test(String(s.indicatorName || '') + ' ' + String(s.indicatorId || '').replace(/-/g, ' '))) : [];
-    if (inflight.length) {
-      const areas = window.qualityData ? window.qualityData() : [];
-      inflight.forEach((s) => s.deptBreakdown.forEach((r) => {
+    if (!HH) { _dcHHCover.set(arr, out); return out; }
+    const areas = window.qualityData ? window.qualityData() : [];
+    const mark = (m, key, state) => {
+      if (!m || key == null) return;
+      if (!out.has(m)) out.set(m, new Map());
+      const cur = out.get(m);
+      if (cur.get(String(key)) !== 'recorded') cur.set(String(key), state);
+    };
+    const markName = (m, nm, state) => { const a = HH.matchDept(nm, areas); if (a) mark(m, a.key, state); };
+    if (Array.isArray(arr.hhCover)) arr.hhCover.forEach((c) => (c.depts || []).forEach((nm) => markName(c.month, nm, c.state === 'recorded' ? 'recorded' : 'pending')));
+    arr.forEach((s) => {
+      if (!(s && s.type === 'quality' && (s.status === 'pending' || s.status === 'approving') && /hand\s*hygiene/i.test(String(s.indicatorName || '')))) return;
+      (Array.isArray(s.deptBreakdown) ? s.deptBreakdown : []).forEach((r) => {
         const t = HH.GROUPS.reduce((n, [k]) => n + (Number(((r && r.g) || {})[k] && r.g[k].d) || 0), 0);
-        if (!(t > 0)) return;   // a 0/0 row = not audited that month
-        const a = HH.matchDept(r && r.dept, areas); if (!a) return;
-        if (!out.has(s.month)) out.set(s.month, new Set());
-        out.get(s.month).add(a.key);
-      }));
+        if (t > 0) markName(s.month, r && r.dept, 'pending');   // a 0/0 row = not audited that month
+      });
+      (Array.isArray(s.coveredDepts) ? s.coveredDepts : []).forEach((k) => markName(s.month, k, 'pending'));
+    });
+    const src = HH.findSource(areas);
+    if (src && src.ind) {
+      const ms = new Set(Object.keys(src.ind.mCovered || {}).concat(Object.keys(src.ind.mDeptBreakdown || {})));
+      ms.forEach((m) => { if (!(src.ind.mNotObserved && src.ind.mNotObserved[m])) HH.coveredKeys(src.ind, m, areas).forEach((k) => mark(m, k, 'recorded')); });
     }
     _dcHHCover.set(arr, out);
     return out;
@@ -4212,7 +4297,7 @@
     }
     if ((st === 'none' || st === 'rejected') && ind && /hand\s*hygiene/i.test(ind.name || '')) {
       const cov = dcHHAuditCover(subs).get(m);
-      if (cov && cov.has(areaKey)) return 'pending';
+      if (cov && cov.has(String(areaKey))) return cov.get(String(areaKey));
     }
     return st;
   };
@@ -4537,6 +4622,23 @@
     const [busy, setBusy] = useState(true);
     const [rev, setRev] = useState(0);
     useEffect(() => { const h = () => setRev((r) => r + 1); window.addEventListener('unico:data-refreshed', h); return () => window.removeEventListener('unico:data-refreshed', h); }, []);
+    // Admin: tick the departments an existing month's audit covered (months recorded as a
+    // hospital figure only, so every department's hand hygiene read as missing).
+    const isAdmin = dcIsAdminUser();
+    const [coverEdit, setCoverEdit] = useState(null);   // { m, sel:[area key…], saving }
+    const coverAreas = useMemo(() => (coverEdit && HH ? (window.qualityData ? window.qualityData() : [])
+      .filter((a) => a && a.key && !HH.isHospital(a) && (a.indicators || []).some(HH.isHHInd))
+      .map((a) => ({ key: String(a.key), name: dcAreaName(a) }))
+      .sort((x, y) => String(x.name).localeCompare(String(y.name))) : []), [!!coverEdit]); // eslint-disable-line
+    const saveCover = () => {
+      if (!coverEdit || coverEdit.saving) return;
+      setCoverEdit((c) => Object.assign({}, c, { saving: true }));
+      dcApi.put('/api/hand-hygiene/coverage', { month: coverEdit.m, depts: coverEdit.sel }).then((r) => {
+        if (!r || !r.ok) { toast((r && r.error) || 'Could not save the departments.', 'error'); setCoverEdit((c) => c && Object.assign({}, c, { saving: false })); return; }
+        toast(monthLabel(coverEdit.m) + ': ' + r.coverage.depts.length + ' department(s) covered', 'success');
+        setCoverEdit(null); dcInvalidateSubs(); dcRefreshLive(); setRev((x) => x + 1);
+      }).catch((e) => { toast(e.message || 'Could not save the departments.', 'error'); setCoverEdit((c) => c && Object.assign({}, c, { saving: false })); });
+    };
     useEffect(() => {
       let dead = false; setBusy(true);
       fetch('/api/hand-hygiene' + (year ? '?year=' + year : ''), { headers: { accept: 'application/json' } })
@@ -4596,7 +4698,7 @@
     const printPage = () => {
       if (!res) return;
       const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-      const cellTxt = (c) => (c && c.d > 0 ? esc(c.n + '/' + c.d) + '<br><b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.pct != null ? '<b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.src === 'not-audited' ? 'n/a' : '—');
+      const cellTxt = (c) => (c && c.d > 0 ? esc(c.n + '/' + c.d) + '<br><b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.pct != null ? '<b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.src === 'not-audited' ? 'n/a' : c && c.src === 'covered' ? 'hospital audit' : '—');
       const monthsHead = deptShown.map((x) => '<th>' + esc(ml(x.m)) + '</th>').join('');
       const deptRows = res.rows.map((r) => '<tr><td>' + esc(r.name) + (r.selfReported ? ' <i>(self-reported)</i>' : '') + '</td>' + deptShown.map((x) => '<td class="r">' + cellTxt(r.cells[x.m]) + '</td>').join('') + '<td class="r">' + cellTxt(r.total) + '</td></tr>').join('');
       const totRow = '<tr class="t"><td>Hospital total (audit)</td>' + deptShown.map((x) => '<td class="r">' + cellTxt(x.d != null ? { n: x.n, d: x.d, pct: x.pct } : { pct: x.pct }) + '</td>').join('') + '<td class="r">' + cellTxt(res.total) + '</td></tr>';
@@ -4649,7 +4751,9 @@
     const cellEl = (c) => (c && c.d > 0
       ? <span title={c.n + ' compliant of ' + c.d + ' observed'}><span style={pctCell(c.pct)}>{hhFmtP(c.pct)}</span><span style={{ display: 'block', fontSize: 10.5, color: '#8592a3' }}>{c.n}/{c.d}</span></span>
       : c && c.pct != null ? <span title="Percentage only — no counts on record" style={pctCell(c.pct)}>{hhFmtP(c.pct)}</span>
-      : c && c.src === 'not-audited' ? <span style={{ color: '#9aa6b5', fontSize: 11 }}>not audited</span> : <span style={{ color: '#c2cad4' }}>—</span>);
+      : c && c.src === 'not-audited' ? <span style={{ color: '#9aa6b5', fontSize: 11 }}>not audited</span>
+      : c && c.src === 'covered' ? <span title="Covered by the hospital audit, entered as an overall total — no department figures" style={{ color: '#12776c', fontSize: 11, fontWeight: 600 }}>hospital audit</span>
+      : <span style={{ color: '#c2cad4' }}>—</span>);
 
     return (
       <div style={{ maxWidth: 1240, margin: '0 auto' }}>
@@ -4658,7 +4762,7 @@
           {kpi('Hospital compliance ' + res.year, hhFmtP(res.total.pct), res.total.d ? hhFmtN(res.total.n) + ' of ' + hhFmtN(res.total.d) + ' opportunities' : 'no counts on record', tTone(res.total.pct))}
           {kpi('Latest month', latest ? hhFmtP(latest.pct) : '—', latest ? ml(latest.m) + (latest.d ? ' · ' + latest.n + '/' + latest.d : ' · % only') : 'nothing reported', latest && tTone(latest.pct))}
           {kpi('Months on target', withVal.length ? onTarget + '/' + withVal.length : '—', 'at or above ' + bench + '%', withVal.length && onTarget === withVal.length ? '#12776c' : '#9a5b00')}
-          {kpi('Departments audited', String(res.rows.filter((r) => r.total.d > 0).length), res.groups.length ? res.groups.length + ' staff groups' : 'no staff-group detail')}
+          {kpi('Departments audited', String(res.rows.filter((r) => r.total.d > 0 || Object.keys(r.cells).some((m) => r.cells[m] && r.cells[m].src === 'covered')).length), res.groups.length ? res.groups.length + ' staff groups' : 'no staff-group detail')}
         </div>
 
         {chart && <div style={card}><div style={sub}>Monthly compliance (%)</div><div style={note}>Hospital total each month · target ≥ {bench}%</div>{chart}</div>}
@@ -4667,7 +4771,7 @@
           <div style={sub}>Hospital total by month</div>
           <div style={note}>Pooled: compliant moments ÷ observed opportunities across every audited department.</div>
           <div style={scroll}><table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 560 }}>
-            <thead><tr><th style={th}>Month</th><th style={thr}>Compliant</th><th style={thr}>Opportunities</th><th style={thr}>Compliance</th><th style={th}>Status</th></tr></thead>
+            <thead><tr><th style={th}>Month</th><th style={thr}>Compliant</th><th style={thr}>Opportunities</th><th style={thr}>Compliance</th><th style={th}>Status</th><th style={th}>Departments</th></tr></thead>
             <tbody>
               {shown.map((x) => { const pend = pendingOf(x.m); return (
                 <tr key={x.m}>
@@ -4678,9 +4782,15 @@
                     {x.pctOnly && <span title="Only a percentage is on record for this month — no compliant / opportunity counts" style={{ marginLeft: 6, fontSize: 10.5, color: '#8592a3' }}>% only</span>}
                     {pend.length > 0 && <span style={{ marginLeft: 6, display: 'inline-block', padding: '2px 8px', borderRadius: 20, background: 'rgba(224,138,30,.16)', color: '#9a5b00', fontWeight: 700, fontSize: 10.5 }}>awaiting approval</span>}
                   </td>
+                  <td style={td}>
+                    {(x.coveredKeys || []).length ? <span title="Departments whose hand hygiene this audit reports">{x.coveredKeys.length} covered</span> : <span style={{ color: '#9a5b00', fontSize: 11 }}>{x.pct != null ? 'none listed' : '—'}</span>}
+                    {isAdmin && x.pct != null && !res.rows.some((r) => r.cells[x.m] && r.cells[x.m].src === 'audit') && (
+                      <button type="button" style={Object.assign({}, btn, { marginLeft: 8, padding: '3px 9px', fontSize: 11 })} onClick={() => setCoverEdit({ m: x.m, sel: (x.coveredKeys || []).slice(), saving: false })}>Edit departments</button>
+                    )}
+                  </td>
                 </tr>); })}
               {shown.length > 0 && <tr><td style={Object.assign({}, tdTot, { textAlign: 'left' })}>{res.year} total</td><td style={tdTot}>{hhFmtN(res.total.n)}</td><td style={tdTot}>{hhFmtN(res.total.d)}</td><td style={Object.assign({}, tdTot, pctCell(res.total.pct))}>{hhFmtP(res.total.pct)}</td><td style={Object.assign({}, tdTot, { textAlign: 'left' })}>{chip(res.total.pct)}</td></tr>}
-              {!shown.length && <tr><td colSpan={5} style={Object.assign({}, td, { color: '#6c7a8c' })}>Nothing reported for {res.year}.</td></tr>}
+              {!shown.length && <tr><td colSpan={6} style={Object.assign({}, td, { color: '#6c7a8c' })}>Nothing reported for {res.year}.</td></tr>}
             </tbody>
           </table></div>
         </div>
@@ -4730,6 +4840,33 @@
                   <td style={td}>{chip(g.total.pct)}</td>
                 </tr>))}</tbody>
             </table></div>
+          </div>
+        )}
+
+        {coverEdit && (
+          <div role="dialog" aria-modal="true" onClick={() => !coverEdit.saving && setCoverEdit(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(15,25,40,.45)', zIndex: 1000, display: 'grid', placeItems: 'center', padding: 16 }}>
+            <div onClick={(e) => e.stopPropagation()} style={Object.assign({}, CP_CARD, { width: 'min(560px, 100%)', maxHeight: '85vh', overflow: 'auto', padding: '18px 20px', background: '#fff' })}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: '#16202e' }}>Departments covered · {monthLabel(coverEdit.m)}</div>
+              <div style={{ fontSize: 12, color: '#6c7a8c', margin: '4px 0 12px' }}>Tick every department this month's hospital audit covered. They then show hand hygiene as submitted. The hospital figure is not changed.</div>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#0072a3' }}>{coverEdit.sel.length} of {coverAreas.length}</span>
+                <span style={{ flex: 1 }} />
+                <button type="button" style={btn} onClick={() => setCoverEdit((c) => Object.assign({}, c, { sel: coverAreas.map((o) => o.key) }))}>Select all</button>
+                <button type="button" style={btn} onClick={() => setCoverEdit((c) => Object.assign({}, c, { sel: [] }))}>Clear</button>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '4px 12px' }}>
+                {coverAreas.map((o) => (
+                  <label key={o.key} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: '#2b3747', padding: '4px 0', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={coverEdit.sel.indexOf(o.key) >= 0} onChange={(e) => setCoverEdit((c) => { const sel = c.sel.filter((k) => k !== o.key); if (e.target.checked) sel.push(o.key); return Object.assign({}, c, { sel }); })} style={{ width: 16, height: 16 }} />
+                    {o.name}
+                  </label>
+                ))}
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+                <button type="button" style={btn} disabled={coverEdit.saving} onClick={() => setCoverEdit(null)}>Cancel</button>
+                <button type="button" style={Object.assign({}, btn, { background: '#0090ca', color: '#fff', borderColor: '#0090ca' })} disabled={coverEdit.saving} onClick={saveCover}>{coverEdit.saving ? 'Saving…' : 'Save'}</button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -5390,7 +5527,7 @@
     // Missing data page) — 'Fill now' opened a blank new report and lost the returned figures.
     const openRej = useMemo(() => dcOpenRejections(S), [subs]);
     const returnedFor = (areaKey, ind, m) => openRej.find((x) => x.type === 'quality' && x.area === areaKey && x.month === m && (x.indicatorId === ind.id || (x.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim())) || null;
-    const statusOf = (areaKey, ind, m) => { const st = cpSubmissionStatus(S, areaKey, ind, m); if (st === 'rejected' && returnedFor(areaKey, ind, m)) return 'Returned'; return ({ recorded: 'Recorded', pending: 'Submitted', notobs: 'Not observed', rejected: 'Missing', none: 'Missing' })[st]; };
+    const statusOf = (areaKey, ind, m) => { const st = dcQStatus(S, areaKey, ind, m); if (st === 'rejected' && returnedFor(areaKey, ind, m)) return 'Returned'; return ({ recorded: 'Recorded', pending: 'Submitted', notobs: 'Not observed', rejected: 'Missing', none: 'Missing' })[st]; };
 
     const collRev = useDcCollectionRev();
     // Only what is OWED for the month: not-measured indicators and months before the
@@ -5698,7 +5835,7 @@
     areas.forEach((a) => a.indicators.forEach((ind) => {
       if (!dcIndDue(a, ind, month, S)) return;   // not measured / before its start month
       totalInd++;
-      const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
+      const sent = ['recorded', 'pending', 'notobs'].includes(dcQStatus(S, a.key, ind, month));
       if (!sent) missing++;
     }));
     const pct = totalInd ? Math.round((totalInd - missing) * 100 / totalInd) : 0;
@@ -5720,7 +5857,7 @@
         if (!dcIndDue(a, ind, m, S)) return;
         t++;
         // Per INDICATOR, the ring's rule — one indicator sent used to mark the whole area done.
-        if (['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, m))) done++;
+        if (['recorded', 'pending', 'notobs'].includes(dcQStatus(S, a.key, ind, m))) done++;
       }));
       return { m: m, pct: t ? Math.round(done * 100 / t) : 0, n: done, of: t };
     });

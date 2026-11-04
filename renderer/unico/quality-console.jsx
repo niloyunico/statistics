@@ -705,7 +705,7 @@ function QCCellDetail({ dep, mk, mlabel, onClose, Q }){
   const notObserved = allInds.filter(ind => monthStatus(ind, mk) === 'na' && qcNotObs(ind, mk));
   // Not owed (before the start month / not measured in Department Setup) is not "not submitted".
   const notDue = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && qcNotDue(dep, ind, mk));
-  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && !qcNotDue(dep, ind, mk));
+  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && !qcNotDue(dep, ind, mk) && !(ind.mCoveredByAudit && ind.mCoveredByAudit[mk]));
   const breaches = reported.filter(r => r.s === 'breach').length;
 
   const field = (label, val) => val ? (
@@ -2858,7 +2858,8 @@ function QCReportBuilder({depts}){
           if(qcNotObs(ind,m[0])){ nobs.push(m[1]); notObserved++; return; }
           if(monthRaw(ind,m[0])==null && qcNotDue(d,ind,m[0])) return;   // not owed (Department Setup)
           assigned++;
-          if(monthRaw(ind,m[0])!=null) submitted++; else miss.push(m[1]);
+          // reported through the hospital hand-hygiene audit (entered as an overall total)
+          if(monthRaw(ind,m[0])!=null || (ind.mCoveredByAudit && ind.mCoveredByAudit[m[0]])) submitted++; else miss.push(m[1]);
         });
         if(miss.length) rows.push({dept:d, ind, miss});
         if(nobs.length) nobsRows.push({dept:d, ind, miss:nobs});

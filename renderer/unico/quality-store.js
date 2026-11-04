@@ -304,8 +304,11 @@
       const src = HH.findSource(list);
       if (!src) return list;
       const normN = HH.normN, canonDept = HH.canonDept;
-      const bd = src.ind.mDeptBreakdown;
-      if (!bd || !Object.keys(bd).length) return list;
+      const bd = src.ind.mDeptBreakdown || {};
+      // Months entered as an "Overall hospital" total: the departments that audit covered
+      // (area keys). They carry no department figures — only the covered mark below.
+      const cov = src.ind.mCovered || {};
+      if (!Object.keys(bd).length && !Object.keys(cov).length) return list;
       return list.map((d) => {
         if (d === src.dep) return d;
         const idx = (d.indicators || []).findIndex(isHH);
@@ -340,8 +343,21 @@
           // the audit once, not again through this department's copy of it.
           fromAudit[mk] = true;
         });
-        if (!months) return d;
-        const patched = Object.assign({}, hh, { months: months, mNum: mNum, mDen: mDen, mFromAudit: fromAudit, hhFromAudit: true });
+        // Covered by an overall-total audit, with no reading of its own: mCoveredByAudit[month],
+        // so status screens read the month as reported, not missing. No figures are invented.
+        let covered = null;
+        if (idx >= 0) Object.keys(cov).forEach((mk) => {
+          if (!Array.isArray(cov[mk]) || !cov[mk].some((k) => String(k) === String(d.key))) return;
+          if ((months && months[mk] != null) || (hh.mNum && hh.mNum[mk] != null && hh.mNum[mk] !== '') || (hh.months && hh.months[mk] != null && hh.months[mk] !== '')) return;
+          (covered = covered || Object.assign({}, hh.mCoveredByAudit || {}))[mk] = true;
+        });
+        if (!months && !covered) return d;
+        if (!months) {
+          const inds0 = (d.indicators || []).slice();
+          inds0[idx] = Object.assign({}, hh, { mCoveredByAudit: covered });
+          return Object.assign({}, d, { indicators: inds0 });
+        }
+        const patched = Object.assign({}, hh, { months: months, mNum: mNum, mDen: mDen, mFromAudit: fromAudit, hhFromAudit: true }, covered ? { mCoveredByAudit: covered } : {});
         // refresh the per-year quarter rollups so quarter-based views see the filled months
         const fys = fysInInd(patched);
         if (fys.length) { const byFy = {}; fys.forEach((fy) => { byFy[fy] = computeQuartersFor(patched, fyQuarterMonths(fy)); }); patched.quartersByFy = byFy; }
