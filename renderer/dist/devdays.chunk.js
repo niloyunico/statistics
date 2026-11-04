@@ -230,6 +230,11 @@
     const [busy, setBusy] = useState('');
     const [flash, setFlash] = useState('');
     const [unlocked, setUnlocked] = useState({});
+    const [adminMode, setAdminModeS] = useState(() => lsGet('unico_dd_admin_entry') !== '0');
+    const setAdminMode = v => {
+      setAdminModeS(v);
+      lsSet('unico_dd_admin_entry', v ? '1' : '0');
+    };
     const scrolled = useRef('');
     const rowRefs = useRef({});
     const load = useCallback(() => {
@@ -288,6 +293,8 @@
     });
     const deptObj = meta.departments.find(d => d.id === dept) || meta.departments[0];
     const cfg = deptObj.cfg;
+    const F = data && data.fields || meta.fields || DD.FIELDS;
+    const adminEntry = meta.isAdmin && adminMode;
     const valOf = (d, f) => {
       const e = edits[d.date];
       if (e && Object.prototype.hasOwnProperty.call(e, f)) return e[f];
@@ -306,7 +313,7 @@
     const editable = d => {
       if (d.state === 'future') return false;
       const st = d.row && d.row.status;
-      if (st === 'submitted' || st === 'approved') return meta.canReview && !!unlocked[d.date];
+      if (st === 'submitted' || st === 'approved') return adminEntry || meta.canReview && !!unlocked[d.date];
       return meta.canAdd || meta.canReview;
     };
     const setVal = (date, f, v) => setEdits(e => Object.assign({}, e, {
@@ -318,7 +325,7 @@
       const v = rowVals(d);
       const any = F.some(f => v[f.id] !== '');
       if (!any) return null;
-      return DD.validateRow(v);
+      return DD.validateRow(v, F);
     };
     const badField = (d, f) => {
       const v = rowVals(d);
@@ -329,13 +336,13 @@
     };
     async function saveRow(d, quiet) {
       const v = rowVals(d);
-      const e = DD.validateRow(v);
+      const e = DD.validateRow(v, F);
       if (e) {
         if (!quiet) toast(DD.fmtDay(d.date) + ': ' + e, 'error');
         return false;
       }
       const locked = d.row && (d.row.status === 'submitted' || d.row.status === 'approved');
-      if (locked && !quiet) {
+      if (locked && !quiet && !adminEntry) {
         const ok = await confirmBox({
           title: 'Correct a sent day?',
           message: DD.fmtDay(d.date) + ' has already been ' + (d.row.status === 'approved' ? 'approved' : 'sent') + '. Your correction is recorded in its history and the day goes back to review.',
@@ -348,7 +355,9 @@
           method: 'PUT',
           body: JSON.stringify(Object.assign({}, v, {
             baseUpdatedAt: d.row ? d.row.updatedAt : null
-          }))
+          }, adminEntry ? {
+            approve: true
+          } : {}))
         });
         setEdits(x => {
           const n = Object.assign({}, x);
@@ -382,7 +391,7 @@
         if (!(await saveRow(d, true))) ok = false;
       }
       setBusy('');
-      if (ok) toast(list.length === 1 ? 'Saved.' : list.length + ' days saved.', 'success');else toast('Some days were not saved — check the rows marked in red.', 'error');
+      if (ok) toast((list.length === 1 ? 'Saved' : list.length + ' days saved') + (adminEntry ? ' as approved.' : '.'), 'success');else toast('Some days were not saved — check the rows marked in red.', 'error');
       load();
       refreshBadge();
       return ok;
@@ -501,7 +510,30 @@
       style: {
         flex: 1
       }
-    }), meta.canPrint && data && React.createElement("button", {
+    }), meta.isAdmin && React.createElement("label", {
+      title: "On: what you type is saved as Approved straight away (no review). Off: you enter and send like a department.",
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: 'pointer',
+        padding: '5px 10px',
+        borderRadius: 8,
+        border: '1px solid ' + (adminMode ? '#9fdcc0' : 'var(--line)'),
+        background: adminMode ? '#e7f6ed' : '#fff',
+        color: adminMode ? '#14713f' : 'var(--ink-2)'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      style: {
+        width: 'auto',
+        margin: 0
+      },
+      checked: adminMode,
+      onChange: e => setAdminMode(e.target.checked)
+    }), "Admin entry \xB7 saves as Approved"), meta.canPrint && data && React.createElement("button", {
       className: "btn sm",
       onClick: () => printSheet(deptObj, month, data)
     }, "Print sheet")), missed.length > 0 && React.createElement("div", {
@@ -653,11 +685,11 @@
         disabled: !!e || !!busy,
         onClick: () => saveRow(d).then(ok => {
           if (ok) {
-            toast('Saved ' + DD.fmtDay(d.date) + '.', 'success');
+            toast('Saved ' + DD.fmtDay(d.date) + (adminEntry ? ' as approved.' : '.'), 'success');
             refreshBadge();
           }
         })
-      }, "Save"), !dirty(d) && d.row && meta.canReview && (d.row.status === 'submitted' || d.row.status === 'approved') && !unlocked[d.date] && React.createElement("button", {
+      }, adminEntry ? 'Save ✓' : 'Save'), !dirty(d) && !adminEntry && d.row && meta.canReview && (d.row.status === 'submitted' || d.row.status === 'approved') && !unlocked[d.date] && React.createElement("button", {
         className: "dd-icon-btn",
         title: "Reviewer: correct this sent day (logged, goes back to review)",
         onClick: () => setUnlocked(x => Object.assign({}, x, {
@@ -704,22 +736,26 @@
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, "Approved: ", approvedT ? approvedT.days + ' days' : '—')))))), data && (meta.canAdd || meta.canReview) && (dirtyN > 0 || unsentN > 0) && React.createElement("div", {
+    }, "Approved: ", approvedT ? approvedT.days + ' days' : '—')))))), data && (meta.canAdd || meta.canReview) && (dirtyN > 0 || unsentN > 0 && !adminEntry) && React.createElement("div", {
       className: "card dd-send"
     }, React.createElement("span", {
       style: {
         fontSize: 12.5,
         color: 'var(--ink-2)'
       }
-    }, dirtyN > 0 && React.createElement("b", null, dirtyN, " unsaved change", dirtyN > 1 ? 's' : '', ". "), unsentN > 0 && React.createElement("span", null, unsentN, " saved day", unsentN > 1 ? 's' : '', " not sent yet.")), React.createElement("span", {
+    }, dirtyN > 0 && React.createElement("b", null, dirtyN, " unsaved change", dirtyN > 1 ? 's' : '', ". "), unsentN > 0 && !adminEntry && React.createElement("span", null, unsentN, " saved day", unsentN > 1 ? 's' : '', " not sent yet."), adminEntry && React.createElement("span", {
+      style: {
+        color: '#14713f'
+      }
+    }, "Admin entry is on: saved days are approved straight away.")), React.createElement("span", {
       style: {
         flex: 1
       }
     }), dirtyN > 0 && React.createElement("button", {
-      className: "btn sm",
+      className: 'btn sm' + (adminEntry ? ' pri' : ''),
       disabled: !!busy,
       onClick: saveAll
-    }, busy === 'save' ? 'Saving…' : 'Save all'), meta.canAdd && React.createElement("button", {
+    }, busy === 'save' ? 'Saving…' : adminEntry ? 'Save all as approved' : 'Save all'), meta.canAdd && !adminEntry && React.createElement("button", {
       className: "btn pri sm",
       disabled: !!busy,
       onClick: send
@@ -750,6 +786,7 @@
         color: 'var(--muted)'
       }
     }, "Loading\u2026");
+    const F = q.fields || DD.FIELDS;
     const names = {};
     q.departments.forEach(d => {
       names[d.id] = d.name;
@@ -827,7 +864,7 @@
     }, "Nothing is waiting. Sent days appear here for approval."), list.map(g => {
       const gIds = g.rows.filter(r => !own(r)).map(r => r.id);
       const allOn = gIds.length && gIds.every(id => pick[id]);
-      const t = DD.totals(g.rows);
+      const t = DD.totals(g.rows, null, F);
       return React.createElement("div", {
         key: g.dept + g.period,
         className: "card",
@@ -948,6 +985,7 @@
     if (!meta.departments.length) return React.createElement(NoDepts, {
       meta: meta
     });
+    const F = s && s.fields || meta.fields || DD.FIELDS;
     const grand = {
       days: 0
     };
@@ -959,7 +997,7 @@
     (s ? s.departments : []).forEach(d => d.months.forEach(m => {
       grand.days += m.approved.days;
       F.forEach(f => {
-        grand[f.id] += m.approved[f.id];
+        grand[f.id] += m.approved[f.id] || 0;
       });
       missing += m.missing;
       waiting += m.submitted;
@@ -970,7 +1008,7 @@
         approved: {}
       }).approved[metric] || 0), 0)
     })) : [];
-    const mf = F.find(f => f.id === metric);
+    const mf = F.find(f => f.id === metric) || F[0];
     return React.createElement("div", {
       className: "dd-wrap"
     }, React.createElement("div", {
@@ -1025,8 +1063,8 @@
       className: "dd-kpis"
     }, React.createElement("div", {
       className: "card dd-kpi"
-    }, React.createElement("span", null, "Patient days"), React.createElement("b", null, grand.total), React.createElement("small", null, grand.days, " approved day-records")), DD.DEVICES.map(k => {
-      const f = F.find(x => x.id === k);
+    }, React.createElement("span", null, "Patient days"), React.createElement("b", null, grand.total), React.createElement("small", null, grand.days, " approved day-records")), F.filter(x => x.id !== 'total').map(f => {
+      const k = f.id;
       const u = DD.utilisation(grand, k);
       return React.createElement("div", {
         key: k,
@@ -1141,15 +1179,176 @@
       }
     }, "Totals count approved days only. Utilisation = device days \xF7 patient days. ", React.createElement(Legend, null)))));
   }
+  function PeoplePicker({
+    value,
+    people,
+    fixed,
+    onChange
+  }) {
+    const [open, setOpen] = useState(false);
+    const [q, setQ] = useState('');
+    const byName = {};
+    people.forEach(p => {
+      byName[p.username] = p;
+    });
+    const needle = q.trim().toLowerCase();
+    const options = people.filter(p => value.indexOf(p.username) < 0 && fixed.indexOf(p.username) < 0).filter(p => !needle || (p.name + ' ' + p.username + ' ' + p.designation).toLowerCase().indexOf(needle) >= 0).slice(0, 40);
+    const remove = async u => {
+      const p = byName[u] || {
+        name: u
+      };
+      const ok = await confirmBox({
+        title: 'Remove ' + p.name + '?',
+        message: p.name + ' will no longer be responsible for this department. If Device Days was given to them only for this, it is switched off for them.',
+        confirmLabel: 'Remove'
+      });
+      if (ok) onChange(value.filter(x => x !== u));
+    };
+    const chip = {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5,
+      padding: '2px 4px 2px 9px',
+      borderRadius: 14,
+      fontSize: 11.5,
+      fontWeight: 600,
+      border: '1px solid var(--blue)',
+      background: 'var(--blue-50)',
+      color: 'var(--blue-700)',
+      margin: '2px 4px 2px 0'
+    };
+    return React.createElement("div", {
+      style: {
+        minWidth: 220,
+        maxWidth: 360,
+        whiteSpace: 'normal'
+      }
+    }, value.map(u => React.createElement("span", {
+      key: u,
+      style: chip,
+      title: byName[u] && byName[u].designation || u
+    }, byName[u] && byName[u].name || u, React.createElement("button", {
+      type: "button",
+      onClick: () => remove(u),
+      "aria-label": "Remove",
+      style: {
+        border: 0,
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontSize: 13,
+        lineHeight: 1,
+        padding: '0 3px'
+      }
+    }, "\xD7"))), fixed.map(u => React.createElement("span", {
+      key: u,
+      style: Object.assign({}, chip, {
+        borderStyle: 'dashed',
+        paddingRight: 9,
+        opacity: .8
+      }),
+      title: "All departments \u2014 set in Access Control"
+    }, byName[u] && byName[u].name || u, " \xB7 all")), React.createElement("button", {
+      type: "button",
+      className: "dd-icon-btn",
+      onClick: () => setOpen(o => !o)
+    }, "+ Add"), open && React.createElement("div", {
+      style: {
+        marginTop: 6,
+        width: 280,
+        maxWidth: '100%',
+        background: '#fff',
+        border: '1px solid var(--line)',
+        borderRadius: 9,
+        boxShadow: '0 10px 28px rgba(13,27,46,.16)',
+        padding: 8
+      }
+    }, React.createElement("input", {
+      autoFocus: true,
+      className: "dd-sel",
+      style: {
+        width: '100%',
+        maxWidth: 'none',
+        marginBottom: 6
+      },
+      placeholder: "Search people\u2026",
+      value: q,
+      onChange: e => setQ(e.target.value)
+    }), React.createElement("div", {
+      style: {
+        maxHeight: 220,
+        overflow: 'auto'
+      }
+    }, !options.length && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)',
+        padding: 6
+      }
+    }, "No one else to add."), options.map(p => React.createElement("button", {
+      key: p.username,
+      type: "button",
+      onClick: () => {
+        onChange(value.concat([p.username]));
+        setQ('');
+      },
+      style: {
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+        border: 0,
+        background: 'transparent',
+        padding: '6px 8px',
+        borderRadius: 6,
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: 12
+      },
+      onMouseEnter: e => {
+        e.currentTarget.style.background = 'var(--blue-50)';
+      },
+      onMouseLeave: e => {
+        e.currentTarget.style.background = 'transparent';
+      }
+    }, React.createElement("b", null, p.name), " ", React.createElement("span", {
+      style: {
+        color: 'var(--muted)',
+        fontSize: 11
+      }
+    }, p.designation || p.username, p.devdays.length ? ' · has Device Days' : '')))), React.createElement("div", {
+      style: {
+        textAlign: 'right',
+        marginTop: 4
+      }
+    }, React.createElement("button", {
+      type: "button",
+      className: "dd-icon-btn",
+      onClick: () => setOpen(false)
+    }, "Done"))));
+  }
   function Settings() {
     const [list, setList] = useState(null);
+    const [people, setPeople] = useState([]);
+    const [peopleOk, setPeopleOk] = useState(true);
+    const [fields, setFields] = useState([]);
     const [err, setErr] = useState('');
     const [busy, setBusy] = useState(false);
     const [filter, setFilter] = useState('');
     const [changed, setChanged] = useState({});
+    const [respChanged, setRespChanged] = useState({});
+    const [fieldsDirty, setFieldsDirty] = useState(false);
+    const [newCol, setNewCol] = useState({
+      label: '',
+      short: ''
+    });
     const load = () => api('/api/device-days/config').then(j => {
       setList(j.departments);
+      setPeople(j.people || []);
+      setPeopleOk(j.peopleAvailable !== false);
+      setFields((j.fields || []).filter(f => f.custom));
       setChanged({});
+      setRespChanged({});
+      setFieldsDirty(false);
     }).catch(e => setErr(e.message));
     useEffect(() => {
       load();
@@ -1176,21 +1375,70 @@
         [id]: true
       }));
     };
+    const setResp = (id, v) => {
+      setList(l => l.map(d => d.id === id ? Object.assign({}, d, {
+        responsibles: v
+      }) : d));
+      setRespChanged(c => Object.assign({}, c, {
+        [id]: true
+      }));
+    };
+    const allDepts = people.filter(p => p.devdays.indexOf('add') >= 0 && p.deviceDepartments.indexOf('*') >= 0).map(p => p.username);
+    const setField = (i, k, v) => {
+      setFields(fs => fs.map((f, j) => j === i ? Object.assign({}, f, {
+        [k]: v
+      }) : f));
+      setFieldsDirty(true);
+    };
+    const addCol = () => {
+      const label = newCol.label.trim();
+      if (!label) {
+        toast('Write the column name, e.g. "Patients with NG tube".', 'error');
+        return;
+      }
+      setFields(fs => fs.concat([{
+        label,
+        short: newCol.short.trim() || label,
+        active: true,
+        isNew: true
+      }]));
+      setNewCol({
+        label: '',
+        short: ''
+      });
+      setFieldsDirty(true);
+    };
+    const n = Object.keys(changed).length + Object.keys(respChanged).length + (fieldsDirty ? 1 : 0);
     const save = async () => {
+      if (!n) return;
+      const body = {};
       const depts = {};
       list.filter(d => changed[d.id]).forEach(d => {
         depts[d.id] = d.cfg;
       });
-      if (!Object.keys(depts).length) return;
+      if (Object.keys(depts).length) body.depts = depts;
+      const resp = {};
+      list.filter(d => respChanged[d.id]).forEach(d => {
+        resp[d.id] = d.responsibles || [];
+      });
+      if (Object.keys(resp).length) body.responsibles = resp;
+      if (fieldsDirty) body.fields = fields.map(f => f.isNew ? {
+        label: f.label,
+        short: f.short
+      } : {
+        id: f.id,
+        label: f.label,
+        short: f.short,
+        active: f.active
+      });
       setBusy(true);
       try {
         const j = await api('/api/device-days/config', {
           method: 'PUT',
-          body: JSON.stringify({
-            depts
-          })
+          body: JSON.stringify(body)
         });
-        toast(j.changed + ' department setting(s) saved.', 'success');
+        const r = j.responsibles || {};
+        toast('Saved.' + (r.granted ? ' ' + r.granted + ' responsible person(s) added.' : '') + (r.removed ? ' ' + r.removed + ' removed.' : '') + (r.skipped && r.skipped.length ? ' Skipped: ' + r.skipped.join('; ') : ''), r.skipped && r.skipped.length ? 'warn' : 'success');
         load();
         refreshBadge();
       } catch (e) {
@@ -1199,7 +1447,6 @@
       setBusy(false);
     };
     const shown = list.filter(d => !filter || d.name.toLowerCase().indexOf(filter.toLowerCase()) >= 0);
-    const n = Object.keys(changed).length;
     return React.createElement("div", {
       className: "dd-wrap"
     }, React.createElement("div", {
@@ -1209,7 +1456,7 @@
         fontSize: 12.5,
         color: 'var(--ink-2)'
       }
-    }, "Tick the departments that keep the ", React.createElement("b", null, "Record of Device Insertion Days"), ". Each fills one row per day; ", React.createElement("b", null, "how often they send"), " decides when a day counts as missed: daily \u2014 that day by the cut-off time; weekly \u2014 the day after the week ends; monthly \u2014 the day after the month ends. Days before the ", React.createElement("b", null, "start date"), " are never counted as missed. Who may enter, review or print is set per person in Access Control \u2192 Device Days."), React.createElement("div", {
+    }, "Tick the departments that keep the ", React.createElement("b", null, "Record of Device Insertion Days"), ". Each fills one row per day; ", React.createElement("b", null, "how often they send"), " decides when a day counts as missed: daily \u2014 that day by the cut-off time; weekly \u2014 the day after the week ends; monthly \u2014 the day after the month ends. Days before the ", React.createElement("b", null, "start date"), " are never counted as missed. A department's ", React.createElement("b", null, "responsible people"), " see Device Days in their menu and can enter and send its sheet; reviewers (Access Control \u2192 Device Days \u2192 Edit) approve it."), React.createElement("div", {
       className: "card dd-bar"
     }, React.createElement("input", {
       className: "dd-sel",
@@ -1239,7 +1486,7 @@
       className: "dd-scroll"
     }, React.createElement("table", {
       className: "dd-tbl"
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Tracked"), React.createElement("th", null, "Department"), React.createElement("th", null, "Sends"), React.createElement("th", null, "Week starts"), React.createElement("th", null, "Start date"), React.createElement("th", null, "Census time"), React.createElement("th", null, "Cut-off"))), React.createElement("tbody", null, shown.map(d => React.createElement("tr", {
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Tracked"), React.createElement("th", null, "Department"), React.createElement("th", null, "Responsible (enter & send)"), React.createElement("th", null, "Sends"), React.createElement("th", null, "Week starts"), React.createElement("th", null, "Start date"), React.createElement("th", null, "Census time"), React.createElement("th", null, "Cut-off"))), React.createElement("tbody", null, shown.map(d => React.createElement("tr", {
       key: d.id,
       className: d.cfg.tracked ? 'dd-st-approved' : ''
     }, React.createElement("td", null, React.createElement("input", {
@@ -1249,12 +1496,27 @@
       },
       checked: !!d.cfg.tracked,
       onChange: e => set(d.id, 'tracked', e.target.checked)
-    })), React.createElement("td", null, React.createElement("b", null, d.name), changed[d.id] && React.createElement("span", {
+    })), React.createElement("td", null, React.createElement("b", null, d.name), (changed[d.id] || respChanged[d.id]) && React.createElement("span", {
       className: "dd-chip returned",
       style: {
         marginLeft: 6
       }
-    }, "unsaved")), React.createElement("td", null, React.createElement("select", {
+    }, "unsaved")), React.createElement("td", null, peopleOk ? d.cfg.tracked ? React.createElement(PeoplePicker, {
+      value: d.responsibles || [],
+      people: people,
+      fixed: allDepts,
+      onChange: v => setResp(d.id, v)
+    }) : React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "tick Tracked first") : React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "accounts unavailable")), React.createElement("td", null, React.createElement("select", {
       className: "dd-sel",
       disabled: !d.cfg.tracked,
       value: d.cfg.frequency,
@@ -1289,7 +1551,120 @@
       disabled: !d.cfg.tracked,
       value: d.cfg.cutoff || '10:00',
       onChange: e => set(d.id, 'cutoff', e.target.value)
-    })))))))));
+    })))))))), React.createElement("div", {
+      className: "card",
+      style: {
+        padding: '14px 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        flexWrap: 'wrap',
+        marginBottom: 4
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 14
+      }
+    }, "Form columns"), React.createElement("span", {
+      style: {
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "What each department counts every day. Every column is a number of patients, never more than Total Patients.")), React.createElement("div", {
+      className: "dd-scroll"
+    }, React.createElement("table", {
+      className: "dd-tbl",
+      style: {
+        maxWidth: 760
+      }
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Column"), React.createElement("th", null, "Short name (sheet header)"), React.createElement("th", null, "Status"))), React.createElement("tbody", null, DD.FIELDS.map(f => React.createElement("tr", {
+      key: f.id
+    }, React.createElement("td", null, f.label), React.createElement("td", {
+      style: {
+        color: 'var(--muted)'
+      }
+    }, f.short), React.createElement("td", null, React.createElement("span", {
+      className: "dd-chip not-due"
+    }, "built in")))), fields.map((f, i) => React.createElement("tr", {
+      key: f.id || 'new' + i,
+      className: f.active === false ? 'dd-st-future' : ''
+    }, React.createElement("td", null, React.createElement("input", {
+      style: {
+        width: 260,
+        textAlign: 'left'
+      },
+      value: f.label,
+      onChange: e => setField(i, 'label', e.target.value)
+    })), React.createElement("td", null, React.createElement("input", {
+      style: {
+        width: 150,
+        textAlign: 'left'
+      },
+      value: f.short,
+      onChange: e => setField(i, 'short', e.target.value)
+    })), React.createElement("td", null, f.isNew ? React.createElement("span", {
+      className: "dd-chip returned"
+    }, "new \xB7 unsaved") : f.active === false ? React.createElement("span", {
+      className: "dd-chip not-due"
+    }, "hidden \xB7 data kept") : React.createElement("span", {
+      className: "dd-chip approved"
+    }, "in use"), !f.isNew && React.createElement("button", {
+      type: "button",
+      className: "dd-icon-btn",
+      style: {
+        marginLeft: 6
+      },
+      onClick: () => setField(i, 'active', f.active === false)
+    }, f.active === false ? 'Show' : 'Hide'), f.isNew && React.createElement("button", {
+      type: "button",
+      className: "dd-icon-btn",
+      style: {
+        marginLeft: 6
+      },
+      onClick: () => {
+        setFields(fs => fs.filter((_, j) => j !== i));
+        setFieldsDirty(true);
+      }
+    }, "Cancel")))), React.createElement("tr", null, React.createElement("td", null, React.createElement("input", {
+      style: {
+        width: 260,
+        textAlign: 'left'
+      },
+      placeholder: "New column, e.g. Patients with NG tube",
+      value: newCol.label,
+      onChange: e => setNewCol(c => Object.assign({}, c, {
+        label: e.target.value
+      })),
+      onKeyDown: e => {
+        if (e.key === 'Enter') addCol();
+      }
+    })), React.createElement("td", null, React.createElement("input", {
+      style: {
+        width: 150,
+        textAlign: 'left'
+      },
+      placeholder: "Short, e.g. NG tube",
+      value: newCol.short,
+      onChange: e => setNewCol(c => Object.assign({}, c, {
+        short: e.target.value
+      })),
+      onKeyDown: e => {
+        if (e.key === 'Enter') addCol();
+      }
+    })), React.createElement("td", null, React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      onClick: addCol
+    }, "+ Add column")))))), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 6
+      }
+    }, "Hiding a column takes it off the sheet and the printout; the figures already saved in it are kept and come back if you show it again. Remember to press Save.")));
   }
   const me = () => window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username) || '';
   const sigNames = () => {
@@ -1332,12 +1707,13 @@
     }
   }
   function printSheet(dept, month, data) {
+    const F = data.fields || DD.FIELDS;
     const rows = data.days.map(d => {
       const r = d.row;
       const cls = d.state === 'missing' ? 'ms' : d.state === 'returned' ? 'rt' : '';
       return '<tr class="' + cls + '"><td>' + esc(DD.fmtDay(d.date)) + '</td><td>' + esc(r ? r.time : '') + '</td>' + F.map(f => '<td>' + esc(r ? r[f.id] : '') + '</td>').join('') + '<td class="st">' + esc(d.state === 'future' ? '' : STATE_LABEL[d.state] || '') + '</td></tr>';
     }).join('');
-    const t = DD.totals(data.days.map(d => d.row).filter(Boolean));
+    const t = DD.totals(data.days.map(d => d.row).filter(Boolean), null, F);
     const body = letterhead('Infection Prevention & Control', 'Record of Device Insertion Days') + '<div class="hd"><span>Department: <b>' + esc(dept.name) + '</b></span><span>Month: <b>' + esc(DD.fmtMonth(month)) + '</b></span></div>' + '<table><thead><tr><th>Date</th><th>Time</th>' + F.map(f => '<th>' + esc(f.label.replace('Patients with ', 'Total Patients with ')) + '</th>').join('') + '<th>Status</th></tr></thead><tbody>' + rows + '</tbody>' + '<tfoot><tr><td>Total</td><td></td>' + F.map(f => '<td>' + t[f.id] + '</td>').join('') + '<td class="st">' + t.days + ' days</td></tr></tfoot></table>' + '<p class="note">Missed days are shaded red, returned days amber. Device utilisation: central line ' + (DD.utilisation(t, 'central') == null ? '—' : DD.utilisation(t, 'central') + '%') + ', urinary catheter ' + (DD.utilisation(t, 'urinary') == null ? '—' : DD.utilisation(t, 'urinary') + '%') + ', ventilator ' + (DD.utilisation(t, 'ventilator') == null ? '—' : DD.utilisation(t, 'ventilator') + '%') + '.</p>' + closing();
     openPrint({
       kind: 'sheet',
@@ -1349,6 +1725,7 @@
     });
   }
   function printSummary(s, scope) {
+    const F = s.fields || DD.FIELDS;
     const rows = s.departments.map(d => d.months.map((m, i) => '<tr><td class="l">' + (i === 0 ? '<b>' + esc(d.name) + '</b>' : '') + '</td><td class="l">' + esc(DD.fmtMonth(m.month)) + '</td>' + F.map(f => '<td>' + (m.approved.days ? m.approved[f.id] : '—') + '</td>').join('') + '<td>' + (DD.utilisation(m.approved, 'central') == null ? '—' : DD.utilisation(m.approved, 'central') + '%') + '</td><td>' + m.approved.days + ' / ' + m.due + '</td><td>' + (m.missing || '') + '</td></tr>').join('')).join('');
     const body = letterhead('Infection Prevention & Control', 'Device Days Summary') + '<div class="hd"><span>Scope: <b>' + esc(scope) + '</b></span><span>Period: <b>' + esc(DD.fmtMonth(s.from) + ' – ' + DD.fmtMonth(s.to)) + '</b></span></div>' + '<table><thead><tr><th>Department</th><th>Month</th>' + F.map(f => '<th>' + (f.id === 'total' ? 'Patient days' : esc(f.short) + ' days') + '</th>').join('') + '<th>CL util.</th><th>Approved / due</th><th>Missed</th></tr></thead><tbody>' + rows + '</tbody></table>' + '<p class="note">Approved days only. Utilisation = device days ÷ patient days.</p>' + closing();
     openPrint({
