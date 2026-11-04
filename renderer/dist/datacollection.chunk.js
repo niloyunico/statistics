@@ -3860,6 +3860,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         if (!denLockedForCollector) setDen(e.target.value);
       },
       placeholder: denLockedForCollector ? 'Set by administrator' : isRate ? 'Total ' + denLabel.toLowerCase() + ' this month' : 'Optional — total base (blank = count)'
+    }), !denLockedForCollector && !hospitalWide && window.UnicoDeviceDaysHint && React.createElement(window.UnicoDeviceDaysHint, {
+      deptId: dcAreaDeptId(area),
+      month,
+      indicatorName: curInd && curInd.name,
+      onUse: v => setDen(String(v))
     }));
     return React.createElement("div", {
       ref: rootRef,

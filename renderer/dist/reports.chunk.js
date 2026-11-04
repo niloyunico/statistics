@@ -4344,7 +4344,7 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
+const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['devdays', 'Device Days', 'Clinical', 'Add = enter & send · Edit = review & correct · departments set below'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
 const MOD_GROUPS = ['Clinical', 'Data', 'Administer', 'Phone'];
 const modsGrouped = list => MOD_GROUPS.map(g => [g, list.filter(m => m[2] === g)]).filter(([, ms]) => ms.length);
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
@@ -4358,6 +4358,13 @@ const PERM_RANK = {
 const PERM_ACTS = [['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete'], ['print', 'Print']];
 const PERM_ORDER = ['view', 'edit', 'add', 'delete', 'print'];
 const MYDEPT_ACTS = ['view', 'print'];
+const DEVDAYS_TIPS = {
+  view: 'See the daily sheet and the summary',
+  edit: 'Review: approve or return sent days, and correct them',
+  add: 'Enter the daily figures and send them for review',
+  delete: 'Remove a day’s figures (kept in history)',
+  print: 'Print the sheet and the summary — every printout is logged'
+};
 const PERM_LEVEL_ORDER = ['view', 'edit', 'add', 'delete'];
 function levelToActions(lv) {
   const i = ['none', 'view', 'edit', 'add', 'delete'].indexOf(lv);
@@ -4800,6 +4807,9 @@ function UserModal({
     return hit ? [hit.id] : [];
   };
   const toggleMyDept = id => setMyDepts(ds => ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds, id]);
+  const [devDepts, setDevDepts] = useState(editing && Array.isArray(initial.deviceDepartments) ? initial.deviceDepartments.slice() : []);
+  const [devDeptQ, setDevDeptQ] = useState('');
+  const toggleDevDept = id => setDevDepts(ds => id === '*' ? ds.indexOf('*') >= 0 ? [] : ['*'] : ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds.filter(x => x !== '*'), id]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const isAdmin = !isPortalAcct && accessType === 'full';
@@ -4903,7 +4913,7 @@ function UserModal({
     if (kind === 'none') {
       setPerms(NONE_PERMS());
       setSubMenus({});
-    } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
+    } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept', 'devdays'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
   };
   const copyAccess = uname => {
     const src = (allUsers || []).find(x => x.username === uname);
@@ -4912,7 +4922,8 @@ function UserModal({
     if (src.role === 'Administrator') {
       setPerms(cur => ({
         ...FULL_PERMS(),
-        mydept: asActions(cur.mydept)
+        mydept: asActions(cur.mydept),
+        devdays: asActions(cur.devdays)
       }));
       setSubMenus({});
       return;
@@ -4924,11 +4935,12 @@ function UserModal({
       ...NONE_PERMS(),
       ...(src.perms || {})
     };
-    setPerms(cur => USER_MODS.reduce((m, [k]) => (m[k] = k === 'mydept' ? asActions(cur.mydept) : asActions(p[k]), m), {}));
+    setPerms(cur => USER_MODS.reduce((m, [k]) => (m[k] = k === 'mydept' || k === 'devdays' ? asActions(cur[k]) : asActions(p[k]), m), {}));
   };
   const toggleAct = (mid, act) => {
     if (mid === 'mydept' && MYDEPT_ACTS.indexOf(act) < 0) return;
     if (mid === 'mydept' && !asActions(perms.mydept).length && !myDepts.length) setMyDepts(myDeptGuess());
+    if (mid === 'devdays' && !asActions(perms.devdays).length && !devDepts.length) setDevDepts(myDeptGuess());
     setPerms(p => {
       const cur = asActions(p[mid]);
       let next = cur.indexOf(act) >= 0 ? cur.filter(a => a !== act) : [...cur, act];
@@ -4967,6 +4979,10 @@ function UserModal({
     if (mdActs.length && !myDepts.length) {
       setSec('access');
       return setErr('My Department: pick at least one department, or set it back to None.');
+    }
+    if (!isAdmin && !isColl && asActions(perms.devdays).length && !devDepts.length) {
+      setSec('access');
+      return setErr('Device Days: pick at least one department (or All departments), or set it back to None.');
     }
     if (mdActs.length) {
       const was = editing ? asActions(initial.perms && initial.perms.mydept) : [];
@@ -5024,6 +5040,7 @@ function UserModal({
           payload.rosterDepartments = rosterScope === 'departments' ? rosterDepts : [];
         }
         payload.myDepartments = asActions(perms.mydept).length ? myDepts : [];
+        payload.deviceDepartments = asActions(perms.devdays).length ? devDepts : [];
         if (staffLinkDirty) {
           payload.staffId = staffId !== '' ? Number(staffId) : null;
           const rec = allStaff.find(x => String(x.id) === String(staffId));
@@ -5840,7 +5857,7 @@ function UserModal({
       return React.createElement("button", {
         key: v,
         onClick: () => toggleAct(id, v),
-        title: v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : v === 'delete' ? 'Can delete' : 'Can print / save as PDF — take the record out of the system on paper',
+        title: id === 'devdays' ? DEVDAYS_TIPS[v] : v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : v === 'delete' ? 'Can delete' : 'Can print / save as PDF — take the record out of the system on paper',
         style: {
           display: 'inline-flex',
           alignItems: 'center',
@@ -6029,6 +6046,90 @@ function UserModal({
         marginTop: 6
       }
     }, "Pick at least one department, or set My Department back to None."));
+  })(), asActions(perms.devdays).length > 0 && (() => {
+    const needle = devDeptQ.trim().toLowerCase();
+    const all = devDepts.indexOf('*') >= 0;
+    const acts = asActions(perms.devdays);
+    const list = allDepts.slice().sort((a, b) => (devDepts.indexOf(b.id) >= 0) - (devDepts.indexOf(a.id) >= 0) || String(a.name).localeCompare(String(b.name))).filter(d => !needle || (String(d.name) + ' ' + d.id).toLowerCase().indexOf(needle) >= 0);
+    const chip = on => ({
+      padding: '5px 11px',
+      borderRadius: 16,
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: 'pointer',
+      border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+      background: on ? 'var(--blue)' : '#fff',
+      color: on ? '#fff' : 'var(--ink-2)'
+    });
+    const does = [acts.indexOf('add') >= 0 && 'send for', acts.indexOf('edit') >= 0 && 'review', acts.indexOf('add') < 0 && acts.indexOf('edit') < 0 && 'view'].filter(Boolean).join(' and ');
+    return React.createElement("div", {
+      style: {
+        borderTop: '1px solid var(--line-2)',
+        paddingTop: 14,
+        marginTop: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        marginBottom: 3
+      }
+    }, "Device Days ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: 'var(--muted)',
+        fontSize: 11
+      }
+    }, '· which departments they ' + does)), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginBottom: 9
+      }
+    }, "Only departments switched on in Device Days ", '→', " Settings appear in their sheet. \"All departments\" also covers departments added later."), React.createElement("input", {
+      value: devDeptQ,
+      onChange: e => setDevDeptQ(e.target.value),
+      placeholder: "Search department\u2026",
+      style: {
+        padding: '6px 9px',
+        border: '1px solid var(--line)',
+        borderRadius: 7,
+        fontSize: 12,
+        fontFamily: 'inherit',
+        marginBottom: 8,
+        width: '100%',
+        maxWidth: 260
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        maxHeight: 170,
+        overflow: 'auto'
+      }
+    }, React.createElement("button", {
+      type: "button",
+      onClick: () => toggleDevDept('*'),
+      style: Object.assign(chip(all), {
+        borderStyle: 'dashed'
+      })
+    }, "All departments"), !all && list.map(d => {
+      const on = devDepts.indexOf(d.id) >= 0;
+      return React.createElement("button", {
+        key: d.id,
+        type: "button",
+        onClick: () => toggleDevDept(d.id),
+        style: chip(on)
+      }, d.name);
+    })), !devDepts.length && React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--rose)',
+        marginTop: 6
+      }
+    }, "Pick at least one department, or set Device Days back to None."));
   })()), curSec === 'data' && collects && scopeBlock, curSec === 'data' && submits && React.createElement("div", {
     style: {
       display: 'flex',
@@ -10078,7 +10179,8 @@ const AC_SHORT = {
   users: 'AC',
   datasubmit: 'DS',
   staffapp: 'SA',
-  mydept: 'MD'
+  mydept: 'MD',
+  devdays: 'DD'
 };
 const AC_ACT_LETTER = {
   view: 'V',

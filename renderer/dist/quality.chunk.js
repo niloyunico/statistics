@@ -3285,6 +3285,11 @@ function QCIndEdit({
     value: den,
     onChange: e => setDen(e.target.value),
     style: inp
+  }), window.UnicoDeviceDaysHint && dep && React.createElement(window.UnicoDeviceDaysHint, {
+    deptId: dep.deptId || (window.DEPTMAP && dep.key ? window.DEPTMAP.idFromQk(dep.key) : null),
+    month: mk,
+    indicatorName: ind.name,
+    onUse: v => setDen(String(v))
   })), React.createElement("div", {
     style: {
       paddingBottom: 7,
