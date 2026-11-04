@@ -16054,48 +16054,192 @@ Object.assign(window, {
     const b = R && R.bucketOf(code);
     return R && b && R.BUCKET_COLOR[b] || '#64748b';
   };
-  function printHtml(data, sections) {
+  const P_PAL = ['#0b66d0', '#0f9b8e', '#e08a1e', '#6a52d4', '#d23a52', '#2bb3a3', '#8a93a3', '#4f8df7'];
+  const nf = v => String(Math.round(v * 100) / 100);
+  const niceMax = v => {
+    if (!(v > 0)) return 1;
+    const e = Math.pow(10, Math.floor(Math.log10(v)));
+    const f = v / e;
+    return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * e;
+  };
+  function svgBars(series, w, h) {
+    const L = 30,
+      B = 20,
+      T = 14,
+      R = 6,
+      max = niceMax(Math.max.apply(null, series.map(d => d.v).concat([0])));
+    const iw = w - L - R,
+      ih = h - T - B,
+      bw = Math.min(34, iw / Math.max(series.length, 1) * 0.62);
+    let g = '';
+    for (let k = 0; k <= 4; k++) {
+      const y = T + ih - ih * k / 4;
+      g += '<line x1="' + L + '" x2="' + (w - R) + '" y1="' + y + '" y2="' + y + '" stroke="#e3e9f0" stroke-width="1"/><text x="' + (L - 5) + '" y="' + (y + 3) + '" text-anchor="end" font-size="8" fill="#8a96a6">' + nf(max * k / 4) + '</text>';
+    }
+    series.forEach((d, i) => {
+      const cx = L + iw * (i + 0.5) / series.length,
+        bh = ih * d.v / max;
+      g += '<rect x="' + (cx - bw / 2) + '" y="' + (T + ih - bh) + '" width="' + bw + '" height="' + Math.max(bh, 0.5) + '" rx="2" fill="#0b66d0"/>' + '<text x="' + cx + '" y="' + (T + ih - bh - 3) + '" text-anchor="middle" font-size="8" font-weight="700" fill="#16202e">' + nf(d.v) + '</text>' + '<text x="' + cx + '" y="' + (h - 6) + '" text-anchor="middle" font-size="8" fill="#5b6878">' + esc(d.l) + '</text>';
+    });
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '" preserveAspectRatio="none" style="overflow:visible">' + g + '</svg>';
+  }
+  function svgDonut(items, centerLabel) {
+    const total = items.reduce((a, d) => a + d.value, 0) || 1,
+      r = 46,
+      c = 2 * Math.PI * r;
+    let off = 0,
+      arcs = '';
+    items.forEach(d => {
+      const len = c * d.value / total;
+      arcs += '<circle r="' + r + '" cx="60" cy="60" fill="none" stroke="' + d.color + '" stroke-width="18" stroke-dasharray="' + len + ' ' + (c - len) + '" stroke-dashoffset="' + -off + '" transform="rotate(-90 60 60)"/>';
+      off += len;
+    });
+    const legend = items.map(d => '<li><i style="background:' + d.color + '"></i><span>' + esc(d.label) + '</span><b>' + nf(d.value) + '</b><em>' + Math.round(d.value / total * 100) + '%</em></li>').join('');
+    return '<div class="donut"><svg viewBox="0 0 120 120" width="112" height="112">' + arcs + '<text x="60" y="58" text-anchor="middle" font-size="17" font-weight="700" fill="#0d1b2e">' + nf(total) + '</text><text x="60" y="72" text-anchor="middle" font-size="7.5" letter-spacing=".8" fill="#7b8796">' + esc(String(centerLabel).toUpperCase()) + '</text></svg><ul>' + legend + '</ul></div>';
+  }
+  function svgTrend(series, target, higher, w, h) {
+    const L = 26,
+      B = 16,
+      T = 8,
+      R = 6,
+      vals = series.map(d => d.v).concat(target != null ? [target] : []);
+    const max = niceMax(Math.max.apply(null, vals.concat([0]))),
+      iw = w - L - R,
+      ih = h - T - B;
+    const x = i => L + (series.length > 1 ? iw * i / (series.length - 1) : iw / 2),
+      y = v => T + ih - ih * v / max;
+    let g = '<line x1="' + L + '" x2="' + (w - R) + '" y1="' + (T + ih) + '" y2="' + (T + ih) + '" stroke="#d9e2ec"/><text x="' + (L - 4) + '" y="' + (T + 3) + '" text-anchor="end" font-size="7" fill="#8a96a6">' + nf(max) + '</text>';
+    if (target != null) g += '<line x1="' + L + '" x2="' + (w - R) + '" y1="' + y(target) + '" y2="' + y(target) + '" stroke="#e08a1e" stroke-width="1" stroke-dasharray="4 3"/>';
+    g += '<polyline fill="none" stroke="#0090ca" stroke-width="1.6" points="' + series.map((d, i) => x(i) + ',' + y(d.v)).join(' ') + '"/>';
+    series.forEach((d, i) => {
+      const bad = target != null && (higher ? d.v < target : d.v > target);
+      g += '<circle cx="' + x(i) + '" cy="' + y(d.v) + '" r="2.4" fill="' + (bad ? '#d23a52' : '#1f9d57') + '"/><text x="' + x(i) + '" y="' + (h - 4) + '" text-anchor="middle" font-size="7" fill="#7b8796">' + esc(d.l) + '</text>';
+    });
+    return '<svg viewBox="0 0 ' + w + ' ' + h + '" width="100%" height="' + h + '" preserveAspectRatio="none" style="overflow:visible">' + g + '</svg>';
+  }
+  const chartBox = (title, inner, grow) => '<div class="chart' + (grow ? ' grow' : '') + '"><div class="ct">' + esc(title) + '</div>' + inner + '</div>';
+  function printHtml(data, sections, opts) {
+    const withCharts = !opts || opts.charts !== false;
     const me = window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username) || '';
-    const sig = window.unicoSig ? window.unicoSig.load() : {};
+    const now = new Date();
+    const when = now.toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    }) + ', ' + now.toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    const pad = x => String(x).padStart(2, '0');
+    const ref = 'MD-' + String(data.dept.id || '').toUpperCase().replace(/[^A-Z0-9]+/g, '').slice(0, 10) + '-' + now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes());
+    const logo = location.origin + '/unico/logo.svg';
+    let n = 0;
+    const head = (title, sub, brk) => '<div class="sec' + (brk ? ' pb' : '') + '"><div class="sh"><span class="no">' + ++n + '</span><h2>' + esc(title) + '</h2>' + (sub ? '<span class="ss">' + esc(sub) + '</span>' : '') + '</div>';
+    const none = t => '<p class="empty">' + esc(t) + '</p>';
     let body = '';
     if (sections.indexOf('patient') >= 0 && data.patient) {
       const p = data.patient;
       const t = patientTable(p);
-      body += '<h2>Patient statistics — ' + esc(data.year) + '</h2>' + (t.months.length ? '<table><thead><tr><th>Month</th>' + p.cols.map(c => '<th class="r">' + esc(c.label) + '</th>').join('') + '</tr></thead><tbody>' + t.months.map(m => '<tr><td>' + esc(ml(m)) + '</td>' + p.cols.map(c => '<td class="r">' + esc(pCell(c, p.rows[m][c.id])) + '</td>').join('') + '</tr>').join('') + '<tr class="t"><td>Total / average</td>' + t.foot.map(v => '<td class="r">' + esc(v) + '</td>').join('') + '</tr></tbody></table>' : '<p class="m">No figures recorded for ' + esc(data.year) + '.</p>');
+      let pc = '';
+      if (withCharts && t.months.length) {
+        const totalCol = p.cols.find(c => /^total$/i.test(String(c.label || c.id).trim()));
+        const parts = p.cols.filter(c => !c.pct && c !== totalCol);
+        const row = m => p.rows[m] || {};
+        const series = t.months.map(m => ({
+          l: m.split('-')[0],
+          v: totalCol ? Number(row(m)[totalCol.id]) || 0 : parts.reduce((a, c) => a + (Number(row(m)[c.id]) || 0), 0)
+        }));
+        const mix = parts.map((c, i) => ({
+          label: c.label,
+          value: t.months.reduce((a, m) => a + (Number(row(m)[c.id]) || 0), 0),
+          color: P_PAL[i % P_PAL.length]
+        })).filter(d => d.value > 0);
+        pc = '<div class="charts">' + chartBox('Monthly total · ' + data.year, svgBars(series, 640, 165), true) + (mix.length > 1 ? chartBox('Year mix · ' + data.year, svgDonut(mix, 'Total')) : '') + '</div>';
+      }
+      body += head('Patient statistics', 'Calendar year ' + data.year + ' · monthly figures') + pc + (t.months.length ? '<table><thead><tr><th>Month</th>' + p.cols.map(c => '<th class="r">' + esc(c.label) + '</th>').join('') + '</tr></thead><tbody>' + t.months.map(m => '<tr><td class="lb">' + esc(ml(m)) + '</td>' + p.cols.map(c => '<td class="r">' + esc(pCell(c, p.rows[m][c.id])) + '</td>').join('') + '</tr>').join('') + '</tbody><tfoot><tr><td class="lb">Total / average</td>' + t.foot.map(v => '<td class="r">' + esc(v) + '</td>').join('') + '</tr></tfoot></table>' + '<p class="note">Percentage columns show the average of the months recorded; all other columns show the total.</p>' : none('No figures recorded for ' + data.year + '.')) + '</div>';
     }
     if (sections.indexOf('quality') >= 0 && data.quality) {
       const q = data.quality;
       const months = data.patient && data.patient.months || MONS.map(m => m + '-' + String(data.year % 100).padStart(2, '0'));
       const used = months.filter(m => q.indicators.some(i => qValue(i, m) != null || (i.notObserved || {})[m]));
-      body += '<h2>Quality indicators — ' + esc(q.name) + ' · ' + esc(data.year) + '</h2>' + (used.length ? '<table><thead><tr><th>Indicator</th><th>Target</th>' + used.map(m => '<th class="r">' + esc(MONS[MONS.indexOf(m.split('-')[0])]) + '</th>').join('') + '</tr></thead><tbody>' + q.indicators.map(i => '<tr><td>' + esc(i.name) + '</td><td>' + esc(i.benchmark || (i.benchmarkValue != null ? i.benchmarkValue : '')) + '</td>' + used.map(m => {
-        const s = qStatus(i, qValue(i, m));
-        return '<td class="r ' + (s || '') + '">' + esc(qCell(i, m)) + '</td>';
-      }).join('') + '</tr>').join('') + '</tbody></table><p class="m">N/O = not observed that month. Red = outside the target.</p>' : '<p class="m">No quality readings recorded for ' + esc(data.year) + '.</p>');
+      let qc = '';
+      if (withCharts && used.length) {
+        let ok = 0,
+          bad = 0;
+        q.indicators.forEach(i => used.forEach(m => {
+          const st = qStatus(i, qValue(i, m));
+          if (st === 'ok') ok++;else if (st === 'bad') bad++;
+        }));
+        const split = [{
+          label: 'Within target',
+          value: ok,
+          color: '#1f9d57'
+        }, {
+          label: 'Outside target',
+          value: bad,
+          color: '#d23a52'
+        }].filter(d => d.value > 0);
+        const minis = q.indicators.map(i => ({
+          i,
+          sr: used.filter(m => qValue(i, m) != null).map(m => ({
+            l: m.split('-')[0],
+            v: qValue(i, m)
+          }))
+        })).filter(x => x.sr.length);
+        qc = (split.length ? '<div class="charts">' + chartBox('Readings against target · ' + data.year, svgDonut(split, 'Readings')) + '<div class="chart grow"><div class="ct">How to read the trends</div><p class="note" style="margin:2px 0 0">Each panel is one indicator across the months reported. <span class="key ok"></span>On target <span class="key bad"></span>Off target; the dashed orange line is the target.</p></div></div>' : '') + (minis.length ? '<div class="minis">' + minis.map(x => '<div class="mini"><div class="mt">' + esc(x.i.name) + (x.i.benchmarkValue != null ? ' <span>· target ' + esc(qFmt(x.i, x.i.benchmarkValue)) + '</span>' : '') + '</div>' + svgTrend(x.sr, x.i.benchmarkValue, x.i.goalDirection === 'higher_is_better', 240, 78) + '</div>').join('') + '</div>' : '');
+      }
+      body += head('Quality indicators', q.name + ' · ' + data.year) + qc + (used.length ? '<table><thead><tr><th>Indicator</th><th>Target</th>' + used.map(m => '<th class="r">' + esc(MONS[MONS.indexOf(m.split('-')[0])]) + '</th>').join('') + '</tr></thead><tbody>' + q.indicators.map(i => '<tr><td class="lb">' + esc(i.name) + '</td><td class="tg">' + esc(i.benchmark || (i.benchmarkValue != null ? i.benchmarkValue : '—')) + '</td>' + used.map(m => {
+        const st = qStatus(i, qValue(i, m));
+        return '<td class="r ' + (st || '') + '">' + esc(qCell(i, m)) + '</td>';
+      }).join('') + '</tr>').join('') + '</tbody></table><p class="note"><span class="key ok"></span>Within target <span class="key bad"></span>Outside target &nbsp;·&nbsp; N/O = not observed that month</p>' : none('No quality readings recorded for ' + data.year + '.')) + '</div>';
     }
     if (sections.indexOf('roster') >= 0) {
       const r = data.roster;
-      if (!r) body += '<h2 class="pb">Duty roster — ' + esc(MONS[data.month]) + ' ' + esc(data.year) + '</h2><p class="m">No approved roster for this month.</p>';else {
+      if (!r) body += head('Duty roster', MONS[data.month] + ' ' + data.year) + none('No approved duty roster for this month.') + '</div>';else {
         const days = rosterDays(r);
         const ppl = rosterPeople(r);
         const d = Array.from({
           length: days
         }, (_, i) => i + 1);
-        body += '<h2 class="pb">Duty roster — ' + esc(MONS[r.month]) + ' ' + esc(r.year) + '</h2><table class="ros"><thead><tr><th>Name</th>' + d.map(x => '<th>' + x + '</th>').join('') + '</tr></thead><tbody>' + ppl.map(p => '<tr><td>' + esc(p.name) + '</td>' + d.map(x => '<td>' + esc(p.row[x] || '') + '</td>').join('') + '</tr>').join('') + '</tbody></table><p class="m">Prepared by ' + esc(r.preparedBy || '—') + ' · Checked by ' + esc(r.checkedBy || '—') + ' · Approved by ' + esc(r.approvedBy || '—') + '</p>';
+        const dow = x => 'SMTWTFS'[new Date(r.year, r.month, x).getDay()];
+        const wk = x => new Date(r.year, r.month, x).getDay() === 5 ? ' class="we"' : '';
+        body += head('Duty roster', MONS[r.month] + ' ' + r.year + ' · approved', true) + '<table class="ros"><thead><tr><th class="nm">Name</th>' + d.map(x => '<th' + wk(x) + '>' + x + '<small>' + dow(x) + '</small></th>').join('') + '</tr></thead><tbody>' + ppl.map(p => '<tr><td class="nm">' + esc(p.name) + '</td>' + d.map(x => '<td' + wk(x) + '>' + esc(p.row[x] || '') + '</td>').join('') + '</tr>').join('') + '</tbody></table>' + '<div class="signs"><div><span>Prepared by</span><b>' + esc(r.preparedBy || '—') + '</b></div><div><span>Checked by</span><b>' + esc(r.checkedBy || '—') + '</b></div><div><span>Approved by</span><b>' + esc(r.approvedBy || '—') + '</b></div></div>' + '</div>';
       }
     }
     if (sections.indexOf('staff') >= 0) {
-      const s = data.staff || [];
-      body += '<h2 class="pb">Staff list (' + s.length + ')</h2>' + (s.length ? '<table><thead><tr><th>#</th><th>Name</th><th>Designation</th><th>Employee no.</th><th>Joined</th></tr></thead><tbody>' + s.map((x, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.designation || x.role || '') + '</td><td>' + esc(x.emp_id || '') + '</td><td>' + esc(x.doj || '') + '</td></tr>').join('') + '</tbody></table>' : '<p class="m">No current staff recorded for this department.</p>');
+      const st = data.staff || [];
+      let sc = '';
+      if (withCharts && st.length) {
+        const by = {};
+        st.forEach(x => {
+          const k = x.designation || x.role || 'Not set';
+          by[k] = (by[k] || 0) + 1;
+        });
+        const mix = Object.keys(by).sort((a, b) => by[b] - by[a]).map((k, i) => ({
+          label: k,
+          value: by[k],
+          color: P_PAL[i % P_PAL.length]
+        }));
+        sc = '<div class="charts">' + chartBox('Staff by designation', svgDonut(mix, 'Staff')) + '<div class="chart grow" style="visibility:hidden"></div></div>';
+      }
+      body += head('Staff list', st.length + ' current staff', st.length > 0) + sc + (st.length ? '<table><thead><tr><th class="c">#</th><th>Name</th><th>Designation</th><th>Employee no.</th><th>Joined</th></tr></thead><tbody>' + st.map((x, i) => '<tr><td class="c mu">' + (i + 1) + '</td><td class="lb">' + esc(x.name) + '</td><td>' + esc(x.designation || x.role || '') + '</td><td class="mono">' + esc(x.emp_id || '') + '</td><td>' + esc(x.doj || '') + '</td></tr>').join('') + '</tbody></table>' : none('No current staff recorded for this department.')) + '</div>';
     }
-    const sigRow = ['prepared', 'reviewed', 'recommended', 'approved'].map(k => '<td><div class="sl"></div>' + esc(sig[k] || '') + '<br><span class="m">' + k.charAt(0).toUpperCase() + k.slice(1) + ' by</span></td>').join('');
-    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(data.dept.name) + ' — My Department</title><style>' + 'body{font:12px/1.4 Arial,sans-serif;color:#16202e;margin:18px}h1{font-size:18px;margin:0 0 2px}h2{font-size:14px;margin:18px 0 6px}.m{color:#5b6878}' + 'table{border-collapse:collapse;width:100%;font-size:10.5px}th,td{border:1px solid #cdd6e0;padding:4px 6px;text-align:left;vertical-align:top}th{background:#eef4fa}.r{text-align:right}' + '.t td{background:#e3f1f8;font-weight:700}.bad{color:#b4233c;font-weight:700}.ok{color:#14713f}.ros th,.ros td{padding:2px 3px;text-align:center;font-size:9px}.ros td:first-child{text-align:left;white-space:nowrap}' + '.cr{margin-top:12px;text-align:center;font-size:6.5px;letter-spacing:.2px;color:#a3adba}.sig{margin-top:28px;border:0}.sig td{border:0;width:25%;padding:0 10px;text-align:center}.sl{border-top:1px solid #16202e;margin:26px 0 4px}' + '@media print{@page{size:A4 landscape;margin:12mm}.pb{page-break-before:always}}</style></head><body>' + '<h1>UNICO Hospitals — ' + esc(data.dept.name) + '</h1><div class="m">My Department · ' + esc(data.year) + ' · printed by ' + esc(me) + ' on ' + esc(new Date().toLocaleString()) + '</div>' + body + '<table class="sig"><tr>' + sigRow + '</tr></table>' + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div>' + '<script>window.onload=function(){window.print();}<\/script></body></html>';
+    const runHead = ('UNICO Hospitals · ' + data.dept.name + ' · Department Report ' + data.year).replace(/["\\]/g, '');
+    const css = '' + '@page{size:A4 landscape;margin:14mm 14mm 16mm;' + '@top-left{content:"' + runHead + '";font:600 7.5pt Arial,sans-serif;color:#7b8796}' + '@bottom-left{content:"Confidential · for internal use of UNICO Hospitals";font:7pt Arial,sans-serif;color:#9aa5b2}' + '@bottom-right{content:"Page " counter(page) " of " counter(pages);font:600 7.5pt Arial,sans-serif;color:#5b6878}}' + '@page :first{@top-left{content:none}}' + '*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:10pt/1.45 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:18px}@media print{body{padding:0}}' + '.lh{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding-bottom:12px;border-bottom:1px solid #d9e2ec}' + '.lh img{height:46px;width:auto;display:block}.lh .tt{text-align:right}' + '.lh .kind{font-size:7.5pt;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;color:#0072a3}' + '.lh h1{margin:3px 0 0;font-size:17pt;line-height:1.15;font-weight:700;color:#0d1b2e}' + '.lh .per{margin-top:2px;font-size:9pt;color:#5b6878}' + '.bar{height:3px;background:linear-gradient(90deg,#0072a3,#27a8db 55%,#3ab5a7);border-radius:0 0 2px 2px}' + '.meta{display:grid;grid-template-columns:repeat(5,1fr);margin:12px 0 4px;border:1px solid #d9e2ec;border-radius:6px;overflow:hidden}' + '.meta div{padding:7px 10px;border-right:1px solid #e3e9f0;background:#f6f9fc;min-width:0}.meta div:last-child{border-right:0}' + '.meta span{display:block;font-size:6.5pt;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7b8796}' + '.meta b{display:block;margin-top:1px;font-size:9pt;font-weight:600;color:#16202e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' + '.sec{margin-top:18px}.sh{display:flex;align-items:center;gap:9px;margin-bottom:7px;padding-bottom:5px;border-bottom:1px solid #e3e9f0}' + '.sh .no{width:19px;height:19px;border-radius:5px;background:#0072a3;color:#fff;font-size:8.5pt;font-weight:700;display:grid;place-items:center;flex-shrink:0}' + '.sh h2{margin:0;font-size:12pt;font-weight:700;color:#0d1b2e}.sh .ss{margin-left:auto;font-size:8.5pt;color:#7b8796}' + 'table{border-collapse:collapse;width:100%;font-size:8.6pt;font-variant-numeric:tabular-nums}' + 'thead{display:table-header-group}tr{page-break-inside:avoid}' + 'th{background:#0d3a5c;color:#fff;font-size:7pt;font-weight:700;letter-spacing:.5px;text-transform:uppercase;text-align:left;padding:6px 7px;border:1px solid #0d3a5c}' + 'td{padding:5px 7px;border-bottom:1px solid #e3e9f0;border-left:1px solid #eef2f6;border-right:1px solid #eef2f6;vertical-align:top}' + 'tbody tr:nth-child(even) td{background:#f7fafc}' + 'tfoot td{background:#e6f1f8!important;font-weight:700;border-top:1.5px solid #0072a3;border-bottom:1.5px solid #0072a3}' + '.r{text-align:right}.c{text-align:center}.lb{font-weight:600}.mu{color:#7b8796}.tg{color:#5b6878;white-space:nowrap}.mono{font-family:Consolas,monospace}' + 'td.bad{color:#b4233c;font-weight:700;background:#fdf0f2!important}td.ok{color:#14713f}' + '.note{margin:5px 0 0;font-size:7.5pt;color:#7b8796}.empty{margin:4px 0;padding:10px 12px;border:1px dashed #cfd8e3;border-radius:6px;color:#7b8796;font-size:9pt}' + '.key{display:inline-block;width:8px;height:8px;border-radius:2px;margin:0 4px 0 8px;vertical-align:-1px}.key:first-child{margin-left:0}.key.ok{background:#14713f}.key.bad{background:#b4233c}' + '.ros{font-size:7pt}.ros th,.ros td{padding:3px 1px;text-align:center}.ros th small{display:block;font-size:5.5pt;font-weight:600;opacity:.75;letter-spacing:0}' + '.ros .nm{text-align:left;white-space:nowrap;padding:3px 6px;font-weight:600}.ros td.we{background:#fff6e5!important}.ros th.we{background:#8a5a00;border-color:#8a5a00}' + '.signs{display:flex;gap:28px;margin-top:9px;font-size:8.5pt}.signs span{display:block;font-size:6.5pt;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7b8796}.signs b{font-weight:600}' + '.charts{display:flex;gap:12px;margin:0 0 10px;page-break-inside:avoid}.chart{flex:1 1 0;min-width:0;border:1px solid #e3e9f0;border-radius:6px;padding:8px 10px 6px;background:#fff}.chart.grow{flex:2 1 0}' + '.ct{font-size:7pt;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#5b6878;margin-bottom:5px}' + '.donut{display:flex;align-items:center;gap:12px}.donut svg{flex-shrink:0}.donut ul{list-style:none;margin:0;padding:0;flex:1;min-width:0;font-size:8pt}' + '.donut li{display:flex;align-items:center;gap:6px;padding:2px 0;border-bottom:1px dotted #e3e9f0}.donut li:last-child{border-bottom:0}.donut i{width:8px;height:8px;border-radius:2px;flex-shrink:0}' + '.donut span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.donut b{font-weight:700}.donut em{font-style:normal;color:#7b8796;width:30px;text-align:right}' + '.minis{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 0 10px}.mini{border:1px solid #e3e9f0;border-radius:6px;padding:6px 8px 2px;page-break-inside:avoid;min-width:0}' + '.mt{font-size:7.5pt;font-weight:700;color:#16202e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px}.mt span{font-weight:500;color:#7b8796}' + '.pb{page-break-before:always}' + '.end{margin-top:22px;padding-top:7px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;gap:16px;font-size:7.5pt;color:#7b8796}' + '.cr{margin-top:6px;text-align:center;font-size:6.5px;letter-spacing:.2px;color:#a3adba}';
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(data.dept.name) + ' — Department Report ' + esc(data.year) + '</title><style>' + css + '</style></head><body>' + '<header class="lh"><img src="' + esc(logo) + '" alt="UNICO Hospitals"><div class="tt"><div class="kind">Department Report</div><h1>' + esc(data.dept.name) + '</h1><div class="per">Reporting year ' + esc(data.year) + '</div></div></header><div class="bar"></div>' + '<div class="meta"><div><span>Department</span><b>' + esc(data.dept.name) + '</b></div><div><span>Period</span><b>Jan – Dec ' + esc(data.year) + '</b></div>' + '<div><span>Printed by</span><b>' + esc(me || '—') + '</b></div><div><span>Printed on</span><b>' + esc(when) + '</b></div><div><span>Reference</span><b>' + esc(ref) + '</b></div></div>' + body + '<div class="end"><span>Figures as recorded in UNICO on ' + esc(when) + '. Read-only extract of approved data.</span><span>Ref. ' + esc(ref) + '</span></div>' + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div>' + '<script>window.onload=function(){setTimeout(function(){window.print();},150);};<\/script></body></html>';
   }
   function PrintDialog({
     data,
+    current,
     onClose
   }) {
     const avail = SECTIONS.filter(([k]) => k !== 'patient' || data.patient).filter(([k]) => k !== 'quality' || data.quality);
-    const [pick, setPick] = useState(() => avail.map(([k]) => k));
+    const [pick, setPick] = useState(() => {
+      const k = avail.some(([x]) => x === current) ? current : avail[0] && avail[0][0];
+      return k ? [k] : [];
+    });
+    const [charts, setCharts] = useState(true);
+    const charted = pick.some(k => k !== 'roster');
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
     const toggle = k => setPick(p => p.indexOf(k) >= 0 ? p.filter(x => x !== k) : p.concat([k]));
@@ -16120,7 +16264,9 @@ Object.assign(window, {
           return;
         }
         w.document.open();
-        w.document.write(printHtml(data, pick));
+        w.document.write(printHtml(data, pick, {
+          charts
+        }));
         w.document.close();
         onClose();
       } catch (e) {
@@ -16180,7 +16326,29 @@ Object.assign(window, {
         fontSize: 11,
         color: 'var(--muted)'
       }
-    }, "\xB7 ", MONS[data.month], " ", data.year))), err && React.createElement("div", {
+    }, "\xB7 ", MONS[data.month], " ", data.year))), React.createElement("label", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 9,
+        padding: '9px 0 2px',
+        marginTop: 6,
+        borderTop: '1px solid var(--line-2)',
+        fontSize: 13,
+        cursor: charted ? 'pointer' : 'default',
+        opacity: charted ? 1 : 0.5
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: charts && charted,
+      disabled: !charted,
+      onChange: () => setCharts(v => !v)
+    }), "Include charts", React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "\xB7 above each table")), err && React.createElement("div", {
       style: {
         color: 'var(--rose)',
         fontSize: 12,
@@ -16837,6 +17005,7 @@ Object.assign(window, {
       s: data.staff
     })), printing && data && React.createElement(PrintDialog, {
       data: data,
+      current: tab,
       onClose: () => setPrinting(false)
     }));
   }
