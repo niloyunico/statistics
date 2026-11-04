@@ -4750,6 +4750,21 @@ function UserModal({
     patient: hasScreen('patient'),
     quality: hasScreen('quality') || hasScreen('status')
   };
+  const SUBS = window.unicoSubMenus && window.unicoSubMenus() || {};
+  const [subMenus, setSubMenus] = useState(() => editing && initial.subMenus && typeof initial.subMenus === 'object' && !Array.isArray(initial.subMenus) ? {
+    ...initial.subMenus
+  } : {});
+  const subOn = (mid, v) => !Array.isArray(subMenus[mid]) || subMenus[mid].indexOf(v) >= 0;
+  const toggleSub = (mid, v) => setSubMenus(s => {
+    const all = (SUBS[mid] || []).map(x => x[0]);
+    const cur = Array.isArray(s[mid]) ? s[mid].filter(x => all.indexOf(x) >= 0) : all;
+    const next = cur.indexOf(v) >= 0 ? cur.filter(x => x !== v) : all.filter(x => x === v || cur.indexOf(x) >= 0);
+    const n = {
+      ...s
+    };
+    if (next.length === all.length) delete n[mid];else n[mid] = next;
+    return n;
+  });
   const [appRole, setAppRole] = useState(editing && (initial.role === 'pca' || initial.appRole === 'pca') ? 'pca' : 'nurse');
   const [staffId, setStaffId] = useState(editing && (initial.staffId === 0 || initial.staffId) ? initial.staffId : editing && initial.staffMatch && initial.staffMatch.id != null ? initial.staffMatch.id : '');
   const [staffLinkDirty, setStaffLinkDirty] = useState(false);
@@ -4885,7 +4900,10 @@ function UserModal({
   };
   const quickSet = kind => {
     setCopyFrom('');
-    if (kind === 'none') setPerms(NONE_PERMS());else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
+    if (kind === 'none') {
+      setPerms(NONE_PERMS());
+      setSubMenus({});
+    } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
   };
   const copyAccess = uname => {
     const src = (allUsers || []).find(x => x.username === uname);
@@ -4896,8 +4914,12 @@ function UserModal({
         ...FULL_PERMS(),
         mydept: asActions(cur.mydept)
       }));
+      setSubMenus({});
       return;
     }
+    setSubMenus(src.subMenus && typeof src.subMenus === 'object' && !Array.isArray(src.subMenus) ? {
+      ...src.subMenus
+    } : {});
     const p = {
       ...NONE_PERMS(),
       ...(src.perms || {})
@@ -4936,6 +4958,11 @@ function UserModal({
     const sendScope = collects && !!ScopeEditor && !!window.dcScopePayload && !scopeLoadFailed;
     if (sendScope && !scopeReady) return setErr('Still loading this account’s data collection scope — try again in a moment.');
     if (submits && !dsScreens.length) return setErr('Data Submission: tick at least one screen they can open.');
+    const noSubs = !isAdmin && !isColl ? USER_MODS.find(([k]) => SUBS[k] && asActions(perms[k]).length && Array.isArray(subMenus[k]) && !subMenus[k].length) : null;
+    if (noSubs) {
+      setSec('access');
+      return setErr(noSubs[1] + ': tick at least one sub-menu, or set it to None.');
+    }
     const mdActs = !isAdmin && !isColl ? asActions(perms.mydept) : [];
     if (mdActs.length && !myDepts.length) {
       setSec('access');
@@ -4987,6 +5014,10 @@ function UserModal({
           payload.dsScreens = dsScreens;
           payload.submitKinds = submitKinds;
         }
+        payload.subMenus = USER_MODS.reduce((o, [k]) => {
+          if (SUBS[k] && asActions(perms[k]).length && Array.isArray(subMenus[k])) o[k] = subMenus[k];
+          return o;
+        }, {});
         if (hasStaffApp) payload.appRole = appRole;
         if (rosterScope) {
           payload.rosterScope = rosterScope;
@@ -5850,7 +5881,80 @@ function UserModal({
         borderRadius: 7,
         padding: '6px 9px'
       }
-    }, "Shows a department\u2019s statistics, quality data, duty roster and staff list. Grant only to people who need it."));
+    }, "Shows a department\u2019s statistics, quality data, duty roster and staff list. Grant only to people who need it."), !none && (SUBS[id] || id === 'datasubmit') && (() => {
+      const ds = id === 'datasubmit';
+      const items = ds ? (window.UNICO_DS_SCREENS || []).filter(r => DS_UNIT.indexOf(r[0]) < 0).map(r => [r[0], r[2]]) : SUBS[id].map(r => [r[0], r[1]]);
+      const hhLocked = ds && !!(scope && scope.allQualityAreas);
+      const isOn = v => ds ? hasScreen(v) || v === 'hh' && hhLocked : subOn(id, v);
+      const n = items.filter(([v]) => isOn(v)).length;
+      return React.createElement("div", {
+        style: {
+          flexBasis: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          flexWrap: 'wrap',
+          padding: '2px 0 4px 12px',
+          borderLeft: '2px solid var(--line-2)'
+        }
+      }, React.createElement("span", {
+        style: {
+          fontSize: 10,
+          fontWeight: 700,
+          color: n ? 'var(--faint)' : 'var(--rose)',
+          textTransform: 'uppercase',
+          letterSpacing: .4,
+          marginRight: 2
+        }
+      }, "Sub-menus ", n, "/", items.length), items.map(([v, l]) => {
+        const on = isOn(v);
+        const locked = v === 'hh' && hhLocked;
+        return React.createElement("button", {
+          key: v,
+          type: "button",
+          disabled: locked,
+          "aria-pressed": on,
+          onClick: () => ds ? toggleScreen(v) : toggleSub(id, v),
+          title: locked ? 'Included with hospital-wide access (they enter the audit)' : on ? 'Shown in their sidebar — click to hide' : 'Hidden — click to show in their sidebar',
+          style: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            font: 'inherit',
+            cursor: locked ? 'not-allowed' : 'pointer',
+            padding: '3px 9px',
+            borderRadius: 6,
+            fontSize: 11,
+            fontWeight: 600,
+            border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+            background: on ? 'var(--blue-50)' : '#fff',
+            color: on ? 'var(--blue-700)' : 'var(--muted)'
+          }
+        }, React.createElement("span", {
+          style: {
+            width: 11,
+            height: 11,
+            borderRadius: 3,
+            display: 'grid',
+            placeItems: 'center',
+            flexShrink: 0,
+            border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+            background: on ? 'var(--blue)' : '#fff'
+          }
+        }, on && React.createElement(Ic, {
+          d: I.check,
+          s: 8,
+          c: "#fff",
+          sw: 3
+        })), l);
+      }), !n && React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          color: 'var(--rose)',
+          fontWeight: 600
+        }
+      }, "Tick at least one, or set ", label, " to None."));
+    })());
   })))), asActions(perms.mydept).length > 0 && (() => {
     const needle = myDeptQ.trim().toLowerCase();
     const list = allDepts.slice().sort((a, b) => (myDepts.indexOf(b.id) >= 0) - (myDepts.indexOf(a.id) >= 0) || String(a.name).localeCompare(String(b.name))).filter(d => !needle || (String(d.name) + ' ' + d.id).toLowerCase().indexOf(needle) >= 0);
@@ -10289,7 +10393,14 @@ function AcPerson({
     d: icon,
     s: 16
   }), busy === key ? 'Working…' : label);
-  const granted = K.USER_MODS.map(([k, l]) => [l, acActs(u, k)]).filter(([, a]) => a.length);
+  const granted = K.USER_MODS.map(([k, l]) => [l, acActs(u, k), k]).filter(([, a]) => a.length);
+  const subNote = k => {
+    const all = (window.unicoSubMenus && window.unicoSubMenus() || {})[k];
+    const pick = u.subMenus && u.subMenus[k];
+    if (!all || !Array.isArray(pick)) return '';
+    const n = all.filter(s => pick.indexOf(s[0]) >= 0).length;
+    return n < all.length ? n + ' of ' + all.length + ' sub-menus' : '';
+  };
   const seen = lastSeen[u.username];
   return React.createElement("div", {
     style: {
@@ -10482,7 +10593,7 @@ function AcPerson({
       color: 'var(--rose)',
       fontWeight: 600
     }
-  }, "Nothing yet. They can sign in but see an empty sidebar."), granted.map(([l, a]) => React.createElement("div", {
+  }, "Nothing yet. They can sign in but see an empty sidebar."), granted.map(([l, a, k]) => React.createElement("div", {
     key: l,
     style: {
       display: 'flex',
@@ -10496,7 +10607,14 @@ function AcPerson({
       fontWeight: 600,
       color: 'var(--ink-2)'
     }
-  }, l), React.createElement("span", {
+  }, l, subNote(k) && React.createElement("span", {
+    style: {
+      display: 'block',
+      fontWeight: 500,
+      fontSize: 10,
+      color: 'var(--muted)'
+    }
+  }, subNote(k))), React.createElement("span", {
     style: {
       display: 'flex',
       gap: 2

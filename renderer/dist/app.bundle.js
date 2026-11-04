@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=397650cf60","quality":"/dist/quality.chunk.js?v=11e713403e","datacollection":"/dist/datacollection.chunk.js?v=bf15ede92e","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=8f9857ede8","quality":"/dist/quality.chunk.js?v=11e713403e","datacollection":"/dist/datacollection.chunk.js?v=bf15ede92e","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -10225,7 +10225,48 @@ function unicoCanAccessView(view) {
   if (view === 'profile' || view === 'home' || view === 'dcResponsibles') return true;
   const ds = unicoDsScreenOf(view);
   if (ds && unicoDsScreens().indexOf(ds) < 0) return false;
+  if (!unicoSubViewOk(view)) return false;
   return unicoCanAccessModule(unicoAccessModuleOf(view));
+}
+function unicoSubMenuOk(mod, view) {
+  const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+  if (!u || u.role === 'Administrator' || mod === 'datasubmit') return true;
+  const s = u.subMenus;
+  if (!s || typeof s !== 'object' || !Array.isArray(s[mod])) return true;
+  return s[mod].indexOf(view) >= 0;
+}
+let unicoSubMenusMemo = null;
+function unicoSubMenus() {
+  if (unicoSubMenusMemo) return unicoSubMenusMemo;
+  const out = {};
+  const SAMPLE = {
+    stats: 'departments',
+    quality: 'quality',
+    supervisor: 'supHome',
+    medicine: 'medHome',
+    staff: 'staffHome',
+    datacol: 'dcReview',
+    reports: 'reports'
+  };
+  Object.keys(SAMPLE).forEach(m => {
+    unicoWorkspaceSubAll(SAMPLE[m]).forEach(s => {
+      if ((s.mod || unicoModuleOf(s.view)) !== m) return;
+      (out[m] = out[m] || []).push([s.view, s.label, s.match || [s.view]]);
+    });
+  });
+  return unicoSubMenusMemo = out;
+}
+function unicoSubViewOk(view) {
+  const mod = unicoModuleOf(view);
+  const subs = unicoSubMenus()[mod];
+  if (!subs) return true;
+  const owners = subs.filter(s => s[2].indexOf(view) >= 0);
+  return !owners.length || owners.some(s => unicoSubMenuOk(mod, s[0]));
+}
+function unicoModuleLanding(mod, home) {
+  if (unicoSubViewOk(home)) return home;
+  const first = (unicoSubMenus()[mod] || []).find(s => unicoSubMenuOk(mod, s[0]));
+  return first ? first[0] : home;
 }
 function unicoAllowedModules() {
   const p = unicoUserPerms();
@@ -10235,7 +10276,7 @@ function unicoAllowedModules() {
 function unicoFirstAllowedHome() {
   const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['datasubmit', 'dsHome'], ['perf', 'perfHome'], ['attrition', 'perfAttrition'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings'], ['mydept', 'myDept']];
   for (let i = 0; i < homes.length; i++) {
-    if (unicoCanAccessModule(homes[i][0])) return homes[i][1];
+    if (unicoCanAccessModule(homes[i][0])) return unicoModuleLanding(homes[i][0], homes[i][1]);
   }
   return null;
 }
@@ -10249,7 +10290,7 @@ function unicoRefreshPerms() {
     if (!j || !j.ok || j.degraded || !j.perms || typeof j.perms !== 'object' || Array.isArray(j.perms)) return false;
     const staffScope = j.staffScope || u.staffScope;
     const ds = j.user && j.user.dsScope && typeof j.user.dsScope === 'object' ? j.user.dsScope : null;
-    const DS_KEYS = ['departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'submitKinds', 'dsScreens', 'enterDen'];
+    const DS_KEYS = ['departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen'];
     const dsChanged = !!ds && DS_KEYS.some(k => JSON.stringify(ds[k] == null ? null : ds[k]) !== JSON.stringify(u[k] == null ? null : u[k]));
     if (JSON.stringify(j.perms) === JSON.stringify(u.perms || null) && staffScope === u.staffScope && !dsChanged) return false;
     const appJob = window.unicoRefreshAppData ? window.unicoRefreshAppData({
@@ -10701,15 +10742,19 @@ function ViewTabs({
   }, label)));
 }
 function wsHome(it) {
-  if (!it.mods) return it.home;
-  if (unicoCanAccessModule(unicoAccessModuleOf(it.home))) return it.home;
+  const land = h => unicoModuleLanding(unicoModuleOf(h), h);
+  if (!it.mods) return land(it.home);
+  if (unicoCanAccessModule(unicoAccessModuleOf(it.home))) return land(it.home);
   for (let i = 0; i < it.mods.length; i++) {
     const h = UNICO_MODULE_VIEWS[it.mods[i]] && UNICO_MODULE_VIEWS[it.mods[i]][0];
-    if (h && unicoCanAccessModule(it.mods[i])) return h;
+    if (h && unicoCanAccessModule(it.mods[i])) return land(h);
   }
   return it.home;
 }
 function unicoWorkspaceSub(view) {
+  return unicoWorkspaceSubAll(view).filter(s => unicoSubMenuOk(s.mod || unicoModuleOf(s.view), s.view));
+}
+function unicoWorkspaceSubAll(view) {
   const mod = unicoModuleOf(view);
   if (view === 'home') return [];
   if (view === 'profile' || view === 'myDept') return [];
@@ -12433,6 +12478,12 @@ Object.assign(window, {
   unicoDsViewOf,
   unicoDsScreenOf,
   unicoHhScreenOn
+});
+Object.assign(window, {
+  unicoSubMenus,
+  unicoSubMenuOk,
+  unicoSubViewOk,
+  unicoModuleLanding
 });
 })();
 ;
