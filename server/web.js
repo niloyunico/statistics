@@ -382,7 +382,7 @@ async function serveIndex(req, res) {
   const userInject = scopeUser
     ? { username: scopeUser.username, name: scopeUser.name, role: scopeUser.role, departments: scopeUser.departments, qualityAreas: scopeUser.qualityAreas, perms: scopeUser.perms,
         allQualityAreas: !!scopeUser.allQualityAreas, qualityIndicators: scopeUser.qualityIndicators || {},
-        unitLead: !!scopeUser.unitLead, rosterEdit: !!scopeUser.rosterEdit, enterDen: !!scopeUser.enterDen, submitKinds: scopeUser.submitKinds || { patient: true, quality: true }, dsScreens: scopeUser.dsScreens || null,
+        unitLead: !!scopeUser.unitLead, rosterEdit: !!scopeUser.rosterEdit, enterDen: !!scopeUser.enterDen, submitKinds: scopeUser.submitKinds || { patient: true, quality: true }, dsScreens: scopeUser.dsScreens || null, subMenus: scopeUser.subMenus || null,
         staffScope: restricted ? restricted.staffScope : 'all', staffId: restricted ? restricted.staffId : null,
         photo: scopeUser.photo || null, email: scopeUser.email || null,
         phone: scopeUser.phone || null, designation: scopeUser.designation || null, title: scopeUser.title || null,

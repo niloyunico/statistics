@@ -1,4 +1,4 @@
-/* One-off cleanup: Dialysis "Out Patient Fall" was duplicated into three copies —
+/* Cleanup: Dialysis "Out Patient Fall" was duplicated into three copies —
  *   DB canonical  ind-out-patient-fall        (Jul-26 data)
  *   DB twin       ind-out-patient-fall-5768   (Jun-26 data)  <- minted by a mismatched submission
  *   overlay twin  ind-out-patient-fall-wtgp   (no data)      <- client indAdded twin
@@ -34,13 +34,23 @@ const nonEmpty = (v) => v != null && v !== '';
 
   // ---- backup ----
   const stamp = new Date(Number(process.env.STAMP) || 0).toISOString().replace(/[:.]/g, '-'); // deterministic-safe
-  const backup = { when: Date.now(), deptId: dia._id, indicators: inds, overlayDialysis: diaOv || null };
+  const subCol = db.collection('submissions');
+  const twinSubs = await subCol.find({ indicatorId: DB_TWIN }).toArray();
+  const backup = { when: Date.now(), deptId: dia._id, indicators: inds, overlayDialysis: diaOv || null, submissions: twinSubs };
   const bdir = path.join(__dirname, 'backups'); try { fs.mkdirSync(bdir, { recursive: true }); } catch (e) {}
   const bfile = path.join(bdir, 'outpatientfall-dedupe-' + backup.when + '.json');
   fs.writeFileSync(bfile, JSON.stringify(backup, null, 2));
   console.log('Backup written:', bfile);
 
   let changed = false;
+
+  // ---- 0) repoint submissions at the canonical id: re-applying one that still names the
+  // twin (the 2026-09 "re-applied after data loss" repair) recreated it ----
+  if (twinSubs.length) {
+    await subCol.updateMany({ indicatorId: DB_TWIN }, { $set: { indicatorId: CANON, isNewIndicator: false } });
+    console.log('Submissions: repointed ' + twinSubs.length + ' from ' + DB_TWIN + ' to ' + CANON + '.');
+    changed = true;
+  }
 
   // ---- 1) merge DB twin -> canonical, drop twin ----
   if (twin && canon) {

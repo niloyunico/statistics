@@ -189,6 +189,7 @@ app.get('/api/me', async (req, res) => {
         qualityIndicators: (u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {},
         submitKinds: access.cleanSubmitKinds ? (access.cleanSubmitKinds(u.submitKinds) || { patient: true, quality: true }) : (u.submitKinds || { patient: true, quality: true }),
         dsScreens: access.cleanDsScreens ? access.cleanDsScreens(u.dsScreens) : (u.dsScreens || null),
+        subMenus: access.cleanSubMenus ? access.cleanSubMenus(u.subMenus) : null,
         enterDen: u.enterDen === true,
       };
     }

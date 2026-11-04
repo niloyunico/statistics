@@ -267,6 +267,7 @@ async function forRequest(req) {
     // written before the choice existed keeps what it could do).
     submitKinds: cleanSubmitKinds(u.submitKinds),
     dsScreens: cleanDsScreens(u.dsScreens),
+    subMenus: cleanSubMenus(u.subMenus),
     // My Department: the departments this person may view there (meaningful with 'mydept').
     myDepartments: Array.isArray(u.myDepartments) ? u.myDepartments.map(String) : [],
   };
@@ -323,6 +324,23 @@ const DS_OPT_IN = ['hh'];
 function cleanDsScreens(v) {
   if (!Array.isArray(v)) return null;
   return DS_SCREENS.filter((s) => v.indexOf(s) >= 0);
+}
+/* Which SUB-MENUS of each module this person sees (Access Control → Module access, the
+   ticks under a module row). `{ quality: ['qualityScore', 'qualityCapa'], ... }` — a module
+   with no key shows all of its sub-menus, so every account saved before the ticks existed
+   keeps what it had. Ids are the sidebar's view names (renderer ui.jsx unicoWorkspaceSub).
+   Data Submission is not here: its screens are `dsScreens` above. The sub-menus share their
+   module's API, so this shapes the menu and the screens, not the module permission. */
+function cleanSubMenus(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  const out = {};
+  Object.keys(v).forEach((m) => {
+    if (ACCESS_MODULES.indexOf(m) < 0 || m === 'datasubmit' || !Array.isArray(v[m])) return;
+    const ids = [];
+    v[m].forEach((s) => { const id = String(s == null ? '' : s).trim().slice(0, 40); if (/^[A-Za-z0-9_-]+$/.test(id) && ids.indexOf(id) < 0 && ids.length < 40) ids.push(id); });
+    out[m] = ids;
+  });
+  return Object.keys(out).length ? out : null;
 }
 function hhScreenOn(access) {
   if (!access) return false;
@@ -950,7 +968,7 @@ module.exports = {
   PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster, MYDEPT_STAFF_FIELDS, myDeptIds,
   LEGACY_SUBMIT_ROLES, submitsData, dataScoped, isUnitLead, phoneRoleOf, CONSOLE_MODULES,
   SUBMIT_KINDS, cleanSubmitKinds, maySubmitKind,
-  DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen, hhScreenOn,
+  DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen, hhScreenOn, cleanSubMenus,
   ACCESS_MODULES, ACTIONS, PERM_RANK, STAFF_SCOPES, cleanStaffScope,
   ROSTER_SCOPES, cleanRosterScope, rosterDeptNames, rosterVisible,
   KEY_MODULE, moduleOfKey,

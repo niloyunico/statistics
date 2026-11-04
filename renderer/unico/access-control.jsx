@@ -126,7 +126,10 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
       <Ic d={icon} s={16}/>{busy===key?'Working…':label}
     </button>
   );
-  const granted=K.USER_MODS.map(([k,l])=>[l,acActs(u,k)]).filter(([,a])=>a.length);
+  const granted=K.USER_MODS.map(([k,l])=>[l,acActs(u,k),k]).filter(([,a])=>a.length);
+  // "4 of 6 sub-menus" for a module limited to some of its sub-menus (absent = all of them).
+  const subNote=(k)=>{ const all=((window.unicoSubMenus&&window.unicoSubMenus())||{})[k]; const pick=u.subMenus&&u.subMenus[k];
+    if(!all||!Array.isArray(pick)) return ''; const n=all.filter(s=>pick.indexOf(s[0])>=0).length; return n<all.length?(n+' of '+all.length+' sub-menus'):''; };
   const seen=lastSeen[u.username];
   return (
     <div style={{display:'flex',flexDirection:'column',gap:14}}>
@@ -181,9 +184,9 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
             <div style={{fontSize:10.5,fontWeight:700,letterSpacing:.6,textTransform:'uppercase',color:'var(--muted)'}}>What they can open</div>
             {t==='portal'&&<div style={{fontSize:12,color:'var(--ink-2)'}}>The portal only — its departments and indicators are set in the editor.</div>}
             {t!=='portal'&&!granted.length&&<div style={{fontSize:12,color:'var(--rose)',fontWeight:600}}>Nothing yet. They can sign in but see an empty sidebar.</div>}
-            {granted.map(([l,a])=>(
+            {granted.map(([l,a,k])=>(
               <div key={l} style={{display:'flex',alignItems:'center',gap:8,fontSize:12}}>
-                <span style={{flex:1,fontWeight:600,color:'var(--ink-2)'}}>{l}</span>
+                <span style={{flex:1,fontWeight:600,color:'var(--ink-2)'}}>{l}{subNote(k)&&<span style={{display:'block',fontWeight:500,fontSize:10,color:'var(--muted)'}}>{subNote(k)}</span>}</span>
                 <span style={{display:'flex',gap:2}}>{K.PERM_ORDER.map(x=><span key={x} style={{width:16,height:18,borderRadius:4,display:'grid',placeItems:'center',fontSize:9.5,fontWeight:800,fontFamily:'var(--mono, monospace)',
                   background:a.indexOf(x)>=0?(x==='delete'?'var(--rose)':'var(--blue)'):'var(--panel-2)',color:a.indexOf(x)>=0?'#fff':'var(--faint)'}}>{AC_ACT_LETTER[x]}</span>)}</span>
               </div>

@@ -190,7 +190,53 @@ function unicoCanAccessModule(mid){ return unicoCan(mid,'view'); }
 function unicoCanAccessView(view){ if(view==='profile'||view==='home'||view==='dcResponsibles') return true;
   // A Data Submission screen also needs that screen granted to this person.
   const ds=unicoDsScreenOf(view); if(ds && unicoDsScreens().indexOf(ds)<0) return false;
+  // A screen behind a sub-menu this person was not given (Access Control → Module access).
+  if(!unicoSubViewOk(view)) return false;
   return unicoCanAccessModule(unicoAccessModuleOf(view)); }
+/* SUB-MENU access. `__UNICO_USER__.subMenus` = { quality:['qualityScore',...], ... }: a module
+   listed there shows only those sub-menus; a module NOT listed shows all of them (every
+   account saved before the ticks existed). Ids are the sidebar items' views. Data Submission
+   is not here — its screens are dsScreens (unicoDsScreens above). */
+function unicoSubMenuOk(mod, view){
+  const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
+  if(!u || u.role==='Administrator' || mod==='datasubmit') return true;
+  const s=u.subMenus;
+  if(!s || typeof s!=='object' || !Array.isArray(s[mod])) return true;
+  return s[mod].indexOf(view)>=0;
+}
+// Every module's grantable sub-menus, from the sidebar's own list: { mod: [[view,label,match]] }.
+// Built on first use (the sidebar tables are declared further down this file).
+let unicoSubMenusMemo=null;
+function unicoSubMenus(){
+  if(unicoSubMenusMemo) return unicoSubMenusMemo;
+  const out={};
+  const SAMPLE={ stats:'departments', quality:'quality', supervisor:'supHome', medicine:'medHome', staff:'staffHome', datacol:'dcReview', reports:'reports' };
+  Object.keys(SAMPLE).forEach(m=>{
+    unicoWorkspaceSubAll(SAMPLE[m]).forEach(s=>{
+      // Performance / Attrition / Duty Roster ride in Staff Management's list but are whole
+      // modules with their own rows in Access Control, so they are not sub-menus of 'staff'.
+      if((s.mod||unicoModuleOf(s.view))!==m) return;
+      (out[m]=out[m]||[]).push([s.view, s.label, s.match||[s.view]]);
+    });
+  });
+  return (unicoSubMenusMemo=out);
+}
+// Is `view` behind a sub-menu this person may not open? A view no sub-menu claims (a module's
+// own landing page, a leaf like a print view) is never refused here.
+function unicoSubViewOk(view){
+  const mod=unicoModuleOf(view);
+  const subs=unicoSubMenus()[mod];
+  if(!subs) return true;
+  const owners=subs.filter(s=>s[2].indexOf(view)>=0);
+  return !owners.length || owners.some(s=>unicoSubMenuOk(mod, s[0]));
+}
+// Where a module lands: its home, else (its home is a sub-menu they were not given) the
+// first sub-menu they may open.
+function unicoModuleLanding(mod, home){
+  if(unicoSubViewOk(home)) return home;
+  const first=(unicoSubMenus()[mod]||[]).find(s=>unicoSubMenuOk(mod, s[0]));
+  return first ? first[0] : home;
+}
 // Viewable module ids, or null when unrestricted. [] => the user has no access at all.
 function unicoAllowedModules(){ const p=unicoUserPerms(); if(!p) return null; return UNICO_ACCESS_MODULES.filter(m=>unicoCan(m,'view')); }
 // The landing view for the first workspace this session can open (sidebar order).
@@ -203,7 +249,7 @@ function unicoFirstAllowedHome(){
   // never sends anyone here looking for a fallback. This list answers a different
   // question — which WORKSPACE to open when a restricted account needs one.
   const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings'],['mydept','myDept']];
-  for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return homes[i][1]; }
+  for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return unicoModuleLanding(homes[i][0], homes[i][1]); }
   return null;
 }
 // Perms were injected once at page load, so a module granted/revoked meanwhile needed a reload
@@ -220,7 +266,7 @@ function unicoRefreshPerms(){
     // The Data Submission assignment travels too (departments, areas, indicators, screens, kinds,
     // enterDen): changing it no longer signs the person out, so the tab must pick it up live.
     const ds=(j.user&&j.user.dsScope&&typeof j.user.dsScope==='object')?j.user.dsScope:null;
-    const DS_KEYS=['departments','qualityAreas','allQualityAreas','qualityIndicators','submitKinds','dsScreens','enterDen'];
+    const DS_KEYS=['departments','qualityAreas','allQualityAreas','qualityIndicators','submitKinds','dsScreens','subMenus','enterDen'];
     const dsChanged=!!ds&&DS_KEYS.some(k=>JSON.stringify(ds[k]==null?null:ds[k])!==JSON.stringify(u[k]==null?null:u[k]));
     if(JSON.stringify(j.perms)===JSON.stringify(u.perms||null) && staffScope===u.staffScope && !dsChanged) return false;
     const appJob=window.unicoRefreshAppData ? window.unicoRefreshAppData({includeNew:true}) : Promise.resolve([]);
@@ -463,17 +509,22 @@ function ViewTabs({ view, setRoute }){
 // Where a sidebar row lands. Normally its own `home`; for a row fronting several
 // permissions (`mods`), the home of the first one this session can open.
 function wsHome(it){
-  if(!it.mods) return it.home;
-  if(unicoCanAccessModule(unicoAccessModuleOf(it.home))) return it.home;
+  const land=(h)=>unicoModuleLanding(unicoModuleOf(h), h);   // its home may be a sub-menu they were not given
+  if(!it.mods) return land(it.home);
+  if(unicoCanAccessModule(unicoAccessModuleOf(it.home))) return land(it.home);
   for(let i=0;i<it.mods.length;i++){
     const h=UNICO_MODULE_VIEWS[it.mods[i]] && UNICO_MODULE_VIEWS[it.mods[i]][0];
-    if(h && unicoCanAccessModule(it.mods[i])) return h;
+    if(h && unicoCanAccessModule(it.mods[i])) return land(h);
   }
   return it.home;
 }
 
-// Secondary views shown (indented) under the ACTIVE primary destination.
+// Secondary views shown (indented) under the ACTIVE primary destination — only the
+// sub-menus this person was given (unicoSubMenuOk).
 function unicoWorkspaceSub(view){
+  return unicoWorkspaceSubAll(view).filter(s=>unicoSubMenuOk(s.mod||unicoModuleOf(s.view), s.view));
+}
+function unicoWorkspaceSubAll(view){
   const mod = unicoModuleOf(view);
   if(view==='home') return [];
   // My Profile is its own thing, not a workspace: it has no sub-views. Without this
@@ -1072,3 +1123,4 @@ Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, M
   unicoCan, unicoModuleLevel, unicoUserPerms, unicoRefreshPerms });
 // Data Submission screens: read by app.jsx (routes) and data-collection.jsx (the screens).
 Object.assign(window,{ UNICO_DS_SCREENS, unicoDsScreens, unicoDsViewOf, unicoDsScreenOf, unicoHhScreenOn });
+Object.assign(window,{ unicoSubMenus, unicoSubMenuOk, unicoSubViewOk, unicoModuleLanding });

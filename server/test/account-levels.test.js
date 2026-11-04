@@ -61,6 +61,7 @@ stub('../access', {
   cleanRosterScope: (v) => (['all', 'departments'].indexOf(v) >= 0 ? v : null),
   cleanSubmitKinds: (v) => ({ patient: !(v && v.patient === false), quality: !(v && v.quality === false) }),
   cleanDsScreens: (v) => (Array.isArray(v) ? v : null),
+  cleanSubMenus: (v) => (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length ? v : null),
   forRequest: async () => ({ unrestricted: true }),
   invalidate: () => {},
 });
@@ -361,6 +362,11 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     assert.equal(r.status, 200, JSON.stringify(r.body));
     let d = colOf('users').docs.find((x) => x.username === 'mithila');
     assert.deepEqual(d.perms.quality, ['view'], 'grant stored');
+    r = await patch('mithila', { subMenus: { quality: ['qualityScore', 'qualityCapa'] } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    d = colOf('users').docs.find((x) => x.username === 'mithila');
+    assert.deepEqual(d.subMenus, { quality: ['qualityScore', 'qualityCapa'] }, 'sub-menus stored');
+    assert.equal(d.sessionEpoch, undefined, 'a sub-menu change does NOT revoke the session');
     assert.equal(d.sessionEpoch, undefined, 'a permission / scope change does NOT revoke the session');
     r = await patch('mithila', { active: false });
     assert.equal(r.status, 200, JSON.stringify(r.body));

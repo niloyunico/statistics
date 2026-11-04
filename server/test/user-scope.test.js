@@ -72,6 +72,7 @@ stub('../access', {
   cleanRosterScope: (v) => (['all', 'departments'].indexOf(v) >= 0 ? v : null),
   cleanSubmitKinds: (v) => ({ patient: !(v && v.patient === false), quality: !(v && v.quality === false) }),
   cleanDsScreens: (v) => (Array.isArray(v) ? v : null),
+  cleanSubMenus: (v) => (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length ? v : null),
   forRequest: async () => ({ unrestricted: true }),
   invalidate: () => {},
 });
@@ -581,6 +582,11 @@ async function call(route, { params = {}, body = {} } = {}) {
     assert.deepEqual(acc.dsScreensOf({ unrestricted: false, role: 'collector' }), ['missing', 'status', 'quality', 'patient', 'history'], 'legacy portal: regular screens, no Hand Hygiene');
     assert.deepEqual(acc.dsScreensOf({ unrestricted: false, role: 'collector', dsScreens: ['hh'] }).slice(-1), ['hh'], 'legacy portal can be given Hand Hygiene');
     assert.equal(acc.hhScreenOn({ unrestricted: true }), true, 'administrators');
+    // Sub-menus: known modules only, lists of view ids; Data Submission keeps dsScreens; empty = all.
+    assert.deepEqual(acc.cleanSubMenus({ quality: ['qualityScore', 'qualityScore', 'bad id!'], nope: ['x'], datasubmit: ['missing'], staff: 'x', supervisor: [] }),
+      { quality: ['qualityScore'], supervisor: [] }, 'cleaned sub-menu map');
+    assert.equal(acc.cleanSubMenus({}), null, 'nothing limited = null (all sub-menus)');
+    assert.equal(acc.cleanSubMenus(['quality']), null, 'not a map');
     // Sending is the ADD action: a view-only Data Submission holder reads its screens but sends nothing.
     assert.equal(acc.maySubmitKind(U({ datasubmit: ['view'] }), 'quality'), false, 'view-only Data Submission cannot send');
     assert.equal(acc.maySubmitKind(U({ datasubmit: ['view', 'edit'] }), 'patient'), false, 'edit without add cannot send new data');

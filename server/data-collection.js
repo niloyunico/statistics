@@ -574,7 +574,7 @@ async function getUserScope(username) {
   if (!u) return null;
   const perms = (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null;
   const unitLead = u.role === 'incharge' || ((u.role || 'User') === 'User' && u.unitLead === true && !!perms && Array.isArray(perms.datasubmit) && perms.datasubmit.length > 0);
-  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: unitLead, unitLead, rosterEdit: u.rosterEdit === true, enterDen: u.enterDen === true, submitKinds: accessRoles.cleanSubmitKinds(u.submitKinds), dsScreens: accessRoles.cleanDsScreens ? accessRoles.cleanDsScreens(u.dsScreens) : null, responsibleId: u.responsibleId || null, departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: aliasIndicatorIds((u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}), perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, myDepartments: Array.isArray(u.myDepartments) ? u.myDepartments.map(String) : [], photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
+  return { username: u.username, name: u.name || u.username, role: u.role || 'User', inCharge: unitLead, unitLead, rosterEdit: u.rosterEdit === true, enterDen: u.enterDen === true, submitKinds: accessRoles.cleanSubmitKinds(u.submitKinds), dsScreens: accessRoles.cleanDsScreens ? accessRoles.cleanDsScreens(u.dsScreens) : null, subMenus: accessRoles.cleanSubMenus ? accessRoles.cleanSubMenus(u.subMenus) : null, responsibleId: u.responsibleId || null, departments: u.departments || [], qualityAreas: u.qualityAreas || [], allQualityAreas: !!u.allQualityAreas, qualityIndicators: aliasIndicatorIds((u.qualityIndicators && typeof u.qualityIndicators === 'object' && !Array.isArray(u.qualityIndicators)) ? u.qualityIndicators : {}), perms: (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : null, myDepartments: Array.isArray(u.myDepartments) ? u.myDepartments.map(String) : [], photo: u.photo || null, email: u.email || null, phone: u.phone || null, designation: u.designation || null, title: u.title || null };
 }
 
 async function deleteResponsible(id) {
@@ -969,10 +969,15 @@ async function applyQuality(spec) {
   for (let attempt = 0; attempt < 8; attempt++) {
     const doc = await qArea(spec.area);
     if (!doc) throw new Error('Quality area no longer exists: ' + spec.area);
-    const orig = (Array.isArray(doc.indicators) ? doc.indicators : []).find((i) => i.id === spec.indicatorId) || null;
+    const inds = Array.isArray(doc.indicators) ? doc.indicators : [];
+    // A stale id (an indicator merged away since the report was approved) falls back to the
+    // same-named indicator: re-applying it used to mint the twin again (Dialysis Out Patient Fall).
+    const norm = (s) => String(s || '').toLowerCase().replace(/\([^)]*\)/g, ' ').replace(/[^a-z0-9]+/g, ' ').replace(/\b(rate|rates|ratio)\b/g, ' ').replace(/\s+/g, ' ').trim();
+    const orig = inds.find((i) => i.id === spec.indicatorId)
+      || (spec.indicatorName ? inds.find((i) => norm(i.name) === norm(spec.indicatorName)) : null) || null;
     // A fresh spec copy per attempt: the merge rewrites spec.value, and a retry must start
     // from what was submitted, not from the previous attempt's computed value.
-    const ind = mergeQuality(orig, Object.assign({}, spec));
+    const ind = mergeQuality(orig, Object.assign({}, spec, orig ? { indicatorId: orig.id } : {}));
     if (await qSetIndicatorIf(spec.area, orig, ind)) return;
   }
   throw new Error('This indicator was being updated by someone else — please approve again.');

@@ -253,7 +253,7 @@ const cleanRosterScope = access.cleanRosterScope;
 
 // Changing any of these must invalidate every token the account already holds —
 // otherwise a revoked permission stays live for the rest of the 12h token TTL.
-const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'unitLead', 'submitKinds', 'dsScreens', 'enterDen', 'myDepartments'];
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'unitLead', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen', 'myDepartments'];
 // Compare only what actually CHANGED. The update object always carries a few scope
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
@@ -363,6 +363,8 @@ function safe(u) {
     appRole: u.appRole === 'pca' ? 'pca' : 'nurse',
     submitKinds: access.cleanSubmitKinds(u.submitKinds),
     dsScreens: access.cleanDsScreens(u.dsScreens),
+    // Which sub-menus of each module they see (absent module = all of them).
+    subMenus: access.cleanSubMenus(u.subMenus),
     myDepartments: cleanMyDepts(u.myDepartments),
     // Which tier of the hierarchy this account sits at (see BUILTIN_TIERS). A ceiling,
     // not a grant: `perms` above is what the server enforces. null = a row written before
@@ -803,6 +805,8 @@ function mount(app, opts) {
         submitKinds: access.cleanSubmitKinds(b.submitKinds),
         // Data Submission: which of its screens they may open (null = the defaults).
         dsScreens: access.cleanDsScreens(b.dsScreens),
+        // Which sub-menus of each module they see (null = all of them).
+        subMenus: role === 'User' ? access.cleanSubMenus(b.subMenus) : null,
         // My Department: which departments they may view there (with the 'mydept' module).
         myDepartments: role === 'Administrator' ? [] : cleanMyDepts(b.myDepartments),
         passwordHash: await auth.hash(password),
@@ -913,6 +917,7 @@ function mount(app, opts) {
         if (b.appRole !== undefined) set.appRole = b.appRole === 'pca' ? 'pca' : 'nurse';
         if (b.submitKinds !== undefined) set.submitKinds = access.cleanSubmitKinds(b.submitKinds);
         if (b.dsScreens !== undefined) set.dsScreens = access.cleanDsScreens(b.dsScreens);
+        if (b.subMenus !== undefined) set.subMenus = role === 'User' ? access.cleanSubMenus(b.subMenus) : null;
         if (b.myDepartments !== undefined) set.myDepartments = cleanMyDepts(b.myDepartments);
       }
 
