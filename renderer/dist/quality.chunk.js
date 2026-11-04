@@ -2360,7 +2360,7 @@ function QCCellDetail({
   const reported = allInds.map(rowFor).filter(r => r.s !== 'na').sort((a, b) => (a.s === 'breach' ? 0 : 1) - (b.s === 'breach' ? 0 : 1));
   const notObserved = allInds.filter(ind => monthStatus(ind, mk) === 'na' && qcNotObs(ind, mk));
   const notDue = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && qcNotDue(dep, ind, mk));
-  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && !qcNotDue(dep, ind, mk));
+  const unreported = allInds.filter(ind => monthStatus(ind, mk) === 'na' && !qcNotObs(ind, mk) && !qcNotDue(dep, ind, mk) && !(ind.mCoveredByAudit && ind.mCoveredByAudit[mk]));
   const breaches = reported.filter(r => r.s === 'breach').length;
   const field = (label, val) => val ? React.createElement("div", {
     style: {
@@ -7917,7 +7917,7 @@ function QCReportBuilder({
           }
           if (monthRaw(ind, m[0]) == null && qcNotDue(d, ind, m[0])) return;
           assigned++;
-          if (monthRaw(ind, m[0]) != null) submitted++;else miss.push(m[1]);
+          if (monthRaw(ind, m[0]) != null || ind.mCoveredByAudit && ind.mCoveredByAudit[m[0]]) submitted++;else miss.push(m[1]);
         });
         if (miss.length) rows.push({
           dept: d,

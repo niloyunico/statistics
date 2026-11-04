@@ -240,6 +240,10 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     if (!me || me.role === 'Administrator' || DC_PORTAL_ROLES.indexOf(me.role) >= 0) return true;
     return dcCanAct(me.perms, 'datacol', 'add') || dcCanAct(me.perms, 'datasubmit', 'add');
   };
+  const dcAreaName = a => {
+    const n = window.DEPTMAP && window.DEPTMAP.nameFromQualityKey ? window.DEPTMAP.nameFromQualityKey(a.key) : null;
+    return n && n !== a.key ? n : a.name || a.key;
+  };
   const dcIsAdminUser = () => {
     const me = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     return !me || me.role === 'Administrator';
@@ -3047,6 +3051,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       other: ''
     });
     const [deptRows, setDeptRows] = useState([]);
+    const [coverSel, setCoverSel] = useState(null);
     const [directNum, setDirectNum] = useState('');
     const [capa, setCapa] = useState({
       finding: '',
@@ -3116,6 +3121,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const denDef = def.denominatorDef || (isRate ? 'Total ' + denLabel.toLowerCase() + ' in ' + monthLabel(month) + ' — the denominator the rate is calculated against.' : '');
     const indNameQ = def.name || newInd.name || 'Result';
     const GROUP_KEYS = [['nurse', 'Nurse'], ['doctor', 'Doctor'], ['pca', 'PCA'], ['other', 'Other']];
+    const groupLike = numMode === 'group' || numMode === 'overall';
     const groupSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groups[k]) || 0), 0);
     const groupDenSum = GROUP_KEYS.reduce((s, [k]) => s + (Number(groupsDen[k]) || 0), 0);
     const deptTot = deptRows.reduce((acc, r) => {
@@ -3203,6 +3209,24 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const isIncidentType = !isHandHygiene && def.formula !== 'avg' && (def.goalDirection ? def.goalDirection !== 'higher_is_better' : true);
     const victimField = !!def.victimField;
     const hospitalWide = !!area && (area.key === 'Overall Hospital' || area.deptId === '__hospital__' || /overall hospital/i.test(String(area.name || '')));
+    const hhCoverOpts = useMemo(() => {
+      const HH = window.UNICO_HH;
+      if (!(isHandHygiene && hospitalWide && HH)) return [];
+      return (areas || []).filter(a => a && a.key && !HH.isHospital(a)).map(a => {
+        const ind = (a.indicators || []).find(HH.isHHInd);
+        return ind && dcIndDue(a, ind, month, []) ? {
+          key: String(a.key),
+          name: dcAreaName(a)
+        } : null;
+      }).filter(Boolean).sort((x, y) => String(x.name).localeCompare(String(y.name)));
+    }, [areas, isHandHygiene, hospitalWide, month, collRevQ]);
+    const coveredKeys = coverSel == null ? hhCoverOpts.map(o => o.key) : hhCoverOpts.map(o => o.key).filter(k => coverSel.indexOf(k) >= 0);
+    const toggleCover = (k, on) => setCoverSel(cur => {
+      const base = cur == null ? hhCoverOpts.map(o => o.key) : cur.slice();
+      const out = base.filter(x => x !== k);
+      if (on) out.push(k);
+      return out;
+    });
     const incidentDepts = useMemo(() => {
       const DM = window.DEPTMAP;
       const ids = DM && DM.patientDeptIds ? DM.patientDeptIds() : dcAllDepts().map(d => d.id);
@@ -3238,8 +3262,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const recordedIncs = curInd && curInd.incidents && Array.isArray(curInd.incidents[month]) ? curInd.incidents[month].length : 0;
     const legacyCount = autoCount && curInd && !recordedIncs ? Number(isRate ? (curInd.mNum || {})[month] : (curInd.months || {})[month]) : NaN;
     const keepLegacy = autoCount && numMode === 'direct' && incidents.length === 0 && legacyCount > 0;
-    const numerator = numMode === 'group' ? groupSum : numMode === 'dept' ? deptTot.n : autoCount ? keepLegacy ? legacyCount : incidents.length : Number(directNum) || 0;
-    const denNum = numMode === 'group' ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
+    const numerator = groupLike ? groupSum : numMode === 'dept' ? deptTot.n : autoCount ? keepLegacy ? legacyCount : incidents.length : Number(directNum) || 0;
+    const denNum = groupLike ? groupDenSum : numMode === 'dept' ? deptTot.d : Number(den) || 0;
     const denEntered = denNum > 0;
     const computeAsRate = isRate || denEntered;
     const rateUnit = unitRaw && /per|%/.test(unitRaw) ? unitRaw : formula === 'pct' ? '%' : formula === 'avg' ? unitRaw || 'average' : 'per ' + mult + (denGuess ? ' ' + denGuess.toLowerCase() : '');
@@ -3256,6 +3280,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       };
       setRemark('');
       setQReason('');
+      setCoverSel(null);
       const toG = o => ({
         nurse: o && o.nurse != null ? String(o.nurse) : '',
         doctor: o && o.doctor != null ? String(o.doctor) : '',
@@ -3286,6 +3311,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       const g = curInd.mGroups && curInd.mGroups[month];
       const gd = curInd.mGroupsDen && curInd.mGroupsDen[month];
       const dep = curInd.mDeptBreakdown && curInd.mDeptBreakdown[month];
+      const cov = hospitalWide && curInd.mCovered && Array.isArray(curInd.mCovered[month]) && curInd.mCovered[month].length ? curInd.mCovered[month] : null;
       const cellStr = (row, k, f) => {
         const v = row && row.g && row.g[k] && row.g[k][f];
         return v == null ? '' : String(v);
@@ -3324,6 +3350,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         setGroups(blankG);
         setGroupsDen(blankG);
         setDirectNum('');
+      } else if (cov) {
+        setDeptRows([]);
+        setGroups(g && typeof g === 'object' ? toG(g) : blankG);
+        setGroupsDen(gd && typeof gd === 'object' ? toG(gd) : blankG);
+        setDirectNum('');
+        setCoverSel(cov.map(String));
+        setNumMode('overall');
       } else if (g && typeof g === 'object') {
         setDeptRows([]);
         setGroups(toG(g));
@@ -3392,6 +3425,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           setGroupsDen(blankG);
           setDirectNum('');
           setNumMode('dept');
+        } else if (hospitalWide && Array.isArray(fr.coveredDepts) && fr.coveredDepts.length) {
+          setDeptRows([]);
+          setGroups(toG(fr.groups));
+          setGroupsDen(fr.groupsDen && typeof fr.groupsDen === 'object' ? toG(fr.groupsDen) : blankG);
+          setDirectNum('');
+          setCoverSel(fr.coveredDepts.map(String));
+          setNumMode('overall');
         } else if (fr.groups && typeof fr.groups === 'object') {
           setDeptRows([]);
           setGroups(toG(fr.groups));
@@ -3484,9 +3524,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         failSubmit('Enter ' + numLabel + ' — type 0 if there were none this month');
         return;
       }
-      if (!notObserved && isRate && (numMode === 'group' || numMode === 'dept')) {
+      if (!notObserved && numMode === 'overall' && !coveredKeys.length) {
+        failSubmit('Tick the departments this hospital audit covered — at least one.');
+        return;
+      }
+      if (!notObserved && isRate && (groupLike || numMode === 'dept')) {
         const typedV = v => String(v == null ? '' : v).trim() !== '';
-        const cells = numMode === 'group' ? GROUP_KEYS.map(([k, lbl]) => ({
+        const cells = groupLike ? GROUP_KEYS.map(([k, lbl]) => ({
           where: lbl,
           n: groups[k],
           d: groupsDen[k]
@@ -3517,10 +3561,10 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
       if (isRate && !notObserved && !denLockedForCollector && !(denNum > 0)) {
         const typed = v => String(v == null ? '' : v).trim() !== '';
-        const denCells = numMode === 'group' ? GROUP_KEYS.map(([k]) => groupsDen[k]) : numMode === 'dept' ? [].concat.apply([], deptRows.map(r => GROUP_KEYS.map(([k]) => r.g && r.g[k] && r.g[k].d))) : [den];
+        const denCells = groupLike ? GROUP_KEYS.map(([k]) => groupsDen[k]) : numMode === 'dept' ? [].concat.apply([], deptRows.map(r => GROUP_KEYS.map(([k]) => r.g && r.g[k] && r.g[k].d))) : [den];
         const explicitZero = !(Number(numerator) > 0) && denCells.some(typed) && denCells.filter(typed).every(v => Number(v) === 0);
         if (!explicitZero) {
-          failSubmit('Enter ' + denLabel + ' (denominator)' + (numMode === 'group' ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'));
+          failSubmit('Enter ' + denLabel + ' (denominator)' + (groupLike ? ' for at least one group' : numMode === 'dept' ? ' for at least one department' : ' — type 0 if there were none this month'));
           return;
         }
       }
@@ -3583,8 +3627,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         value: notObserved || computeAsRate ? undefined : numerator,
         num: !notObserved && computeAsRate ? numerator : undefined,
         den: !notObserved && computeAsRate ? denLockedForCollector ? undefined : denNum : undefined,
-        groups: !notObserved && numMode === 'group' ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
-        groupsDen: !notObserved && numMode === 'group' && computeAsRate ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
+        groups: !notObserved && groupLike ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groups[k]) || 0, o), {}) : undefined,
+        groupsDen: !notObserved && groupLike && computeAsRate ? GROUP_KEYS.reduce((o, [k]) => (o[k] = Number(groupsDen[k]) || 0, o), {}) : undefined,
+        coveredDepts: !notObserved && numMode === 'overall' ? coveredKeys : undefined,
         deptBreakdown: !notObserved && numMode === 'dept' ? deptRows.map(r => ({
           dept: r.dept || '',
           g: GROUP_KEYS.reduce((o, [k]) => (o[k] = {
@@ -3721,7 +3766,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         animation: p ? 'dqf-pulse 1.8s ease-out infinite' : undefined
       };
     };
-    const nothingEntered = !notObserved && (numMode === 'group' ? !GROUP_KEYS.some(([k]) => typedQ(groups[k])) : numMode === 'dept' ? !deptRows.some(r => GROUP_KEYS.some(([k]) => typedQ(r.g[k].n))) : autoCount ? incidents.length === 0 && !zeroOk : !typedQ(directNum));
+    const nothingEntered = !notObserved && (groupLike ? !GROUP_KEYS.some(([k]) => typedQ(groups[k])) : numMode === 'dept' ? !deptRows.some(r => GROUP_KEYS.some(([k]) => typedQ(r.g[k].n))) : autoCount ? incidents.length === 0 && !zeroOk : !typedQ(directNum));
     const noValue = notObserved || nothingEntered || ratePending;
     const NO_C = '#5b3fa8';
     const LBL = {
@@ -4290,7 +4335,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, "By department"), React.createElement("button", {
       className: numMode === 'direct' ? 'on' : '',
       onClick: () => setNumMode('direct')
-    }, "Direct value")), autoCount && numMode === 'direct' && React.createElement("div", {
+    }, "Direct value"), hospitalWide && React.createElement("button", {
+      className: numMode === 'overall' ? 'on' : '',
+      onClick: () => setNumMode('overall'),
+      title: "The whole hospital's staff-group totals, and the departments this audit covered"
+    }, "Overall hospital")), autoCount && numMode === 'direct' && React.createElement("div", {
       style: {
         display: 'flex',
         flexWrap: 'wrap',
@@ -4326,12 +4375,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         } : {})
       },
       onClick: () => setZeroOk(false)
-    }, "Undo"))), numMode === 'group' ? React.createElement(React.Fragment, null, React.createElement("div", {
+    }, "Undo"))), groupLike ? React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         fontSize: 11.5,
         color: 'var(--muted)'
       }
-    }, isRate ? 'Enter each staff group’s ' + numLabel.toLowerCase() + ' (numerator) and ' + denLabel.toLowerCase() + ' (denominator) — they add up to the totals.' : 'Enter the ' + (numLabel || 'value').toLowerCase() + ' for each staff group — they add up to the total value.'), GROUP_KEYS.map(([k, lbl]) => React.createElement("div", {
+    }, numMode === 'overall' ? 'Enter the whole hospital’s ' + numLabel.toLowerCase() + ' and ' + denLabel.toLowerCase() + ' by staff group, then tick the departments this audit covered.' : isRate ? 'Enter each staff group’s ' + numLabel.toLowerCase() + ' (numerator) and ' + denLabel.toLowerCase() + ' (denominator) — they add up to the totals.' : 'Enter the ' + (numLabel || 'value').toLowerCase() + ' for each staff group — they add up to the total value.'), GROUP_KEYS.map(([k, lbl]) => React.createElement("div", {
       key: k,
       style: {
         display: 'grid',
@@ -4383,7 +4432,87 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         color: 'var(--ink-2)'
       }
-    }, groupDenSum)))) : numMode === 'dept' ? React.createElement(React.Fragment, null, React.createElement("div", {
+    }, groupDenSum))), numMode === 'overall' && React.createElement("div", {
+      style: {
+        border: '1px solid var(--line)',
+        borderRadius: 8,
+        padding: '10px 12px',
+        background: 'var(--panel-2)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink)'
+      }
+    }, "Departments included in this audit", star), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        padding: '2px 9px',
+        borderRadius: 999,
+        background: 'var(--blue-50)',
+        color: 'var(--blue-700)'
+      }
+    }, coveredKeys.length, " of ", hhCoverOpts.length), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      onClick: () => setCoverSel(null)
+    }, "Select all"), React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      onClick: () => setCoverSel([])
+    }, "Clear")), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)'
+      }
+    }, "Ticked departments show hand hygiene as submitted for ", monthLabel(month), " \u2014 untick any the audit did not visit."), hhCoverOpts.length ? React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: narrow ? '1fr' : 'repeat(auto-fill, minmax(200px, 1fr))',
+        gap: '4px 12px'
+      }
+    }, hhCoverOpts.map(o => React.createElement("label", {
+      key: o.key,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        padding: narrow ? '6px 0' : '3px 0',
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: coveredKeys.indexOf(o.key) >= 0,
+      onChange: e => toggleCover(o.key, e.target.checked),
+      style: {
+        width: 16,
+        height: 16,
+        flexShrink: 0
+      }
+    }), o.name))) : React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: 'var(--muted)'
+      }
+    }, "No department owes hand hygiene for ", monthLabel(month), "."))) : numMode === 'dept' ? React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         fontSize: 11.5,
         color: 'var(--muted)'
@@ -5486,6 +5615,23 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       d: s.groupsDen && s.groupsDen[k] != null ? s.groupsDen[k] : ''
     }, o), {}) : null);
     const hasGrp = !!grp;
+    const [cover, setCover] = useState(() => Array.isArray(s.coveredDepts) && s.coveredDepts.length ? s.coveredDepts.map(String) : null);
+    const hasCover = !!cover;
+    const coverOpts = useMemo(() => {
+      if (!hasCover) return [];
+      const HH = window.UNICO_HH;
+      const list = (window.qualityData ? window.qualityData() : []).filter(a => a && a.key && HH && !HH.isHospital(a) && (a.indicators || []).some(HH.isHHInd)).map(a => ({
+        key: String(a.key),
+        name: dcAreaName(a)
+      }));
+      (s.coveredDepts || []).forEach(k => {
+        if (!list.some(o => o.key === String(k))) list.push({
+          key: String(k),
+          name: String(k)
+        });
+      });
+      return list.sort((x, y) => String(x.name).localeCompare(String(y.name)));
+    }, [hasCover]);
     const setGrpCell = (k, f, v) => setGrp(g => ({
       ...g,
       [k]: {
@@ -5593,6 +5739,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           body.groups = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].n) || 0, o), {});
           if (isRate) body.groupsDen = GROUPS.reduce((o, [k]) => (o[k] = Number(grp[k].d) || 0, o), {});
         }
+        if (hasCover) body.coveredDepts = cover;
         if (target && target !== s.area) {
           body.area = target;
           body.areaName = (areaOpts.find(a => a.key === target) || {}).name || target;
@@ -5705,6 +5852,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
               d: Number(r.g[k].d) || 0
             }, o), {})
           })) : undefined,
+          coveredDepts: hasCover ? cover : undefined,
           incidents: incidents.length || Array.isArray(s.incidents) && s.incidents.length ? incidents : undefined
         }, common);
       }
@@ -6396,7 +6544,61 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           fontSize: 12
         }
       }, r.g[k].d || 0)))))));
-    }))))), s.type === 'quality' && (editable || incidents.length > 0) && React.createElement("div", null, React.createElement("div", {
+    }))), hasCover && React.createElement("div", {
+      style: {
+        marginTop: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        textTransform: 'uppercase',
+        letterSpacing: .4,
+        marginBottom: 8
+      }
+    }, "Departments covered ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: 'var(--muted)',
+        textTransform: 'none',
+        letterSpacing: 0
+      }
+    }, "\xB7 ", cover.length, " \u2014 shown as submitted once approved")), editable ? React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))',
+        gap: '3px 12px'
+      }
+    }, coverOpts.map(o => React.createElement("label", {
+      key: o.key,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: cover.indexOf(o.key) >= 0,
+      onChange: e => setCover(c => {
+        const out = c.filter(x => x !== o.key);
+        if (e.target.checked) out.push(o.key);
+        return out;
+      }),
+      style: {
+        width: 15,
+        height: 15
+      }
+    }), o.name))) : React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: 'var(--ink-2)',
+        lineHeight: 1.6
+      }
+    }, coverOpts.filter(o => cover.indexOf(o.key) >= 0).map(o => o.name).join(', ') || '—')))), s.type === 'quality' && (editable || incidents.length > 0) && React.createElement("div", null, React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
@@ -9174,7 +9376,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, []);
     const pendingFor = (areaKey, ind, m) => (subs || []).some(s => s.type === 'quality' && s.area === areaKey && s.month === m && s.status === 'pending' && (s.indicatorId === ind.id || (s.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim()));
     const notObs = (ind, m) => !!(ind && ind.mNotObserved && ind.mNotObserved[m]);
-    const statusOf = (areaKey, ind, m) => cpSubmissionStatus(subs, areaKey, ind, m);
+    const statusOf = (areaKey, ind, m) => dcQStatus(subs || [], areaKey, ind, m);
     const tone = {
       recorded: ['var(--pos)', 'var(--pos-bg)', 'Recorded'],
       pending: ['#9a6b00', '#fff4e0', 'Pending'],
@@ -9775,26 +9977,36 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     if (_dcHHCover.has(arr)) return _dcHHCover.get(arr);
     const out = new Map();
     const HH = window.UNICO_HH;
-    if (HH && Array.isArray(arr.hhCover)) {
-      const areas = window.qualityData ? window.qualityData() : [];
-      arr.hhCover.forEach(c => (c.depts || []).forEach(nm => {
-        const a = HH.matchDept(nm, areas);
-        if (!a) return;
-        if (!out.has(c.month)) out.set(c.month, new Set());
-        out.get(c.month).add(a.key);
-      }));
+    if (!HH) {
+      _dcHHCover.set(arr, out);
+      return out;
     }
-    const inflight = HH ? arr.filter(s => s && s.type === 'quality' && (s.status === 'pending' || s.status === 'approving') && Array.isArray(s.deptBreakdown) && s.deptBreakdown.length && /hand\s*hygiene/i.test(String(s.indicatorName || '') + ' ' + String(s.indicatorId || '').replace(/-/g, ' '))) : [];
-    if (inflight.length) {
-      const areas = window.qualityData ? window.qualityData() : [];
-      inflight.forEach(s => s.deptBreakdown.forEach(r => {
+    const areas = window.qualityData ? window.qualityData() : [];
+    const mark = (m, key, state) => {
+      if (!m || key == null) return;
+      if (!out.has(m)) out.set(m, new Map());
+      const cur = out.get(m);
+      if (cur.get(String(key)) !== 'recorded') cur.set(String(key), state);
+    };
+    const markName = (m, nm, state) => {
+      const a = HH.matchDept(nm, areas);
+      if (a) mark(m, a.key, state);
+    };
+    if (Array.isArray(arr.hhCover)) arr.hhCover.forEach(c => (c.depts || []).forEach(nm => markName(c.month, nm, c.state === 'recorded' ? 'recorded' : 'pending')));
+    arr.forEach(s => {
+      if (!(s && s.type === 'quality' && (s.status === 'pending' || s.status === 'approving') && /hand\s*hygiene/i.test(String(s.indicatorName || '')))) return;
+      (Array.isArray(s.deptBreakdown) ? s.deptBreakdown : []).forEach(r => {
         const t = HH.GROUPS.reduce((n, [k]) => n + (Number((r && r.g || {})[k] && r.g[k].d) || 0), 0);
-        if (!(t > 0)) return;
-        const a = HH.matchDept(r && r.dept, areas);
-        if (!a) return;
-        if (!out.has(s.month)) out.set(s.month, new Set());
-        out.get(s.month).add(a.key);
-      }));
+        if (t > 0) markName(s.month, r && r.dept, 'pending');
+      });
+      (Array.isArray(s.coveredDepts) ? s.coveredDepts : []).forEach(k => markName(s.month, k, 'pending'));
+    });
+    const src = HH.findSource(areas);
+    if (src && src.ind) {
+      const ms = new Set(Object.keys(src.ind.mCovered || {}).concat(Object.keys(src.ind.mDeptBreakdown || {})));
+      ms.forEach(m => {
+        if (!(src.ind.mNotObserved && src.ind.mNotObserved[m])) HH.coveredKeys(src.ind, m, areas).forEach(k => mark(m, k, 'recorded'));
+      });
     }
     _dcHHCover.set(arr, out);
     return out;
@@ -9808,7 +10020,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }
     if ((st === 'none' || st === 'rejected') && ind && /hand\s*hygiene/i.test(ind.name || '')) {
       const cov = dcHHAuditCover(subs).get(m);
-      if (cov && cov.has(areaKey)) return 'pending';
+      if (cov && cov.has(String(areaKey))) return cov.get(String(areaKey));
     }
     return st;
   };
@@ -10470,6 +10682,40 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       window.addEventListener('unico:data-refreshed', h);
       return () => window.removeEventListener('unico:data-refreshed', h);
     }, []);
+    const isAdmin = dcIsAdminUser();
+    const [coverEdit, setCoverEdit] = useState(null);
+    const coverAreas = useMemo(() => coverEdit && HH ? (window.qualityData ? window.qualityData() : []).filter(a => a && a.key && !HH.isHospital(a) && (a.indicators || []).some(HH.isHHInd)).map(a => ({
+      key: String(a.key),
+      name: dcAreaName(a)
+    })).sort((x, y) => String(x.name).localeCompare(String(y.name))) : [], [!!coverEdit]);
+    const saveCover = () => {
+      if (!coverEdit || coverEdit.saving) return;
+      setCoverEdit(c => Object.assign({}, c, {
+        saving: true
+      }));
+      dcApi.put('/api/hand-hygiene/coverage', {
+        month: coverEdit.m,
+        depts: coverEdit.sel
+      }).then(r => {
+        if (!r || !r.ok) {
+          toast(r && r.error || 'Could not save the departments.', 'error');
+          setCoverEdit(c => c && Object.assign({}, c, {
+            saving: false
+          }));
+          return;
+        }
+        toast(monthLabel(coverEdit.m) + ': ' + r.coverage.depts.length + ' department(s) covered', 'success');
+        setCoverEdit(null);
+        dcInvalidateSubs();
+        dcRefreshLive();
+        setRev(x => x + 1);
+      }).catch(e => {
+        toast(e.message || 'Could not save the departments.', 'error');
+        setCoverEdit(c => c && Object.assign({}, c, {
+          saving: false
+        }));
+      });
+    };
     useEffect(() => {
       let dead = false;
       setBusy(true);
@@ -10638,7 +10884,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         '>': '&gt;',
         '"': '&quot;'
       })[c]);
-      const cellTxt = c => c && c.d > 0 ? esc(c.n + '/' + c.d) + '<br><b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.pct != null ? '<b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.src === 'not-audited' ? 'n/a' : '—';
+      const cellTxt = c => c && c.d > 0 ? esc(c.n + '/' + c.d) + '<br><b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.pct != null ? '<b>' + esc(hhFmtP(c.pct)) + '</b>' : c && c.src === 'not-audited' ? 'n/a' : c && c.src === 'covered' ? 'hospital audit' : '—';
       const monthsHead = deptShown.map(x => '<th>' + esc(ml(x.m)) + '</th>').join('');
       const deptRows = res.rows.map(r => '<tr><td>' + esc(r.name) + (r.selfReported ? ' <i>(self-reported)</i>' : '') + '</td>' + deptShown.map(x => '<td class="r">' + cellTxt(r.cells[x.m]) + '</td>').join('') + '<td class="r">' + cellTxt(r.total) + '</td></tr>').join('');
       const totRow = '<tr class="t"><td>Hospital total (audit)</td>' + deptShown.map(x => '<td class="r">' + cellTxt(x.d != null ? {
@@ -10849,7 +11095,14 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         color: '#9aa6b5',
         fontSize: 11
       }
-    }, "not audited") : React.createElement("span", {
+    }, "not audited") : c && c.src === 'covered' ? React.createElement("span", {
+      title: "Covered by the hospital audit, entered as an overall total \u2014 no department figures",
+      style: {
+        color: '#12776c',
+        fontSize: 11,
+        fontWeight: 600
+      }
+    }, "hospital audit") : React.createElement("span", {
       style: {
         color: '#c2cad4'
       }
@@ -10866,7 +11119,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         flexWrap: 'wrap',
         marginBottom: 14
       }
-    }, kpi('Hospital compliance ' + res.year, hhFmtP(res.total.pct), res.total.d ? hhFmtN(res.total.n) + ' of ' + hhFmtN(res.total.d) + ' opportunities' : 'no counts on record', tTone(res.total.pct)), kpi('Latest month', latest ? hhFmtP(latest.pct) : '—', latest ? ml(latest.m) + (latest.d ? ' · ' + latest.n + '/' + latest.d : ' · % only') : 'nothing reported', latest && tTone(latest.pct)), kpi('Months on target', withVal.length ? onTarget + '/' + withVal.length : '—', 'at or above ' + bench + '%', withVal.length && onTarget === withVal.length ? '#12776c' : '#9a5b00'), kpi('Departments audited', String(res.rows.filter(r => r.total.d > 0).length), res.groups.length ? res.groups.length + ' staff groups' : 'no staff-group detail')), chart && React.createElement("div", {
+    }, kpi('Hospital compliance ' + res.year, hhFmtP(res.total.pct), res.total.d ? hhFmtN(res.total.n) + ' of ' + hhFmtN(res.total.d) + ' opportunities' : 'no counts on record', tTone(res.total.pct)), kpi('Latest month', latest ? hhFmtP(latest.pct) : '—', latest ? ml(latest.m) + (latest.d ? ' · ' + latest.n + '/' + latest.d : ' · % only') : 'nothing reported', latest && tTone(latest.pct)), kpi('Months on target', withVal.length ? onTarget + '/' + withVal.length : '—', 'at or above ' + bench + '%', withVal.length && onTarget === withVal.length ? '#12776c' : '#9a5b00'), kpi('Departments audited', String(res.rows.filter(r => r.total.d > 0 || Object.keys(r.cells).some(m => r.cells[m] && r.cells[m].src === 'covered')).length), res.groups.length ? res.groups.length + ' staff groups' : 'no staff-group detail')), chart && React.createElement("div", {
       style: card
     }, React.createElement("div", {
       style: sub
@@ -10896,7 +11149,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: thr
     }, "Compliance"), React.createElement("th", {
       style: th
-    }, "Status"))), React.createElement("tbody", null, shown.map(x => {
+    }, "Status"), React.createElement("th", {
+      style: th
+    }, "Departments"))), React.createElement("tbody", null, shown.map(x => {
       const pend = pendingOf(x.m);
       return React.createElement("tr", {
         key: x.m
@@ -10930,7 +11185,28 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           fontWeight: 700,
           fontSize: 10.5
         }
-      }, "awaiting approval")));
+      }, "awaiting approval")), React.createElement("td", {
+        style: td
+      }, (x.coveredKeys || []).length ? React.createElement("span", {
+        title: "Departments whose hand hygiene this audit reports"
+      }, x.coveredKeys.length, " covered") : React.createElement("span", {
+        style: {
+          color: '#9a5b00',
+          fontSize: 11
+        }
+      }, x.pct != null ? 'none listed' : '—'), isAdmin && x.pct != null && !res.rows.some(r => r.cells[x.m] && r.cells[x.m].src === 'audit') && React.createElement("button", {
+        type: "button",
+        style: Object.assign({}, btn, {
+          marginLeft: 8,
+          padding: '3px 9px',
+          fontSize: 11
+        }),
+        onClick: () => setCoverEdit({
+          m: x.m,
+          sel: (x.coveredKeys || []).slice(),
+          saving: false
+        })
+      }, "Edit departments")));
     }), shown.length > 0 && React.createElement("tr", null, React.createElement("td", {
       style: Object.assign({}, tdTot, {
         textAlign: 'left'
@@ -10946,7 +11222,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         textAlign: 'left'
       })
     }, chip(res.total.pct))), !shown.length && React.createElement("tr", null, React.createElement("td", {
-      colSpan: 5,
+      colSpan: 6,
       style: Object.assign({}, td, {
         color: '#6c7a8c'
       })
@@ -11076,7 +11352,122 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       })
     }, cellEl(g.total)), React.createElement("td", {
       style: td
-    }, chip(g.total.pct)))))))), React.createElement("div", {
+    }, chip(g.total.pct)))))))), coverEdit && React.createElement("div", {
+      role: "dialog",
+      "aria-modal": "true",
+      onClick: () => !coverEdit.saving && setCoverEdit(null),
+      style: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(15,25,40,.45)',
+        zIndex: 1000,
+        display: 'grid',
+        placeItems: 'center',
+        padding: 16
+      }
+    }, React.createElement("div", {
+      onClick: e => e.stopPropagation(),
+      style: Object.assign({}, CP_CARD, {
+        width: 'min(560px, 100%)',
+        maxHeight: '85vh',
+        overflow: 'auto',
+        padding: '18px 20px',
+        background: '#fff'
+      })
+    }, React.createElement("div", {
+      style: {
+        fontSize: 15,
+        fontWeight: 800,
+        color: '#16202e'
+      }
+    }, "Departments covered \xB7 ", monthLabel(coverEdit.m)), React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: '#6c7a8c',
+        margin: '4px 0 12px'
+      }
+    }, "Tick every department this month's hospital audit covered. They then show hand hygiene as submitted. The hospital figure is not changed."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginBottom: 10,
+        alignItems: 'center'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: '#0072a3'
+      }
+    }, coverEdit.sel.length, " of ", coverAreas.length), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("button", {
+      type: "button",
+      style: btn,
+      onClick: () => setCoverEdit(c => Object.assign({}, c, {
+        sel: coverAreas.map(o => o.key)
+      }))
+    }, "Select all"), React.createElement("button", {
+      type: "button",
+      style: btn,
+      onClick: () => setCoverEdit(c => Object.assign({}, c, {
+        sel: []
+      }))
+    }, "Clear")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+        gap: '4px 12px'
+      }
+    }, coverAreas.map(o => React.createElement("label", {
+      key: o.key,
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 7,
+        fontSize: 12.5,
+        color: '#2b3747',
+        padding: '4px 0',
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: coverEdit.sel.indexOf(o.key) >= 0,
+      onChange: e => setCoverEdit(c => {
+        const sel = c.sel.filter(k => k !== o.key);
+        if (e.target.checked) sel.push(o.key);
+        return Object.assign({}, c, {
+          sel
+        });
+      }),
+      style: {
+        width: 16,
+        height: 16
+      }
+    }), o.name))), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        justifyContent: 'flex-end',
+        marginTop: 16
+      }
+    }, React.createElement("button", {
+      type: "button",
+      style: btn,
+      disabled: coverEdit.saving,
+      onClick: () => setCoverEdit(null)
+    }, "Cancel"), React.createElement("button", {
+      type: "button",
+      style: Object.assign({}, btn, {
+        background: '#0090ca',
+        color: '#fff',
+        borderColor: '#0090ca'
+      }),
+      disabled: coverEdit.saving,
+      onClick: saveCover
+    }, coverEdit.saving ? 'Saving…' : 'Save')))), React.createElement("div", {
       style: Object.assign({}, card, {
         fontSize: 11.5,
         color: '#3c4858',
@@ -12571,7 +12962,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const openRej = useMemo(() => dcOpenRejections(S), [subs]);
     const returnedFor = (areaKey, ind, m) => openRej.find(x => x.type === 'quality' && x.area === areaKey && x.month === m && (x.indicatorId === ind.id || (x.indicatorName || '').toLowerCase().trim() === (ind.name || '').toLowerCase().trim())) || null;
     const statusOf = (areaKey, ind, m) => {
-      const st = cpSubmissionStatus(S, areaKey, ind, m);
+      const st = dcQStatus(S, areaKey, ind, m);
       if (st === 'rejected' && returnedFor(areaKey, ind, m)) return 'Returned';
       return {
         recorded: 'Recorded',
@@ -13524,7 +13915,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     areas.forEach(a => a.indicators.forEach(ind => {
       if (!dcIndDue(a, ind, month, S)) return;
       totalInd++;
-      const sent = ['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, month));
+      const sent = ['recorded', 'pending', 'notobs'].includes(dcQStatus(S, a.key, ind, month));
       if (!sent) missing++;
     }));
     const pct = totalInd ? Math.round((totalInd - missing) * 100 / totalInd) : 0;
@@ -13537,7 +13928,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       areas.forEach(a => a.indicators.forEach(ind => {
         if (!dcIndDue(a, ind, m, S)) return;
         t++;
-        if (['recorded', 'pending', 'notobs'].includes(cpSubmissionStatus(S, a.key, ind, m))) done++;
+        if (['recorded', 'pending', 'notobs'].includes(dcQStatus(S, a.key, ind, m))) done++;
       }));
       return {
         m: m,

@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=8f9857ede8","quality":"/dist/quality.chunk.js?v=11e713403e","datacollection":"/dist/datacollection.chunk.js?v=bf15ede92e","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=8f9857ede8","quality":"/dist/quality.chunk.js?v=bc26a36d88","datacollection":"/dist/datacollection.chunk.js?v=2b679ed3d9","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=7218a3ca36"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -6414,6 +6414,21 @@ window.QI_CORRECTIONS_BY_DEFID = {
   }
 
   const sumG = (g) => GROUPS.reduce((a, [k]) => { const x = (g || {})[k] || {}; return { n: a.n + (Number(x.n) || 0), d: a.d + (Number(x.d) || 0) }; }, { n: 0, d: 0 });
+
+  /* The departments a hospital audit COVERED in month m: the ones it was entered for "By
+     department" (a row with observed > 0), plus the ones ticked when it was entered as an
+     "Overall hospital" total (mCovered[m] = [area key…], no per-department figures). Such a
+     department's hand hygiene is reported through the audit, so it is never "missing".
+     Returns a Set of area keys. */
+  function coveredKeys(sInd, m, depts) {
+    const out = new Set();
+    if (!sInd) return out;
+    const keys = sInd.mCovered && sInd.mCovered[m];
+    if (Array.isArray(keys)) keys.forEach((k) => { if (k != null && k !== '') out.add(String(k)); });
+    const rows = sInd.mDeptBreakdown && sInd.mDeptBreakdown[m];
+    if (Array.isArray(rows)) rows.forEach((r) => { if (!r || !(sumG(r.g).d > 0)) return; const dep = matchDept(r.dept, depts); if (dep) out.add(String(dep.key)); });
+    return out;
+  }
   const cell = (n, d, src) => ({ n: n, d: d, pct: pctOf(n, d), src: src });
 
   /* Shape for one series reader: the hospital view = the audit (n/d/pct); a view narrowed to
@@ -6491,6 +6506,18 @@ window.QI_CORRECTIONS_BY_DEFID = {
       });
     });
 
+    // 2b. departments ticked on an "Overall hospital" audit: covered, but no figures of their own
+    if (sInd && sInd.mCovered) {
+      months.forEach((m) => {
+        (Array.isArray(sInd.mCovered[m]) ? sInd.mCovered[m] : []).forEach((k) => {
+          const dep = (depts || []).find((d) => String(d.key) === String(k) && !isHospital(d));
+          if (!dep || !keep(String(dep.key))) return;
+          const row = rowFor(String(dep.key), dep.name, dep);
+          if (!row.cells[m]) row.cells[m] = { n: null, d: null, pct: null, src: 'covered' };
+        });
+      });
+    }
+
     const rows = Array.from(rowsByKey.values());
     // 3. per-month hospital totals
     const monthRows = months.map((m) => {
@@ -6508,6 +6535,8 @@ window.QI_CORRECTIONS_BY_DEFID = {
         nAll: dAll > 0 ? nAll : n, dAll: dAll > 0 ? dAll : d, pctAll: dAll > 0 ? pctOf(nAll, dAll) : pct,
         selfReported: od > 0,
         notObserved: !!(sInd && sInd.mNotObserved && sInd.mNotObserved[m]),
+        // the departments the audit covered this month (by department, or ticked)
+        coveredKeys: Array.from(coveredKeys(sInd, m, depts)),
       };
     });
 
@@ -6573,7 +6602,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     return low + '–' + hi + '%';
   }
 
-  const API = { GROUPS: GROUPS, DEFAULT_BENCH: DEFAULT_BENCH, HOSPITAL_ID: HOSPITAL_ID, DEPT_ALIAS: DEPT_ALIAS, normN: normN, canonDept: canonDept, isHHInd: isHHInd, isHospital: isHospital, benchOf: benchOf, findSource: findSource, matchDept: matchDept, pctOf: pctOf, build: build, series: series, totalOf: totalOf, status: status, improveBand: improveBand };
+  const API = { GROUPS: GROUPS, DEFAULT_BENCH: DEFAULT_BENCH, HOSPITAL_ID: HOSPITAL_ID, DEPT_ALIAS: DEPT_ALIAS, normN: normN, canonDept: canonDept, isHHInd: isHHInd, isHospital: isHospital, benchOf: benchOf, findSource: findSource, matchDept: matchDept, coveredKeys: coveredKeys, pctOf: pctOf, build: build, series: series, totalOf: totalOf, status: status, improveBand: improveBand };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   if (root) root.UNICO_HH = API;
 })(typeof window !== 'undefined' ? window : null);
@@ -6886,8 +6915,11 @@ window.QI_CORRECTIONS_BY_DEFID = {
       const src = HH.findSource(list);
       if (!src) return list;
       const normN = HH.normN, canonDept = HH.canonDept;
-      const bd = src.ind.mDeptBreakdown;
-      if (!bd || !Object.keys(bd).length) return list;
+      const bd = src.ind.mDeptBreakdown || {};
+      // Months entered as an "Overall hospital" total: the departments that audit covered
+      // (area keys). They carry no department figures — only the covered mark below.
+      const cov = src.ind.mCovered || {};
+      if (!Object.keys(bd).length && !Object.keys(cov).length) return list;
       return list.map((d) => {
         if (d === src.dep) return d;
         const idx = (d.indicators || []).findIndex(isHH);
@@ -6922,8 +6954,21 @@ window.QI_CORRECTIONS_BY_DEFID = {
           // the audit once, not again through this department's copy of it.
           fromAudit[mk] = true;
         });
-        if (!months) return d;
-        const patched = Object.assign({}, hh, { months: months, mNum: mNum, mDen: mDen, mFromAudit: fromAudit, hhFromAudit: true });
+        // Covered by an overall-total audit, with no reading of its own: mCoveredByAudit[month],
+        // so status screens read the month as reported, not missing. No figures are invented.
+        let covered = null;
+        if (idx >= 0) Object.keys(cov).forEach((mk) => {
+          if (!Array.isArray(cov[mk]) || !cov[mk].some((k) => String(k) === String(d.key))) return;
+          if ((months && months[mk] != null) || (hh.mNum && hh.mNum[mk] != null && hh.mNum[mk] !== '') || (hh.months && hh.months[mk] != null && hh.months[mk] !== '')) return;
+          (covered = covered || Object.assign({}, hh.mCoveredByAudit || {}))[mk] = true;
+        });
+        if (!months && !covered) return d;
+        if (!months) {
+          const inds0 = (d.indicators || []).slice();
+          inds0[idx] = Object.assign({}, hh, { mCoveredByAudit: covered });
+          return Object.assign({}, d, { indicators: inds0 });
+        }
+        const patched = Object.assign({}, hh, { months: months, mNum: mNum, mDen: mDen, mFromAudit: fromAudit, hhFromAudit: true }, covered ? { mCoveredByAudit: covered } : {});
         // refresh the per-year quarter rollups so quarter-based views see the filled months
         const fys = fysInInd(patched);
         if (fys.length) { const byFy = {}; fys.forEach((fy) => { byFy[fy] = computeQuartersFor(patched, fyQuarterMonths(fy)); }); patched.quartersByFy = byFy; }
