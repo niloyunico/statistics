@@ -431,8 +431,9 @@ function App(){
         <div className="content" key={((route.view&&route.view.indexOf('ds')===0)?'ds':route.view)+(route.dept||'')+(route.emp||'')+layout}>
           {typeof ViewTabs!=='undefined' && <ViewTabs view={route.view} setRoute={setRoute}/>}
           {body}
-          {typeof AppCredit!=='undefined' && <AppCredit/>}
         </div>
+        {/* The credit bar: outside the scrolling .content, so it stays at the window's foot. */}
+        {typeof AppCredit!=='undefined' && <AppCredit/>}
       </div>
     </div>
   );
