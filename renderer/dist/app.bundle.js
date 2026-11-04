@@ -15992,7 +15992,7 @@ Object.assign(window, {
       body += '<h2 class="pb">Staff list (' + s.length + ')</h2>' + (s.length ? '<table><thead><tr><th>#</th><th>Name</th><th>Designation</th><th>Employee no.</th><th>Joined</th></tr></thead><tbody>' + s.map((x, i) => '<tr><td>' + (i + 1) + '</td><td>' + esc(x.name) + '</td><td>' + esc(x.designation || x.role || '') + '</td><td>' + esc(x.emp_id || '') + '</td><td>' + esc(x.doj || '') + '</td></tr>').join('') + '</tbody></table>' : '<p class="m">No current staff recorded for this department.</p>');
     }
     const sigRow = ['prepared', 'reviewed', 'recommended', 'approved'].map(k => '<td><div class="sl"></div>' + esc(sig[k] || '') + '<br><span class="m">' + k.charAt(0).toUpperCase() + k.slice(1) + ' by</span></td>').join('');
-    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(data.dept.name) + ' — My Department</title><style>' + 'body{font:12px/1.4 Arial,sans-serif;color:#16202e;margin:18px}h1{font-size:18px;margin:0 0 2px}h2{font-size:14px;margin:18px 0 6px}.m{color:#5b6878}' + 'table{border-collapse:collapse;width:100%;font-size:10.5px}th,td{border:1px solid #cdd6e0;padding:4px 6px;text-align:left;vertical-align:top}th{background:#eef4fa}.r{text-align:right}' + '.t td{background:#e3f1f8;font-weight:700}.bad{color:#b4233c;font-weight:700}.ok{color:#14713f}.ros th,.ros td{padding:2px 3px;text-align:center;font-size:9px}.ros td:first-child{text-align:left;white-space:nowrap}' + '.sig{margin-top:28px;border:0}.sig td{border:0;width:25%;padding:0 10px;text-align:center}.sl{border-top:1px solid #16202e;margin:26px 0 4px}' + '@media print{@page{size:A4 landscape;margin:12mm}.pb{page-break-before:always}}</style></head><body>' + '<h1>UNICO Hospitals — ' + esc(data.dept.name) + '</h1><div class="m">My Department · ' + esc(data.year) + ' · printed by ' + esc(me) + ' on ' + esc(new Date().toLocaleString()) + '</div>' + body + '<table class="sig"><tr>' + sigRow + '</tr></table>' + '<script>window.onload=function(){window.print();}<\/script></body></html>';
+    return '<!doctype html><html><head><meta charset="utf-8"><title>' + esc(data.dept.name) + ' — My Department</title><style>' + 'body{font:12px/1.4 Arial,sans-serif;color:#16202e;margin:18px}h1{font-size:18px;margin:0 0 2px}h2{font-size:14px;margin:18px 0 6px}.m{color:#5b6878}' + 'table{border-collapse:collapse;width:100%;font-size:10.5px}th,td{border:1px solid #cdd6e0;padding:4px 6px;text-align:left;vertical-align:top}th{background:#eef4fa}.r{text-align:right}' + '.t td{background:#e3f1f8;font-weight:700}.bad{color:#b4233c;font-weight:700}.ok{color:#14713f}.ros th,.ros td{padding:2px 3px;text-align:center;font-size:9px}.ros td:first-child{text-align:left;white-space:nowrap}' + '.cr{margin-top:14px;text-align:center;font-size:8px;color:#8a96a6}.sig{margin-top:28px;border:0}.sig td{border:0;width:25%;padding:0 10px;text-align:center}.sl{border-top:1px solid #16202e;margin:26px 0 4px}' + '@media print{@page{size:A4 landscape;margin:12mm}.pb{page-break-before:always}}</style></head><body>' + '<h1>UNICO Hospitals — ' + esc(data.dept.name) + '</h1><div class="m">My Department · ' + esc(data.year) + ' · printed by ' + esc(me) + ' on ' + esc(new Date().toLocaleString()) + '</div>' + body + '<table class="sig"><tr>' + sigRow + '</tr></table>' + '<div class="cr">Designed &amp; developed by Nasif Ahammed Niloy · nasifahammedniloy.com · WhatsApp 01947527775</div>' + '<script>window.onload=function(){window.print();}<\/script></body></html>';
   }
   function PrintDialog({
     data,
@@ -16150,14 +16150,149 @@ Object.assign(window, {
       fontSize: 12.5
     }
   }, children);
+  const PAL = () => window.PALETTE || ['#0b66d0', '#0f9b8e', '#e08a1e', '#6a52d4', '#d23a52', '#2bb3a3', '#8a93a3', '#4f8df7'];
+  const hasChart = n => typeof window[n] === 'function';
+  const ChartRow = ({
+    children
+  }) => React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 14,
+      flexWrap: 'wrap',
+      marginBottom: 16,
+      paddingBottom: 14,
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, children);
+  const Panel = ({
+    title,
+    right,
+    grow,
+    children
+  }) => React.createElement("div", {
+    style: {
+      flex: grow ? '2 1 360px' : '1 1 240px',
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 8
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, title), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), right), children);
+  const miniSel = {
+    padding: '4px 8px',
+    borderRadius: 7,
+    border: '1px solid var(--line)',
+    background: '#fff',
+    fontFamily: 'inherit',
+    fontSize: 11.5,
+    color: 'var(--ink-2)',
+    maxWidth: 220
+  };
+  const Seg = ({
+    value,
+    onChange,
+    opts
+  }) => React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      overflow: 'hidden'
+    }
+  }, opts.map(([v, l]) => React.createElement("button", {
+    key: v,
+    type: "button",
+    onClick: () => onChange(v),
+    style: {
+      border: 0,
+      padding: '4px 10px',
+      fontSize: 11.5,
+      fontWeight: 600,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      background: value === v ? 'var(--blue)' : '#fff',
+      color: value === v ? '#fff' : 'var(--ink-2)'
+    }
+  }, l)));
+  const DonutBox = ({
+    data,
+    label,
+    value
+  }) => data.length && hasChart('Donut') ? React.createElement(window.Donut, {
+    data,
+    size: 150,
+    thickness: 24,
+    centerLabel: label,
+    centerValue: value
+  }) : React.createElement(Empty, null, "Nothing to chart.");
   function PatientTab({
     p,
     year
   }) {
+    const [metric, setMetric] = useState('');
+    const [kind, setKind] = useState('bar');
     if (!p) return React.createElement(Empty, null, "This department reports quality indicators only.");
     const t = patientTable(p);
     if (!t.months.length) return React.createElement(Empty, null, "No patient statistics recorded for ", year, ".");
-    return React.createElement("div", {
+    const col = p.cols.find(c => c.id === metric) || p.cols[0];
+    const series = col ? t.months.map(m => ({
+      mon: m.split('-')[0],
+      v: Number((p.rows[m] || {})[col.id]) || 0
+    })) : [];
+    const mix = p.cols.filter(c => !c.pct && !/^total$/i.test(String(c.label || c.id).trim())).map((c, i) => ({
+      label: c.label,
+      value: t.months.reduce((a, m) => a + (Number((p.rows[m] || {})[c.id]) || 0), 0),
+      color: PAL()[i % PAL().length]
+    })).filter(d => d.value > 0);
+    return React.createElement("div", null, React.createElement(ChartRow, null, React.createElement(Panel, {
+      grow: true,
+      title: (col ? col.label : '') + ' · ' + year,
+      right: React.createElement(React.Fragment, null, p.cols.length > 1 && React.createElement("select", {
+        style: miniSel,
+        value: col ? col.id : '',
+        onChange: e => setMetric(e.target.value)
+      }, p.cols.map(c => React.createElement("option", {
+        key: c.id,
+        value: c.id
+      }, c.label))), React.createElement(Seg, {
+        value: kind,
+        onChange: setKind,
+        opts: [['bar', 'Bar'], ['line', 'Line']]
+      }))
+    }, kind === 'line' && hasChart('LineChart') ? React.createElement(window.LineChart, {
+      data: series,
+      x: 'mon',
+      y: 'v',
+      height: 220,
+      color: '#0090ca'
+    }) : hasChart('BarChart') ? React.createElement(window.BarChart, {
+      data: series,
+      x: 'mon',
+      y: 'v',
+      height: 220,
+      label: 'md' + (col ? col.id : '')
+    }) : null), mix.length > 1 && React.createElement(Panel, {
+      title: 'Year mix · ' + year
+    }, React.createElement(DonutBox, {
+      data: mix,
+      label: "Total",
+      value: mix.reduce((a, d) => a + d.value, 0)
+    }))), React.createElement("div", {
       style: scroll
     }, React.createElement("table", {
       style: {
@@ -16186,13 +16321,14 @@ Object.assign(window, {
         fontWeight: 800,
         background: 'var(--blue-50)'
       })
-    }, v))))));
+    }, v)))))));
   }
   function QualityTab({
     q,
     months,
     year
   }) {
+    const [pick, setPick] = useState('');
     if (!q || !q.indicators.length) return React.createElement(Empty, null, "No quality indicators for this department.");
     const used = months.filter(m => q.indicators.some(i => qValue(i, m) != null || (i.notObserved || {})[m]));
     if (!used.length) return React.createElement(Empty, null, "No quality readings recorded for ", year, ".");
@@ -16203,7 +16339,57 @@ Object.assign(window, {
       color: '#b4233c',
       fontWeight: 700
     } : {};
-    return React.createElement("div", {
+    const withData = q.indicators.filter(i => used.some(m => qValue(i, m) != null));
+    const ind = withData.find(i => i.id === pick) || withData[0];
+    const series = ind ? used.filter(m => qValue(ind, m) != null).map(m => ({
+      mon: m.split('-')[0],
+      v: qValue(ind, m)
+    })) : [];
+    let ok = 0,
+      bad = 0;
+    q.indicators.forEach(i => used.forEach(m => {
+      const st = qStatus(i, qValue(i, m));
+      if (st === 'ok') ok++;else if (st === 'bad') bad++;
+    }));
+    const split = [{
+      label: 'Within target',
+      value: ok,
+      color: '#1f9d57'
+    }, {
+      label: 'Outside target',
+      value: bad,
+      color: '#d23a52'
+    }].filter(d => d.value > 0);
+    return React.createElement("div", null, React.createElement(ChartRow, null, ind && React.createElement(Panel, {
+      grow: true,
+      title: ind.name + (ind.benchmarkValue != null ? ' · target ' + qFmt(ind, ind.benchmarkValue) : ''),
+      right: withData.length > 1 && React.createElement("select", {
+        style: miniSel,
+        value: ind.id,
+        onChange: e => setPick(e.target.value)
+      }, withData.map(i => React.createElement("option", {
+        key: i.id,
+        value: i.id
+      }, i.name)))
+    }, hasChart('AreaTargetChart') ? React.createElement(window.AreaTargetChart, {
+      data: series,
+      x: 'mon',
+      y: 'v',
+      target: ind.benchmarkValue,
+      height: 220,
+      color: '#0090ca'
+    }) : hasChart('LineChart') ? React.createElement(window.LineChart, {
+      data: series,
+      x: 'mon',
+      y: 'v',
+      height: 220
+    }) : null), React.createElement(Panel, {
+      title: 'Readings against target · ' + year
+    }, React.createElement(DonutBox, {
+      data: split,
+      label: "Readings",
+      value: ok + bad
+    }))), React.createElement("div", {
       style: scroll
     }, React.createElement("table", {
       style: {
@@ -16238,7 +16424,7 @@ Object.assign(window, {
         color: 'var(--muted)',
         marginTop: 8
       }
-    }, "Green = within target \xB7 red = outside target \xB7 N/O = not observed that month."));
+    }, "Green = within target \xB7 red = outside target \xB7 N/O = not observed that month.")));
   }
   function RosterTab({
     r,
@@ -16258,7 +16444,40 @@ Object.assign(window, {
       borderBottom: '1px solid var(--line-2)',
       minWidth: 26
     };
-    return React.createElement("div", null, React.createElement("div", {
+    const R = window.UNICO_ROSTER;
+    const counts = {};
+    const dutyDays = ppl.map(p => {
+      let n = 0;
+      d.forEach(x => {
+        const c = p.row[x];
+        if (!c) return;
+        const b = R && R.bucketOf(c) || 'O';
+        counts[b] = (counts[b] || 0) + 1;
+        if (R ? R.isDuty(c) : b !== 'O') n++;
+      });
+      return {
+        label: p.name,
+        value: n,
+        color: '#0090ca'
+      };
+    }).sort((a, b) => b.value - a.value).slice(0, 10);
+    const mix = (R && R.BUCKETS || []).map(b => ({
+      label: b.label,
+      value: counts[b.id] || 0,
+      color: b.color
+    })).filter(x => x.value > 0);
+    return React.createElement("div", null, React.createElement(ChartRow, null, React.createElement(Panel, {
+      title: 'Shift mix · ' + MONS[r.month] + ' ' + r.year
+    }, React.createElement(DonutBox, {
+      data: mix,
+      label: "Shifts",
+      value: mix.reduce((a, x) => a + x.value, 0)
+    })), React.createElement(Panel, {
+      grow: true,
+      title: "Duty days per person (top 10)"
+    }, dutyDays.length && hasChart('HBar') ? React.createElement(window.HBar, {
+      rows: dutyDays
+    }) : React.createElement(Empty, null, "Nothing to chart."))), React.createElement("div", {
       style: scroll
     }, React.createElement("table", {
       style: {
@@ -16307,7 +16526,23 @@ Object.assign(window, {
     s
   }) {
     if (!s || !s.length) return React.createElement(Empty, null, "No current staff recorded for this department.");
-    return React.createElement("div", {
+    const by = {};
+    s.forEach(x => {
+      const k = x.designation || x.role || 'Not set';
+      by[k] = (by[k] || 0) + 1;
+    });
+    const mix = Object.keys(by).sort((a, b) => by[b] - by[a]).map((k, i) => ({
+      label: k,
+      value: by[k],
+      color: PAL()[i % PAL().length]
+    }));
+    return React.createElement("div", null, React.createElement(ChartRow, null, React.createElement(Panel, {
+      title: "Staff by designation"
+    }, React.createElement(DonutBox, {
+      data: mix,
+      label: "Staff",
+      value: s.length
+    }))), React.createElement("div", {
       style: scroll
     }, React.createElement("table", {
       style: {
@@ -16338,7 +16573,7 @@ Object.assign(window, {
       style: td
     }, x.emp_id || '—'), React.createElement("td", {
       style: td
-    }, x.doj || '—'))))));
+    }, x.doj || '—')))))));
   }
   function MyDepartment() {
     const now = new Date();
@@ -26141,6 +26376,35 @@ function SystemMonitor() {
 window.SystemMonitor = SystemMonitor;
 })();
 ;
+/* ===== app-credit.jsx ===== */
+(function(){
+(function () {
+  const CSS = '.app-credit{margin:28px auto 0;padding:12px 8px 4px;border-top:1px solid var(--line-2,rgba(125,145,180,.18));' + 'text-align:center;font-size:11px;line-height:1.6;color:var(--muted,#6c7a8c)}' + '.app-credit a{color:var(--blue-700,#0072a3);font-weight:600;text-decoration:none}.app-credit a:hover{text-decoration:underline}' + '.app-credit .sep{margin:0 6px;opacity:.5}' + '@media print{.app-credit{display:none!important}}body.pdf-export-mode .app-credit{display:none!important}';
+  function AppCredit() {
+    return React.createElement(React.Fragment, null, React.createElement("style", null, CSS), React.createElement("footer", {
+      className: "app-credit"
+    }, "Designed & developed by ", React.createElement("a", {
+      href: "https://nasifahammedniloy.com",
+      target: "_blank",
+      rel: "noopener"
+    }, "Nasif Ahammed Niloy"), React.createElement("span", {
+      className: "sep"
+    }, "\xB7"), React.createElement("a", {
+      href: "https://nasifahammedniloy.com",
+      target: "_blank",
+      rel: "noopener"
+    }, "nasifahammedniloy.com"), React.createElement("span", {
+      className: "sep"
+    }, "\xB7"), "Queries: ", React.createElement("a", {
+      href: "https://wa.me/8801947527775",
+      target: "_blank",
+      rel: "noopener"
+    }, "WhatsApp 01947527775")));
+  }
+  window.AppCredit = AppCredit;
+})();
+})();
+;
 /* ===== app.jsx ===== */
 (function(){
 const {
@@ -26803,7 +27067,7 @@ function App() {
       if (window.unicoLoadChunk) window.unicoLoadChunk('datacollection').catch(() => {});
       return React.createElement(ModuleLoading, null);
     }
-    return React.createElement(CollectorPortal, null);
+    return React.createElement(React.Fragment, null, React.createElement(CollectorPortal, null), typeof AppCredit !== 'undefined' && React.createElement(AppCredit, null));
   }
   const accessMods = window.unicoAllowedModules ? window.unicoAllowedModules() : null;
   if (Array.isArray(accessMods) && accessMods.length === 0) {
@@ -26866,7 +27130,7 @@ function App() {
   }, typeof ViewTabs !== 'undefined' && React.createElement(ViewTabs, {
     view: route.view,
     setRoute: setRoute
-  }), body)));
+  }), body, typeof AppCredit !== 'undefined' && React.createElement(AppCredit, null))));
 }
 function ModuleLoading({
   failed,

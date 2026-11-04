@@ -394,7 +394,7 @@ function App(){
       if(window.unicoLoadChunk) window.unicoLoadChunk('datacollection').catch(()=>{});
       return <ModuleLoading/>;
     }
-    return <CollectorPortal/>;
+    return <React.Fragment><CollectorPortal/>{typeof AppCredit!=='undefined' && <AppCredit/>}</React.Fragment>;
   }
   // Per-module access: a 'User' with no workspaces granted has nothing to show.
   const accessMods = window.unicoAllowedModules ? window.unicoAllowedModules() : null;
@@ -431,6 +431,7 @@ function App(){
         <div className="content" key={((route.view&&route.view.indexOf('ds')===0)?'ds':route.view)+(route.dept||'')+(route.emp||'')+layout}>
           {typeof ViewTabs!=='undefined' && <ViewTabs view={route.view} setRoute={setRoute}/>}
           {body}
+          {typeof AppCredit!=='undefined' && <AppCredit/>}
         </div>
       </div>
     </div>

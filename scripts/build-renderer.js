@@ -121,6 +121,7 @@ const MANIFEST = [
   // System Monitor panel (window.SystemMonitor) + the save-failure reporter every browser
   // runs. Before app.jsx; wraps window.unicoNative.persist at load.
   { file: 'monitor.jsx', jsx: true },
+  { file: 'app-credit.jsx', jsx: true },       // window.AppCredit — the developer credit line under every screen
   { file: 'app.jsx', jsx: true },
 ];
 
