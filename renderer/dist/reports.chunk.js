@@ -4722,6 +4722,34 @@ function UserModal({
   const [signoff, setSignoff] = useState(editing && typeof initial.signoff === 'string' ? initial.signoff : '');
   const [signoffSet, setSignoffSet] = useState(!editing || !initial.signoffInherited);
   const [rosterRole, setRosterRole] = useState(editing && typeof initial.rosterRole === 'string' ? initial.rosterRole : '');
+  const viewerAdmin = (() => {
+    const me = typeof window !== 'undefined' ? window.__UNICO_USER__ : null;
+    return !me || me.role === 'Administrator';
+  })();
+  const [rcfg, setRcfg] = useState(null);
+  const [rosSel, setRosSel] = useState(null);
+  const [rosQ, setRosQ] = useState('');
+  const [rosViewAdded, setRosViewAdded] = useState(false);
+  const rosSlot = rosterRole === 'manager' ? 'manager' : rosterRole === 'incharge' ? 'incharge' : null;
+  const acctName = String(editing ? initial.username : username || '').trim().toLowerCase();
+  const heldIn = (cfg, slot) => (cfg && cfg.depts || []).filter(d => d[slot] && d[slot].username === acctName).map(d => d.id);
+  React.useEffect(() => {
+    if (!viewerAdmin) return undefined;
+    let live = true;
+    fetch('/api/rosters/config', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(r => r.ok ? r.json() : null).then(j => {
+      if (live && j && j.ok) setRcfg(j);
+    }).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  React.useEffect(() => {
+    if (rcfg) setRosSel(rosSlot ? heldIn(rcfg, rosSlot) : []);
+  }, [rcfg, rosSlot]);
+  const [ownOnly, setOwnOnly] = useState(false);
   const [copyFrom, setCopyFrom] = useState('');
   const [sec, setSec] = useState('account');
   const [perms, setPerms] = useState(() => {
@@ -4799,6 +4827,30 @@ function UserModal({
     return Array.isArray(s) ? s.slice().sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''))) : [];
   }, []);
   const toggleDept = id => setStaffDepts(ds => ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds, id]);
+  const empNorm = v => String(v == null ? '' : v).trim().toLowerCase();
+  const curStaff = x => x && !x.former && x.is_active !== false;
+  const [empQ, setEmpQ] = useState(() => {
+    const r = allStaff.find(x => String(x.id) === String(staffId));
+    return r ? String(r.emp_id || '') : editing && initial.staffEmpId ? String(initial.staffEmpId) : '';
+  });
+  const empHits = React.useMemo(() => {
+    const q = empNorm(empQ);
+    return q ? allStaff.filter(x => curStaff(x) && empNorm(x.emp_id) === q) : [];
+  }, [empQ, allStaff]);
+  const typeEmp = v => {
+    setEmpQ(v);
+    setStaffLinkDirty(true);
+    const q = empNorm(v);
+    const hits = q ? allStaff.filter(x => curStaff(x) && empNorm(x.emp_id) === q) : [];
+    setStaffId(hits.length === 1 ? hits[0].id : hits.some(h => String(h.id) === String(staffId)) ? staffId : '');
+  };
+  const linkStaff = id => {
+    setStaffId(id);
+    setStaffLinkDirty(true);
+    const r = allStaff.find(x => String(x.id) === String(id));
+    if (r) setEmpQ(String(r.emp_id || ''));else if (id === '') setEmpQ('');
+  };
+  const linkedRec = allStaff.find(x => String(x.id) === String(staffId)) || null;
   const myDeptGuess = () => {
     const own = (scope && scope.departments || []).concat(staffDepts || []).filter(id => allDepts.some(d => d.id === id));
     if (own.length) return [...new Set(own)];
@@ -4911,9 +4963,15 @@ function UserModal({
   };
   const quickSet = kind => {
     setCopyFrom('');
+    setOwnOnly(kind === 'own');
     if (kind === 'none') {
       setPerms(NONE_PERMS());
       setSubMenus({});
+    } else if (kind === 'own') {
+      setPerms(NONE_PERMS());
+      setSubMenus({});
+      setStaffScope('self');
+      setRosterRole('');
     } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept', 'devdays'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
   };
   const copyAccess = uname => {
@@ -4960,6 +5018,56 @@ function UserModal({
       [mid]: []
     }));
   };
+  const pickRosterRole = v => {
+    setRosterRole(v);
+    if ((v === 'manager' || v === 'cns') && !isAdmin && !isColl && asActions(perms.roster).indexOf('view') < 0) {
+      setPerms(p => ({
+        ...p,
+        roster: PERM_ORDER.filter(a => asActions(p.roster).concat('view').indexOf(a) >= 0)
+      }));
+      setRosViewAdded(true);
+    }
+  };
+  const rosCfgPlan = () => {
+    if (!viewerAdmin || !rcfg || rosSel == null || isAdmin || !acctName) return null;
+    const body = {
+      depts: {}
+    };
+    let n = 0;
+    const lost = [];
+    const nm = id => ((rcfg.depts || []).find(d => d.id === id) || {}).name || id;
+    ['incharge', 'manager'].forEach(slot => {
+      const held = heldIn(rcfg, slot),
+        want = slot === rosSlot ? rosSel : [];
+      held.filter(id => want.indexOf(id) < 0).forEach(id => {
+        (body.depts[id] = body.depts[id] || {})[slot] = null;
+        n++;
+        lost.push((slot === 'manager' ? 'Manager' : 'In-charge') + ' of ' + nm(id));
+      });
+      want.filter(id => held.indexOf(id) < 0).forEach(id => {
+        (body.depts[id] = body.depts[id] || {})[slot] = {
+          username: acctName
+        };
+        n++;
+      });
+    });
+    const wasCns = !!(rcfg.cns && rcfg.cns.username === acctName);
+    if (rosterRole === 'cns' && !wasCns) {
+      body.cns = {
+        username: acctName
+      };
+      n++;
+    }
+    if (rosterRole !== 'cns' && wasCns) {
+      body.cns = null;
+      n++;
+      lost.push('the CNS');
+    }
+    return n ? {
+      body,
+      lost
+    } : null;
+  };
   const save = async () => {
     setErr('');
     if (!editing) {
@@ -4975,6 +5083,20 @@ function UserModal({
     if (noSubs) {
       setSec('access');
       return setErr(noSubs[1] + ': tick at least one sub-menu, or set it to None.');
+    }
+    const noModules = USER_MODS.every(([k]) => !asActions(perms[k]).length);
+    if (ownOnly && noModules && !isAdmin && !isColl && String(staffId) === '') {
+      setSec('account');
+      return setErr('Own profile only: enter their Employee ID (Account tab) so My Profile can show their record.');
+    }
+    const rosPlan = rosCfgPlan();
+    if (rosPlan && rosPlan.lost.length) {
+      const ok = await window.UI.confirm({
+        title: 'Change their duty roster places?',
+        confirmLabel: 'Save',
+        message: (name.trim() || username) + ' will no longer be ' + rosPlan.lost.slice(0, 6).join(', ') + (rosPlan.lost.length > 6 ? ' and ' + (rosPlan.lost.length - 6) + ' more' : '') + '. Those departments are left without one until someone else is picked.'
+      });
+      if (!ok) return;
     }
     const mdActs = !isAdmin && !isColl ? asActions(perms.mydept) : [];
     if (mdActs.length && !myDepts.length) {
@@ -5012,7 +5134,11 @@ function UserModal({
         perms: isAdmin || isColl ? null : granted
       };
       if (!isColl && signoffSet) payload.signoff = signoff || '';
-      if (!isColl && !isAdmin && (!editing || rosterRole !== (initial.rosterRole || ''))) payload.rosterRole = rosterRole || '';
+      if (!isAdmin && (!editing || rosterRole !== (initial.rosterRole || ''))) payload.rosterRole = isColl ? rosterRole === 'incharge' ? 'incharge' : '' : rosterRole || '';
+      if (isColl && staffLinkDirty) {
+        payload.staffId = staffId !== '' ? Number(staffId) : null;
+        payload.staffEmpId = linkedRec && linkedRec.emp_id ? linkedRec.emp_id : '';
+      }
       if (!editing || backendRole !== (initial.role || 'User')) payload.role = backendRole;
       if (sendScope) {
         const base = scopeBase.current || (window.dcScopeBase ? window.dcScopeBase(scope0.current) : undefined);
@@ -5068,6 +5194,28 @@ function UserModal({
           ...payload
         });
       }
+      if (rosPlan) {
+        try {
+          const r = await fetch('/api/rosters/config', {
+            method: 'PUT',
+            credentials: 'same-origin',
+            headers: {
+              'content-type': 'application/json'
+            },
+            body: JSON.stringify(rosPlan.body)
+          });
+          const j = await r.json().catch(() => null);
+          if (!j || !j.ok) throw new Error(j && j.error || 'the roster setup was not saved');
+          try {
+            if (window.UNICO_ROSTER_KIT && window.UNICO_ROSTER_KIT.loadConfig) window.UNICO_ROSTER_KIT.loadConfig(true);
+            window.dispatchEvent(new Event('unico:ros-refresh'));
+          } catch (e) {}
+        } catch (e) {
+          uToast((editing ? 'User updated' : 'User created') + ', but their roster departments were not saved: ' + (e.message || 'error'), 'error');
+          onSaved();
+          return;
+        }
+      }
       uToast(editing ? 'User updated' : 'User created');
       onSaved();
     } catch (e) {
@@ -5075,6 +5223,297 @@ function UserModal({
     } finally {
       setBusy(false);
     }
+  };
+  const staffBlock = () => React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 6
+    }
+  }, "Staff record ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 which staff member this login is \u2014 My Profile shows their record")), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(140px,200px) 1fr',
+      gap: 10,
+      alignItems: 'start'
+    }
+  }, React.createElement("div", {
+    className: "field",
+    style: {
+      margin: 0
+    }
+  }, React.createElement("input", {
+    value: empQ,
+    onChange: e => typeEmp(e.target.value),
+    placeholder: "Employee ID, e.g. N-007",
+    "aria-label": "Employee ID"
+  })), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      lineHeight: 1.55,
+      paddingTop: 7
+    }
+  }, linkedRec ? React.createElement("span", {
+    style: {
+      color: '#157a43',
+      fontWeight: 600
+    }
+  }, "\u2713 ", linkedRec.name, linkedRec.designation ? ' · ' + linkedRec.designation : '', linkedRec.current_department ? ' · ' + linkedRec.current_department : '', ' ', React.createElement("button", {
+    type: "button",
+    onClick: () => linkStaff(''),
+    style: {
+      border: 0,
+      background: 'none',
+      color: 'var(--muted)',
+      textDecoration: 'underline',
+      cursor: 'pointer',
+      font: 'inherit',
+      fontSize: 11,
+      padding: 0,
+      marginLeft: 6
+    }
+  }, "Unlink")) : empHits.length > 1 ? React.createElement("span", {
+    style: {
+      color: '#8a5a00'
+    }
+  }, "This number belongs to ", empHits.length, " people \u2014 pick the right one:", ' ', React.createElement("select", {
+    value: "",
+    onChange: e => linkStaff(e.target.value),
+    style: {
+      padding: '3px 6px',
+      borderRadius: 6,
+      border: '1px solid var(--line)',
+      fontFamily: 'inherit',
+      fontSize: 11.5
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "Choose\u2026"), empHits.map(x => React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.name, x.current_department ? ' · ' + x.current_department : '')))) : empQ.trim() ? React.createElement("span", {
+    style: {
+      color: '#b5670a'
+    }
+  }, "No current staff member has this Employee ID. Check the number, or pick them by name below.") : React.createElement("span", {
+    style: {
+      color: 'var(--muted)'
+    }
+  }, "Not linked. Type their Employee ID, or pick them by name below."))), !linkedRec && React.createElement("select", {
+    value: "",
+    onChange: e => linkStaff(e.target.value),
+    "aria-label": "Pick the staff member by name",
+    style: {
+      marginTop: 6,
+      width: '100%',
+      maxWidth: 420,
+      padding: '6px 9px',
+      border: '1px solid var(--line)',
+      borderRadius: 7,
+      fontSize: 12,
+      fontFamily: 'inherit',
+      background: '#fff'
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "\u2026or pick by name"), allStaff.filter(curStaff).map(x => React.createElement("option", {
+    key: x.id,
+    value: x.id
+  }, x.name, x.emp_id ? ' · ' + x.emp_id : '', x.current_department ? ' · ' + x.current_department : ''))));
+  const rosterRoleBlock = portal => {
+    const opts = portal ? [['', 'None'], ['incharge', 'In-charge · prepares']] : [['', 'None'], ['incharge', 'In-charge · prepares'], ['manager', 'Manager · checks'], ['cns', 'CNS · approves']];
+    const list = rcfg && rcfg.depts || [];
+    const needle = rosQ.trim().toLowerCase();
+    const shown = list.filter(d => !needle || String(d.name).toLowerCase().indexOf(needle) >= 0);
+    const sel = rosSel || [];
+    const tog = id => setRosSel(s => (s || []).indexOf(id) >= 0 ? (s || []).filter(x => x !== id) : [...(s || []), id]);
+    const otherCns = rcfg && rcfg.cns && rcfg.cns.username !== acctName ? rcfg.cns : null;
+    return React.createElement("div", null, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        marginBottom: 6
+      }
+    }, "Duty roster role ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: 'var(--muted)',
+        fontSize: 11
+      }
+    }, "\xB7 their place in the roster review chain")), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }
+    }, opts.map(([v, l]) => {
+      const on = rosterRole === v || portal && v === '' && rosterRole !== 'incharge';
+      return React.createElement("button", {
+        key: v || 'none',
+        type: "button",
+        onClick: () => pickRosterRole(v),
+        style: {
+          font: 'inherit',
+          cursor: 'pointer',
+          padding: '5px 12px',
+          borderRadius: 16,
+          fontSize: 12,
+          fontWeight: 600,
+          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+          background: on ? 'var(--blue-50)' : '#fff',
+          color: on ? 'var(--blue-700)' : 'var(--muted)'
+        }
+      }, l);
+    })), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginTop: 6,
+        lineHeight: 1.6
+      }
+    }, rosterRole === 'manager' ? 'They check the rosters of the departments ticked below, and forward each one to the CNS or return it with a note.' : rosterRole === 'cns' ? 'They give the final approval for every department.' : rosterRole === 'incharge' ? 'They prepare and send the rosters of the departments ticked below; their name fills “Prepared by”.' : 'Takes no part in the roster review.', portal && ' To make this person a Manager or the CNS, convert the account first.'), rosViewAdded && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#157a43',
+        marginTop: 4
+      }
+    }, "Duty Roster view was added on Module access \u2014 they need it to open the review inbox."), rosterRole === 'cns' && viewerAdmin && rcfg && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        marginTop: 8,
+        color: otherCns ? '#8a5a00' : '#157a43'
+      }
+    }, otherCns ? 'Saving makes them the CNS in place of ' + otherCns.name + '.' : 'They will be the CNS for every department.'), rosSlot && !viewerAdmin && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: 'var(--muted)',
+        marginTop: 8
+      }
+    }, "An administrator assigns their departments (Duty Roster \u2192 Setup)."), rosSlot && viewerAdmin && React.createElement("div", {
+      style: {
+        marginTop: 10,
+        border: '1px solid var(--line)',
+        borderRadius: 10,
+        overflow: 'hidden'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '8px 10px',
+        background: 'var(--blue-50)',
+        borderBottom: '1px solid var(--line)',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 12,
+        color: 'var(--ink)'
+      }
+    }, rosSlot === 'manager' ? 'Departments they check' : 'Departments they prepare'), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: 'var(--blue-700)',
+        background: '#fff',
+        border: '1px solid var(--blue-100)',
+        borderRadius: 10,
+        padding: '1px 8px'
+      }
+    }, sel.length, " department", sel.length === 1 ? '' : 's'), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement("input", {
+      value: rosQ,
+      onChange: e => setRosQ(e.target.value),
+      placeholder: "Find\u2026",
+      style: {
+        padding: '4px 8px',
+        border: '1px solid var(--line)',
+        borderRadius: 6,
+        fontSize: 11.5,
+        fontFamily: 'inherit',
+        width: 130
+      }
+    }), React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      onClick: () => setRosSel(s => [...new Set([...(s || []), ...shown.map(d => d.id)])])
+    }, "Select all"), React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      onClick: () => setRosSel([])
+    }, "Clear")), !rcfg ? React.createElement("div", {
+      style: {
+        padding: 12,
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "Loading departments\u2026") : React.createElement("div", {
+      style: {
+        maxHeight: 220,
+        overflow: 'auto',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))'
+      }
+    }, shown.map(d => {
+      const on = sel.indexOf(d.id) >= 0;
+      const holder = d[rosSlot];
+      const other = holder && holder.username !== acctName ? holder : null;
+      return React.createElement("label", {
+        key: d.id,
+        style: {
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 7,
+          padding: '6px 10px',
+          cursor: 'pointer',
+          fontSize: 12,
+          borderBottom: '1px solid var(--line)',
+          background: on ? 'var(--blue-50)' : '#fff'
+        }
+      }, React.createElement("input", {
+        type: "checkbox",
+        checked: on,
+        onChange: () => tog(d.id),
+        style: {
+          marginTop: 2
+        }
+      }), React.createElement("span", {
+        style: {
+          minWidth: 0
+        }
+      }, React.createElement("span", {
+        style: {
+          display: 'block',
+          fontWeight: 600,
+          color: 'var(--ink)'
+        }
+      }, d.name), other && React.createElement("span", {
+        style: {
+          display: 'block',
+          fontSize: 10.5,
+          color: on ? '#b5670a' : 'var(--muted)'
+        }
+      }, on ? 'replaces ' + other.name : 'now: ' + other.name)));
+    }), !shown.length && React.createElement("div", {
+      style: {
+        padding: 12,
+        fontSize: 11.5,
+        color: 'var(--muted)'
+      }
+    }, "No departments", needle ? ' match' : '', "."))));
   };
   const lvlColor = {
     none: 'var(--muted)',
@@ -5527,7 +5966,7 @@ function UserModal({
     value: password,
     onChange: e => setPassword(e.target.value),
     placeholder: "At least 6 characters"
-  })))), isPortalAcct ? curSec === 'account' && React.createElement("div", {
+  }))), !isAdmin && staffBlock()), isPortalAcct ? curSec === 'account' && React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: 'var(--ink-2)',
@@ -5558,7 +5997,7 @@ function UserModal({
     style: {
       flexShrink: 0
     }
-  }, "Convert")) : React.createElement("div", {
+  }, "Convert")), (portalRole === 'incharge' || portalRole === 'collector') && rosterRoleBlock(true)) : React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -5679,52 +6118,7 @@ function UserModal({
       fontSize: 10.5,
       color: '#8a5a00'
     }
-  }, "Carried over from the old hierarchy \u2014 pick one to set it on this person."))), curSec === 'account' && !isColl && !isAdmin && React.createElement("div", null, React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      fontWeight: 700,
-      color: 'var(--ink)',
-      marginBottom: 6
-    }
-  }, "Duty roster role ", React.createElement("span", {
-    style: {
-      fontWeight: 500,
-      color: 'var(--muted)',
-      fontSize: 11
-    }
-  }, "\xB7 their place in the roster review chain")), React.createElement("div", {
-    style: {
-      display: 'flex',
-      gap: 6,
-      flexWrap: 'wrap',
-      alignItems: 'center'
-    }
-  }, [['', 'None'], ['incharge', 'In-charge · prepares'], ['manager', 'Manager · checks'], ['cns', 'CNS · approves']].map(([v, l]) => {
-    const on = rosterRole === v;
-    return React.createElement("button", {
-      key: v || 'none',
-      type: "button",
-      onClick: () => setRosterRole(v),
-      style: {
-        font: 'inherit',
-        cursor: 'pointer',
-        padding: '5px 12px',
-        borderRadius: 16,
-        fontSize: 12,
-        fontWeight: 600,
-        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-        background: on ? 'var(--blue-50)' : '#fff',
-        color: on ? 'var(--blue-700)' : 'var(--muted)'
-      }
-    }, l);
-  })), React.createElement("div", {
-    style: {
-      fontSize: 10.5,
-      color: 'var(--muted)',
-      marginTop: 6,
-      lineHeight: 1.6
-    }
-  }, rosterRole === 'manager' ? 'They get a Review inbox for the units they check, and forward each roster to the CNS or return it with a note.' : rosterRole === 'cns' ? 'They get the Review inbox for every unit and give the final approval. Pick them as the CNS under Duty Roster → Setup.' : rosterRole === 'incharge' ? 'They can be picked as a unit’s In-charge under Duty Roster → Setup, and their name fills “Prepared by”.' : 'Takes no part in the roster review. Which units a person prepares or checks is set under Duty Roster → Setup.', ' ', "They still need Duty Roster access (view) for their units."))), curSec === 'account' && React.createElement("div", {
+  }, "Carried over from the old hierarchy \u2014 pick one to set it on this person."))), curSec === 'account' && !isColl && !isAdmin && rosterRoleBlock(false)), curSec === 'account' && React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
@@ -5819,7 +6213,12 @@ function UserModal({
     type: "button",
     className: "btn sm",
     onClick: () => quickSet('view')
-  }, "View only everywhere"), React.createElement("select", {
+  }, "View only everywhere"), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => quickSet('own'),
+    title: "No modules: Home and My Profile only \u2014 their own record, no performance"
+  }, "Own profile only"), React.createElement("select", {
     value: copyFrom,
     onChange: e => copyAccess(e.target.value),
     "aria-label": "Copy access from another person",
@@ -5837,7 +6236,22 @@ function UserModal({
   }, "Copy from a person\u2026"), (allUsers || []).filter(x => x.username !== (editing ? initial.username : '') && !PORTAL_ROLE_LABEL[x.role]).map(x => React.createElement("option", {
     key: x.username,
     value: x.username
-  }, x.name || x.username)))), React.createElement("div", {
+  }, x.name || x.username)))), ownOnly && USER_MODS.every(([k]) => !asActions(perms[k]).length) && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--ink-2)',
+      background: 'var(--blue-50)',
+      border: '1px solid var(--blue-100)',
+      borderRadius: 9,
+      padding: '10px 12px',
+      marginBottom: 10,
+      lineHeight: 1.55
+    }
+  }, React.createElement("b", null, "Own profile only."), " They see ", React.createElement("b", null, "Home"), " and ", React.createElement("b", null, "My Profile"), " \u2014 their own register details, today's shift, their password. No performance, no other staff, no other module.", linkedRec ? React.createElement(React.Fragment, null, " Linked to ", React.createElement("b", null, linkedRec.name), ".") : React.createElement("span", {
+    style: {
+      color: '#b5670a'
+    }
+  }, " Enter their Employee ID on the Account tab before saving.")), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -6376,10 +6790,7 @@ function UserModal({
     className: "field"
   }, React.createElement("label", null, "Which staff member is this login?"), React.createElement("select", {
     value: staffId === null ? '' : String(staffId),
-    onChange: e => {
-      setStaffId(e.target.value);
-      setStaffLinkDirty(true);
-    }
+    onChange: e => linkStaff(e.target.value)
   }, React.createElement("option", {
     value: ""
   }, "\u2014 not linked \u2014"), allStaff.map(x => React.createElement("option", {
@@ -10487,6 +10898,28 @@ function AcPerson({
   const t = acAccessType(u);
   const isMe = me && u.username === me;
   const lastAdmin = u.role === 'Administrator' && u.active !== false && admins <= 1;
+  const [rcfg, setRcfg] = React.useState(null);
+  React.useEffect(() => {
+    const me2 = window.__UNICO_USER__;
+    if (me2 && me2.role !== 'Administrator') return undefined;
+    let live = true;
+    fetch('/api/rosters/config', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(r => r.ok ? r.json() : null).then(j => {
+      if (live && j && j.ok) setRcfg(j);
+    }).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [u.username, u.updatedAt]);
+  const rosterHeld = (() => {
+    if (!rcfg) return '';
+    if (rcfg.cns && rcfg.cns.username === u.username) return 'CNS · every department';
+    const slot = u.rosterRole === 'manager' ? 'manager' : u.rosterRole === 'incharge' ? 'incharge' : null;
+    const ds = (rcfg.depts || []).filter(d => slot && d[slot] && d[slot].username === u.username).map(d => d.name);
+    return ds.length ? ds.slice(0, 4).join(', ') + (ds.length > 4 ? ' +' + (ds.length - 4) : '') : '';
+  })();
   const Editor = window.UserModal;
   const run = async (key, fn, msg) => {
     setBusy(key);
@@ -10710,11 +11143,11 @@ function AcPerson({
     prepare: 'Prepares',
     check: 'Checks',
     approve: 'Approves'
-  }[u.signoff] || 'Takes no part'), t !== 'portal' && row('Duty roster role', {
+  }[u.signoff] || 'Takes no part'), row('Duty roster role', ({
     incharge: 'In-charge · prepares',
     manager: 'Manager · checks',
     cns: 'CNS · approves'
-  }[u.rosterRole] || 'None')))), K.mayUsers('edit') && React.createElement("div", {
+  }[u.rosterRole] || 'None') + (rosterHeld && u.rosterRole !== 'cns' ? ' — ' + rosterHeld : ''))))), K.mayUsers('edit') && React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b",

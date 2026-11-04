@@ -47,6 +47,13 @@ const rosCan = a => {
   }
 };
 const rosKey = e => 'S' + String(e.id);
+const rosRowOf = e => ({
+  empId: rosKey(e),
+  empIdShown: e.emp_id || '',
+  name: e.name,
+  desig: e.designation,
+  photo: MK && MK.photoUrlOf && MK.photoUrlOf(e) || ''
+});
 const rosMigrateGrid = (grid, rows) => {
   const g = grid || {};
   const keys = Object.keys(g);
@@ -739,12 +746,7 @@ const rosRowsFrom = (doc, staff, dept, withRegister) => {
   (staff || []).forEach(e => {
     all[rosKey(e)] = e;
   });
-  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => ({
-    empId: rosKey(e),
-    empIdShown: e.emp_id || '',
-    name: e.name,
-    desig: e.designation
-  }));
+  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => rosRowOf(e));
   const known = Object.keys(all).map(k => ({
     empId: k,
     empIdShown: all[k].emp_id || ''
@@ -757,12 +759,7 @@ const rosRowsFrom = (doc, staff, dept, withRegister) => {
     if (!id || seen[id]) return;
     seen[id] = 1;
     const e = all[id];
-    out.push(e ? {
-      empId: id,
-      empIdShown: e.emp_id || '',
-      name: e.name,
-      desig: e.designation
-    } : {
+    out.push(e ? rosRowOf(e) : {
       empId: id,
       empIdShown: '',
       name: names[id] || id,
@@ -2486,12 +2483,7 @@ function RosterGrid({
   const history = useRef([]);
   const saveTimer = useRef(null);
   const toastTimer = useRef(null);
-  const staff = useMemo(() => (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => ({
-    empId: rosKey(e),
-    empIdShown: e.emp_id || '',
-    name: e.name,
-    desig: e.designation
-  })).sort((a, b) => String(a.name).localeCompare(String(b.name))), [staffStore.staff, dept]);
+  const staff = useMemo(() => (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => rosRowOf(e)).sort((a, b) => String(a.name).localeCompare(String(b.name))), [staffStore.staff, dept]);
   const rows = useMemo(() => {
     const byId = {};
     staff.forEach(x => {
@@ -3856,7 +3848,8 @@ function RosterGrid({
       }
     }, React.createElement(MK.Av, {
       name: x.name,
-      empId: x.empId,
+      emp: x,
+      empId: x.empIdShown,
       size: 28,
       radius: rosAvRadius(28)
     }), React.createElement("div", {
@@ -4441,7 +4434,8 @@ function RosterGrid({
         }
       }, React.createElement(MK.Av, {
         name: p.x.name,
-        empId: p.x.empId,
+        emp: p.x,
+        empId: p.x.empIdShown,
         size: 30,
         radius: rosAvRadius(30)
       }), React.createElement("div", {
@@ -4529,7 +4523,8 @@ function RosterGrid({
       }
     }, React.createElement(MK.Av, {
       name: x.name,
-      empId: x.empId,
+      emp: x,
+      empId: x.empIdShown,
       size: 34,
       radius: rosAvRadius(34)
     }), React.createElement("div", {
@@ -4858,7 +4853,8 @@ function RosterGrid({
         }
       }, React.createElement(MK.Av, {
         name: x.name,
-        empId: x.empId,
+        emp: x,
+        empId: x.empIdShown,
         size: 22,
         radius: rosAvRadius(22)
       }), React.createElement("span", {
@@ -5749,7 +5745,8 @@ function RosterGrid({
       }
     }, React.createElement(MK.Av, {
       name: n.p.x.name,
-      empId: n.p.x.empId,
+      emp: n.p.x,
+      empId: n.p.x.empIdShown,
       size: 22,
       radius: rosAvRadius(22)
     }), React.createElement("span", {
@@ -7493,7 +7490,8 @@ function RosterGrid({
         }
       }, React.createElement(MK.Av, {
         name: p.x.name,
-        empId: p.x.empId,
+        emp: p.x,
+        empId: p.x.empIdShown,
         size: 28,
         radius: rosAvRadius(28)
       }), React.createElement("div", {
@@ -7607,6 +7605,97 @@ function RosterGrid({
     }, "Open day view \u203A")))));
   })());
 }
+const rosEsc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+})[c]);
+const rosDate = t => t ? new Date(t).toLocaleDateString('en-GB', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric'
+}) : '';
+function rosPrintHtml({
+  dept,
+  year,
+  month,
+  doc,
+  rows,
+  grid,
+  signers,
+  colour,
+  summary,
+  legend,
+  printedBy
+}) {
+  const days = R.daysIn(year, month);
+  const ds = Array.from({
+    length: days
+  }, (_, i) => i + 1);
+  const st = rosStatusNorm(doc ? doc.status : null);
+  const hist = doc && doc.history || [];
+  const lastOf = acts => {
+    for (let i = hist.length - 1; i >= 0; i--) if (acts.indexOf(hist[i].action) >= 0) return hist[i];
+    return null;
+  };
+  const inChain = st === 'pending_manager' || st === 'pending_cns' || st === 'approved';
+  const sent = inChain ? lastOf(['send_manager', 'send_cns']) : null;
+  const fwd = inChain ? lastOf(['forward']) : null;
+  const ok = st === 'approved' ? lastOf(['approve']) : null;
+  const sg = signers || {};
+  const signs = [['Prepared by', doc && doc.preparedBy || sg.incharge && sg.incharge.name || '', 'In-charge, ' + dept, sent ? rosDate(sent.at) : ''], ['Checked by', fwd && doc && doc.checkedBy || sg.manager && sg.manager.name || '', 'Nurse Manager', fwd ? rosDate(fwd.at) : sent && sent.action === 'send_cns' ? 'sent directly to CNS' : ''], ['Approved by', ok && doc && doc.approvedBy || sg.cns && sg.cns.name || '', 'Chief of Nursing Services', ok ? rosDate(ok.at) : '']];
+  const mark = st === 'approved' ? '' : st === 'none' ? 'NOT PREPARED' : st === 'pending_manager' ? 'AWAITING MANAGER CHECK' : st === 'pending_cns' ? 'AWAITING CNS APPROVAL' : st === 'returned' ? 'RETURNED FOR CORRECTION' : 'DRAFT — NOT APPROVED';
+  const tint = code => {
+    if (!code) return '';
+    const b = R.bucketOf(code);
+    if (!colour) return b === 'O' ? 'background:#f1f3f6' : '';
+    const c = rosBColor(b);
+    return 'background:' + c + '1f;color:' + c;
+  };
+  const fri = d => new Date(year, month, d).getDay() === 5;
+  const head1 = ds.map(d => '<th class="d' + (fri(d) ? ' fr' : '') + '">' + d + '</th>').join('');
+  const head2 = ds.map(d => '<th class="w' + (fri(d) ? ' fr' : '') + '">' + rosEsc(String(rosDow(year, month, d)).slice(0, 2)) + '</th>').join('');
+  const body = rows.map((r, i) => {
+    const row = grid && grid[r.empId] || {};
+    const t = R.totalsFor(row, days);
+    const cells = ds.map(d => {
+      const c = row[d] || '';
+      return '<td class="c' + (fri(d) ? ' fr' : '') + '" style="' + tint(c) + '">' + rosEsc(c) + '</td>';
+    }).join('');
+    return '<tr><td class="n">' + (i + 1) + '</td><td class="e">' + rosEsc(r.empIdShown || '') + '</td>' + '<td class="nm"><b>' + rosEsc(r.name) + '</b><span>' + rosEsc(r.desig || '') + '</span></td>' + cells + ['G', 'M', 'E', 'N', 'O'].map(b => '<td class="t">' + (t[b] || '') + '</td>').join('') + '<td class="t h">' + (t.hours || '') + '</td></tr>';
+  }).join('');
+  const ids = rows.map(r => r.empId);
+  const sumRow = (label, fn) => '<tr class="sum"><td colspan="3" class="sl">' + label + '</td>' + ds.map(d => {
+    const v = fn(d);
+    return '<td class="c' + (fri(d) ? ' fr' : '') + '">' + (v || '') + '</td>';
+  }).join('') + '<td colspan="6"></td></tr>';
+  const cov = {};
+  ds.forEach(d => {
+    cov[d] = R.coverageFor(grid || {}, ids, d);
+  });
+  const leaveOn = d => ids.filter(id => R.isLeave(((grid || {})[id] || {})[d])).length;
+  const sums = !summary ? '' : sumRow('General on duty', d => cov[d].G) + sumRow('Morning on duty', d => cov[d].M) + sumRow('Evening on duty', d => cov[d].E) + sumRow('Night on duty', d => cov[d].N) + sumRow('On leave', leaveOn);
+  const legendHtml = !legend ? '' : '<div class="lg">' + R.BUCKETS.concat([{
+    id: 'O',
+    label: 'Leave / off',
+    color: '#8b98ab'
+  }]).filter((b, i, a) => a.findIndex(x => x.id === b.id) === i).map(b => {
+    const codes = R.SHIFTS.filter(s => s.bucket === b.id);
+    if (!codes.length) return '';
+    return '<div class="lgb"><b style="color:' + (colour ? rosBColor(b.id) : '#16202e') + '">' + rosEsc(b.label) + '</b>' + codes.map(s => '<span><i>' + rosEsc(s.code) + '</i> ' + rosEsc(s.label) + '</span>').join('') + '</div>';
+  }).join('') + '</div>';
+  const at = new Date().toLocaleString('en-GB', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+  const css = '@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff;position:relative}@media print{body{padding:0}}' + '.lh{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding-bottom:6px;border-bottom:1px solid #d9e2ec}.lh img{height:38px}' + '.lh .tt{text-align:right}.lh .kind{font-size:7pt;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#0072a3}.lh h1{margin:2px 0 0;font-size:14pt;color:#0d1b2e}' + '.bar{height:3px;background:linear-gradient(90deg,#0072a3,#27a8db 55%,#3ab5a7);margin-bottom:7px}' + '.info{display:flex;flex-wrap:wrap;gap:4px 22px;margin:0 0 6px;font-size:8.5pt}.info b{font-weight:700}.st{display:inline-block;padding:0 7px;border-radius:9px;font-size:7.5pt;font-weight:700;border:1px solid currentColor}' + 'table{border-collapse:collapse;width:100%;table-layout:fixed}thead{display:table-header-group}tr{page-break-inside:avoid}' + 'th{background:#0d3a5c;color:#fff;font-weight:700;border:1px solid #0d3a5c;padding:2px 0;font-size:7pt}th.w{font-weight:500;font-size:6.2pt;background:#1d4f76}th.fr{background:#2a6a99}' + 'td{border:1px solid #c9d3de;text-align:center;padding:0;height:15px}td.c{font-size:6.8pt;font-weight:700}td.fr{box-shadow:inset 0 0 0 9999px rgba(13,58,92,.05)}' + 'td.n{width:6mm;color:#5b6878}td.e{font-size:6.6pt;color:#3c4858}td.nm{text-align:left;padding:1px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{display:block;font-size:7.4pt;overflow:hidden;text-overflow:ellipsis}td.nm span{display:block;font-size:6pt;color:#6c7a8c}' + 'td.t{font-size:7pt;background:#f4f7fa}td.h{font-weight:700}col.n{width:6mm}col.e{width:12mm}col.nm{width:40mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}' + 'tr.sum td{background:#eef4f9;font-size:6.8pt;font-weight:700;color:#0d3a5c;height:12px}tr.sum td.sl{text-align:right;padding-right:5px;font-weight:600}' + '.lg{display:grid;grid-template-columns:repeat(5,1fr);gap:2px 12px;margin-top:5px;font-size:6.4pt;color:#3c4858;page-break-inside:avoid}.lgb b{display:block;font-size:7pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.5px}.lgb span{display:inline-block;margin-right:7px;white-space:nowrap}.lgb i{font-style:normal;font-weight:700;color:#16202e}' + '.nb{margin-top:6px;font-size:7pt;color:#3c4858}.rm{margin-top:4px;font-size:7.5pt;border-bottom:1px dotted #9aa6b4;height:14px}' + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:16px;font-size:8pt;page-break-inside:avoid}.signs div{border-top:1px solid #16202e;padding-top:3px}' + '.signs span{display:block;font-size:6.6pt;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7b8796}.signs b{display:block;font-size:9pt}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}' + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}.cr{margin-top:3px;text-align:center;font-size:6px;color:#a3adba}' + '.wm{position:fixed;top:42%;left:0;right:0;text-align:center;font-size:54pt;font-weight:800;color:rgba(210,58,82,.10);transform:rotate(-14deg);pointer-events:none;letter-spacing:4px;z-index:0}';
+  const stColour = st === 'approved' ? '#157a43' : st === 'returned' ? '#b4232f' : st === 'none' ? '#7d8ea8' : '#b5670a';
+  const html = (mark ? '<div class="wm">' + rosEsc(mark) + '</div>' : '') + '<header class="lh"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"><div class="tt"><div class="kind">Nursing Services · Duty Roster</div><h1>Duty Roster — ' + rosEsc(dept) + '</h1></div></header><div class="bar"></div>' + '<div class="info"><span>Month: <b>' + rosEsc(R.MONTHS[month] + ' ' + year) + '</b></span><span>Department: <b>' + rosEsc(dept) + '</b></span>' + '<span>Staff: <b>' + rows.length + '</b></span><span>Revision: <b>' + (doc ? doc.revision || 1 : '—') + '</b></span>' + '<span>Status: <span class="st" style="color:' + stColour + '">' + rosEsc(ROS_STATUS[st].label) + '</span></span>' + (ok ? '<span>Approved on: <b>' + rosEsc(rosDate(ok.at)) + '</b></span>' : '') + '</div>' + '<table><colgroup><col class="n"><col class="e"><col class="nm">' + ds.map(() => '<col class="d">').join('') + '<col class="t"><col class="t"><col class="t"><col class="t"><col class="t"><col class="h"></colgroup>' + '<thead><tr><th rowspan="2">S/N</th><th rowspan="2">Emp ID</th><th rowspan="2" style="text-align:left;padding-left:4px">Name · Designation</th>' + head1 + '<th rowspan="2">G</th><th rowspan="2">M</th><th rowspan="2">E</th><th rowspan="2">N</th><th rowspan="2">O</th><th rowspan="2">Hrs</th></tr><tr>' + head2 + '</tr></thead>' + '<tbody>' + (body || '<tr><td colspan="' + (days + 9) + '" style="padding:14px;color:#7b8796">No staff on this roster.</td></tr>') + sums + '</tbody></table>' + legendHtml + '<div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>' + '<div class="rm">Remarks:</div>' + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + (when ? ' · ' + rosEsc(when) : '') + '</em></div>').join('') + '</div>' + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (st === 'approved' ? 'Approved roster — final.' : 'Not approved — may still change.') + '</span></div>' + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div>';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dept + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + css + '</style></head><body>' + html + '</body></html>';
+}
+const ROS_PRINT_OPT_KEY = 'unico_roster_print_opts_v1';
 function RosterPrint({
   staffStore,
   dept,
@@ -7614,43 +7703,72 @@ function RosterPrint({
   month,
   setRoute
 }) {
-  const days = R.daysIn(year, month);
   const [doc, setDoc] = useState(null);
   const [signers, setSigners] = useState({});
+  const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [opt, setOpt] = useState(() => {
+    const d = {
+      colour: true,
+      summary: true,
+      legend: true
+    };
+    try {
+      return {
+        ...d,
+        ...(JSON.parse(localStorage.getItem(ROS_PRINT_OPT_KEY) || '{}') || {})
+      };
+    } catch (e) {
+      return d;
+    }
+  });
+  const [busy, setBusy] = useState(false);
+  const frame = useRef(null);
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
       setDoc(r && r.ok ? r.roster : null);
       setSigners(r && r.ok && r.signers || {});
+      setCan(r && r.ok && (r.roster && r.roster.can || r.can) || null);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [dept, year, month]);
-  const staff = useMemo(() => (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => ({
-    empId: rosKey(e),
-    empIdShown: e.emp_id || '',
-    name: e.name,
-    desig: e.designation
-  })), [staffStore.staff, dept]);
-  const order = doc && doc.order || [];
-  const rows = useMemo(() => {
-    if (!order.length) return staff;
-    const by = {};
-    staff.forEach(s => {
-      by[s.empId] = s;
-    });
-    const out = [];
-    const seen = {};
-    order.forEach(id => {
-      if (by[id] && !seen[id]) {
-        out.push(by[id]);
-        seen[id] = 1;
+  useEffect(() => {
+    try {
+      localStorage.setItem(ROS_PRINT_OPT_KEY, JSON.stringify(opt));
+    } catch (e) {}
+  }, [opt]);
+  const view = useMemo(() => rosRowsFrom(doc, staffStore.staff, dept), [doc, staffStore.staff, dept]);
+  const me = window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username) || '';
+  const html = useMemo(() => rosPrintHtml({
+    dept,
+    year,
+    month,
+    doc,
+    rows: view.rows,
+    grid: view.grid,
+    signers,
+    ...opt,
+    printedBy: me
+  }), [dept, year, month, doc, view, signers, opt, me]);
+  const mayPrint = rosCan('print') || !!(can && (can.edit || can.send));
+  const print = () => {
+    const w = frame.current && frame.current.contentWindow;
+    if (!w) return;
+    setBusy(true);
+    rosApi.post('/api/rosters/print', {
+      kind: 'sheet',
+      target: dept,
+      detail: R.MONTHS[month] + ' ' + year + (doc ? ' · rev ' + (doc.revision || 1) + ' · ' + rosStatusNorm(doc.status) : ' · not prepared')
+    }).catch(() => null).then(() => {
+      setBusy(false);
+      try {
+        w.focus();
+        w.print();
+      } catch (e) {
+        rosToast('Could not open the print dialog.', 'error');
       }
     });
-    staff.forEach(s => {
-      if (!seen[s.empId]) out.push(s);
-    });
-    return out;
-  }, [staff, order]);
+  };
   if (loading) return React.createElement("div", {
     style: {
       display: 'grid',
@@ -7659,25 +7777,37 @@ function RosterPrint({
       color: 'var(--muted,#8aa0b8)'
     }
   }, "Loading\u2026");
-  const grid = rosMigrateGrid(doc && doc.grid, staff);
-  const sig = window.unicoSig && window.unicoSig.load && window.unicoSig.load() || {};
-  const nm = k => signers[k] && signers[k].name || '';
-  const cell = {
-    border: '1px solid #333',
-    padding: '2px 3px',
-    fontSize: 8.6,
-    textAlign: 'center'
-  };
-  return React.createElement("div", null, React.createElement("div", {
-    className: "card",
+  const st = rosStatusNorm(doc ? doc.status : null);
+  const tog = (k, label) => React.createElement("label", {
     style: {
-      marginBottom: 12
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 12,
+      color: '#3c4858',
+      cursor: 'pointer'
     }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!opt[k],
+    onChange: e => setOpt(o => ({
+      ...o,
+      [k]: e.target.checked
+    }))
+  }), label);
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "card"
   }, React.createElement("div", {
     className: "card-b",
     style: {
       display: 'flex',
-      gap: 8,
+      gap: 14,
       alignItems: 'center',
       flexWrap: 'wrap'
     }
@@ -7691,156 +7821,57 @@ function RosterPrint({
     })
   }, "\u2039 Back to the grid"), React.createElement("div", {
     style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    className: "sub"
-  }, "1:1 with the roster workbook"), rosCan('print') && React.createElement("button", {
-    className: "btn pri",
-    onClick: () => window.print()
-  }, "Print / Save as PDF"))), React.createElement("div", {
-    id: "pdf-root",
-    style: {
-      background: '#fff',
-      color: '#111',
-      padding: '16px 18px',
-      borderRadius: 8,
-      overflow: 'auto'
+      minWidth: 180
     }
   }, React.createElement("div", {
     style: {
-      textAlign: 'center',
-      marginBottom: 8
+      fontWeight: 700,
+      fontSize: 13.5,
+      color: '#16202e'
     }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 14,
-      fontWeight: 700
-    }
-  }, "Duty Roster For ", dept), React.createElement("div", {
+  }, "Print roster \u2014 ", dept, ", ", R.MONTHS[month], " ", year), React.createElement("div", {
+    className: "sub",
     style: {
       fontSize: 11
     }
-  }, R.MONTHS[month], " ", year, doc ? ' · revision ' + (doc.revision || 1) + ' · ' + ROS_STATUS[rosStatusNorm(doc.status)].label : ' · not yet drafted')), React.createElement("table", {
+  }, "A4 landscape \xB7 letterhead \xB7 signatures", st !== 'approved' ? ' · watermarked until approved' : '')), React.createElement(RosStatusChip, {
+    st: doc ? doc.status : null
+  }), React.createElement("div", {
     style: {
-      borderCollapse: 'collapse',
-      width: '100%'
+      flex: 1
     }
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+  }), tog('colour', 'Colour codes'), tog('summary', 'Daily cover rows'), tog('legend', 'Shift legend'), mayPrint ? React.createElement("button", {
+    className: "btn pri",
+    disabled: busy,
+    onClick: print
+  }, busy ? 'Preparing…' : 'Print / Save as PDF') : React.createElement("span", {
+    className: "sub",
     style: {
-      ...cell,
-      background: '#eef2f7',
-      width: 22
+      fontSize: 11
     }
-  }, "S/N"), React.createElement("th", {
+  }, "Printing needs Duty Roster print access."))), React.createElement("div", {
     style: {
-      ...cell,
-      background: '#eef2f7',
-      width: 52
+      background: 'rgba(125,145,180,.12)',
+      borderRadius: 12,
+      padding: 14,
+      overflow: 'auto'
     }
-  }, "EMP-ID"), React.createElement("th", {
+  }, React.createElement("iframe", {
+    ref: frame,
+    title: "Roster print preview",
+    srcDoc: html,
     style: {
-      ...cell,
-      background: '#eef2f7',
-      textAlign: 'left',
-      minWidth: 120
+      display: 'block',
+      margin: '0 auto',
+      width: '100%',
+      maxWidth: 1180,
+      height: '78vh',
+      border: 0,
+      background: '#fff',
+      borderRadius: 6,
+      boxShadow: '0 10px 30px rgba(16,32,46,.18)'
     }
-  }, "Staff Name"), React.createElement("th", {
-    style: {
-      ...cell,
-      background: '#eef2f7',
-      textAlign: 'left',
-      minWidth: 84
-    }
-  }, "Designation"), Array.from({
-    length: days
-  }, (_, i) => i + 1).map(d => {
-    const dt = new Date(year, month, d);
-    return React.createElement("th", {
-      key: d,
-      style: {
-        ...cell,
-        background: dt.getDay() === 5 ? '#e6ebf2' : '#eef2f7',
-        width: 15
-      }
-    }, d);
-  }), ['G', 'M', 'E', 'N', 'O'].map(b => React.createElement("th", {
-    key: b,
-    style: {
-      ...cell,
-      background: '#eef2f7',
-      width: 16
-    }
-  }, b)), React.createElement("th", {
-    style: {
-      ...cell,
-      background: '#eef2f7',
-      width: 26
-    }
-  }, "Hours"))), React.createElement("tbody", null, rows.map((s, i) => {
-    const row = grid[s.empId] || {};
-    const t = R.totalsFor(row, days);
-    return React.createElement("tr", {
-      key: s.empId
-    }, React.createElement("td", {
-      style: cell
-    }, i + 1), React.createElement("td", {
-      style: cell
-    }, s.empIdShown || '—'), React.createElement("td", {
-      style: {
-        ...cell,
-        textAlign: 'left'
-      }
-    }, s.name), React.createElement("td", {
-      style: {
-        ...cell,
-        textAlign: 'left'
-      }
-    }, s.desig || ''), Array.from({
-      length: days
-    }, (_, k) => k + 1).map(d => React.createElement("td", {
-      key: d,
-      style: cell
-    }, row[d] || '')), ['G', 'M', 'E', 'N', 'O'].map(b => React.createElement("td", {
-      key: b,
-      style: cell
-    }, t[b] || '')), React.createElement("td", {
-      style: {
-        ...cell,
-        fontWeight: 700
-      }
-    }, t.hours || ''));
-  }))), React.createElement("div", {
-    style: {
-      marginTop: 10,
-      fontSize: 8.6
-    }
-  }, React.createElement("b", null, "NB:"), " Do not make changes without permission from the authorised person."), React.createElement("div", {
-    style: {
-      marginTop: 8,
-      fontSize: 8.4
-    }
-  }, React.createElement(ShiftLegend, {
-    compact: true
-  })), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(3,1fr)',
-      gap: 24,
-      marginTop: 34,
-      fontSize: 10
-    }
-  }, [['Prepared By', doc && doc.preparedBy || nm('incharge') || sig.prepared], ['Checked By', doc && doc.checkedBy || nm('manager') || sig.reviewed], ['Approved By', doc && doc.approvedBy || nm('cns') || sig.approved]].map(([l, n]) => React.createElement("div", {
-    key: l,
-    style: {
-      borderTop: '1px solid #333',
-      paddingTop: 4
-    }
-  }, React.createElement("div", {
-    style: {
-      fontWeight: 700
-    }
-  }, l), React.createElement("div", null, n || ''))))));
+  })));
 }
 function RosterView({
   view,
