@@ -3266,6 +3266,6 @@ window.UNICO_ROSTER_KIT = {
   useRosterIndex, useRosterScope, useRosterStaff, useRosterConfig, loadConfig: rosLoadConfig, useRosDecide,
   ROS_STATUS, ROS_ACTIONS, ROS_HIST_LABEL, ROS_EDITABLE, statusNorm: rosStatusNorm,
   RosStatusChip, RosDecisionButtons, RosHistoryTimeline, RosReturnedBanner, RosDrawer, RosSheetTable, RosSignOff, RosVersions,
-  rulesOf: rosRulesOf, findingsOf: rosFindingsOf, rowsFrom: rosRowsFrom,
+  rulesOf: rosRulesOf, findingsOf: rosFindingsOf, rowsFrom: rosRowsFrom, printHtml: rosPrintHtml,
   bColor: rosBColor, MONO: ROS_MONO,
 };
