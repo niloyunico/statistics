@@ -10264,6 +10264,7 @@ const I = {
   bed: 'M3 7v10M3 12h12a4 4 0 014 4v1M3 17h18M7 9h4a2 2 0 010 4H3',
   activity: 'M3 12h4l2 6 4-14 2 8h6',
   steth: 'M6 3v5a4 4 0 008 0V3M19 14a3 3 0 11-6 0v-1M16 18v2',
+  cap: 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5',
   cal: 'M3 5h18v16H3zM3 9h18M8 3v4M16 3v4',
   syringe: 'M18 2l4 4M16 4l4 4-9 9H7v-4zM2 22l5-5',
   user: 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0',
@@ -10523,6 +10524,7 @@ function unicoSubMenus() {
     unicoWorkspaceSubAll(SAMPLE[m]).forEach(s => {
       if ((s.mod || unicoModuleOf(s.view)) !== m) return;
       if (s.adminOnly) return;
+      if (s.grant) return;
       (out[m] = out[m] || []).push([s.view, s.label, s.match || [s.view]]);
     });
   });
@@ -11042,7 +11044,7 @@ function wsHome(it) {
   return it.home;
 }
 function unicoWorkspaceSub(view) {
-  return unicoWorkspaceSubAll(view).filter(s => unicoSubMenuOk(s.mod || unicoModuleOf(s.view), s.view));
+  return unicoWorkspaceSubAll(view).filter(s => unicoSubMenuOk(s.mod || unicoModuleOf(s.view), s.grant || s.view));
 }
 function unicoWorkspaceSubAll(view) {
   const mod = unicoModuleOf(view);
@@ -11112,6 +11114,25 @@ function unicoWorkspaceSubAll(view) {
     mod: 'staff',
     match: ['staffAll', 'nurses', 'pca']
   }, {
+    label: 'Nurses',
+    view: 'nurses',
+    mod: 'staff',
+    grant: 'staffAll',
+    icon: I.steth
+  }, {
+    label: 'PCA',
+    view: 'pca',
+    mod: 'staff',
+    grant: 'staffAll',
+    icon: I.user
+  }, {
+    label: 'Trainee Nurses',
+    view: 'traineeHome',
+    go: 'trainees',
+    mod: 'staff',
+    icon: I.cap,
+    match: ['traineeHome', 'trainees']
+  }, {
     label: 'New Entry Staff',
     view: 'staffNewEntries',
     mod: 'staff'
@@ -11119,11 +11140,6 @@ function unicoWorkspaceSubAll(view) {
     label: 'Last Updated Staff Info',
     view: 'staffRecentUpdates',
     mod: 'staff'
-  }, {
-    label: 'Trainee Nurses',
-    view: 'traineeHome',
-    mod: 'staff',
-    match: ['traineeHome', 'trainees']
   }, {
     label: 'Compliance',
     view: 'nurseCompliance',
@@ -11558,7 +11574,8 @@ function Sidebar({
     return () => window.removeEventListener('unico:dc-pending', h);
   }, []);
   const sub = unicoWorkspaceSub(view).filter(s => !s.mod || unicoCanAccessModule(s.mod));
-  const subOn = s => s.match ? s.match.indexOf(view) >= 0 : view === s.view;
+  const subExact = sub.find(s => (s.go || s.view) === view);
+  const subOn = s => subExact ? s === subExact : s.match ? s.match.indexOf(view) >= 0 : view === s.view;
   const AUTO_OPEN = {
     datasubmit: 'dsHome'
   };
@@ -11671,14 +11688,19 @@ function Sidebar({
         key: s.view,
         className: 'sb-sub-item' + (subOn(s) ? ' active' : ''),
         onClick: () => setRoute({
-          view: s.view
+          view: s.go || s.view
         }),
         style: s.divider && si > 0 ? {
           marginTop: 7,
           paddingTop: 9,
           borderTop: '1px solid rgba(255,255,255,.10)'
+        } : s.icon ? {
+          paddingLeft: 36
         } : null
-      }, React.createElement("span", {
+      }, s.icon ? React.createElement(Ic, {
+        d: s.icon,
+        s: 14
+      }) : React.createElement("span", {
         className: "dot"
       }), React.createElement("span", {
         className: "lbl"
