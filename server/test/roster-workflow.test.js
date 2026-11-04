@@ -114,6 +114,19 @@ assert.equal(r.status, 403); assert.equal(r.code, 'forbidden'); assert.match(r.e
 r = W.transition(sheet('pending_manager'), 'forward', incharge, cfg);
 assert.equal(r.code, 'forbidden'); assert.match(r.error, /manager/); pass += 2;
 
+/* ---- the In-charge named in Setup: no Duty Roster Edit permission, no unit assignment ---- */
+const setupIncharge = actor({ username: 'rahima', name: 'Rahima Akter', rosterRole: 'incharge' });   // canEdit false, inScope false
+ok('Setup in-charge sees the sheet', can(setupIncharge, 'draft').view);
+ok('Setup in-charge edits a draft', can(setupIncharge, 'draft').edit);
+ok('Setup in-charge sends a draft', can(setupIncharge, 'draft').send);
+ok('Setup in-charge edits a returned sheet', can(setupIncharge, 'returned').edit);
+ok('Setup in-charge cannot edit while with the Manager', !can(setupIncharge, 'pending_manager').edit);
+ok('Setup in-charge cannot edit an approved sheet', !can(setupIncharge, 'approved').edit);
+ok('Setup in-charge cannot forward or approve', !can(setupIncharge, 'pending_manager').forward && !can(setupIncharge, 'pending_cns').approve);
+ok('another unit\'s in-charge gets nothing', !can(actor({ username: 'someone', rosterRole: 'incharge' }), 'draft').edit);
+ok('not named in Setup: still needs the permission', !can(setupIncharge, 'draft', noCfg).edit);
+ok('Setup in-charge transition send_manager works', W.transition(sheet('draft'), 'send_manager', setupIncharge, cfg, { now: 5 }).ok);
+
 const rs = W.resumeOnEdit(sheet('returned'), incharge, 9);
 assert.deepEqual(rs.set, { status: 'draft', stage: null }); assert.equal(rs.entry.action, 'resume'); assert.equal(rs.entry.revision, 3); pass += 3;
 

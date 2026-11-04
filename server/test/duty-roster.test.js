@@ -20,6 +20,7 @@ const ACCOUNTS = [
   { username: 'farida', name: 'Farida Begum', role: 'User', active: true, rosterRole: 'manager', rosterScope: 'departments', rosterDepartments: [] },
   { username: 'nasrin', name: 'Nasrin Sultana', role: 'User', active: true, rosterRole: 'cns' },
   { username: 'gone', name: 'Left Already', role: 'User', active: false, rosterRole: 'manager' },
+  { username: 'shirin', name: 'Shirin Akter', role: 'User', active: true, rosterRole: 'incharge', rosterScope: 'departments', rosterDepartments: [] },
   { username: 'plain', name: 'No Role', role: 'User', active: true },
 ];
 const fakeUsers = {
@@ -57,6 +58,9 @@ const USERS = {
   rahima: { unrestricted: false, username: 'rahima', name: 'Rahima Akter', role: 'User', rosterRole: 'incharge', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: ['micu'] },
   farida: { unrestricted: false, username: 'farida', name: 'Farida Begum', role: 'User', rosterRole: 'manager', perms: { roster: ['view'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: [] },
   nasrin: { unrestricted: false, username: 'nasrin', name: 'Nasrin Sultana', role: 'User', rosterRole: 'cns', perms: { roster: ['view'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'all' },
+  // Named NICU's In-charge in Setup, but holds Duty Roster VIEW only and no units: the
+  // setup alone must let her prepare NICU's roster — and nothing else.
+  shirin: { unrestricted: false, username: 'shirin', name: 'Shirin Akter', role: 'User', rosterRole: 'incharge', perms: { roster: ['view'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: [] },
   // A second CNS-role holder who prepares a unit too: must not sign what she sent.
   dual: { unrestricted: false, username: 'dual', name: 'Dual Role', role: 'User', rosterRole: 'cns', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'all' },
 };
@@ -200,7 +204,7 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.equal(cfgGet.depts.find((d) => d.id === 'micu').manager.username, 'farida');
     assert.equal(cfgGet.depts.find((d) => d.id === 'nicu').manager, null);
     const reviewers = (await call('GET', '/api/rosters/reviewers')).body.reviewers;
-    assert.deepEqual(reviewers.map((r) => r.username + ':' + r.rosterRole).sort(), ['admin:admin', 'farida:manager', 'nasrin:cns', 'rahima:incharge'], 'active role holders plus administrators, nobody else');
+    assert.deepEqual(reviewers.map((r) => r.username + ':' + r.rosterRole).sort(), ['admin:admin', 'farida:manager', 'nasrin:cns', 'rahima:incharge', 'shirin:incharge'], 'active role holders plus administrators, nobody else');
     assert.ok(reviewers.every((r) => r.perms === undefined && r.passwordHash === undefined), 'names and roster fields only');
 
     // The account-level flags the screens are built from.
@@ -335,6 +339,18 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.equal((await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-11') + '/status', { status: 'draft' }, 'admin')).body.roster.status, 'draft');
     r = await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-11') + '/status', { status: 'approved' }, 'admin');
     assert.equal(r.body.roster.status, 'approved'); assert.deepEqual(r.body.roster.history.slice(-2).map((h) => h.action), ['send_cns', 'approve'], 'approving a draft through the old route sends then approves');
+
+    // The In-charge named in Setup prepares that unit's roster without the Edit permission.
+    assert.equal((await call('PUT', '/api/rosters', { dept: 'NICU', year: 2026, month: 9, grid: { S5: { 1: 'M4' } }, baseRevision: 0 }, 'shirin')).status, 403, 'not named yet: refused');
+    assert.equal((await call('PUT', '/api/rosters/config', { depts: { nicu: { incharge: { username: 'shirin' } } } })).status, 200);
+    let ic = await call('PUT', '/api/rosters', { dept: 'NICU', year: 2026, month: 9, grid: { S5: { 1: 'M4' } }, baseRevision: 0 }, 'shirin');
+    assert.equal(ic.status, 200, 'named In-charge saves her unit: ' + JSON.stringify(ic.body));
+    const icSheet = (await call('GET', '/api/rosters/NICU/2026/9', null, 'shirin')).body;
+    assert.ok(icSheet.roster.can.edit && icSheet.roster.can.send && !icSheet.roster.can.approve, 'she may edit and send, never approve');
+    assert.ok((await call('GET', '/api/rosters/scope', null, 'shirin')).body.units.indexOf('NICU') >= 0, 'her unit is in her roster scope');
+    ic = await call('POST', '/api/rosters/' + encodeURIComponent('ros-NICU-2026-09') + '/transition', { action: 'send_manager' }, 'shirin');
+    assert.equal(ic.status, 200, 'she sends it to the Manager');
+    assert.equal((await call('PUT', '/api/rosters', { dept: 'MICU', year: 2026, month: 9, grid: {}, baseRevision: 0 }, 'shirin')).status, 403, 'another unit is still refused');
 
     // The print log.
     assert.equal((await call('POST', '/api/rosters/print', { kind: 'staff', target: 'Rahima', detail: 'May-Nov 2026' }, 'rahima')).body.ok, true);

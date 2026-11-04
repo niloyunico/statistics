@@ -321,11 +321,26 @@ async function decorate(req, doc, stub) {
 async function reviewVisible(req, cfg, index, dept) {
   const role = roleOf(req);
   if (role === 'admin' || role === 'cns') return true;
-  if (role !== 'manager') return false;
   const key = deptKeyOf(index, dept);
   const d = key && cfg.depts[key];
   const me = (req.access && req.access.username) || '';
+  // The unit's own In-charge (Setup) sees its sheets whatever their roster unit list says.
+  if (me && d && d.incharge && d.incharge.username === me) return true;
+  if (role !== 'manager') return false;
   return !!(d && d.manager && d.manager.username === me);
+}
+
+/* Is this account the In-charge Duty Roster -> Setup names for the unit `dept`? Then it may
+   prepare (save, send) that unit's roster without the Duty Roster Edit permission: naming
+   someone the In-charge is the grant. Read by the save route and its write guard (web.js). */
+async function isUnitIncharge(req, dept) {
+  const me = String((req.access && req.access.username) || '').toLowerCase();
+  if (!me || !dept) return false;
+  try {
+    const cfg = await getConfig(); const index = await deptIndex();
+    const key = deptKeyOf(index, dept); const d = key && cfg.depts[key];
+    return !!(d && d.incharge && String(d.incharge.username || '').toLowerCase() === me);
+  } catch (e) { return false; }
 }
 
 const monthKey = (y, m) => y * 12 + m;
@@ -393,7 +408,14 @@ function mount(app, opts) {
           .forEach((p) => { if (p && p.is_active !== false && !p.former) names.add(s(p.current_department || 'Unassigned', 120)); });
       } catch (e) { /* register unreadable -> fall back to the rosters' own departments */ }
       (await listAll()).forEach((d) => { if (d && d.dept) names.add(d.dept); });
-      const units = [...names].filter((n) => n && allowed(n)).sort((x, y) => x.localeCompare(y));
+      // Plus the units Setup names this account the In-charge of — they prepare those rosters.
+      let icKeys = new Set(), icIndex = null;
+      try {
+        const me = (a && a.username) || '';
+        const cfg0 = await getConfig(); icIndex = await deptIndex();
+        Object.keys(cfg0.depts || {}).forEach((k) => { const d = cfg0.depts[k]; if (me && d && d.incharge && d.incharge.username === me) icKeys.add(k); });
+      } catch (e) { icKeys = new Set(); }
+      const units = [...names].filter((n) => n && (allowed(n) || (icKeys.size && icIndex && icKeys.has(deptKeyOf(icIndex, n))))).sort((x, y) => x.localeCompare(y));
       const may = (act) => !a || a.unrestricted || acc.can(a, 'roster', act);
       const pe = acc.portalMayEditRoster(a);
       const console_ = !isCollector(req);
@@ -832,7 +854,7 @@ function mount(app, opts) {
     try {
       const b = obj(req.body);
       if (!s(b.dept)) return res.status(400).json({ ok: false, error: 'A department is required.' });
-      if (!(await deptMatcher(req))(b.dept)) return res.status(403).json({ ok: false, error: 'This roster belongs to a unit outside your departments.' });
+      if (!(await deptMatcher(req))(b.dept) && !(await isUnitIncharge(req, b.dept))) return res.status(403).json({ ok: false, error: 'This roster belongs to a unit outside your departments.' });
       const head = normRoster(b);
       const id = rosterId(head.dept, head.year, head.month);
       const c = await col();
@@ -924,7 +946,7 @@ function mount(app, opts) {
 module.exports = {
   mount, COLL, VER_COLL, CFG_COLL, STATUSES, rosterId, normGrid,
   effStatus: W.effStatus, rawStatuses: W.rawStatuses, resumeOnEdit: W.resumeOnEdit, PENDING: W.PENDING, EDITABLE: W.EDITABLE, HISTORY_CAP: W.HISTORY_CAP,
-  applyTransition, getConfig, deptIndex, deptKeyOf, getOne, decorate, actorOf,
+  applyTransition, getConfig, deptIndex, deptKeyOf, getOne, decorate, actorOf, isUnitIncharge,
   // The in-memory store, for the tests to plant a legacy row in.
   __mem: () => mem,
 };

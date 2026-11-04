@@ -1294,7 +1294,12 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const stNorm = rosStatusNorm(status);
   const locked = ROS_EDITABLE.indexOf(stNorm) < 0;
   const canEdit = !loadError && !conflict && (sheetCan ? !!sheetCan.edit : (!locked && rosCan('edit')));
+  // Said once, not once per click: painting across a locked row used to stack a toast per cell.
+  const blockedAt = useRef(0);
   const editBlocked = () => {
+    const now = Date.now();
+    if (now - blockedAt.current < 4000) return;
+    blockedAt.current = now;
     rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.'
       : stNorm === 'approved' ? 'Approved and locked — an administrator can reopen it for editing.'
       : stNorm === 'pending_manager' ? 'This roster is with the Manager for checking — ask them to return it if it needs changes.'

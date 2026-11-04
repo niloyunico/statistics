@@ -1053,6 +1053,9 @@ const rosterWriteGuard = async (req, res, next) => {
     if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
     req.access = a;
     if (access.portalMayEditRoster(a)) return next();
+    // The In-charge Duty Roster -> Setup names for this unit prepares its roster; the save
+    // route re-checks the unit, the lock and the revision as for everyone else.
+    if (req.method === 'PUT' && req.body && req.body.dept && await require('./duty-roster').isUnitIncharge(req, req.body.dept)) return next();
     return rosterModuleGuard(req, res, next);
   } catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
 };

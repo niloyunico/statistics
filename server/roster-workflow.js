@@ -80,14 +80,17 @@ function rights(actor, doc, cfgDept, cfgCns) {
   const me = a.username || '';
   const admin = a.unrestricted === true;
   const mgrOfUnit = !!(cfgDept && cfgDept.manager && cfgDept.manager.username && cfgDept.manager.username === me);
+  // The person Duty Roster -> Setup names as this unit's In-charge prepares its roster: the
+  // setup IS the grant, so they need no separate Duty Roster Edit permission for it.
+  const inchOfUnit = !!(me && cfgDept && cfgDept.incharge && cfgDept.incharge.username && cfgDept.incharge.username === me);
   const isMgr = a.rosterRole === 'manager' && (mgrOfUnit || a.inScope === true);
   const isCns = a.rosterRole === 'cns';
-  const editor = a.inScope === true && a.canEdit === true;
+  const editor = (a.inScope === true && a.canEdit === true) || inchOfUnit;
   const editable = EDITABLE.indexOf(st) >= 0;
   // Self-approval: the person who sent a sheet to the CNS must not also be the one signing it.
   const sentByMe = !!(doc && doc.sentBy && doc.sentBy === me);
   return {
-    view: admin || a.inScope === true || isCns || mgrOfUnit,
+    view: admin || a.inScope === true || isCns || mgrOfUnit || inchOfUnit,
     edit: admin ? st !== 'approved' : (editor && editable),
     send: (admin || editor) && editable,
     forward: st === 'pending_manager' && (admin || isMgr),
