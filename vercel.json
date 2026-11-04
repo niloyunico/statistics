@@ -13,6 +13,8 @@
         "includeFiles": [
           "renderer/index.html",
           "renderer/unico/hh-pool.js",
+          "renderer/unico/dose-library.js",
+          "renderer/unico/dose-math.js",
           "server/seed/**",
           "server/meds-index/**",
           "server/h360/logo.png",

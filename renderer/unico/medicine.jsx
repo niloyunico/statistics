@@ -1672,11 +1672,14 @@ function MedInteractions({ setRoute }) {
   );
 }
 
-/* ================= dose calculator =================
- * DELIBERATELY NOT AUTO-FILLED. Only 11% of the monographs state a mg/kg figure in a
- * form a machine could lift out reliably, so the calculator does the arithmetic and
- * shows the drug's own dosage text beside it — the clinician supplies the mg/kg. A
- * calculator that guessed the rate would be the most dangerous thing in this module.
+/* ================= dose calculator (fallback) =================
+ * The real Dose Calculator is dose-calc.jsx (window.MedDoseCalc): a curated, hospital-
+ * reviewed drug library + the tested engine in dose-math.js. This plain version only
+ * renders if that chunk file is missing. Either way the rates are NEVER lifted from the
+ * monograph text — only 11% of monographs state a mg/kg figure a machine could read
+ * reliably, and a calculator that guessed the rate would be the most dangerous thing in
+ * this module. The library's rates come from published references and carry a "Not yet
+ * reviewed" flag until the hospital signs each one off.
  */
 function MedCalc() {
   const [weight, setWeight] = useState('');
@@ -1873,7 +1876,7 @@ function MedicineView({ view, id, rx, q, setRoute }) {
   if (view === 'medTemplates') return <MedTemplates setRoute={setRoute} />;
   if (view === 'medCatalog') return <MedCatalog setRoute={setRoute} />;
   if (view === 'medInteractions') return <MedInteractions setRoute={setRoute} />;
-  if (view === 'medCalc') return <MedCalc />;
+  if (view === 'medCalc') return window.MedDoseCalc ? <window.MedDoseCalc /> : <MedCalc />;
   if (view === 'medAnalytics') return <MedAnalytics setRoute={setRoute} />;
   return <MedHome setRoute={setRoute} />;
 }
@@ -1898,4 +1901,5 @@ function medInjectStyle() {
   document.head.appendChild(el);
 }
 
-Object.assign(window, { MedicineView, DrugSearchBox, medApi });
+// Monograph / chips are reused by the Dose Calculator's monograph panel (dose-calc.jsx).
+Object.assign(window, { MedicineView, DrugSearchBox, medApi, MedMonograph: Monograph, MedPregChip: PregChip, MedAbxChip: AbxChip });

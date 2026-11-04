@@ -33,6 +33,12 @@ const C_BRAND = 'medBrands';
 const C_REF = 'medRefs';
 const C_RX = 'prescriptions';
 const C_TPL = 'rxTemplates';
+const C_DOSE = 'doseLibrary';
+
+// The calculator's built-in list and engine — the same files the browser runs.
+const DOSE_LIB = require('../renderer/unico/dose-library.js');
+const DOSE = require('../renderer/unico/dose-math.js');
+const DOSE_KINDS = { infusion: 'INFUSIONS', emergency: 'EMERGENCY', paed: 'PAEDIATRIC' };
 
 async function col(name) { const db = await getDbHandle(); return db ? db.collection(name) : null; }
 
@@ -396,6 +402,37 @@ function normRx(input, prev0) {
     })),
     acknowledged: !!i.acknowledged,
   };
+}
+
+// A hospital edit to a dose-library entry: only known fields, every number bounded.
+// Missing fields are left out (not blanked) so a built-in entry keeps its default.
+function normDoseEntry(kind, d) {
+  const out = {};
+  const n = (v) => { const x = num(v); return x != null && x >= 0 && x < 1e7 ? x : null; };
+  const range = (v) => { const a = arr(v); const lo = n(a[0]), hi = n(a[1]); return lo != null && hi != null && lo <= hi ? [lo, hi] : null; };
+  const str = (k, max) => { if (d[k] != null) out[k] = s(d[k], max).trim(); };
+  const nm = (k) => { if (d[k] != null && d[k] !== '') { const x = n(d[k]); if (x != null) out[k] = x; } };
+  const AMT = /^(g|mg|mcg|ng|units|milliunits|mmol|mEq|mL)$/;
+  ['name', 'group', 'notes', 'source', 'diluent', 'prep', 'route'].forEach((k) => str(k, k === 'notes' ? 600 : 160));
+  if (d.unit != null) { const u = s(d.unit, 30).trim(); if (/^[a-zA-Z]+(\/kg)?(\/(min|h))?$/.test(u)) out.unit = u; }
+  if (d.highAlert != null) out.highAlert = !!d.highAlert;
+  if (d.weight != null && /^(actual|ideal|none)$/.test(d.weight)) out.weight = d.weight;
+  if (kind === 'infusion') {
+    if (d.conc != null) out.conc = arr(d.conc).slice(0, 6).map((c0) => { const c = obj(c0); return { label: s(c.label, 40), amount: n(c.amount), unit: AMT.test(c.unit) ? c.unit : 'mg', ml: n(c.ml) }; }).filter((c) => c.amount > 0 && c.ml > 0);
+    if (d.ampoule != null) { const a = obj(d.ampoule); if (n(a.amount) > 0 && n(a.ml) > 0) out.ampoule = { amount: n(a.amount), unit: AMT.test(a.unit) ? a.unit : 'mg', ml: n(a.ml), label: s(a.label, 80) }; }
+    if (d.soft != null) { const r = range(d.soft); if (r) out.soft = r; }
+    ['hard', 'start', 'step'].forEach(nm);
+  } else if (kind === 'emergency') {
+    if (d.dose != null) { const r = Array.isArray(d.dose) ? range(d.dose) : n(d.dose); if (r != null) out.dose = r; }
+    if (d.unit != null && AMT.test(d.unit)) out.unit = d.unit;
+    ['max', 'min', 'adult', 'perMl'].forEach(nm);
+  } else if (kind === 'paed') {
+    if (d.mode != null) out.mode = d.mode === 'day' ? 'day' : 'dose';
+    if (d.dose != null) { const r = range(d.dose); if (r) out.dose = r; }
+    ['perDay', 'maxDose', 'maxDay', 'maxDayPerKg'].forEach(nm);
+    if (d.strengths != null) out.strengths = arr(d.strengths).slice(0, 8).map((x0) => { const x = obj(x0); const r = { label: s(x.label, 60), mg: n(x.mg) }; if (x.form) r.form = s(x.form, 10); else r.ml = n(x.ml); return r; }).filter((x) => x.mg > 0 && (x.form || x.ml > 0));
+  }
+  return out;
 }
 
 const rxId = () => 'rx-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8);
@@ -899,6 +936,92 @@ function mount(app, opts) {
     } catch (e) { fail(res, 'Could not delete the template.')(e); }
   });
 
+  /* --- dose library (Dose Calculator) ---------------------------------------------- */
+  // The built-in list ships in renderer/unico/dose-library.js. Only the hospital's
+  // OVERRIDES live here — one doc per drug (edits, switched off, review sign-off) plus
+  // `_layout` (the hospital's order). Reading works for everyone with Medicine access;
+  // changing what every clinician calculates from is an admin act.
+  app.get('/api/med/dose-library', guard, async (req, res) => {
+    try {
+      const c = await col(C_DOSE);
+      // No database (local seed mode): the calculator still works from the built-in list.
+      if (!c) return res.json({ ok: true, overrides: [], offline: true });
+      const rows = await c.find({}).limit(1000).toArray();
+      res.json({ ok: true, overrides: rows.map(outDoc) });
+    } catch (e) { fail(res, 'Could not load the dose library.')(e); }
+  });
+
+  app.put('/api/med/dose-library/:id', guard, adminOnly, async (req, res) => {
+    try {
+      const c = await col(C_DOSE);
+      if (!c) return noDb(res);
+      const id = s(req.params.id, 60);
+      const b = obj(req.body);
+      if (id === '_layout') {
+        const order = (v) => arr(v).slice(0, 300).map((x) => s(x, 60)).filter(Boolean);
+        const o = obj(b.layout);
+        const layout = { infusion: order(o.infusion), emergency: order(o.emergency), paed: order(o.paed), groups: {}, calcs: order(o.calcs), tabs: order(o.tabs) };
+        Object.keys(obj(o.groups)).slice(0, 10).forEach((k) => { layout.groups[s(k, 20)] = order(o.groups[k]); });
+        await c.updateOne({ _id: id }, { $set: { layout, updatedAt: Date.now(), updatedBy: who(req) } }, { upsert: true });
+        return res.json({ ok: true, override: outDoc(await c.findOne({ _id: id })) });
+      }
+      if (!/^[a-z0-9-]{3,60}$/i.test(id)) return res.status(400).json({ ok: false, error: 'Bad drug id.' });
+      const kind = DOSE_KINDS[b.kind] ? b.kind : null;
+      if (!kind) return res.status(400).json({ ok: false, error: 'Unknown library section.' });
+      const builtIn = DOSE_LIB[DOSE_KINDS[kind]].some((x) => x.id === id);
+      const data = normDoseEntry(kind, obj(b.data));
+      if (!builtIn && !data.name) return res.status(400).json({ ok: false, error: 'A drug name is required.' });
+      if (kind === 'infusion') {
+        // Check the entry as the calculator will see it (default + this edit): a usual range
+        // above the hard limit would print labels the hard limit was meant to stop.
+        const base = DOSE_LIB.INFUSIONS.find((x) => x.id === id) || {};
+        const m = Object.assign({}, base, data);
+        if (m.soft && m.hard != null && m.soft[1] > m.hard) return res.status(400).json({ ok: false, error: 'The usual range cannot go above the hard limit.' });
+        if (m.start != null && m.hard != null && m.start > m.hard) return res.status(400).json({ ok: false, error: 'The usual start dose cannot be above the hard limit.' });
+        if (!builtIn && !(m.conc && m.conc.length)) return res.status(400).json({ ok: false, error: 'Add at least one concentration.' });
+      }
+      const set = { kind, builtIn, data, disabled: !!b.disabled, updatedAt: Date.now(), updatedBy: who(req) };
+      // Keep the review: mergeLibrary compares its hash with the content, so an edit
+      // shows "Changed since review" instead of silently keeping a green sign-off.
+      await c.updateOne({ _id: id }, { $set: set, $setOnInsert: { createdAt: Date.now(), createdBy: who(req) } }, { upsert: true });
+      res.json({ ok: true, override: outDoc(await c.findOne({ _id: id })) });
+    } catch (e) { fail(res, 'Could not save the drug.')(e); }
+  });
+
+  // Sign-off: the hash is computed HERE from the merged entry, so what is marked
+  // reviewed is exactly what the calculator is showing — not what a client claims.
+  app.post('/api/med/dose-library/:id/review', guard, adminOnly, async (req, res) => {
+    try {
+      const c = await col(C_DOSE);
+      if (!c) return noDb(res);
+      const id = s(req.params.id, 60);
+      const overrides = (await c.find({}).limit(1000).toArray()).map(outDoc);
+      const merged = DOSE.mergeLibrary(DOSE_LIB, overrides);
+      let entry = null, kind = null;
+      Object.keys(merged).forEach((k) => { const e = merged[k].find((x) => x.id === id); if (e) { entry = e; kind = k; } });
+      if (!entry) return res.status(404).json({ ok: false, error: 'No such drug in the library.' });
+      const clear = obj(req.body).clear === true;
+      const review = clear ? null : { by: who(req), at: Date.now(), hash: DOSE.contentHash(entry) };
+      await c.updateOne({ _id: id }, { $set: { review, kind, builtIn: !!entry.builtIn }, $setOnInsert: { createdAt: Date.now(), createdBy: who(req) } }, { upsert: true });
+      res.json({ ok: true, override: outDoc(await c.findOne({ _id: id })) });
+    } catch (e) { fail(res, 'Could not record the review.')(e); }
+  });
+
+  // Only a hospital-added drug can be deleted; a built-in one is switched off instead
+  // (deleting its override would just bring the default back).
+  app.delete('/api/med/dose-library/:id', guard, adminOnly, async (req, res) => {
+    try {
+      const c = await col(C_DOSE);
+      if (!c) return noDb(res);
+      const id = s(req.params.id, 60);
+      const doc = await c.findOne({ _id: id });
+      if (!doc) return res.status(404).json({ ok: false, error: 'Not found.' });
+      if (doc.builtIn) return res.status(409).json({ ok: false, error: 'Built-in drugs are switched off, not deleted.' });
+      const r = await c.deleteOne({ _id: id, builtIn: { $ne: true } });
+      res.json({ ok: r.deletedCount > 0 });
+    } catch (e) { fail(res, 'Could not delete the drug.')(e); }
+  });
+
   // Whether the index has actually been imported. The UI uses this to show the
   // "run the importer" message instead of an empty search box that looks broken.
   app.get('/api/med/status', guard, async (req, res) => {
@@ -914,4 +1037,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, checkInteractions, checkAllergies, normRx, normItem, C_GEN, C_BRAND, C_REF, C_RX, C_TPL };
+module.exports = { mount, checkInteractions, checkAllergies, normRx, normItem, normDoseEntry, C_GEN, C_BRAND, C_REF, C_RX, C_TPL, C_DOSE };

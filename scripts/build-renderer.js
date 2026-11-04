@@ -119,6 +119,12 @@ const MANIFEST = [
   // ported from the approved "Medicine Info v2" design canvas. Must load before
   // medicine.jsx? No — medicine.jsx only reads window.MedicineInfoV2 at render time.
   { file: 'medicine-info.jsx', jsx: true, chunk: 'medicine' },
+  // Dose Calculator: the built-in library + the one maths engine (both also require()d by the
+  // server and the tests), then the animated pumps, then the screen (window.MedDoseCalc).
+  { file: 'dose-library.js', jsx: false, chunk: 'medicine' },
+  { file: 'dose-math.js', jsx: false, chunk: 'medicine' },
+  { file: 'dose-pumps.jsx', jsx: true, chunk: 'medicine' },
+  { file: 'dose-calc.jsx', jsx: true, chunk: 'medicine' },
   { file: 'medicine.jsx', jsx: true, chunk: 'medicine' },   // drug index + prescription pad (window.MedicineView)
   // System Monitor panel (window.SystemMonitor) + the save-failure reporter every browser
   // runs. Before app.jsx; wraps window.unicoNative.persist at load.
