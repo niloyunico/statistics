@@ -345,11 +345,19 @@ function App(){
     crumbs=['UNICO','Staff Management','Manpower Overview'];
     body=<window.ManpowerOverview setRoute={setRoute}/>;
   } else if(route.view==='rosterFullReview' && typeof window!=='undefined' && window.RosterReviewFull){
-    // The cross-unit review: queue, workload tree, hospital diagram and what the store
-    // can honestly say about who changed what. Its own route because it is about EVERY
-    // unit's sheet, not the one month RosterView is editing.
-    crumbs=['UNICO','Staff Management','Roster Full Review'];
-    body=<window.RosterReviewFull setRoute={setRoute}/>;
+    // The Managers' and the CNS's review inbox: every unit's roster for a month, where it
+    // is in the review chain, and the step this account may take. Its own route because
+    // it is about EVERY unit's sheet, not the one month RosterView is editing.
+    crumbs=['UNICO','Staff Management','Roster Review'];
+    body=<window.RosterReviewFull year={route.year} month={route.month} setRoute={setRoute}/>;
+  } else if(route.view==='rosterStaff' && typeof window!=='undefined' && window.RosterStaffView){
+    // One person's duty across months and units.
+    crumbs=['UNICO','Staff Management','Staff Roster'];
+    body=<window.RosterStaffView staffId={route.staffId} setRoute={setRoute}/>;
+  } else if(route.view==='rosterSetup' && typeof window!=='undefined' && window.RosterSetup){
+    // Who prepares, checks and approves each unit's roster — set once by an administrator.
+    crumbs=['UNICO','Staff Management','Roster Setup'];
+    body=<window.RosterSetup setRoute={setRoute}/>;
   } else if(route.view && route.view.indexOf('roster')===0 && typeof RosterView!=='undefined'){
     // Duty Roster module — renders INSIDE the global shell.
     const RV_TITLE={rosterHome:'Duty Roster',rosterGrid:'Monthly Grid',rosterReview:'Coverage & Rules',rosterPrint:'Print Sheet'};

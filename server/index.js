@@ -201,6 +201,9 @@ app.get('/api/me', async (req, res) => {
     // server would refuse anyway (the server stays the authority either way).
     perms: a.unrestricted ? null : a.perms,
     staffScope: a.staffScope || 'all',
+    // Duty Roster review chain ('admin' for an administrator) — the sheet's buttons and
+    // the review inbox badge are shown from this.
+    rosterRole: a.unrestricted ? 'admin' : (a.rosterRole || ''),
     // Database unreachable: perms above is the empty stand-in, not a revocation. The console's
     // live perms refresh must ignore it or a blip hides every workspace.
     degraded: a.degraded ? true : undefined,

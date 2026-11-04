@@ -10,24 +10,66 @@
  * that is half this week and half last), and the printed sheet always corresponds to
  * exactly one stored record.
  *
- * status: draft -> submitted -> approved. Approving locks the grid; the module keeps
- * `revision` and the sign-off names so a printed copy can be traced to a stored one.
+ * THE REVIEW CHAIN (rules in server/roster-workflow.js — read that first)
+ *   draft -> pending_manager -> pending_cns -> approved, with `returned` from either
+ *   review stage. Every hand-over appends to `history[]` on the sheet and snapshots the
+ *   grid into `rosterVersions`, so a printed copy can be traced to a stored revision
+ *   and an earlier version can be opened again. Legacy 'submitted' sheets are READ as
+ *   pending_cns; nothing stored is rewritten.
+ *
+ * WHO SIGNS
+ *   `rosterConfig` (one document) names the in-charge and manager of each canonical
+ *   department and the one CNS. Those names are stamped on Prepared / Checked /
+ *   Approved by the hand-over itself — a sheet never carries a name somebody typed.
  *
  * Shift codes are NOT validated against a list here on purpose: the legend lives in
  * renderer/unico/roster-spec.js and units do occasionally add a local code. The server
  * bounds the size and shape of what it stores; the renderer owns what the codes mean.
  */
 const { getDbHandle } = require('./db');
+const W = require('./roster-workflow');
 
 const COLL = 'dutyRosters';
-const STATUSES = ['draft', 'submitted', 'approved'];
+const VER_COLL = 'rosterVersions';
+const CFG_COLL = 'rosterConfig';
+// Every status the store may hold, legacy spelling included (the old STATUSES export).
+const STATUSES = W.STATUSES.concat(Object.keys(W.LEGACY));
 
-async function col() { const db = await getDbHandle(); return db ? db.collection(COLL) : null; }
+let indexed = false;
+async function col() {
+  const db = await getDbHandle(); if (!db) return null;
+  const c = db.collection(COLL);
+  if (!indexed) {
+    indexed = true;
+    c.createIndex({ year: 1, month: 1 }).catch(() => {});
+    c.createIndex({ status: 1 }).catch(() => {});
+    c.createIndex({ staffIds: 1, year: -1, month: -1 }).catch(() => {});
+    db.collection(VER_COLL).createIndex({ rosterId: 1, revision: 1 }, { unique: true }).catch(() => {});
+    db.collection(VER_COLL).createIndex({ rosterId: 1, at: -1 }).catch(() => {});
+  }
+  return c;
+}
+async function verCol() { const db = await getDbHandle(); return db ? db.collection(VER_COLL) : null; }
+async function cfgCol() { const db = await getDbHandle(); return db ? db.collection(CFG_COLL) : null; }
+// In-memory fallback when there is no database (the local seed preview and the tests).
 const mem = [];
+const memVersions = [];
+let memCfg = { _id: 'config', cns: null, depts: {} };
 
 const s = (v, max) => String(v == null ? '' : v).slice(0, max || 200);
 const obj = (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
-const outDoc = (d) => { if (!d) return null; const { _id, ...r } = d; return { id: _id, ...r }; };
+// Out of the store: the effective status (legacy 'submitted' read as pending_cns), with the
+// stored spelling kept beside it so a conditional write can still match the row.
+const outDoc = (d) => {
+  if (!d) return null;
+  const { _id, ...r } = d;
+  const eff = W.effStatus(r);
+  if (r.status && r.status !== eff) r.legacyStatus = r.status;
+  r.status = eff;
+  return { id: _id, ...r };
+};
+const memOut = (x) => { if (!x) return null; const { id, ...r } = x; return outDoc(Object.assign({ _id: id }, JSON.parse(JSON.stringify(r)))); };
+const rawStatus = (d) => (d && (d.legacyStatus || d.status)) || 'draft';
 const who = (req) => (req.user && (req.user.name || req.user.sub)) || 'local';
 
 const rosterId = (dept, year, month) => 'ros-' + s(dept, 40) + '-' + year + '-' + String(month).padStart(2, '0');
@@ -58,6 +100,7 @@ function normRoster(input, existing) {
   const i = obj(input), prev = obj(existing);
   const year = parseInt(i.year, 10) || prev.year || new Date().getFullYear();
   const month = Number.isInteger(parseInt(i.month, 10)) ? parseInt(i.month, 10) : (prev.month != null ? prev.month : new Date().getMonth());
+  const editable = W.EDITABLE.indexOf(W.effStatus(prev)) >= 0 || !existing;
   return {
     dept: s(i.dept || prev.dept, 40),
     deptName: s(i.deptName || prev.deptName, 120),
@@ -76,16 +119,20 @@ function normRoster(input, existing) {
       return out;
     }()),
     rules: has(i, 'rules') ? obj(i.rules) : obj(prev.rules),
-    status: STATUSES.indexOf(s(i.status)) >= 0 ? s(i.status) : (prev.status || 'draft'),
-    preparedBy: has(i, 'preparedBy') ? s(i.preparedBy, 120) : s(prev.preparedBy, 120),
-    checkedBy: has(i, 'checkedBy') ? s(i.checkedBy, 120) : s(prev.checkedBy, 120),
-    // The approver is stamped by the approve ROUTE, never by a save; without this
-    // fallback the very next "Save draft" $set the field to '' and the published sheet
-    // lost the name of the person who signed it.
-    approvedBy: s(i.approvedBy, 120) || s(prev.approvedBy, 120),
+    // A SAVE never changes the status: every hand-over is a transition (applyTransition),
+    // which is what stamps the names and writes the history. The stored spelling is kept
+    // as-is so a legacy 'submitted' row is not silently rewritten by an autosave.
+    status: existing ? rawStatus(prev) : 'draft',
+    // Prepared / Checked / Approved are stamped by the hand-overs. The one payload field
+    // still honoured is "Checked by" on a sheet nobody has sent yet (the old footer).
+    preparedBy: s(prev.preparedBy, 120),
+    checkedBy: (editable && has(i, 'checkedBy')) ? s(i.checkedBy, 120) : s(prev.checkedBy, 120),
+    approvedBy: s(prev.approvedBy, 120),
     note: has(i, 'note') ? s(i.note, 1000) : s(prev.note, 1000),
   };
 }
+
+/* ------------------------------------------------------------- access helpers --- */
 
 // Which units' rosters this request may touch. The account's OWN roster assignment
 // (rosterScope / rosterDepartments on the users row) decides — see rosterDeptNames()
@@ -100,60 +147,218 @@ async function deptMatcher(req) {
   return (dept) => acc.rosterVisible(keys, dept);
 }
 
+// A legacy portal account, or a Data Submission holder reading rosters WITHOUT the Duty
+// Roster module (let in by requireRead's allowCollector): both see published sheets only.
+const isCollector = (req) => {
+  const acc = require('./access'); const a = req.access;
+  if (!a || a.unrestricted) return false;
+  return acc.isPortal(a) || (acc.submitsData(a) && !acc.can(a, 'roster', 'view'));
+};
+/* A portal account sees PUBLISHED sheets only -- unless it is the in-charge who builds
+   them. Granting `rosterEdit` without this made the editor useless: the moment a draft
+   was saved it vanished from its own author's screen, because every unapproved sheet was
+   filtered out of both the index and the month read.
+
+   READ THIS BEFORE REUSING THE IDEA ELSEWHERE. "Unapproved" is no longer a synonym for
+   "invisible to a portal account": it is invisible to every portal account EXCEPT a
+   rosterEdit holder, and then only for the units deptMatcher already allows them --
+   this exemption widens WHICH STATUSES they see, never which units. It is scoped to
+   this module's own sheets and must not be generalised to other portal data. */
+const mayEdit = (req) => require('./access').portalMayEditRoster(req.access);
+const publishedOnly = (req, docs) => ((isCollector(req) && !mayEdit(req)) ? (docs || []).filter((d) => d && d.status === 'approved') : docs);
+// Account-level place in the chain: 'admin' | 'cns' | 'manager' | 'incharge' | ''.
+const roleOf = (req) => { const a = req.access; if (!a || a.unrestricted) return 'admin'; return a.rosterRole || ''; };
+
+/* The actor the workflow decides for. canEdit is the SAME formula /scope answers for
+   `can.edit`; inScope is the unit assignment — so a hand-over is refused exactly when the
+   editor would have been. */
+async function actorOf(req, doc) {
+  const acc = require('./access');
+  const a = req.access || { unrestricted: true };
+  const username = a.username || (req.user && req.user.sub) || 'local';
+  const name = a.name || (req.user && req.user.name) || username;
+  const canEdit = !!(a.unrestricted || acc.portalMayEditRoster(a) || (!isCollector(req) && acc.can(a, 'roster', 'edit')));
+  const inScope = doc && doc.dept ? (await deptMatcher(req))(doc.dept) : true;
+  return { unrestricted: a.unrestricted === true, username, name, rosterRole: a.rosterRole || '', canEdit, inScope };
+}
+
+/* ------------------------------------------------------------- the department index --- */
+
+/* Sheets are filed under the free text typed on a staff record ("Medical ICU", "MICU",
+   "M.I.C.U"), while the setup screen, the review inbox and the account assignments speak
+   canonical department ids (micu). This index resolves one to the other with the same
+   vocabulary the access check uses — ids, register names, quality keys, the alias table
+   and the Level-N rule — so a unit spelled four ways is still one row. Cached briefly:
+   it reads the department map, and the inbox asks for it on every refresh. */
+let _idx = null, _idxTs = 0;
+const IDX_TTL = 30000;
+async function deptIndex() {
+  if (_idx && Date.now() - _idxTs < IDX_TTL) return _idx;
+  const acc = require('./access');
+  let byId = {};
+  try { const map = await require('./deptmap').get(); byId = (map && map.byId) || {}; } catch (e) { byId = {}; }
+  const out = [];
+  for (const id of Object.keys(byId)) {
+    if (byId[id].qualityOnly) continue;
+    const keys = await acc.scopedDeptNames({ departments: [id] }, { departmentsOnly: true });
+    out.push({ id, name: byId[id].name || id, keys });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  _idx = out; _idxTs = Date.now();
+  return out;
+}
+const deptKeyOf = (index, dept) => {
+  if (!dept) return null;
+  const acc = require('./access');
+  const hit = (index || []).find((d) => acc.rosterVisible(d.keys, dept));
+  return hit ? hit.id : null;
+};
+
+/* ------------------------------------------------------------------ the config --- */
+
+const person = (p) => (p && p.username) ? { username: s(p.username, 80), name: s(p.name || p.username, 120) } : null;
+async function getConfig() {
+  const c = await cfgCol();
+  const raw = c ? (await c.findOne({ _id: 'config' })) : memCfg;
+  const d = obj(raw);
+  const depts = {};
+  Object.keys(obj(d.depts)).forEach((k) => { const v = obj(d.depts[k]); depts[k] = { incharge: person(v.incharge), manager: person(v.manager) }; });
+  return { cns: person(d.cns), depts, updatedAt: d.updatedAt || null, updatedBy: d.updatedBy || null };
+}
+async function saveConfig(doc) {
+  const c = await cfgCol();
+  if (c) await c.replaceOne({ _id: 'config' }, Object.assign({ _id: 'config' }, doc), { upsert: true });
+  else memCfg = Object.assign({ _id: 'config' }, doc);
+}
+const signersFor = (cfg, key) => {
+  const d = (key && cfg.depts[key]) || {};
+  return { incharge: d.incharge || null, manager: d.manager || null, cns: cfg.cns || null };
+};
+
+/* ------------------------------------------------------------------- storage --- */
+
 async function listAll() {
   const c = await col();
-  if (!c) return mem.slice();
-  const docs = await c.find({}, { projection: { grid: 0 } }).sort({ year: -1, month: -1 }).toArray();
+  if (!c) return mem.map(memOut).sort((a, b) => (b.year - a.year) || (b.month - a.month));
+  const docs = await c.find({}, { projection: { grid: 0, history: 0 } }).sort({ year: -1, month: -1 }).toArray();
   return docs.map(outDoc);
 }
 async function getOne(id) {
   const c = await col();
-  if (!c) return mem.find((x) => x.id === id) || null;
+  if (!c) return memOut(mem.find((x) => x.id === id));
   return outDoc(await c.findOne({ _id: id }));
+}
+
+// One grid snapshot per revision: a return-without-edit followed by a resend lands on
+// the same revision and just refreshes the stamps. Bounded per sheet.
+async function snapshot(doc, r) {
+  const v = { rosterId: doc.id, revision: doc.revision || 0, status: r.to, action: r.entry.action, at: r.entry.at, by: r.entry.by, byName: r.entry.byName, note: r.entry.note,
+    grid: doc.grid || {}, order: doc.order || [], names: doc.names || {}, rules: doc.rules || {} };
+  const c = await verCol();
+  if (c) {
+    await c.replaceOne({ rosterId: v.rosterId, revision: v.revision }, Object.assign({ _id: v.rosterId + '@' + v.revision }, v), { upsert: true });
+    const n = await c.countDocuments({ rosterId: v.rosterId });
+    if (n > W.VERSION_CAP) {
+      const old = await c.find({ rosterId: v.rosterId }, { projection: { _id: 1 } }).sort({ revision: 1 }).limit(n - W.VERSION_CAP).toArray();
+      if (old.length) await c.deleteMany({ _id: { $in: old.map((x) => x._id) } });
+    }
+  } else {
+    const i = memVersions.findIndex((x) => x.rosterId === v.rosterId && x.revision === v.revision);
+    if (i >= 0) memVersions[i] = v; else memVersions.push(v);
+    const mine = memVersions.filter((x) => x.rosterId === v.rosterId).sort((a, b) => a.revision - b.revision);
+    while (mine.length > W.VERSION_CAP) { const drop = mine.shift(); memVersions.splice(memVersions.indexOf(drop), 1); }
+  }
+}
+
+/* The one way a sheet changes status. Resolves the config and the actor, asks the
+   workflow, then writes CONDITIONALLY on the status and revision it decided against —
+   two reviewers deciding the same sheet at the same moment cannot both land. */
+async function applyTransition(req, id, action, note) {
+  const doc = await getOne(id);
+  if (!doc) return { status: 404, body: { ok: false, error: 'Roster not found.' } };
+  const cfg = await getConfig();
+  const key = deptKeyOf(await deptIndex(), doc.dept);
+  const actor = await actorOf(req, doc);
+  const r = W.transition(doc, action, actor, { dept: cfg.depts[key] || {}, cns: cfg.cns }, { now: Date.now(), note });
+  if (!r.ok) return { status: r.status, body: { ok: false, code: r.code, error: r.error } };
+  const c = await col();
+  const conflict = { status: 409, body: { ok: false, code: 'conflict', conflict: true, error: 'This roster changed while you were deciding. Reload the month and look again.' } };
+  if (c) {
+    const w = await c.updateOne(
+      { _id: id, status: { $in: W.rawStatuses(r.from) }, revision: doc.revision == null ? null : doc.revision },
+      { $set: r.set, $push: { history: { $each: [r.entry], $slice: -W.HISTORY_CAP } } });
+    if (!w.matchedCount) return conflict;
+  } else {
+    const x = mem.find((m) => m.id === id);
+    if (!x || W.rawStatuses(r.from).indexOf(x.status) < 0 || (x.revision || 0) !== (doc.revision || 0)) return conflict;
+    Object.assign(x, r.set);
+    x.history = (Array.isArray(x.history) ? x.history : []).concat([r.entry]).slice(-W.HISTORY_CAP);
+  }
+  if (r.snapshot) { try { await snapshot(doc, r); } catch (e) { /* the hand-over stands; a missing snapshot is not a reason to refuse it */ } }
+  try {
+    require('./activity-log').log(req, r.activity, { target: doc.deptName || doc.dept, detail: (doc.month + 1) + '/' + doc.year + ' · rev ' + (doc.revision || 0) + (r.entry.note ? ' · ' + r.entry.note : '') });
+  } catch (e) { /* logging never breaks the request */ }
+  return { status: 200, body: { ok: true, roster: await decorate(req, await getOne(id)) } };
+}
+
+// What the renderer needs beside the sheet: per-sheet rights and the names to print.
+async function decorate(req, doc, stub) {
+  const cfg = await getConfig();
+  const target = doc || stub;
+  const key = deptKeyOf(await deptIndex(), target && target.dept);
+  const actor = await actorOf(req, target);
+  const can = W.rights(actor, target, cfg.depts[key] || {}, cfg.cns);
+  const signers = signersFor(cfg, key);
+  if (!doc) return { roster: null, signers, can };
+  const out = Object.assign({}, doc, { can, signers, deptId: key });
+  if (Array.isArray(out.history)) out.history = out.history.slice(-50);
+  return out;
+}
+
+// May this request SEE a sheet of this unit through the review chain, beyond its own
+// unit assignment? The CNS and administration see every unit; a manager the units the
+// setup names them for.
+async function reviewVisible(req, cfg, index, dept) {
+  const role = roleOf(req);
+  if (role === 'admin' || role === 'cns') return true;
+  if (role !== 'manager') return false;
+  const key = deptKeyOf(index, dept);
+  const d = key && cfg.depts[key];
+  const me = (req.access && req.access.username) || '';
+  return !!(d && d.manager && d.manager.username === me);
+}
+
+const monthKey = (y, m) => y * 12 + m;
+function parseYm(v, fallback) {
+  const m = /^(\d{4})-(\d{1,2})$/.exec(String(v || ''));
+  if (!m) return fallback;
+  const mo = parseInt(m[2], 10) - 1;
+  return (mo >= 0 && mo <= 11) ? monthKey(parseInt(m[1], 10), mo) : fallback;
 }
 
 function mount(app, opts) {
   const guard = (opts && opts.requireApi) || function (req, res, next) { next(); };
-  // Reading a PUBLISHED roster is not the same right as editing one. The two GET
-  // routes below accept a wider guard so a data collector / nurse in-charge can see
-  // the approved sheet for their own unit; `publishedOnly` then strips anything that
-  // is still a draft, so an unapproved roster stays invisible to them. Every write
-  // route keeps the full `guard`.
+  // Reading a PUBLISHED roster is not the same right as editing one. The GET routes
+  // accept a wider guard so a data collector / nurse in-charge can see the approved
+  // sheet for their own unit; `publishedOnly` then strips anything that is still a
+  // draft, so an unapproved roster stays invisible to them.
+  // The hand-over routes ALSO sit on this guard: who may decide is settled by the
+  // workflow's rights(), not by the HTTP verb -> module action mapping (which wanted
+  // 'add' for every POST and so refused a CNS holding view+edit).
   const readGuard = (opts && opts.requireRead) || guard;
   // Writing is a THIRD right, between the two above. A console account reaches it through
   // the `roster` module permission (the default `guard`); a ward in-charge reaches it only
   // when an administrator granted `rosterEdit`, and web.js passes a guard that admits both.
-  // Approving is NOT part of it -- see the status route.
   const writeGuard = (opts && opts.requireWrite) || guard;
-  // A legacy portal account, or a Data Submission holder reading rosters WITHOUT the Duty
-  // Roster module (let in by requireRead's allowCollector): both see published sheets only.
-  const isCollector = (req) => {
-    const acc = require('./access'); const a = req.access;
-    if (!a || a.unrestricted) return false;
-    return acc.isPortal(a) || (acc.submitsData(a) && !acc.can(a, 'roster', 'view'));
-  };
-  /* A portal account sees PUBLISHED sheets only -- unless it is the in-charge who builds
-     them. Granting `rosterEdit` without this made the editor useless: the moment a draft
-     was saved it vanished from its own author's screen, because every unapproved sheet was
-     filtered out of both the index and the month read.
-
-     READ THIS BEFORE REUSING THE IDEA ELSEWHERE. "Unapproved" is no longer a synonym for
-     "invisible to a portal account": it is invisible to every portal account EXCEPT a
-     rosterEdit holder, and then only for the units deptMatcher already allows them --
-     this exemption widens WHICH STATUSES they see, never which units. It is scoped to
-     this module's own sheets and must not be generalised to other portal data. */
-  const mayEdit = (req) => require('./access').portalMayEditRoster(req.access);
-  const publishedOnly = (req, docs) => ((isCollector(req) && !mayEdit(req)) ? (docs || []).filter((d) => d && d.status === 'approved') : docs);
-  /* Who may publish a roster, and therefore who may review every unit's access.
-     NOT the Administrator role: the tier that signs a roster off is a nursing one
-     (the Chief of Nursing Services), so it is the top Duty Roster action that decides.
-     Defined once here because the scope route was still answering `unrestricted` while
-     the status route had already moved to this rule -- the screen and the API disagreed
-     about whether the Publish button would work. */
-  const mayApprove = (req) => !!(req.access && (req.access.unrestricted || require('./access').can(req.access, 'roster', 'delete')));
   const adminOnly = (req, res, next) => {
     if (req.access && !req.access.unrestricted) return res.status(403).json({ ok: false, error: 'Administrator access required.' });
     next();
+  };
+  // Account-level flags for the screen (per-sheet rights ride on the sheet itself).
+  const accountCan = (req) => {
+    const role = roleOf(req);
+    const admin = role === 'admin', mgr = role === 'manager', cns = role === 'cns';
+    return { forward: admin || mgr, approve: admin || cns, return: admin || mgr || cns, reopen: admin, review: admin || mgr || cns, setup: admin, role };
   };
 
   // The index: every roster, WITHOUT its grid. The list screen shows a dozen months
@@ -161,7 +366,10 @@ function mount(app, opts) {
   app.get('/api/rosters', readGuard, async (req, res) => {
     try {
       const allowed = await deptMatcher(req);
-      res.json({ ok: true, rosters: publishedOnly(req, (await listAll()).filter((d) => d && allowed(d.dept))) });
+      const cfg = await getConfig(); const index = await deptIndex();
+      const out = [];
+      for (const d of await listAll()) { if (d && (allowed(d.dept) || await reviewVisible(req, cfg, index, d.dept))) out.push(d); }
+      res.json({ ok: true, rosters: publishedOnly(req, out) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load rosters.' }); }
   });
 
@@ -187,35 +395,33 @@ function mount(app, opts) {
       (await listAll()).forEach((d) => { if (d && d.dept) names.add(d.dept); });
       const units = [...names].filter((n) => n && allowed(n)).sort((x, y) => x.localeCompare(y));
       const may = (act) => !a || a.unrestricted || acc.can(a, 'roster', act);
+      const pe = acc.portalMayEditRoster(a);
+      const console_ = !isCollector(req);
+      const edit = pe || (console_ && may('edit'));
       res.json({
         ok: true,
         scope: (a && !a.unrestricted && a.rosterScope) || 'all',
         units,
         // Collectors and in-charges only ever receive APPROVED sheets (publishedOnly),
         // so the renderer must not offer them an editor for a unit they can only read.
-        // A ward in-charge granted `rosterEdit` may build and submit their own unit's
-        // sheet, but never approve or delete one -- publishing stays with an administrator.
-        can: (function () {
-          const pe = acc.portalMayEditRoster(a);
-          const console_ = !isCollector(req);
-          return {
-            view: may('view'),
-            edit: pe || (console_ && may('edit')),
-            add: pe || (console_ && may('add')),
-            delete: console_ && may('delete'),
-            submit: pe || (console_ && may('edit')),
-            approve: mayApprove(req),
-            // The oversight view below is the same right as publishing.
-            review: mayApprove(req),
-          };
-        }()),
+        // A ward in-charge granted `rosterEdit` may build and send their own unit's
+        // sheet; checking, approving and reopening follow the person's roster role.
+        can: Object.assign({
+          view: may('view'),
+          edit,
+          add: pe || (console_ && may('add')),
+          delete: console_ && may('delete'),
+          submit: edit,
+          send: edit,
+        }, accountCan(req)),
       });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load your roster access.' }); }
   });
 
   /* The oversight view: every unit, who may roster it, and whether it actually has a
-     sheet this month. Same right as publishing (mayApprove) — the person accountable
-     for the rosters being done is the person who should see where they are not.
+     sheet this month. Open to whoever reviews rosters (manager, CNS, administration) —
+     the person accountable for the rosters being done is the person who should see
+     where they are not.
 
      WHY IT IS A SERVER ROUTE AND NOT A CLIENT JOIN
      The renderer could in principle read /api/users and join it itself, but that needs
@@ -229,20 +435,17 @@ function mount(app, opts) {
      those rows with the same vocabulary the access check uses (rosterVisible) — which is
      also how a unit spelled four ways in the register still reviews as one row. */
   app.get('/api/rosters/access', readGuard, async (req, res) => {
-    if (!mayApprove(req)) return res.status(403).json({ ok: false, error: 'Full Duty Roster access is needed to review every unit.' });
+    if (!accountCan(req).review) return res.status(403).json({ ok: false, error: 'Reviewing every unit needs a roster review role (manager, CNS or administrator).' });
     try {
       const acc = require('./access');
-      const deptmap = require('./deptmap');
-      const map = await deptmap.get().catch(() => null);
-      const byId = (map && map.byId) || {};
-      const depts = Object.keys(byId).filter((id) => !byId[id].qualityOnly).map((id) => ({ id, name: byId[id].name || id }));
+      const depts = (await deptIndex()).map((d) => ({ id: d.id, name: d.name }));
 
       // Only the fields this view shows. A projection, not a filter applied afterwards:
       // password hashes must never be read into the process in the first place.
       let accounts = [];
       try {
         const users = await require('./db').getUsers();
-        accounts = await users.find({}, { projection: { username: 1, name: 1, role: 1, active: 1, perms: 1, rosterScope: 1, rosterDepartments: 1, staffScope: 1, departments: 1 } }).toArray();
+        if (users && typeof users.find === 'function') accounts = await users.find({}, { projection: { username: 1, name: 1, role: 1, active: 1, perms: 1, rosterScope: 1, rosterDepartments: 1, rosterRole: 1, staffScope: 1, departments: 1 } }).toArray();
       } catch (e) { accounts = []; }
 
       const actionsOf = (u) => {
@@ -266,6 +469,7 @@ function mount(app, opts) {
         const keys = await acc.rosterDeptNames(a);
         people.push({
           username: u.username, name: u.name || u.username, role: u.role || 'User',
+          rosterRole: u.role === 'Administrator' ? 'admin' : W.cleanRosterRole(u.rosterRole),
           actions: acts,
           // null = every unit. Kept distinct from [] (assigned none) on purpose.
           scope: keys === null ? 'all' : 'departments',
@@ -285,10 +489,10 @@ function mount(app, opts) {
         const holders = people.filter((p) => p.covers === null || p.covers.indexOf(d.id) >= 0);
         return {
           id: d.id, name: d.name,
-          holders: holders.map((p) => ({ username: p.username, name: p.name, actions: p.actions, scope: p.scope, inherited: p.inherited })),
+          holders: holders.map((p) => ({ username: p.username, name: p.name, actions: p.actions, scope: p.scope, inherited: p.inherited, rosterRole: p.rosterRole })),
           editors: holders.filter((p) => p.actions.indexOf('edit') >= 0 || p.actions.indexOf('add') >= 0).length,
           sheets: mine.length,
-          current: thisMonth ? { status: thisMonth.status || 'draft', revision: thisMonth.revision || 1, updatedAt: thisMonth.updatedAt || null, updatedBy: thisMonth.updatedBy || null } : null,
+          current: thisMonth ? { status: thisMonth.status || 'draft', stage: thisMonth.stage || null, revision: thisMonth.revision || 1, updatedAt: thisMonth.updatedAt || null, updatedBy: thisMonth.updatedBy || null } : null,
         };
       }).sort((a, b) => a.name.localeCompare(b.name));
 
@@ -318,20 +522,296 @@ function mount(app, opts) {
   app.get('/api/rosters/staff', readGuard, async (req, res) => {
     try {
       const allowed = await deptMatcher(req);
+      const cfg = await getConfig(); const index = await deptIndex();
       const all = await require('./staff-roster').loadRoster({ cached: true });
-      const out = (all || []).filter((p) => p && p.is_active !== false && !p.former && allowed(p.current_department || 'Unassigned'))
-        .map((p) => { const o = {}; ROSTER_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) o[k] = p[k]; }); return o; });
+      const out = [];
+      for (const p of (all || [])) {
+        if (!p || p.is_active === false || p.former) continue;
+        const dept = p.current_department || 'Unassigned';
+        if (!(allowed(dept) || await reviewVisible(req, cfg, index, dept))) continue;
+        const o = {}; ROSTER_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) o[k] = p[k]; }); out.push(o);
+      }
       res.json({ ok: true, staff: out });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the unit staff.' }); }
   });
 
-  // One month, with the grid.
+  /* ------------------------------------------------------------- the review inbox --- */
+
+  /* One row per canonical department for a month, for whoever reviews rosters. A unit
+     with NO sheet is a row too ("not submitted") — the inbox exists to show what is
+     missing as much as what is waiting. Each row carries the per-sheet rights so the
+     screen renders exactly the buttons the server would honour. */
+  async function reviewRows(req, year, month) {
+    const cfg = await getConfig(); const index = await deptIndex();
+    const allowed = await deptMatcher(req);
+    const role = roleOf(req);
+    const me = (req.access && req.access.username) || '';
+    const sheets = (await listAll()).filter((d) => d && d.year === year && d.month === month);
+    const byKey = {};
+    const unmapped = [];
+    sheets.forEach((sh) => {
+      const key = deptKeyOf(index, sh.dept);
+      if (!key) { unmapped.push(sh); return; }
+      // Two spellings of one unit in one month: the most recently saved one is the row.
+      if (!byKey[key] || (sh.updatedAt || 0) > (byKey[key].updatedAt || 0)) byKey[key] = sh;
+    });
+    const rows = [];
+    const rowOf = async (key, name, sh) => {
+      const cfgDept = (key && cfg.depts[key]) || {};
+      const target = sh || { dept: name, status: 'draft', revision: 0 };
+      const actor = await actorOf(req, target);
+      const can = W.rights(actor, target, cfgDept, cfg.cns);
+      const st = sh ? sh.status : null;
+      const pendingForMe = st === 'pending_manager' ? (can.forward || can.return) : st === 'pending_cns' ? (can.approve || can.return) : false;
+      return {
+        dept: key, deptName: name, sheetDept: sh ? sh.dept : name,
+        id: sh ? sh.id : null, hasSheet: !!sh, status: st, stage: sh ? (sh.stage || null) : null, revision: sh ? (sh.revision || 0) : 0,
+        sentAt: sh ? (sh.sentAt || null) : null, sentBy: sh ? (sh.sentBy || null) : null, sentByName: sh ? (sh.sentByName || null) : null,
+        returnNote: sh ? (sh.returnNote || '') : '', returnedByName: sh ? (sh.returnedByName || null) : null, returnStage: sh ? (sh.returnStage || null) : null,
+        approvedBy: sh ? (sh.approvedBy || null) : null, approvedAt: sh ? (sh.approvedAt || null) : null,
+        updatedAt: sh ? (sh.updatedAt || null) : null, updatedBy: sh ? (sh.updatedBy || null) : null,
+        staffCount: sh ? (Array.isArray(sh.order) ? sh.order.length : 0) : 0,
+        incharge: cfgDept.incharge || null, manager: cfgDept.manager || null,
+        pendingForMe, can,
+      };
+    };
+    for (const d of index) {
+      const mine = role === 'admin' || role === 'cns'
+        || (role === 'manager' && ((cfg.depts[d.id] && cfg.depts[d.id].manager && cfg.depts[d.id].manager.username === me) || allowed(d.id) || allowed(d.name)));
+      if (!mine) continue;
+      rows.push(await rowOf(d.id, d.name, byKey[d.id] || null));
+    }
+    for (const sh of unmapped) {
+      if (!(role === 'admin' || role === 'cns' || allowed(sh.dept))) continue;
+      rows.push(await rowOf(null, sh.deptName || sh.dept, sh));
+    }
+    return { rows, cfg };
+  }
+  const ymOf = (req) => {
+    const now = new Date();
+    const year = parseInt(req.query.year, 10) || now.getFullYear();
+    const m = parseInt(req.query.month, 10);
+    return { year, month: (m >= 0 && m <= 11) ? m : now.getMonth() };
+  };
+  app.get('/api/rosters/review', readGuard, async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      if (!accountCan(req).review) return res.status(403).json({ ok: false, error: 'The review inbox is for managers, the CNS and administrators.' });
+      const { year, month } = ymOf(req);
+      const { rows, cfg } = await reviewRows(req, year, month);
+      res.json({ ok: true, year, month, me: (req.access && req.access.username) || null, role: roleOf(req), cns: cfg.cns, rows });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the review inbox.' }); }
+  });
+  // The sidebar badge: sheets waiting on ME, and my own units' sheets sent back to me.
+  app.get('/api/rosters/review/count', readGuard, async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const { year, month } = ymOf(req);
+      let pending = 0, returned = 0;
+      if (accountCan(req).review) pending = (await reviewRows(req, year, month)).rows.filter((r) => r.pendingForMe).length;
+      const allowed = await deptMatcher(req);
+      const actor = await actorOf(req, null);
+      if (actor.canEdit) returned = (await listAll()).filter((d) => d && d.year === year && d.month === month && d.status === 'returned' && allowed(d.dept)).length;
+      res.json({ ok: true, year, month, pending, returned });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not count the roster queue.' }); }
+  });
+
+  /* ------------------------------------------------------------ staff-wise history --- */
+
+  // One person's row across months. Rows are keyed 'S<staff.id>' on the sheet; sheets
+  // saved since this shipped carry `staffIds` for the index, older ones are matched on
+  // the grid key itself.
+  app.get('/api/rosters/staff/:staffId', readGuard, async (req, res) => {
+    try {
+      const digits = String(req.params.staffId || '').replace(/^S/i, '');
+      if (!/^\d+$/.test(digits)) return res.status(400).json({ ok: false, error: 'A staff id is needed.' });
+      const key = 'S' + digits;
+      const now = new Date();
+      const to = parseYm(req.query.to, monthKey(now.getFullYear(), now.getMonth()));
+      let from = parseYm(req.query.from, to - 11);
+      if (from > to) from = to;
+      if (to - from > 23) from = to - 23;
+      const allowed = await deptMatcher(req);
+      const cfg = await getConfig(); const index = await deptIndex();
+      const c = await col();
+      let docs;
+      if (c) {
+        docs = (await c.find({ $or: [{ staffIds: key }, { ['grid.' + key]: { $exists: true } }] },
+          { projection: { ['grid.' + key]: 1, dept: 1, deptName: 1, year: 1, month: 1, status: 1, revision: 1, approvedAt: 1 } }).toArray()).map(outDoc);
+      } else {
+        docs = mem.filter((x) => x.grid && x.grid[key]).map(memOut);
+      }
+      const out = [];
+      for (const d of docs) {
+        const k = monthKey(d.year, d.month);
+        if (k < from || k > to) continue;
+        if (!(allowed(d.dept) || await reviewVisible(req, cfg, index, d.dept))) continue;
+        if (!publishedOnly(req, [d]).length) continue;
+        out.push({ id: d.id, dept: d.dept, deptName: d.deptName || d.dept, year: d.year, month: d.month, status: d.status, revision: d.revision || 0, cells: (d.grid && d.grid[key]) || {} });
+      }
+      out.sort((a, b) => monthKey(a.year, a.month) - monthKey(b.year, b.month));
+      res.json({ ok: true, staffKey: key, from: { year: Math.floor(from / 12), month: from % 12 }, to: { year: Math.floor(to / 12), month: to % 12 }, months: out });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load this person\'s rosters.' }); }
+  });
+
+  /* ------------------------------------------------------------------- the config --- */
+
+  // Who prepares, checks and approves: names only, readable by anyone who opens a sheet
+  // (they are printed on it). Every canonical department is listed so the setup screen
+  // and the sign-off block never have to resolve a unit themselves.
+  app.get('/api/rosters/config', readGuard, async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const cfg = await getConfig();
+      const depts = (await deptIndex()).map((d) => { const v = cfg.depts[d.id] || {}; return { id: d.id, name: d.name, incharge: v.incharge || null, manager: v.manager || null }; });
+      res.json({ ok: true, cns: cfg.cns, depts, updatedAt: cfg.updatedAt, updatedBy: cfg.updatedBy });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the roster setup.' }); }
+  });
+  app.put('/api/rosters/config', readGuard, adminOnly, async (req, res) => {
+    try {
+      const b = obj(req.body);
+      const index = await deptIndex();
+      const ids = new Set(index.map((d) => d.id));
+      const users = await require('./db').getUsers();
+      // A slot names an ACCOUNT, never free text: the manager and CNS must be able to sign
+      // in and decide, and a renamed person must keep their place. Looked up one by one
+      // (the in-memory dev store has no find()); it is a handful of names.
+      const lookup = async (p) => {
+        if (p == null || p === '' || (typeof p === 'object' && !p.username)) return null;
+        const username = s(typeof p === 'object' ? p.username : p, 80).trim().toLowerCase();
+        if (!username) return null;
+        const u = users ? await users.findOne({ username }) : null;
+        if (!u || u.active === false) throw new Error('No active account is called "' + username + '".');
+        return { username: u.username, name: u.name || u.username };
+      };
+      const cfg = await getConfig();
+      const next = { cns: cfg.cns, depts: Object.assign({}, cfg.depts) };
+      const changed = [];
+      if (has(b, 'cns')) { const v = await lookup(b.cns); if (JSON.stringify(v) !== JSON.stringify(cfg.cns)) { changed.push('CNS: ' + (v ? v.name : '—')); } next.cns = v; }
+      const depts = obj(b.depts);
+      for (const id of Object.keys(depts).slice(0, 300)) {
+        if (!ids.has(id)) return res.status(400).json({ ok: false, error: 'Unknown department "' + s(id, 60) + '".' });
+        const v = obj(depts[id]);
+        const cur = cfg.depts[id] || { incharge: null, manager: null };
+        const row = { incharge: has(v, 'incharge') ? await lookup(v.incharge) : cur.incharge, manager: has(v, 'manager') ? await lookup(v.manager) : cur.manager };
+        if (JSON.stringify(row) !== JSON.stringify(cur)) { changed.push(id + ': ' + (row.incharge ? row.incharge.name : '—') + ' / ' + (row.manager ? row.manager.name : '—')); }
+        next.depts[id] = row;
+      }
+      await saveConfig({ cns: next.cns, depts: next.depts, updatedAt: Date.now(), updatedBy: who(req) });
+      if (changed.length) { try { require('./activity-log').log(req, 'roster_config', { target: 'Duty Roster', detail: changed.join(', ').slice(0, 900) }); } catch (e) { /* never breaks the save */ } }
+      const saved = await getConfig();
+      res.json({ ok: true, changed: changed.length, cns: saved.cns, depts: index.map((d) => { const v = saved.depts[d.id] || {}; return { id: d.id, name: d.name, incharge: v.incharge || null, manager: v.manager || null }; }), updatedAt: saved.updatedAt, updatedBy: saved.updatedBy });
+    } catch (e) {
+      if (e && /No active account/.test(e.message)) return res.status(400).json({ ok: false, error: e.message });
+      res.status(500).json({ ok: false, error: 'Could not save the roster setup.' });
+    }
+  });
+
+  // The accounts the setup pickers offer: everyone with a place in the chain, plus the
+  // administrators (who may stand in for any slot). Names and roster fields only.
+  app.get('/api/rosters/reviewers', readGuard, async (req, res) => {
+    try {
+      let list = [];
+      try {
+        const users = await require('./db').getUsers();
+        if (users && typeof users.find === 'function') list = await users.find({ active: { $ne: false } }, { projection: { username: 1, name: 1, title: 1, role: 1, rosterRole: 1, rosterScope: 1, rosterDepartments: 1 } }).toArray();
+      } catch (e) { list = []; }
+      const out = list
+        .filter((u) => u.role === 'Administrator' || W.cleanRosterRole(u.rosterRole))
+        .map((u) => ({ username: u.username, name: u.name || u.username, title: u.title || '', rosterRole: u.role === 'Administrator' ? 'admin' : W.cleanRosterRole(u.rosterRole), rosterScope: u.rosterScope || null, rosterDepartments: Array.isArray(u.rosterDepartments) ? u.rosterDepartments : [] }))
+        .sort((x, y) => String(x.name).localeCompare(String(y.name)));
+      res.json({ ok: true, reviewers: out });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the reviewers.' }); }
+  });
+
+  // A printout is logged, like My Department's and Device Days' are.
+  app.post('/api/rosters/print', readGuard, async (req, res) => {
+    const b = obj(req.body);
+    try { await require('./activity-log').log(req, 'roster_print', { target: s(b.target || b.kind || 'Duty Roster', 160), detail: s(b.detail, 400) }); } catch (e) { /* never fails the print */ }
+    res.json({ ok: true });
+  });
+
+  /* ------------------------------------------------------------------- versions --- */
+
+  const sheetVisible = async (req, doc) => {
+    if (!doc) return false;
+    const allowed = await deptMatcher(req);
+    if (!(allowed(doc.dept) || await reviewVisible(req, await getConfig(), await deptIndex(), doc.dept))) return false;
+    return publishedOnly(req, [doc]).length > 0;
+  };
+  app.get('/api/rosters/:id/versions', readGuard, async (req, res) => {
+    try {
+      const id = s(req.params.id, 80);
+      if (!(await sheetVisible(req, await getOne(id)))) return res.status(403).json({ ok: false, error: 'This roster is outside your departments.' });
+      const c = await verCol();
+      const list = c ? await c.find({ rosterId: id }, { projection: { grid: 0, order: 0, names: 0, rules: 0 } }).sort({ revision: -1 }).toArray()
+        : memVersions.filter((v) => v.rosterId === id).sort((a, b) => b.revision - a.revision);
+      res.json({ ok: true, versions: list.map((v) => ({ revision: v.revision, status: v.status, action: v.action, at: v.at, by: v.by, byName: v.byName, note: v.note || '' })) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the roster versions.' }); }
+  });
+  app.get('/api/rosters/:id/versions/:revision', readGuard, async (req, res) => {
+    try {
+      const id = s(req.params.id, 80); const rev = parseInt(req.params.revision, 10);
+      if (!(await sheetVisible(req, await getOne(id)))) return res.status(403).json({ ok: false, error: 'This roster is outside your departments.' });
+      const c = await verCol();
+      const v = c ? await c.findOne({ rosterId: id, revision: rev }) : memVersions.find((x) => x.rosterId === id && x.revision === rev);
+      if (!v) return res.status(404).json({ ok: false, error: 'That version is no longer kept.' });
+      const { _id, ...rest } = v;
+      res.json({ ok: true, version: rest });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not load that roster version.' }); }
+  });
+
+  /* ---------------------------------------------------------------- hand-overs --- */
+
+  // The one decision route. Body: { action: send_manager | send_cns | forward | approve | return | reopen, note? }.
+  app.post('/api/rosters/:id/transition', readGuard, async (req, res) => {
+    try {
+      const b = obj(req.body);
+      const r = await applyTransition(req, s(req.params.id, 80), s(b.action, 40), b.note);
+      res.status(r.status).json(r.body);
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not change the status.' }); }
+  });
+
+  // The status route older clients still call, mapped onto the hand-overs. The caller's
+  // `approvedBy` is ignored: names come from the setup, never from the payload.
+  app.post('/api/rosters/:id/status', readGuard, async (req, res) => {
+    try {
+      const id = s(req.params.id, 80);
+      const status = s(obj(req.body).status);
+      const cur = await getOne(id);
+      if (!cur) return res.status(404).json({ ok: false, error: 'Roster not found.' });
+      const eff = cur.status;
+      // The final step decides whether the whole move is allowed: a caller who cannot
+      // approve must not get the sheet sent to the CNS as a side effect of trying.
+      if (status === 'approved' && !accountCan(req).approve) return res.status(403).json({ ok: false, code: 'forbidden', error: 'Only the CNS can approve a roster.' });
+      let steps = [];
+      if (status === 'submitted') steps = ['send_cns'];
+      else if (status === 'approved') steps = (W.EDITABLE.indexOf(eff) >= 0 ? ['send_cns'] : eff === 'pending_manager' ? ['forward'] : []).concat(['approve']);
+      else if (status === 'draft') steps = eff === 'approved' ? ['reopen'] : ['return'];
+      else return res.status(400).json({ ok: false, error: 'Unknown status.' });
+      let r = null;
+      for (const step of steps) { r = await applyTransition(req, id, step, obj(req.body).note); if (r.status !== 200) break; }
+      // The old route said `locked` on a published sheet; keep that flag for its callers.
+      if (r.status === 409 && eff === 'approved') r.body.locked = true;
+      res.status(r.status).json(r.body);
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not change the status.' }); }
+  });
+
+  /* ------------------------------------------------------------------- the sheet --- */
+
+  // One month, with the grid — plus the names to print and what this account may do with
+  // it. A unit that has no sheet yet still answers with the names, so a brand-new sheet
+  // opens with its sign-off block filled in.
   app.get('/api/rosters/:dept/:year/:month', readGuard, async (req, res) => {
     try {
-      if (!(await deptMatcher(req))(req.params.dept)) return res.status(403).json({ ok: false, error: 'This roster belongs to a unit outside your departments.' });
-      const id = rosterId(req.params.dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
-      const doc = await getOne(id);
-      res.json({ ok: true, roster: publishedOnly(req, doc ? [doc] : [])[0] || null });   // null when never drafted (or not published, to a collector)
+      const dept = s(req.params.dept, 40);
+      const allowed = await deptMatcher(req);
+      if (!(allowed(dept) || await reviewVisible(req, await getConfig(), await deptIndex(), dept))) return res.status(403).json({ ok: false, error: 'This roster belongs to a unit outside your departments.' });
+      const id = rosterId(dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
+      const doc = publishedOnly(req, [await getOne(id)].filter(Boolean))[0] || null;   // null when never drafted (or not published, to a collector)
+      const d = await decorate(req, doc, { dept, status: 'draft', revision: 0 });
+      if (!doc) return res.json({ ok: true, roster: null, signers: d.signers, can: d.can });
+      res.json({ ok: true, roster: d, signers: d.signers, can: d.can });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the roster.' }); }
   });
 
@@ -343,13 +823,19 @@ function mount(app, opts) {
       const head = normRoster(b);
       const id = rosterId(head.dept, head.year, head.month);
       const c = await col();
-      const existing = c ? outDoc(await c.findOne({ _id: id })) : mem.find((x) => x.id === id);
+      const existing = await getOne(id);
+      const eff = existing ? existing.status : 'draft';
+      const admin = !!(req.access && req.access.unrestricted);
       // An approved roster is the published, signed sheet. NO save may overwrite it or
       // move it back to draft — the old check let any save labelled "draft" through, so
       // a pending autosave un-published a roster seconds after it was approved.
-      // Reopening is the admin-only status route.
-      if (existing && existing.status === 'approved') {
+      // Reopening is a hand-over (admin only). A sheet WITH A REVIEWER is locked the same
+      // way for its author: what the manager is reading must be what they decide on.
+      if (eff === 'approved') {
         return res.status(409).json({ ok: false, locked: true, error: 'This roster is approved and locked. Reopen it before editing.' });
+      }
+      if (W.PENDING.indexOf(eff) >= 0 && !admin) {
+        return res.status(409).json({ ok: false, locked: true, pending: true, error: 'This roster is ' + (eff === 'pending_manager' ? 'with the manager' : 'with the CNS') + ' for review. Ask them to return it if it needs changes.' });
       }
       // Lost-update guard. The grid is saved whole, so a browser that edited an older
       // revision would erase every cell somebody else saved since. It says which
@@ -360,59 +846,53 @@ function mount(app, opts) {
           error: 'Someone else saved this roster since you opened it. Reload the month to see their changes, then make yours again.' });
       }
       const doc = normRoster(b, existing);
-      // Approval only ever happens through the status route, which stamps who signed.
-      if (doc.status === 'approved') doc.status = (existing && existing.status) || 'draft';
+      // Keys a legacy client still sends that a save no longer honours — reported, not refused.
+      const ignored = [];
+      if (has(b, 'status') && s(b.status) !== doc.status && s(b.status) !== 'submitted') ignored.push('status');
+      if (has(b, 'approvedBy')) ignored.push('approvedBy');
+      doc.staffIds = Object.keys(doc.grid);
       doc.revision = current + 1;
       doc.updatedAt = Date.now();
       doc.updatedBy = who(req);
+      // Editing a returned sheet: the correction has started, it is a draft again.
+      let push = null;
+      if (eff === 'returned') { const rs = W.resumeOnEdit(existing, await actorOf(req, existing), doc.updatedAt); Object.assign(doc, rs.set); push = rs.entry; }
       const raced = () => res.status(409).json({ ok: false, conflict: true,
         error: 'Someone else saved this roster at the same moment. Reload the month and try again.' });
       if (c) {
         if (existing) {
-          // Conditional on the revision just checked, so two saves can never interleave.
-          const r = await c.updateOne({ _id: id, revision: existing.revision == null ? null : existing.revision, status: { $ne: 'approved' } }, { $set: doc });
+          // Conditional on the revision just checked, so two saves can never interleave;
+          // and on the status, so a hand-over landing meanwhile is not overwritten.
+          const filter = { _id: id, revision: existing.revision == null ? null : existing.revision, status: { $in: W.rawStatuses(eff) } };
+          const upd = { $set: doc }; if (push) upd.$push = { history: { $each: [push], $slice: -W.HISTORY_CAP } };
+          const r = await c.updateOne(filter, upd);
           if (!r.matchedCount) return raced();
         } else {
-          doc.createdAt = Date.now(); doc.createdBy = who(req);
+          doc.createdAt = Date.now(); doc.createdBy = who(req); doc.history = [];
           try { await c.insertOne(Object.assign({ _id: id }, doc)); }
           catch (e) { if (e && e.code === 11000) return raced(); throw e; }
         }
       } else {
-        if (!existing) { doc.createdAt = Date.now(); doc.createdBy = who(req); }
         const idx = mem.findIndex((x) => x.id === id);
-        if (idx >= 0) mem[idx] = Object.assign({ id }, doc); else mem.push(Object.assign({ id }, doc));
+        if (idx >= 0) {
+          const x = mem[idx];
+          if ((x.revision || 0) !== current || W.rawStatuses(eff).indexOf(x.status) < 0) return raced();
+          Object.assign(x, doc);
+          if (push) x.history = (Array.isArray(x.history) ? x.history : []).concat([push]).slice(-W.HISTORY_CAP);
+        } else {
+          doc.createdAt = Date.now(); doc.createdBy = who(req); doc.history = [];
+          mem.push(Object.assign({ id }, doc));
+        }
       }
-      res.json({ ok: true, roster: await getOne(id) });
+      // Older clients hand a sheet in by saving it with status 'submitted'.
+      if (s(b.status) === 'submitted' && W.EDITABLE.indexOf(doc.status) >= 0) {
+        const t = await applyTransition(req, id, 'send_cns');
+        if (t.status === 200) return res.json(Object.assign({}, t.body, ignored.length ? { ignored } : {}));
+      }
+      const out = { ok: true, roster: await decorate(req, await getOne(id)) };
+      if (ignored.length) out.ignored = ignored;
+      res.json(out);
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not save the roster.' }); }
-  });
-
-  // Approve / reopen. Approval is the moment the sheet becomes the published roster,
-  // so it is admin-only and stamps who signed it.
-  app.post('/api/rosters/:id/status', writeGuard, async (req, res) => {
-    try {
-      const id = s(req.params.id, 80);
-      const status = s((obj(req.body)).status);
-      if (STATUSES.indexOf(status) < 0) return res.status(400).json({ ok: false, error: 'Unknown status.' });
-      // APPROVING is the moment the sheet becomes the published roster, and REOPENING
-      // unpublishes one people may already be working to. Both need FULL control of the
-      // roster module ('delete' -- the top action), not the Administrator role: the tier
-      // that signs a roster off is a nursing one, and gating on the backend role locked the
-      // Chief of Nursing Services out of the approval she is accountable for. Everyone else
-      // who may write a roster may still move it exactly one step: hand it in.
-      if (!mayApprove(req)) {
-        if (status !== 'submitted') return res.status(403).json({ ok: false, error: 'You can submit this roster for approval. Approving and reopening need full Duty Roster access.' });
-        const cur = await getOne(id);
-        if (!cur) return res.status(404).json({ ok: false, error: 'Roster not found.' });
-        if (!(await deptMatcher(req))(cur.dept)) return res.status(403).json({ ok: false, error: 'This roster belongs to a unit outside your departments.' });
-        if (cur.status === 'approved') return res.status(409).json({ ok: false, locked: true, error: 'This roster is approved and locked. Ask someone with full Duty Roster access to reopen it.' });
-      }
-      const patch = { status, statusBy: who(req), statusAt: Date.now() };
-      if (status === 'approved') { patch.approvedBy = s((obj(req.body)).approvedBy, 120) || who(req); patch.approvedAt = Date.now(); }
-      const c = await col();
-      if (c) { const r = await c.updateOne({ _id: id }, { $set: patch }); if (!r.matchedCount) return res.status(404).json({ ok: false, error: 'Roster not found.' }); }
-      else { const x = mem.find((m) => m.id === id); if (!x) return res.status(404).json({ ok: false, error: 'Roster not found.' }); Object.assign(x, patch); }
-      res.json({ ok: true, roster: await getOne(id) });
-    } catch (e) { res.status(500).json({ ok: false, error: 'Could not change the status.' }); }
   });
 
   app.delete('/api/rosters/:id', guard, adminOnly, async (req, res) => {
@@ -428,4 +908,10 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, COLL, STATUSES, rosterId, normGrid };
+module.exports = {
+  mount, COLL, VER_COLL, CFG_COLL, STATUSES, rosterId, normGrid,
+  effStatus: W.effStatus, rawStatuses: W.rawStatuses, resumeOnEdit: W.resumeOnEdit, PENDING: W.PENDING, EDITABLE: W.EDITABLE, HISTORY_CAP: W.HISTORY_CAP,
+  applyTransition, getConfig, deptIndex, deptKeyOf, getOne, decorate, actorOf,
+  // The in-memory store, for the tests to plant a legacy row in.
+  __mem: () => mem,
+};

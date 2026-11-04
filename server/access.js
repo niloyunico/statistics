@@ -149,12 +149,22 @@ function cleanRosterScope(v) {
   return ROSTER_SCOPES.indexOf(s) >= 0 ? s : null;
 }
 
+// The account's place in the DUTY ROSTER review chain, set per person:
+//   ''        — takes no part (builds sheets if the module lets them, nothing more)
+//   incharge  — prepares a unit's sheet (named on the setup screen, stamped "Prepared by")
+//   manager   — checks sheets sent to them and forwards them to the CNS, or returns them
+//   cns       — signs rosters off (the only non-administrator who approves)
+// Independent of the `roster` module actions: those say whether the person may EDIT a
+// sheet; this says whether they REVIEW one. Rules live in server/roster-workflow.js.
+const ROSTER_ROLES = require('./roster-workflow').ROSTER_ROLES;
+const cleanRosterRole = require('./roster-workflow').cleanRosterRole;
+
 /* ----------------------------------------------------------------- access --- */
 
 // Resolved authority for one request. `unrestricted` covers open local-PC mode
 // (REQUIRE_AUTH=false) and the Administrator role — both may do anything.
 function unrestricted(user) {
-  return { unrestricted: true, username: (user && user.sub) || null, role: (user && user.role) || null, staffScope: 'all', rosterScope: 'all', rosterDepartments: [], rosterEdit: true };
+  return { unrestricted: true, username: (user && user.sub) || null, role: (user && user.role) || null, staffScope: 'all', rosterScope: 'all', rosterDepartments: [], rosterEdit: true, rosterRole: '' };
 }
 
 // Permissions come from the DATABASE, never from the JWT. The token carries only
@@ -227,7 +237,7 @@ async function forRequest(req) {
   // out here would bounce them to a /login that cannot reach the database either, so a
   // brief outage became a lockout. An empty perms map is the safe reading of "unknown".
   if (u === DB_UNREACHABLE) {
-    return { unrestricted: false, degraded: true, username: claims.sub, name: claims.name, role: 'User', perms: {}, departments: [], qualityAreas: [], staffScope: 'self', staffId: null, staffEmpId: '', rosterScope: 'departments', rosterDepartments: [], rosterEdit: false };
+    return { unrestricted: false, degraded: true, username: claims.sub, name: claims.name, role: 'User', perms: {}, departments: [], qualityAreas: [], staffScope: 'self', staffId: null, staffEmpId: '', rosterScope: 'departments', rosterDepartments: [], rosterEdit: false, rosterRole: '' };
   }
   if (!u || u.active === false) return null;              // deactivated -> session dies now
   // Session revocation: bumping sessionEpoch on the user doc invalidates every token
@@ -260,6 +270,8 @@ async function forRequest(req) {
     // administrator grants it, and meaningless for every other role: a console account
     // is governed by the `roster` module permission, not by this flag.
     rosterEdit: u.rosterEdit === true,
+    // Duty Roster review chain: '' | incharge | manager | cns (see cleanRosterRole).
+    rosterRole: cleanRosterRole(u.rosterRole),
     // Data Submission extras, set per person: runs a unit (its staff list, staff requests,
     // unit dashboard). Meaningful only alongside the 'datasubmit' module.
     unitLead: u.unitLead === true,
@@ -984,7 +996,7 @@ module.exports = {
   SUBMIT_KINDS, cleanSubmitKinds, maySubmitKind,
   DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen, hhScreenOn, cleanSubMenus,
   ACCESS_MODULES, ACTIONS, PERM_RANK, STAFF_SCOPES, cleanStaffScope,
-  ROSTER_SCOPES, cleanRosterScope, rosterDeptNames, rosterVisible,
+  ROSTER_SCOPES, cleanRosterScope, rosterDeptNames, rosterVisible, ROSTER_ROLES, cleanRosterRole,
   KEY_MODULE, moduleOfKey,
   forRequest, attach, requirePerm, requireModule, actionForMethod, can, canWrite, invalidate, submitScoped,
   filterStaff, staffVisible, scopedDeptNames, deptsOfStaff,

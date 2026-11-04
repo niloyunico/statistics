@@ -747,8 +747,11 @@ class AdminApp extends React.Component {
     if (!ref || this.state.demo) return;
     tryApi('/api/rosters/' + encodeURIComponent(ref.dept) + '/' + ref.year + '/' + ref.month).then((r) => {
       if (!r || !r.ok || !r.roster) return this.toastMsg('Roster not found.');
-      const me = this.state.me || {};
-      return api('/api/rosters', { method: 'PUT', body: Object.assign({}, r.roster, { status, approvedBy: status === 'approved' ? (me.name || me.username) : r.roster.approvedBy }) }).then(() => tryApi('/api/rosters')).then((x) => { if (x && x.ok) this.setState((s) => ({ live: Object.assign({}, s.live, { rosters: x.rosters || [] }) })); });
+      // A step of the review chain, never a PUT: a save cannot change the status (the server
+      // ignores it) and the approver's name comes from Duty Roster → Setup, not this phone.
+      const action = status === 'approved' ? 'approve' : 'return';
+      return api('/api/rosters/' + encodeURIComponent(r.roster.id) + '/transition', { method: 'POST', body: { action, note: action === 'return' ? 'Returned from the Admin App' : '' } })
+        .then(() => tryApi('/api/rosters')).then((x) => { if (x && x.ok) this.setState((s) => ({ live: Object.assign({}, s.live, { rosters: x.rosters || [] }) })); });
     }).catch((e) => this.toastMsg(e.message || 'The roster was not updated.'));
   }
   broadcast(body) {

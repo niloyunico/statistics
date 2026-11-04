@@ -1,7 +1,11 @@
 /* MANPOWER OVERVIEW — live staffing command view for the whole hospital.
  *
- * UI ported 1:1 from the approved Claude-Design canvas "Manpower Overview v2.dc.html";
- * the DATA is real: units come from the staff register (grouped exactly the way the
+ * First ported from the design canvas "Manpower Overview v2.dc.html"; since 2026-11 one
+ * column — header, a units table (one row per unit, sorted shortest first), the week grid
+ * and the selected unit's staff. The floor map, the two tile columns, the division rings
+ * and the animated sky were taken out: they showed the hospital but answered nothing a
+ * table does not answer faster.
+ * The DATA is real: units come from the staff register (grouped exactly the way the
  * Duty Roster module groups them — the raw `current_department` string), the per-day
  * duty codes come from each unit's saved roster sheet (GET /api/rosters/:dept/:y/:m,
  * grid keyed 'S'+staff.id like roster.jsx's rosKey), and the per-shift requirement
@@ -64,7 +68,11 @@
     if (ru.minMorning) return [Number(ru.minMorning.value) || 2, Number(ru.minEvening && ru.minEvening.value) || 2, Number(ru.minNight && ru.minNight.value) || 2];
     return [2, 2, 2];   // the roster module's own defaults (ROS_DEF_CFG)
   };
-  const statusWord = (sheet) => !sheet ? 'No roster' : sheet.status === 'approved' ? 'Published' : sheet.status === 'submitted' ? 'Submitted' : 'Draft';
+  const statusWord = (sheet) => !sheet ? 'No roster'
+    : sheet.status === 'approved' ? 'Published'
+    : (sheet.status === 'submitted' || sheet.status === 'pending_cns') ? 'Pending CNS'
+    : sheet.status === 'pending_manager' ? 'Pending Manager'
+    : sheet.status === 'returned' ? 'Returned' : 'Draft';
 
   /* Keyframes + the design's style-hover states, injected once. */
   (function () {
@@ -134,14 +142,6 @@
         people.forEach((e) => { hc[desigBucket(e)]++; });
         const chief = people.find((e) => desigBucket(e) === 0) || people.find((e) => desigBucket(e) === 1) || people[0];
         return { dept, div: divOf(dept), people, hc, incharge: chief ? chief.name : '—' };
-      });
-      // floor-map placement: three floors, spans sized to fit 12 columns per floor
-      const ordered = [].concat(units.filter((u) => u.div === 'ip'), units.filter((u) => u.div === 'pr'), units.filter((u) => u.div === 'ce'), units.filter((u) => u.div === 'op'));
-      const per = Math.max(1, Math.ceil(ordered.length / 3));
-      ordered.forEach((u, i) => {
-        const row = Math.min(2, Math.floor(i / per)), pos = i - row * per, n = Math.min(per, ordered.length - row * per);
-        const span = Math.max(1, Math.floor(12 / n)), extra = 12 - span * n;
-        u.grid = [1 + pos * span + Math.min(pos, extra), span + (pos < extra ? 1 : 0), row + 1];
       });
       return units;
     }, [staffStore.staff]);
@@ -223,7 +223,7 @@
     const tabStyle = (a) => ({ display: 'inline-flex', alignItems: 'center', gap: 5, border: 'none', padding: '6px 10px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', color: a ? '#fff' : T.inkMid, background: a ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'transparent', boxShadow: a ? '0 6px 16px rgba(0,144,202,.3)' : 'none', transition: 'all .18s' });
     const ring = (r, p) => { const c = 2 * Math.PI * r; return (Math.min(1, p / 100) * c) + ' ' + c; };
     const active = (id) => S.sel === id || S.hot === id;
-    const statusChipColor = (w) => w === 'Published' ? '#157a43' : w === 'No roster' ? '#a92c42' : '#b5670a';
+    const statusChipColor = (w) => w === 'Published' ? '#157a43' : (w === 'No roster' || w === 'Returned') ? '#a92c42' : w === 'Pending CNS' ? '#5b45c4' : w === 'Pending Manager' ? '#0072a3' : '#b5670a';
 
     const week = Array.from({ length: 7 }, (_, i) => {
       const date = shiftDate(wk0, i), units = dayUnits(date);
@@ -243,58 +243,7 @@
       off: roster.filter((p) => !covers(p.code, sh) && !R.isLeave(p.code)),
       away: roster.filter((p) => R.isLeave(p.code)),
     };
-    const SKY = [
-      { bg: 'linear-gradient(180deg,#f3f6fb 0%,#e6eef9 55%,#f6efe2 100%)', a: 'rgba(255,196,110,.5)', b: 'rgba(39,168,219,.32)', sun: { top: 60, right: '12%', size: 140, color: 'radial-gradient(circle,rgba(255,224,150,.95),rgba(255,190,90,.55) 45%,transparent 70%)' } },
-      { bg: 'linear-gradient(180deg,#e9e3f6 0%,#f3dbe0 45%,#f7e2cf 100%)', a: 'rgba(255,140,90,.5)', b: 'rgba(106,82,212,.38)', sun: { top: 200, right: '8%', size: 180, color: 'radial-gradient(circle,rgba(255,170,110,.95),rgba(232,96,120,.5) 45%,transparent 70%)' } },
-      { bg: 'linear-gradient(180deg,#0b1730 0%,#12264a 55%,#1a2f56 100%)', a: 'rgba(39,168,219,.28)', b: 'rgba(106,82,212,.3)', sun: { top: 50, right: '10%', size: 90, color: 'radial-gradient(circle,#f4f7fb 0 44%,rgba(244,247,251,.35) 52%,transparent 70%)' } }
-    ][sh];
-    const rnd = (n) => { let x = 12345 + n * 7919; x = (x * 9301 + 49297) % 233280; return x / 233280; };
-
     const openRoster = (dept, iso) => { const [y, m] = ymOf(iso || S.date); setRoute && setRoute(dept ? { view: 'rosterGrid', dept, year: y, month: m } : { view: 'rosterHome' }); };
-
-    /* unit tile — identical markup used by BOTH columns */
-    const tileCard = (x) => {
-      const u = x.u, d = DIVS.find((v) => v[0] === u.div), n = x.need[sh], o = x.on[sh], c = tone(o, n), p = n ? Math.round(o / n * 100) : 100, hc = u.people.length, act = active(u.dept);
-      const sw = stateWord(o, n);
-      const gapText = sw === 'OK' ? 'adequate' : sw === 'Closed' ? 'closed this shift' : sw.replace('+', 'surplus +');
-      const mix = DESIG.map((dg, i) => ({ code: dg[0], n: u.hc[i], title: dg[1] + ': ' + u.hc[i], w: hc ? u.hc[i] / hc * 100 : 0, col: dg[2] }));
-      return (
-        <div key={u.dept} className="mp-lift" onClick={() => set({ sel: S.sel === u.dept ? null : u.dept })}
-          onMouseEnter={() => set({ hot: u.dept })} onMouseLeave={() => set({ hot: null })}
-          style={{ position: 'relative', overflow: 'hidden', cursor: 'pointer', background: T.glass, backdropFilter: 'blur(24px) saturate(1.7)', WebkitBackdropFilter: 'blur(24px) saturate(1.7)', border: '1px solid ' + (act ? d[2] + '99' : T.glassBorder), borderRadius: 13, boxShadow: act ? '0 0 0 3px ' + d[2] + '2e,0 12px 34px rgba(31,59,90,.16)' : T.shadow, padding: '10px 11px 9px 14px', transition: 'transform .2s,box-shadow .25s,border-color .2s' }}>
-          <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: 4, background: d[2] }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <div style={{ position: 'relative', width: 42, height: 42, flexShrink: 0 }}>
-              <svg viewBox="0 0 42 42" width="42" height="42" style={{ display: 'block' }}><circle cx="21" cy="21" r="17" fill="none" stroke="rgba(125,145,180,.18)" strokeWidth="5" /><circle cx="21" cy="21" r="17" fill="none" stroke={c} strokeWidth="5" strokeLinecap="round" strokeDasharray={ring(17, p)} transform="rotate(-90 21 21)" style={{ transition: 'stroke-dasharray .5s ease' }} /></svg>
-              <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', fontFamily: MONO, fontSize: 9.5, fontWeight: 700 }}>{p + '%'}</div>
-            </div>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.dept}</span><span style={chip(statusChipColor(x.status))}>{x.status}</span></div>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 5, marginTop: 1 }}><span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: c }}>{o + '/' + n}</span><span style={{ fontSize: 10, color: T.inkSoft }}>on duty · {gapText}</span></div>
-              <div style={{ fontSize: 10, color: T.inkFaint }}>on register <b style={{ fontFamily: MONO, color: T.inkMid, fontWeight: 600 }}>{hc}</b> staff</div>
-            </div>
-          </div>
-          <div style={{ marginTop: 8, display: 'flex', height: 6, borderRadius: 4, overflow: 'hidden', gap: 1 }}>
-            {mix.map((m) => <span key={m.code} title={m.title} style={{ display: 'block', width: m.w + '%', background: m.col, transition: 'width .3s' }} />)}
-          </div>
-          <div style={{ display: 'flex', gap: 7, marginTop: 4, fontSize: 9.5, color: T.inkLabel, fontFamily: MONO }}>
-            {mix.map((m) => <span key={m.code} style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: 2, background: m.col, display: 'inline-block' }} />{m.code} {m.n}</span>)}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 4, marginTop: 8 }}>
-            {SHIFTS.map((s, i) => { const tc = tone(x.on[i], x.need[i]); return (
-              <span key={s[0]} title={s[1] + ' ' + s[2] + ': ' + x.on[i] + ' on duty, ' + x.need[i] + ' required'}
-                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 3, fontFamily: MONO, fontSize: 10, color: i === sh ? '#fff' : tc, background: i === sh ? tc : tc + '1a', border: '1px solid ' + tc + (i === sh ? '' : '44'), borderRadius: 7, padding: '3px 0', transition: 'all .2s' }}>
-                {s[0]} <b style={{ fontWeight: 700 }}>{x.on[i] + '/' + x.need[i]}</b></span>
-            ); })}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, paddingTop: 7, borderTop: '1px solid ' + T.rule }}>
-            <span style={{ display: 'inline-grid', placeItems: 'center', width: 22, height: 22, borderRadius: 7, fontSize: 9, fontWeight: 800, color: '#fff', background: 'linear-gradient(135deg,' + d[2] + ',#0d1b2e)', flexShrink: 0 }}>{ini(u.incharge)}</span>
-            <div style={{ minWidth: 0, flex: 1, fontSize: 10.5, color: T.inkMid, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.incharge}</div>
-            <span style={{ fontSize: 9.5, fontWeight: 600, color: x.leave ? '#b5670a' : '#157a43', whiteSpace: 'nowrap' }}>{x.leave ? x.leave + ' leave · ' + x.off + ' off' : 'all present'}</span>
-          </div>
-        </div>
-      );
-    };
 
     const legendRow = (
       <>
@@ -307,20 +256,10 @@
 
     const glassCard = { background: T.glass, backdropFilter: 'blur(26px) saturate(1.75)', WebkitBackdropFilter: 'blur(26px) saturate(1.75)', border: '1px solid ' + T.glassBorder, borderRadius: 16, boxShadow: '0 14px 42px rgba(31,59,90,.14),inset 0 1px 0 rgba(255,255,255,.95)', overflow: 'hidden' };
     const secLabel = { fontSize: 9.5, fontWeight: 800, letterSpacing: '.7px', textTransform: 'uppercase', color: T.inkLabel, marginBottom: 7 };
-    const half = Math.ceil(U.length / 2);
 
     return (
-      <div style={{ position: 'relative', overflow: 'hidden', borderRadius: 18, margin: '-8px -10px', color: T.ink }}>
-        {/* sky — morning / evening / night, with stars after dark */}
-        <div style={{ position: 'absolute', inset: 0, zIndex: 0, pointerEvents: 'none', overflow: 'hidden', background: SKY.bg, transition: 'background 1s ease' }}>
-          <div style={{ position: 'absolute', width: 720, height: 720, left: '-8%', top: '-30%', borderRadius: '50%', background: 'radial-gradient(circle,' + SKY.a + ',transparent 70%)', filter: 'blur(50px)', animation: 'mpOrbFloat 18s ease-in-out infinite alternate', transition: 'background 1s ease' }} />
-          <div style={{ position: 'absolute', width: 800, height: 800, right: '-12%', bottom: '-35%', borderRadius: '50%', background: 'radial-gradient(circle,' + SKY.b + ',transparent 70%)', filter: 'blur(60px)', animation: 'mpOrbFloat 22s ease-in-out infinite alternate-reverse', transition: 'background 1s ease' }} />
-          <div style={{ position: 'absolute', top: SKY.sun.top, right: SKY.sun.right, width: SKY.sun.size, height: SKY.sun.size, borderRadius: '50%', background: SKY.sun.color, filter: night ? 'drop-shadow(0 0 30px rgba(220,230,255,.6))' : 'blur(6px)', transition: 'all 1s ease' }} />
-          {night && <div>{Array.from({ length: 70 }, (_, i) => (
-            <span key={i} style={{ position: 'absolute', left: rnd(i) * 100 + '%', top: rnd(i + 200) * 70 + '%', width: 1 + rnd(i + 400) * 2, height: 1 + rnd(i + 400) * 2, borderRadius: '50%', background: '#fff', opacity: .3 + rnd(i + 600) * .7, animation: 'mpLivepulse ' + (2 + rnd(i + 800) * 4) + 's ease-in-out ' + (rnd(i) * 3) + 's infinite' }} />
-          ))}</div>}
-        </div>
-        <div style={{ position: 'relative', minHeight: 'calc(100vh - 130px)', padding: '16px 18px 40px', boxSizing: 'border-box' }}>
+      <div style={{ position: 'relative', color: T.ink }}>
+        <div style={{ position: 'relative', boxSizing: 'border-box' }}>
           <div style={{ maxWidth: 1500, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
 
             {/* ===== header ===== */}
@@ -383,71 +322,62 @@
               </div>
             </div>
 
-            {/* ===== main grid ===== */}
-            <div style={S.narrow ? { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 12, alignItems: 'start' } : { display: 'grid', gridTemplateColumns: '262px minmax(0,1fr) 262px', gap: 12, alignItems: 'start' }}>
+            {/* ===== one column: units table, week grid, the selected unit ===== */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
 
-              {/* left tiles */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>{U.slice(0, half).map(tileCard)}</div>
-
-              {/* center */}
-              <div style={S.narrow ? { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0, gridColumn: '1 / span 2', gridRow: 1 } : { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }}>
-
-                {/* ---- floor map (day view) ---- */}
-                {S.view !== 'week' && (
-                  <div style={glassCard}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid ' + T.rule, flexWrap: 'wrap' }}>
-                      <span style={{ display: 'inline-grid', placeItems: 'center', width: 26, height: 26, borderRadius: 8, background: 'rgba(0,144,202,.12)', color: '#0072a3', flexShrink: 0 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3h18v18H3zM3 9h18M9 9v12M15 3v6" /></svg></span>
-                      <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700 }}>Hospital floor map — {SHIFTS[sh][1]} shift</h3>
-                      <span style={{ fontSize: 10.5, color: T.inkFaint }}>rooms coloured by staffing · click a room</span>
-                      <span style={{ flex: 1 }} />
-                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>{legendRow}</div>
-                    </div>
-                    <div style={{ padding: 12, background: 'repeating-linear-gradient(0deg,rgba(125,145,180,.07) 0 1px,transparent 1px 22px),repeating-linear-gradient(90deg,rgba(125,145,180,.07) 0 1px,transparent 1px 22px)' }}>
-                      <div style={{ minWidth: 0 }}>
-                        <div style={{ display: 'flex', gap: 5, marginBottom: 6, flexWrap: 'wrap' }}>
-                          {DIVS.map((d) => {
-                            const us = U.filter((x) => x.u.div === d[0]); if (!us.length) return null;
-                            const wN = us.reduce((a, x) => a + x.need[sh], 0), wO = us.reduce((a, x) => a + x.on[sh], 0);
-                            return (
-                              <div key={d[0]} style={{ flex: '1 1 0', display: 'flex', alignItems: 'center', gap: 6, fontSize: 9, fontWeight: 700, letterSpacing: '.5px', textTransform: 'uppercase', color: d[2], background: d[2] + '14', border: '1px solid ' + d[2] + '33', borderRadius: 7, padding: '3px 8px', minWidth: 0, whiteSpace: 'nowrap' }}>
-                                <span style={{ width: 7, height: 7, borderRadius: 2, background: d[2] }} />
-                                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{({ ce: 'Critical & ER', pr: 'Procedural', ip: 'In-patient', op: 'Out-patient' })[d[0]]}</span>
-                                <span style={{ fontFamily: MONO, fontWeight: 600, opacity: .8, marginLeft: 'auto', flexShrink: 0 }}>{wO + '/' + wN}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12,minmax(0,1fr))', gridTemplateRows: '78px 22px 78px 22px 78px', gap: 5 }}>
-                          {U.map((x) => {
-                            const u = x.u, d = DIVS.find((v) => v[0] === u.div), n = x.need[sh], o = x.on[sh], c = tone(o, n), g = u.grid, act = active(u.dept), closed = !n;
-                            return (
-                              <div key={u.dept} className="mp-bright" onClick={() => set({ sel: S.sel === u.dept ? null : u.dept })}
-                                onMouseEnter={() => set({ hot: u.dept })} onMouseLeave={() => set({ hot: null })}
-                                title={u.dept + ' · ' + d[1] + ' · ' + o + ' on duty / ' + n + ' required'}
-                                style={{ gridColumn: g[0] + ' / span ' + g[1], gridRow: (g[2] * 2 - 1) + ' / span 1', display: 'flex', flexDirection: 'column', padding: '6px 7px 5px', borderRadius: 9, cursor: 'pointer', minWidth: 0, color: closed ? T.inkLabel : T.ink, background: closed ? T.inner : 'linear-gradient(160deg,' + c + (night ? '3a' : '2e') + ',' + c + (night ? '18' : '14') + ')', border: '1.5px solid ' + (act ? c : c + '66'), borderTop: '4px solid ' + d[2], boxShadow: act ? '0 0 0 3px ' + c + '33,0 10px 24px rgba(31,59,90,.18)' : 'inset 0 1px 0 rgba(255,255,255,.7)', animation: o < n && n ? 'mpShortPulse 2.6s ease-in-out infinite' : 'none', transition: 'box-shadow .2s,border-color .2s' }}>
-                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 4 }}>
-                                  <span style={{ fontSize: 10.5, fontWeight: 700, lineHeight: 1.2, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.dept}</span>
-                                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: c, flexShrink: 0, marginTop: 3 }} />
-                                </div>
-                                <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'baseline', gap: 4 }}>
-                                  <span style={{ fontFamily: MONO, fontSize: 16, fontWeight: 700, lineHeight: 1 }}>{o}</span>
-                                  <span style={{ fontFamily: MONO, fontSize: 10, opacity: .75, whiteSpace: 'nowrap' }}>/{n}</span>
-                                  <span style={{ marginLeft: 'auto', fontSize: 9.5, fontWeight: 700, letterSpacing: '.3px', opacity: .9, whiteSpace: 'nowrap', display: g[1] < 2 ? 'none' : 'inline' }}>{stateWord(o, n)}</span>
-                                </div>
-                              </div>
-                            );
-                          })}
-                          <div style={{ gridColumn: '1 / span 12', gridRow: 2, borderRadius: 6, background: 'linear-gradient(90deg,rgba(125,145,180,.16),rgba(125,145,180,.26),rgba(125,145,180,.16))', border: '1px dashed rgba(125,145,180,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, fontSize: 9.5, fontWeight: 700, letterSpacing: '.9px', textTransform: 'uppercase', color: T.inkLabel }}>
-                            <span>Lifts</span><span style={{ opacity: .5 }}>·</span><span>In-patient wards</span><span style={{ opacity: .5 }}>·</span><span>Nurses' station</span>
-                          </div>
-                          <div style={{ gridColumn: '1 / span 12', gridRow: 4, borderRadius: 6, background: 'linear-gradient(90deg,rgba(125,145,180,.16),rgba(125,145,180,.26),rgba(125,145,180,.16))', border: '1px dashed rgba(125,145,180,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, fontSize: 9.5, fontWeight: 700, letterSpacing: '.9px', textTransform: 'uppercase', color: T.inkLabel }}>
-                            <span>Lifts</span><span style={{ opacity: .5 }}>·</span><span>Procedural floor above · Critical care &amp; out-patient below</span><span style={{ opacity: .5 }}>·</span><span>Lifts</span>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                {/* ---- every unit, this shift ---- */}
+                <div style={glassCard}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid ' + T.rule, flexWrap: 'wrap' }}>
+                    <h3 style={{ margin: 0, fontSize: 13, fontWeight: 700 }}>Units — {SHIFTS[sh][1]} shift, {new Date(S.date + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</h3>
+                    <span style={{ fontSize: 10.5, color: T.inkSoft }}>click a unit for its staff · shortest first</span>
+                    <div style={{ flex: 1 }} />
+                    {legendRow}
                   </div>
-                )}
+                  <div style={{ overflow: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
+                      <thead>
+                        <tr style={{ color: T.inkLabel, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: '.5px' }}>
+                          {['Unit', 'In-charge', 'Roster', ...SHIFTS.map((s) => s[1]), 'Leave', 'Off', 'Staff', ''].map((h, i) => (
+                            <th key={h + i} style={{ textAlign: i < 3 ? 'left' : 'center', padding: '8px 10px', borderBottom: '1px solid ' + T.rule, fontWeight: 800, whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {U.slice().sort((a, b) => (a.on[sh] - a.need[sh]) - (b.on[sh] - b.need[sh])).map((x) => {
+                          const u = x.u, d = DIVS.find((v) => v[0] === u.div), act = active(u.dept);
+                          return (
+                            <tr key={u.dept} onClick={() => set({ sel: S.sel === u.dept ? null : u.dept })}
+                              onMouseEnter={() => set({ hot: u.dept })} onMouseLeave={() => set({ hot: null })}
+                              style={{ cursor: 'pointer', background: act ? d[2] + '12' : 'transparent' }}>
+                              <td style={{ padding: '7px 10px', borderBottom: '1px solid ' + T.rule, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                <span title={d[1]} style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: d[2], marginRight: 8 }} />{u.dept}
+                              </td>
+                              <td style={{ padding: '7px 10px', borderBottom: '1px solid ' + T.rule, color: T.inkMid, whiteSpace: 'nowrap', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.incharge}</td>
+                              <td style={{ padding: '7px 10px', borderBottom: '1px solid ' + T.rule }}><span style={chip(statusChipColor(x.status))}>{x.status}</span></td>
+                              {SHIFTS.map((s, i) => {
+                                const tc = tone(x.on[i], x.need[i]);
+                                return (
+                                  <td key={s[0]} style={{ padding: '7px 6px', borderBottom: '1px solid ' + T.rule, textAlign: 'center' }}>
+                                    <span title={s[1] + ': ' + x.on[i] + ' on duty, ' + x.need[i] + ' required'}
+                                      style={{ display: 'inline-block', minWidth: 46, fontFamily: MONO, fontSize: 10.5, fontWeight: 700, color: i === sh ? '#fff' : tc, background: i === sh ? tc : tc + '1a', border: '1px solid ' + tc + (i === sh ? '' : '44'), borderRadius: 7, padding: '2px 0' }}>{x.on[i] + '/' + x.need[i]}</span>
+                                  </td>
+                                );
+                              })}
+                              <td style={{ padding: '7px 6px', borderBottom: '1px solid ' + T.rule, textAlign: 'center', fontFamily: MONO, color: x.leave ? '#b5670a' : T.inkFaint }}>{x.leave}</td>
+                              <td style={{ padding: '7px 6px', borderBottom: '1px solid ' + T.rule, textAlign: 'center', fontFamily: MONO, color: T.inkFaint }}>{x.off}</td>
+                              <td style={{ padding: '7px 6px', borderBottom: '1px solid ' + T.rule, textAlign: 'center', fontFamily: MONO, color: T.inkMid }}>{u.people.length}</td>
+                              <td style={{ padding: '7px 10px', borderBottom: '1px solid ' + T.rule, textAlign: 'right' }}>
+                                <button type="button" onClick={(e) => { e.stopPropagation(); openRoster(u.dept); }}
+                                  style={{ border: '1px solid rgba(0,114,163,.3)', background: 'rgba(255,255,255,.85)', color: '#0072a3', borderRadius: 8, padding: '4px 10px', fontSize: 10.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>Roster</button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                        {!U.length && <tr><td colSpan={10} style={{ padding: 22, textAlign: 'center', color: T.inkSoft }}>No units on the register.</td></tr>}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
 
                 {/* ---- week grid ---- */}
                 {S.view === 'week' && (
@@ -602,30 +532,6 @@
                   </div>
                 )}
 
-                {/* ---- division summary ---- */}
-                <div style={{ ...glassCard, padding: '11px 14px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10 }}>
-                  {DIVS.map((d) => {
-                    const us = U.filter((x) => x.u.div === d[0]); if (!us.length) return null;
-                    const dN = us.reduce((a, x) => a + x.need[sh], 0), dO = us.reduce((a, x) => a + x.on[sh], 0), sh2 = us.filter((x) => x.on[sh] < x.need[sh]), p = dN ? Math.round(dO / dN * 100) : 100;
-                    return (
-                      <div key={d[0]} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 11, background: T.inner, border: '1px solid ' + T.innerBorder }}>
-                        <div style={{ position: 'relative', width: 44, height: 44, flexShrink: 0 }}>
-                          <svg viewBox="0 0 44 44" width="44" height="44" style={{ display: 'block' }}><circle cx="22" cy="22" r="18" fill="none" stroke="rgba(125,145,180,.18)" strokeWidth="5" /><circle cx="22" cy="22" r="18" fill="none" stroke={d[2]} strokeWidth="5" strokeLinecap="round" strokeDasharray={ring(18, p)} transform="rotate(-90 22 22)" style={{ transition: 'stroke-dasharray .5s ease' }} /></svg>
-                          <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', fontFamily: MONO, fontSize: 10, fontWeight: 700 }}>{p + '%'}</div>
-                        </div>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d[1]}</div>
-                          <div style={{ fontSize: 10.5, color: T.inkSoft }}>{us.length} depts · {us.reduce((a, x) => a + x.u.people.length, 0)} staff</div>
-                          <div style={{ fontSize: 10.5, color: sh2.length ? '#a92c42' : '#157a43', fontWeight: 600 }}>{sh2.length ? sh2.map((x) => x.u.dept).join(', ') + ' short' : 'All departments covered'}</div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* right tiles */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>{U.slice(half).map(tileCard)}</div>
             </div>
           </div>
 

@@ -730,7 +730,8 @@ function mount(app, opts) {
 
   /* ---- in-charge: the unit's roster (draft -> submitted; approval stays with administration) ---- */
   const rosterCol = async () => { const db = await getDbHandle().catch(() => null); return db ? db.collection(rosterMod.COLL) : null; };
-  const rosterOut = (d) => { if (!d) return null; const { _id, ...r } = d; return Object.assign({ id: _id }, r); };
+  // The effective status (a legacy 'submitted' row reads as pending_cns), like the console.
+  const rosterOut = (d) => { if (!d) return null; const { _id, ...r } = d; const eff = rosterMod.effStatus(r); return Object.assign({ id: _id }, r, { status: eff }, r.status && r.status !== eff ? { legacyStatus: r.status } : {}); };
   // The roster sheet is keyed by the unit NAME (as the console does); the phone names units by id.
   const unitOf = (req) => { const id = s(req.query.dept || obj(req.body).dept, 80) || req.ctx.own[0] || (req.ctx.depts.length === 1 ? req.ctx.depts[0] : null); return id && req.ctx.inDept(id) ? { id, name: req.ctx.deptName(id) } : null; };
   const canEditRoster = (ctx, unitId) => ctx.isAdmin || (ctx.isIncharge && ctx.own.indexOf(String(unitId)) >= 0) || (ctx.isConsole && ctx.can('roster', 'edit') && ctx.inDept(unitId));
@@ -755,23 +756,52 @@ function mount(app, opts) {
       const c = await rosterCol(); if (!c) return fail(res, 503, 'Database unavailable.');
       const id = rosterMod.rosterId(unit.name, year, month);
       const existing = rosterOut(await c.findOne({ _id: id }));
-      if (existing && existing.status === 'approved' && !ctx.isAdmin) return fail(res, 409, 'This roster is approved and locked. Ask administration to reopen it.');
-      // An in-charge may save a draft or submit it; approving is administration's signature.
-      const status = b.status === 'submitted' ? 'submitted' : 'draft';
+      const eff = rosterMod.effStatus(existing);
+      /* The same locks as the console PUT (server/duty-roster.js): an approved sheet is
+         never overwritten by a save — administration reopens it through a hand-over — and a
+         sheet a reviewer is reading stays as they see it. The phone used to let an
+         administrator's save un-publish a roster and wipe its note; neither happens now. */
+      if (existing && eff === 'approved') return fail(res, 409, 'This roster is approved and locked. Ask administration to reopen it.');
+      if (existing && rosterMod.PENDING.indexOf(eff) >= 0 && !ctx.isAdmin) return fail(res, 409, 'This roster is with ' + (eff === 'pending_manager' ? 'the manager' : 'the CNS') + ' for review. Ask them to return it if it needs changes.');
+      // Lost-update guard, as the console has: a phone that edited an older revision must
+      // not erase cells the console saved since.
+      const current = (existing && existing.revision) || 0;
+      if (b.baseRevision != null && Number(b.baseRevision) !== current) return res.status(409).json({ ok: false, conflict: true, revision: current, error: 'Someone else saved this roster since you opened it. Reload it and make your changes again.' });
       const names = {}; Object.keys(obj(b.names)).slice(0, 400).forEach((k) => { const v = s(b.names[k], 120); if (v) names[s(k, 40)] = v; });
-      const doc = { dept: unit.name, deptName: unit.name, year, month, grid: rosterMod.normGrid(b.grid), order: arr(b.order).map((x) => s(x, 40)).slice(0, 400), names: Object.keys(names).length ? names : ((existing && existing.names) || {}), rules: obj(existing && existing.rules), status, preparedBy: ctx.name, checkedBy: s((existing && existing.checkedBy) || '', 120), approvedBy: s((existing && existing.approvedBy) || '', 120), note: s(b.note, 1000), revision: ((existing && existing.revision) || 0) + 1, updatedAt: nowMs(), updatedBy: ctx.name, unitId: unit.id };
-      if (!existing) { doc.createdAt = nowMs(); doc.createdBy = ctx.name; }
+      const grid = rosterMod.normGrid(b.grid);
+      const hasNote = Object.prototype.hasOwnProperty.call(b, 'note') && b.note !== undefined;
+      // Status and the sign-off names are stamped by the hand-overs, never by a save.
+      const doc = { dept: unit.name, deptName: unit.name, year, month, grid, staffIds: Object.keys(grid), order: arr(b.order).map((x) => s(x, 40)).slice(0, 400), names: Object.keys(names).length ? names : ((existing && existing.names) || {}), rules: obj(existing && existing.rules),
+        status: existing ? (existing.legacyStatus || existing.status) : 'draft', preparedBy: s((existing && existing.preparedBy) || ctx.name, 120), checkedBy: s((existing && existing.checkedBy) || '', 120), approvedBy: s((existing && existing.approvedBy) || '', 120),
+        note: hasNote ? s(b.note, 1000) : s((existing && existing.note) || '', 1000), revision: current + 1, updatedAt: nowMs(), updatedBy: ctx.name, unitId: unit.id };
+      if (!existing) { doc.createdAt = nowMs(); doc.createdBy = ctx.name; doc.history = []; }
+      // Editing a returned sheet: the correction has started, it is a draft again.
+      let push = null;
+      if (existing && eff === 'returned') { const rs = rosterMod.resumeOnEdit(existing, { username: ctx.username, name: ctx.name }, doc.updatedAt); Object.assign(doc, rs.set); push = rs.entry; }
       // Conditional on the revision read above: the console saves the same document, and
       // an unconditional $set let whichever save landed second erase the other's cells.
       const raced = () => fail(res, 409, 'Someone else saved this roster at the same moment. Reload it and try again.');
       if (existing) {
-        const wr = await c.updateOne({ _id: id, revision: existing.revision == null ? null : existing.revision, status: existing.status }, { $set: doc });
+        const upd = { $set: doc }; if (push) upd.$push = { history: { $each: [push], $slice: -rosterMod.HISTORY_CAP } };
+        const wr = await c.updateOne({ _id: id, revision: existing.revision == null ? null : existing.revision, status: { $in: rosterMod.rawStatuses(eff) } }, upd);
         if (!wr.matchedCount) return raced();
       } else {
         try { await c.insertOne(Object.assign({ _id: id }, doc)); }
         catch (e) { if (e && e.code === 11000) return raced(); throw e; }
       }
-      log(req, status === 'submitted' ? 'roster_submitted' : 'roster_saved', unit.name + ' · ' + (month + 1) + '/' + year, doc.order.length + ' staff · rev ' + doc.revision);
+      log(req, 'roster_saved', unit.name + ' · ' + (month + 1) + '/' + year, doc.order.length + ' staff · rev ' + doc.revision);
+      // Handing it in is a hand-over through the shared workflow: to the unit's manager when
+      // the setup names one, straight to the CNS otherwise. `action` lets the phone name
+      // the move itself (send_manager | send_cns).
+      const action = s(b.action, 40) || (b.status === 'submitted' ? 'auto' : '');
+      if (action) {
+        let move = action;
+        if (move === 'auto') { const cfg = await rosterMod.getConfig(); const key = rosterMod.deptKeyOf(await rosterMod.deptIndex(), unit.name); move = (key && cfg.depts[key] && cfg.depts[key].manager) ? 'send_manager' : 'send_cns'; }
+        req.access = req.access || ctx.a;
+        const t = await rosterMod.applyTransition(req, id, move, b.note);
+        if (t.status !== 200) return res.status(t.status).json(Object.assign({ saved: true }, t.body));
+        return res.json(t.body);
+      }
       res.json({ ok: true, roster: rosterOut(await c.findOne({ _id: id })) });
     } catch (e) { fail(res, 500, 'Could not save the roster.'); }
   });

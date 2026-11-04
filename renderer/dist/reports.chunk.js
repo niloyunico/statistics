@@ -4721,6 +4721,7 @@ function UserModal({
   const [accessType, setAccessType] = useState(editing && initial.role === 'Administrator' ? 'full' : 'custom');
   const [signoff, setSignoff] = useState(editing && typeof initial.signoff === 'string' ? initial.signoff : '');
   const [signoffSet, setSignoffSet] = useState(!editing || !initial.signoffInherited);
+  const [rosterRole, setRosterRole] = useState(editing && typeof initial.rosterRole === 'string' ? initial.rosterRole : '');
   const [copyFrom, setCopyFrom] = useState('');
   const [sec, setSec] = useState('account');
   const [perms, setPerms] = useState(() => {
@@ -5011,6 +5012,7 @@ function UserModal({
         perms: isAdmin || isColl ? null : granted
       };
       if (!isColl && signoffSet) payload.signoff = signoff || '';
+      if (!isColl && !isAdmin && (!editing || rosterRole !== (initial.rosterRole || ''))) payload.rosterRole = rosterRole || '';
       if (!editing || backendRole !== (initial.role || 'User')) payload.role = backendRole;
       if (sendScope) {
         const base = scopeBase.current || (window.dcScopeBase ? window.dcScopeBase(scope0.current) : undefined);
@@ -5677,7 +5679,52 @@ function UserModal({
       fontSize: 10.5,
       color: '#8a5a00'
     }
-  }, "Carried over from the old hierarchy \u2014 pick one to set it on this person.")))), curSec === 'account' && React.createElement("div", {
+  }, "Carried over from the old hierarchy \u2014 pick one to set it on this person."))), curSec === 'account' && !isColl && !isAdmin && React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: 'var(--ink)',
+      marginBottom: 6
+    }
+  }, "Duty roster role ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: 'var(--muted)',
+      fontSize: 11
+    }
+  }, "\xB7 their place in the roster review chain")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, [['', 'None'], ['incharge', 'In-charge · prepares'], ['manager', 'Manager · checks'], ['cns', 'CNS · approves']].map(([v, l]) => {
+    const on = rosterRole === v;
+    return React.createElement("button", {
+      key: v || 'none',
+      type: "button",
+      onClick: () => setRosterRole(v),
+      style: {
+        font: 'inherit',
+        cursor: 'pointer',
+        padding: '5px 12px',
+        borderRadius: 16,
+        fontSize: 12,
+        fontWeight: 600,
+        border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+        background: on ? 'var(--blue-50)' : '#fff',
+        color: on ? 'var(--blue-700)' : 'var(--muted)'
+      }
+    }, l);
+  })), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: 'var(--muted)',
+      marginTop: 6,
+      lineHeight: 1.6
+    }
+  }, rosterRole === 'manager' ? 'They get a Review inbox for the units they check, and forward each roster to the CNS or return it with a note.' : rosterRole === 'cns' ? 'They get the Review inbox for every unit and give the final approval. Pick them as the CNS under Duty Roster → Setup.' : rosterRole === 'incharge' ? 'They can be picked as a unit’s In-charge under Duty Roster → Setup, and their name fills “Prepared by”.' : 'Takes no part in the roster review. Which units a person prepares or checks is set under Duty Roster → Setup.', ' ', "They still need Duty Roster access (view) for their units."))), curSec === 'account' && React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: '1fr 1fr',
@@ -7082,6 +7129,34 @@ function ActivityLog() {
     roster_deleted: {
       l: 'Duty roster deleted',
       c: '#d23a52'
+    },
+    roster_sent: {
+      l: 'Duty roster sent for review',
+      c: '#0090ca'
+    },
+    roster_forwarded: {
+      l: 'Duty roster forwarded to CNS',
+      c: '#6a52d4'
+    },
+    roster_approved: {
+      l: 'Duty roster approved',
+      c: '#1f9d57'
+    },
+    roster_returned: {
+      l: 'Duty roster returned',
+      c: '#d23a52'
+    },
+    roster_reopened: {
+      l: 'Duty roster reopened',
+      c: '#e08a1e'
+    },
+    roster_config: {
+      l: 'Roster setup changed',
+      c: '#e08a1e'
+    },
+    roster_print: {
+      l: 'Duty roster printed',
+      c: '#3ab5a7'
     },
     submission_sent: {
       l: 'Submission sent',
@@ -10635,7 +10710,11 @@ function AcPerson({
     prepare: 'Prepares',
     check: 'Checks',
     approve: 'Approves'
-  }[u.signoff] || 'Takes no part')))), K.mayUsers('edit') && React.createElement("div", {
+  }[u.signoff] || 'Takes no part'), t !== 'portal' && row('Duty roster role', {
+    incharge: 'In-charge · prepares',
+    manager: 'Manager · checks',
+    cns: 'CNS · approves'
+  }[u.rosterRole] || 'None')))), K.mayUsers('edit') && React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b",

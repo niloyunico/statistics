@@ -112,6 +112,9 @@ const MANIFEST = [
   // every file is IIFE-wrapped, so load order is what makes window.RosterReviewFull
   // available to the shell.
   { file: 'roster-review.jsx', jsx: true, chunk: 'roster' },
+  // After roster.jsx too: both read window.UNICO_ROSTER_KIT at render time.
+  { file: 'roster-staff.jsx', jsx: true, chunk: 'roster' },    // window.RosterStaffView — one person's duty across months
+  { file: 'roster-setup.jsx', jsx: true, chunk: 'roster' },    // window.RosterSetup — who prepares / checks / approves (admin)
   // Manpower Overview — the live staffing command view (window.ManpowerOverview),
   // ported from the approved "Manpower Overview v2" design canvas.
   { file: 'manpower.jsx', jsx: true, chunk: 'manpower' },

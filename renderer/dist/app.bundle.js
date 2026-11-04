@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=417b92f7ec","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=e207cf7f86","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=f1bf936a26","manpower":"/dist/manpower.chunk.js?v=2280baf576","medicine":"/dist/medicine.chunk.js?v=d80a35f978"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=220a2117b8","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=e207cf7f86","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=9ce9ace00c","manpower":"/dist/manpower.chunk.js?v=92e4ecd57d","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -10413,7 +10413,7 @@ const UNICO_MODULE_VIEWS = {
   users: ['users'],
   perf: ['perfHome', 'perfForm', 'perfPrint', 'perfAchievements', 'perfIncidents', 'perfCompare', 'perfRisk', 'perfBoard'],
   attrition: ['perfAttrition'],
-  roster: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint', 'rosterFullReview', 'manpower'],
+  roster: ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint', 'rosterFullReview', 'rosterStaff', 'rosterSetup', 'manpower'],
   datasubmit: ['dsHome', 'dsMissing', 'dsStatus', 'dsQuality', 'dsPatient', 'dsHistory', 'dsHandHygiene'],
   mydept: ['myDept'],
   devdays: ['devDaysEntry', 'devDaysReview', 'devDaysSummary', 'devDaysSettings'],
@@ -10526,6 +10526,7 @@ function unicoSubMenus() {
       (out[m] = out[m] || []).push([s.view, s.label, s.match || [s.view]]);
     });
   });
+  out.roster = [['rosterHome', 'Rosters', ['rosterHome', 'rosterGrid', 'rosterReview', 'rosterPrint']], ['rosterFullReview', 'Review inbox', ['rosterFullReview']], ['rosterStaff', 'Staff roster', ['rosterStaff']], ['manpower', 'Manpower', ['manpower']]];
   return unicoSubMenusMemo = out;
 }
 function unicoSubViewOk(view) {
@@ -10561,10 +10562,11 @@ function unicoRefreshPerms() {
   }).then(r => r.ok ? r.json() : null).then(j => {
     if (!j || !j.ok || j.degraded || !j.perms || typeof j.perms !== 'object' || Array.isArray(j.perms)) return false;
     const staffScope = j.staffScope || u.staffScope;
+    const rosterRole = typeof j.rosterRole === 'string' ? j.rosterRole === 'admin' ? '' : j.rosterRole : u.rosterRole || '';
     const ds = j.user && j.user.dsScope && typeof j.user.dsScope === 'object' ? j.user.dsScope : null;
     const DS_KEYS = ['departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen'];
     const dsChanged = !!ds && DS_KEYS.some(k => JSON.stringify(ds[k] == null ? null : ds[k]) !== JSON.stringify(u[k] == null ? null : u[k]));
-    if (JSON.stringify(j.perms) === JSON.stringify(u.perms || null) && staffScope === u.staffScope && !dsChanged) return false;
+    if (JSON.stringify(j.perms) === JSON.stringify(u.perms || null) && staffScope === u.staffScope && rosterRole === (u.rosterRole || '') && !dsChanged) return false;
     const appJob = window.unicoRefreshAppData ? window.unicoRefreshAppData({
       includeNew: true
     }) : Promise.resolve([]);
@@ -10579,7 +10581,8 @@ function unicoRefreshPerms() {
       if (res[0] === null) return false;
       Object.assign(u, {
         perms: j.perms,
-        staffScope
+        staffScope,
+        rosterRole
       });
       if (ds) DS_KEYS.forEach(k => {
         if (Object.prototype.hasOwnProperty.call(ds, k)) u[k] = ds[k];
@@ -10936,7 +10939,8 @@ const UNICO_WS = [{
     icon: I.steth,
     home: 'staffHome',
     mods: ['staff', 'perf', 'attrition', 'roster'],
-    on: v => ['staff', 'perf', 'attrition', 'roster'].indexOf(unicoModuleOf(v)) >= 0
+    on: v => ['staff', 'perf', 'attrition', 'roster'].indexOf(unicoModuleOf(v)) >= 0,
+    badge: 'ros'
   }, {
     id: 'access',
     label: 'Access Control',
@@ -10979,8 +10983,15 @@ const UNICO_VIEW_TABS = [{
     rosterGrid: 'rosterHome',
     rosterReview: 'rosterHome'
   },
-  tabs: [['rosterHome', 'Rosters'], ['manpower', 'Manpower'], ['rosterFullReview', 'Full Review']]
+  tabs: [['rosterHome', 'Rosters'], ['rosterFullReview', 'Review inbox', 'review'], ['rosterStaff', 'Staff roster'], ['manpower', 'Manpower'], ['rosterSetup', 'Setup', 'admin']]
 }];
+function unicoTabForOk(who) {
+  if (!who) return true;
+  const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+  if (!u || u.role === 'Administrator') return true;
+  if (who === 'review') return u.rosterRole === 'manager' || u.rosterRole === 'cns';
+  return false;
+}
 function unicoViewTabs(view) {
   for (let i = 0; i < UNICO_VIEW_TABS.length; i++) {
     const g = UNICO_VIEW_TABS[i];
@@ -11000,7 +11011,7 @@ function ViewTabs({
 }) {
   const g = unicoViewTabs(view);
   if (!g) return null;
-  const tabs = g.tabs.filter(([v]) => !window.unicoCanAccessView || window.unicoCanAccessView(v));
+  const tabs = g.tabs.filter(([v,, who]) => unicoTabForOk(who) && (!window.unicoCanAccessView || window.unicoCanAccessView(v)));
   if (tabs.length < 2) return null;
   return React.createElement("div", {
     className: "seg",
@@ -11538,6 +11549,8 @@ function Sidebar({
   }, []);
   const ddAlerts = unicoUseDevDaysAlerts(unicoCanAccessModule('devdays'));
   const ddBadge = ddAlerts ? (ddAlerts.total || 0) + (ddAlerts.pendingReview || 0) : 0;
+  const rosPend = unicoUseRosterPending(unicoCanAccessModule('roster'));
+  const rosBadge = rosPend ? (rosPend.pending || 0) + (rosPend.returned || 0) : 0;
   const [dcBadge, setDcBadge] = React.useState(() => window.__UNICO_DC_PENDING__ || 0);
   React.useEffect(() => {
     const h = e => setDcBadge(e && e.detail || 0);
@@ -11594,7 +11607,7 @@ function Sidebar({
       className: "sb-sec"
     }, g.sec), items.map(it => {
       const active = it.on(view);
-      const badgeN = it.id === 'datacol' ? dcBadge : it.badge === 'sup' ? supBadge : it.badge === 'dd' ? ddBadge : it.badge === 'ds' ? dsBadge : it.badge ? qBadge : 0;
+      const badgeN = it.id === 'datacol' ? dcBadge : it.badge === 'sup' ? supBadge : it.badge === 'dd' ? ddBadge : it.badge === 'ros' ? rosBadge : it.badge === 'ds' ? dsBadge : it.badge ? qBadge : 0;
       const badge = badgeN > 0 ? badgeN : null;
       const auto = !!AUTO_OPEN[it.id];
       const itSub = auto && folded[it.id] ? [] : subFor(it, active);
@@ -11674,7 +11687,13 @@ function Sidebar({
         style: {
           marginLeft: 'auto'
         }
-      }, dsBadge), s.view === 'dcReview' && dcBadge > 0 && React.createElement("span", {
+      }, dsBadge), s.view === 'rosterHome' && rosBadge > 0 && React.createElement("span", {
+        className: "badge alert num",
+        style: {
+          marginLeft: 'auto'
+        },
+        title: (rosPend.pending || 0) + ' waiting for your review · ' + (rosPend.returned || 0) + ' returned to you'
+      }, rosBadge), s.view === 'dcReview' && dcBadge > 0 && React.createElement("span", {
         className: "badge alert num",
         style: {
           marginLeft: 'auto'
@@ -11978,6 +11997,45 @@ function PeriodPill({
     key: m,
     value: m
   }, fmtKey(m))))))));
+}
+function unicoUseRosterPending(enabled) {
+  const [a, setA] = React.useState(() => window.__UNICO_ROS_PENDING__ || null);
+  React.useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    const run = () => {
+      if (document.visibilityState === 'hidden') return;
+      fetch('/api/rosters/review/count', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      }).then(r => r.ok ? r.json() : null).then(j => {
+        if (!live || !j || !j.ok) return;
+        setA(j);
+        try {
+          window.__UNICO_ROS_PENDING__ = j;
+          window.dispatchEvent(new CustomEvent('unico:ros-pending', {
+            detail: j
+          }));
+        } catch (e) {}
+      }).catch(() => {});
+    };
+    run();
+    const t = setInterval(run, 60000);
+    const vis = () => {
+      if (document.visibilityState === 'visible') run();
+    };
+    window.addEventListener('unico:ros-refresh', run);
+    window.addEventListener('unico:data-refreshed', run);
+    document.addEventListener('visibilitychange', vis);
+    return () => {
+      live = false;
+      clearInterval(t);
+      window.removeEventListener('unico:ros-refresh', run);
+      window.removeEventListener('unico:data-refreshed', run);
+      document.removeEventListener('visibilitychange', vis);
+    };
+  }, [enabled]);
+  return enabled ? a : null;
 }
 function unicoUseDevDaysAlerts(enabled) {
   const [a, setA] = React.useState(() => window.__UNICO_DD_ALERTS__ || null);
@@ -27586,8 +27644,21 @@ function App() {
       setRoute: setRoute
     });
   } else if (route.view === 'rosterFullReview' && typeof window !== 'undefined' && window.RosterReviewFull) {
-    crumbs = ['UNICO', 'Staff Management', 'Roster Full Review'];
+    crumbs = ['UNICO', 'Staff Management', 'Roster Review'];
     body = React.createElement(window.RosterReviewFull, {
+      year: route.year,
+      month: route.month,
+      setRoute: setRoute
+    });
+  } else if (route.view === 'rosterStaff' && typeof window !== 'undefined' && window.RosterStaffView) {
+    crumbs = ['UNICO', 'Staff Management', 'Staff Roster'];
+    body = React.createElement(window.RosterStaffView, {
+      staffId: route.staffId,
+      setRoute: setRoute
+    });
+  } else if (route.view === 'rosterSetup' && typeof window !== 'undefined' && window.RosterSetup) {
+    crumbs = ['UNICO', 'Staff Management', 'Roster Setup'];
+    body = React.createElement(window.RosterSetup, {
       setRoute: setRoute
     });
   } else if (route.view && route.view.indexOf('roster') === 0 && typeof RosterView !== 'undefined') {

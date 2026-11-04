@@ -46,69 +46,6 @@ const rosCan = a => {
     return true;
   }
 };
-const rosMayApprove = () => {
-  try {
-    return window.unicoCan ? window.unicoCan('roster', 'delete') : true;
-  } catch (e) {
-    return true;
-  }
-};
-let ROS_SIGNERS = null,
-  ROS_SIGNERS_REQ = null;
-function rosLoadSigners() {
-  if (ROS_SIGNERS) return Promise.resolve(ROS_SIGNERS);
-  if (ROS_SIGNERS_REQ) return ROS_SIGNERS_REQ;
-  ROS_SIGNERS_REQ = fetch('/api/signatories', {
-    credentials: 'same-origin'
-  }).then(r => r.json()).then(j => {
-    ROS_SIGNERS = j && j.ok ? j : {
-      signatories: [],
-      tiers: []
-    };
-    ROS_SIGNERS_REQ = null;
-    return ROS_SIGNERS;
-  }).catch(() => {
-    ROS_SIGNERS = {
-      signatories: [],
-      tiers: []
-    };
-    ROS_SIGNERS_REQ = null;
-    return ROS_SIGNERS;
-  });
-  return ROS_SIGNERS_REQ;
-}
-function useRosSigners() {
-  const [v, setV] = React.useState(ROS_SIGNERS);
-  React.useEffect(() => {
-    let live = true;
-    rosLoadSigners().then(x => {
-      if (live) setV(x);
-    });
-    return () => {
-      live = false;
-    };
-  }, []);
-  return v || ROS_SIGNERS || {
-    signatories: [],
-    tiers: []
-  };
-}
-const rosTierFor = (sg, role) => (sg.tiers || []).find(t => t.signoff === role) || null;
-const rosNamesFor = (sg, role) => (sg.signatories || []).filter(u => u.signoff === role).map(u => u.name);
-const ROS_STATUS = {
-  draft: {
-    label: 'Draft',
-    color: '#e0a12a'
-  },
-  submitted: {
-    label: 'Submitted',
-    color: '#27a8db'
-  },
-  approved: {
-    label: 'Approved',
-    color: '#1f9d63'
-  }
-};
 const rosKey = e => 'S' + String(e.id);
 const rosMigrateGrid = (grid, rows) => {
   const g = grid || {};
@@ -627,18 +564,1199 @@ function ShiftLegend({
     }, codes.map(c => c.code + ': ' + c.label).join('  |  ')));
   }));
 }
-function RosStatusChip({
-  st
-}) {
-  const map = {
-    draft: 'In progress',
-    submitted: 'Awaiting discussion',
-    approved: 'Actioned'
+const rosPortal = n => window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
+const ROS_STATUS = {
+  draft: {
+    label: 'Draft',
+    color: '#b5670a',
+    bg: 'rgba(224,138,30,.14)'
+  },
+  pending_manager: {
+    label: 'Pending Manager',
+    color: '#0072a3',
+    bg: 'rgba(0,144,202,.12)'
+  },
+  pending_cns: {
+    label: 'Pending CNS',
+    color: '#5b45c4',
+    bg: 'rgba(106,82,212,.13)'
+  },
+  approved: {
+    label: 'Approved',
+    color: '#157a43',
+    bg: 'rgba(31,157,87,.13)'
+  },
+  returned: {
+    label: 'Returned',
+    color: '#b4232f',
+    bg: 'rgba(210,58,82,.12)'
+  },
+  none: {
+    label: 'Not submitted',
+    color: '#7d8ea8',
+    bg: 'rgba(125,145,180,.14)'
+  }
+};
+const rosStatusNorm = st => st === 'submitted' ? 'pending_cns' : ROS_STATUS[st] ? st : st ? 'draft' : 'none';
+const ROS_EDITABLE = ['draft', 'returned'];
+const ROS_SEND_ICON = 'M22 2L11 13M22 2l-7 20-4-9-9-4z';
+const ROS_ACTIONS = {
+  send_manager: {
+    label: 'Send to Manager',
+    done: 'Sent to the Manager for checking.',
+    tone: 'pri',
+    icon: ROS_SEND_ICON
+  },
+  send_cns: {
+    label: 'Send to CNS',
+    done: 'Sent straight to the CNS for approval.',
+    tone: 'ghost',
+    icon: ROS_SEND_ICON
+  },
+  forward: {
+    label: 'Forward to CNS',
+    done: 'Forwarded to the CNS for approval.',
+    tone: 'pri',
+    icon: 'M5 12h14M13 6l6 6-6 6'
+  },
+  approve: {
+    label: 'Approve',
+    done: 'Roster approved and locked.',
+    tone: 'ok',
+    icon: 'M4 12l5 5L20 6'
+  },
+  return: {
+    label: 'Return',
+    done: 'Roster returned to the in-charge.',
+    tone: 'danger',
+    icon: 'M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3'
+  },
+  reopen: {
+    label: 'Reopen',
+    done: 'Roster reopened for editing.',
+    tone: 'ghost',
+    icon: 'M1 4v6h6M3.5 15a9 9 0 102.1-9.4L1 10'
+  }
+};
+const ROS_HIST_LABEL = {
+  send_manager: 'Sent to Manager',
+  send_cns: 'Sent straight to CNS',
+  forward: 'Forwarded to CNS',
+  approve: 'Approved',
+  return: 'Returned',
+  reopen: 'Reopened',
+  resume: 'Edited after return',
+  edit: 'Edited during review',
+  create: 'Created'
+};
+const rosWhen = t => {
+  if (!t) return '';
+  const d = new Date(t);
+  return d.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short'
+  }) + ', ' + d.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+};
+const rosSheetId = (dept, year, month) => 'ros-' + String(dept).slice(0, 40) + '-' + year + '-' + String(month).padStart(2, '0');
+let ROS_CFG = null,
+  ROS_CFG_REQ = null;
+function rosLoadConfig(force) {
+  if (ROS_CFG && !force) return Promise.resolve(ROS_CFG);
+  if (ROS_CFG_REQ && !force) return ROS_CFG_REQ;
+  ROS_CFG_REQ = rosApi.get('/api/rosters/config').then(j => {
+    ROS_CFG = j && j.ok ? j : {
+      cns: null,
+      depts: []
+    };
+    ROS_CFG_REQ = null;
+    return ROS_CFG;
+  }).catch(() => {
+    ROS_CFG_REQ = null;
+    return ROS_CFG || {
+      cns: null,
+      depts: []
+    };
+  });
+  return ROS_CFG_REQ;
+}
+function useRosterConfig() {
+  const [v, setV] = useState(ROS_CFG);
+  useEffect(() => {
+    let live = true;
+    rosLoadConfig().then(x => {
+      if (live) setV(x);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const reload = React.useCallback(() => rosLoadConfig(true).then(x => {
+    setV(x);
+    return x;
+  }), []);
+  return {
+    cns: v && v.cns || null,
+    depts: v && v.depts || [],
+    updatedAt: v && v.updatedAt,
+    loading: !v,
+    reload
   };
-  const label = (ROS_STATUS[st || 'draft'] || ROS_STATUS.draft).label;
+}
+const rosRulesOf = ru => {
+  ru = ru || {};
+  let cfg = {
+    ...ROS_DEF_CFG,
+    ...(ru.cfg || {})
+  };
+  if (!ru.cfg && ru.minMorning) {
+    cfg = {
+      ...cfg,
+      minM: ru.minMorning && ru.minMorning.value || cfg.minM,
+      minE: ru.minEvening && ru.minEvening.value || cfg.minE,
+      minN: ru.minNight && ru.minNight.value || cfg.minN,
+      maxNights: ru.maxConsecNight && ru.maxConsecNight.value || cfg.maxNights,
+      maxLeavePerDay: ru.leaveClash && ru.leaveClash.value || cfg.maxLeavePerDay
+    };
+  }
+  return {
+    cfg,
+    en: {
+      ...ROS_DEF_OFF,
+      ...(ru.off || {})
+    },
+    custom: Array.isArray(ru.custom) ? ru.custom : []
+  };
+};
+const rosFindingsOf = (grid, rows, year, month, rules) => {
+  const r = rosRulesOf(rules);
+  return rosEval(grid || {}, rows || [], R.daysIn(year, month), year, month, r.cfg, r.en, r.custom);
+};
+const rosRowsFrom = (doc, staff, dept, withRegister) => {
+  const all = {};
+  (staff || []).forEach(e => {
+    all[rosKey(e)] = e;
+  });
+  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => ({
+    empId: rosKey(e),
+    empIdShown: e.emp_id || '',
+    name: e.name,
+    desig: e.designation
+  }));
+  const known = Object.keys(all).map(k => ({
+    empId: k,
+    empIdShown: all[k].emp_id || ''
+  }));
+  const grid = rosMigrateGrid(doc && doc.grid, known);
+  const names = doc && doc.names || {};
+  const seen = {},
+    out = [];
+  const add = id => {
+    if (!id || seen[id]) return;
+    seen[id] = 1;
+    const e = all[id];
+    out.push(e ? {
+      empId: id,
+      empIdShown: e.emp_id || '',
+      name: e.name,
+      desig: e.designation
+    } : {
+      empId: id,
+      empIdShown: '',
+      name: names[id] || id,
+      desig: ''
+    });
+  };
+  (doc && doc.order || []).forEach(id => {
+    if (grid[id] || reg.some(r => r.empId === id)) add(id);
+  });
+  Object.keys(grid).forEach(add);
+  reg.forEach(r => add(r.empId));
+  return {
+    rows: out,
+    grid
+  };
+};
+function RosStatusChip({
+  st,
+  stage,
+  big
+}) {
+  const s = ROS_STATUS[rosStatusNorm(st)];
   return React.createElement("span", {
-    style: MK.stChip(map[st] || 'Not started')
-  }, label);
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: big ? 11.5 : 10.5,
+      fontWeight: 700,
+      padding: big ? '6px 12px' : '3px 9px',
+      borderRadius: 14,
+      whiteSpace: 'nowrap',
+      color: s.color,
+      background: s.bg,
+      border: '1px solid ' + s.color + '33'
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 7,
+      height: 7,
+      borderRadius: '50%',
+      background: s.color
+    }
+  }), s.label, stage ? ' · ' + stage : '');
+}
+function RosDecisionButtons({
+  status,
+  can,
+  onAction,
+  busy,
+  compact,
+  hasManager
+}) {
+  const c = can || {};
+  const resend = rosStatusNorm(status) === 'returned';
+  const tones = {
+    pri: {
+      background: 'linear-gradient(135deg,#27a8db,#0072a3)',
+      color: '#fff',
+      border: '1px solid transparent',
+      boxShadow: '0 6px 16px rgba(0,144,202,.28)'
+    },
+    ok: {
+      background: 'linear-gradient(135deg,#2fbf7f,#157a43)',
+      color: '#fff',
+      border: '1px solid transparent',
+      boxShadow: '0 6px 16px rgba(31,157,87,.28)'
+    },
+    danger: {
+      background: 'rgba(210,58,82,.07)',
+      color: '#b4232f',
+      border: '1px solid rgba(210,58,82,.35)'
+    },
+    ghost: {
+      background: 'rgba(255,255,255,.9)',
+      color: '#0072a3',
+      border: '1px solid rgba(0,114,163,.3)'
+    }
+  };
+  const btn = (a, label) => {
+    const m = ROS_ACTIONS[a];
+    const noMgr = a === 'send_manager' && hasManager === false;
+    const dis = busy || noMgr;
+    return React.createElement("button", {
+      key: a,
+      type: "button",
+      disabled: dis,
+      onClick: e => {
+        e.stopPropagation();
+        onAction(a);
+      },
+      title: noMgr ? 'No Manager is set for this unit — an administrator sets one under Duty Roster → Setup.' : '',
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: compact ? '5px 10px' : '8px 14px',
+        borderRadius: 9,
+        fontSize: compact ? 11 : 12,
+        fontWeight: 700,
+        fontFamily: 'inherit',
+        cursor: dis ? 'default' : 'pointer',
+        opacity: dis ? .5 : 1,
+        whiteSpace: 'nowrap',
+        ...tones[m.tone]
+      }
+    }, React.createElement(Ic, {
+      d: m.icon,
+      s: compact ? 12 : 13,
+      sw: 2.2
+    }), label || m.label);
+  };
+  const out = [];
+  if (c.send) {
+    out.push(btn('send_cns', resend ? 'Resend to CNS' : null));
+    out.push(btn('send_manager', resend ? 'Resend to Manager' : null));
+  }
+  if (c.return) out.push(btn('return'));
+  if (c.forward) out.push(btn('forward'));
+  if (c.approve) out.push(btn('approve'));
+  if (c.reopen) out.push(btn('reopen'));
+  if (!out.length) return null;
+  return React.createElement("div", {
+    style: {
+      display: 'inline-flex',
+      gap: 7,
+      flexWrap: 'wrap',
+      alignItems: 'center'
+    }
+  }, out);
+}
+function RosNoteModal({
+  what,
+  busy,
+  onCancel,
+  onConfirm
+}) {
+  const [note, setNote] = useState('');
+  const presets = ['Night cover is below the minimum', 'Rule warnings are not resolved', 'Wrong staff on the sheet', 'Leave clash', 'Too many consecutive nights'];
+  useEffect(() => {
+    const k = e => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, []);
+  return rosPortal(React.createElement("div", {
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 9000,
+      background: 'rgba(16,32,46,.42)',
+      display: 'grid',
+      placeItems: 'center',
+      padding: 16
+    },
+    onMouseDown: e => {
+      if (e.target === e.currentTarget) onCancel();
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 'min(520px,100%)',
+      background: 'var(--panel,#fff)',
+      borderRadius: 14,
+      boxShadow: '0 24px 60px rgba(16,32,46,.3)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '14px 18px',
+      borderBottom: '1px solid rgba(125,145,180,.18)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 30,
+      height: 30,
+      borderRadius: 9,
+      background: 'rgba(210,58,82,.12)',
+      color: '#b4232f'
+    }
+  }, React.createElement(Ic, {
+    d: ROS_ACTIONS.return.icon,
+    s: 15,
+    sw: 2.2
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 14.5,
+      color: '#16202e'
+    }
+  }, "Return this roster"), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#6c7a8c'
+    }
+  }, what, " goes back to the in-charge, flagged red."))), React.createElement("div", {
+    style: {
+      padding: '14px 18px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: '#6c7a8c',
+      textTransform: 'uppercase',
+      letterSpacing: .5,
+      marginBottom: 6
+    }
+  }, "Reason ", React.createElement("span", {
+    style: {
+      textTransform: 'none',
+      fontWeight: 500
+    }
+  }, "(optional)")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 8
+    }
+  }, presets.map(p => React.createElement("button", {
+    key: p,
+    type: "button",
+    onClick: () => setNote(n => ((n ? n.replace(/\s*$/, '') + '\n' : '') + p).slice(0, 500)),
+    style: {
+      border: '1px solid rgba(125,145,180,.35)',
+      background: 'rgba(125,145,180,.08)',
+      color: '#3c4858',
+      borderRadius: 14,
+      padding: '4px 10px',
+      fontSize: 11,
+      fontFamily: 'inherit',
+      cursor: 'pointer'
+    }
+  }, p))), React.createElement("textarea", {
+    value: note,
+    onChange: e => setNote(e.target.value.slice(0, 500)),
+    rows: 4,
+    autoFocus: true,
+    placeholder: "What should the in-charge fix? Leave blank to return without a note.",
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
+      borderRadius: 9,
+      border: '1px solid rgba(125,145,180,.4)',
+      padding: '9px 11px',
+      fontFamily: 'inherit',
+      fontSize: 12.5,
+      resize: 'vertical',
+      outline: 'none'
+    }
+  }), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#9aa6b4',
+      textAlign: 'right'
+    }
+  }, note.length, "/500")), React.createElement("div", {
+    style: {
+      padding: '12px 18px',
+      borderTop: '1px solid rgba(125,145,180,.18)',
+      display: 'flex',
+      justifyContent: 'flex-end',
+      gap: 8
+    }
+  }, React.createElement("button", {
+    className: "btn",
+    type: "button",
+    onClick: onCancel,
+    disabled: busy
+  }, "Cancel"), React.createElement("button", {
+    type: "button",
+    disabled: busy,
+    onClick: () => onConfirm(note.trim()),
+    style: {
+      border: 0,
+      borderRadius: 9,
+      padding: '8px 16px',
+      fontWeight: 700,
+      fontSize: 12.5,
+      fontFamily: 'inherit',
+      cursor: 'pointer',
+      color: '#fff',
+      background: 'linear-gradient(135deg,#e8697f,#b4232f)'
+    }
+  }, note.trim() ? 'Return with note' : 'Return without note')))));
+}
+function useRosDecide() {
+  const [ask, setAsk] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const post = (id, action, note) => {
+    setBusy(true);
+    return rosApi.post('/api/rosters/' + encodeURIComponent(id) + '/transition', {
+      action,
+      note: note || ''
+    }).then(r => {
+      setBusy(false);
+      if (r && r.ok) {
+        rosToast(ROS_ACTIONS[action].done);
+        try {
+          window.dispatchEvent(new Event('unico:ros-refresh'));
+        } catch (e) {}
+        return r;
+      }
+      rosToast(r && r.error || 'Could not complete that step.', 'error');
+      return r || {
+        ok: false
+      };
+    }).catch(() => {
+      setBusy(false);
+      rosToast('Could not reach the server.', 'error');
+      return {
+        ok: false
+      };
+    });
+  };
+  const run = async ({
+    id,
+    action,
+    unit,
+    period,
+    warnings
+  }) => {
+    const what = unit + ' · ' + period;
+    if (action === 'return') {
+      const note = await new Promise(resolve => setAsk({
+        what,
+        resolve
+      }));
+      if (note === null) return {
+        ok: false,
+        cancelled: true
+      };
+      return post(id, action, note);
+    }
+    const warn = warnings ? ' It still has ' + warnings + ' rule warning' + (warnings === 1 ? '' : 's') + '.' : '';
+    const msgs = {
+      send_manager: ['Send to the Manager?', what + ' goes to the unit Manager for checking. It is locked while it is with them.' + warn],
+      send_cns: ['Send straight to the CNS?', 'This skips the Manager check. ' + what + ' goes directly to the CNS for approval.' + warn, true],
+      forward: ['Forward to the CNS?', 'You have checked ' + what + '. It goes to the CNS for final approval.'],
+      approve: ['Approve this roster?', what + ' becomes the published roster and is locked.' + warn],
+      reopen: ['Reopen this roster?', what + ' goes back to draft so it can be edited. It has to be sent for review again.', true]
+    };
+    const m = msgs[action];
+    if (m) {
+      const UI = window.UI || {};
+      const yes = UI.confirm ? await UI.confirm({
+        title: m[0],
+        message: m[1],
+        confirmLabel: ROS_ACTIONS[action].label,
+        danger: !!m[2]
+      }) : true;
+      if (!yes) return {
+        ok: false,
+        cancelled: true
+      };
+    }
+    return post(id, action, '');
+  };
+  const modal = ask ? React.createElement(RosNoteModal, {
+    what: ask.what,
+    busy: busy,
+    onCancel: () => {
+      ask.resolve(null);
+      setAsk(null);
+    },
+    onConfirm: n => {
+      ask.resolve(n);
+      setAsk(null);
+    }
+  }) : null;
+  return {
+    run,
+    modal,
+    busy
+  };
+}
+function RosHistoryTimeline({
+  history,
+  empty
+}) {
+  const list = (history || []).slice().reverse();
+  if (!list.length) return React.createElement("div", {
+    style: {
+      padding: '10px 2px',
+      fontSize: 12,
+      color: '#8a97a8'
+    }
+  }, empty || 'Nothing yet — the history starts the first time this sheet is sent for review.');
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, list.map((h, i) => {
+    const c = h.action === 'return' ? '#b4232f' : h.action === 'approve' ? '#157a43' : ROS_STATUS[rosStatusNorm(h.to)].color;
+    return React.createElement("div", {
+      key: i,
+      style: {
+        display: 'flex',
+        gap: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        width: 12,
+        flexShrink: 0
+      }
+    }, React.createElement("span", {
+      style: {
+        width: 10,
+        height: 10,
+        borderRadius: '50%',
+        background: c,
+        marginTop: 4,
+        boxShadow: '0 0 0 3px ' + c + '22'
+      }
+    }), i < list.length - 1 && React.createElement("span", {
+      style: {
+        flex: 1,
+        width: 2,
+        background: 'rgba(125,145,180,.25)',
+        marginTop: 3
+      }
+    })), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1,
+        paddingBottom: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, ROS_HIST_LABEL[h.action] || h.action, " ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: '#6c7a8c'
+      }
+    }, "\xB7 ", h.byName || h.by || '—')), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#8a97a8'
+      }
+    }, rosWhen(h.at), h.revision != null ? ' · rev ' + h.revision : ''), h.action === 'return' && !h.note && React.createElement("div", {
+      style: {
+        marginTop: 4,
+        fontSize: 11,
+        color: '#8c1d2a',
+        fontStyle: 'italic'
+      }
+    }, "No reason given"), h.note && React.createElement("div", {
+      style: {
+        marginTop: 4,
+        fontSize: 11.5,
+        color: h.action === 'return' ? '#8c1d2a' : '#3c4858',
+        background: h.action === 'return' ? 'rgba(210,58,82,.08)' : 'rgba(125,145,180,.1)',
+        borderLeft: '3px solid ' + c,
+        padding: '5px 8px',
+        borderRadius: 6,
+        whiteSpace: 'pre-wrap'
+      }
+    }, h.note)));
+  }));
+}
+function RosReturnedBanner({
+  meta
+}) {
+  const m = meta || {};
+  const by = m.returnedByName || m.returnedBy || 'the reviewer';
+  const stage = m.returnStage === 'manager' ? 'Manager' : m.returnStage === 'cns' ? 'CNS' : '';
+  return React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'flex-start',
+      background: 'rgba(210,58,82,.07)',
+      border: '1px solid rgba(210,58,82,.3)',
+      borderLeft: '4px solid #b4232f',
+      borderRadius: 12,
+      padding: '11px 15px',
+      marginBottom: 14
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 28,
+      height: 28,
+      borderRadius: 8,
+      background: 'rgba(210,58,82,.14)',
+      color: '#b4232f',
+      flexShrink: 0
+    }
+  }, React.createElement(Ic, {
+    d: ROS_ACTIONS.return.icon,
+    s: 14,
+    sw: 2.2
+  })), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: '#8c1d2a'
+    }
+  }, "Returned by ", by, stage ? ' (' + stage + ')' : '', m.returnedAt ? ' · ' + rosWhen(m.returnedAt) : ''), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: m.returnNote ? '#5a1620' : '#9a5a63',
+      marginTop: 3,
+      whiteSpace: 'pre-wrap',
+      fontStyle: m.returnNote ? 'normal' : 'italic'
+    }
+  }, m.returnNote || 'No reason given.'), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#9a5a63',
+      marginTop: 4
+    }
+  }, "Fix the sheet, then send it again. The return stays in the sheet's history.")));
+}
+function RosDrawer({
+  title,
+  sub,
+  onClose,
+  children,
+  wide
+}) {
+  useEffect(() => {
+    const k = e => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, []);
+  return rosPortal(React.createElement("div", {
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 8500,
+      background: 'rgba(16,32,46,.32)',
+      display: 'flex',
+      justifyContent: 'flex-end'
+    },
+    onMouseDown: e => {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, React.createElement("div", {
+    style: {
+      width: wide ? 'min(1180px,100%)' : 'min(420px,100%)',
+      height: '100%',
+      background: 'var(--panel,#fff)',
+      boxShadow: '-18px 0 50px rgba(16,32,46,.22)',
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '14px 18px',
+      borderBottom: '1px solid rgba(125,145,180,.18)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 800,
+      fontSize: 14.5,
+      color: '#16202e'
+    }
+  }, title), sub && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#6c7a8c'
+    }
+  }, sub)), React.createElement("button", {
+    className: "btn sm",
+    type: "button",
+    onClick: onClose
+  }, "Close")), React.createElement("div", {
+    style: {
+      flex: 1,
+      overflow: 'auto',
+      padding: '14px 18px'
+    }
+  }, children))));
+}
+function RosSheetTable({
+  rows,
+  grid,
+  year,
+  month,
+  maxHeight
+}) {
+  const days = R.daysIn(year, month);
+  const ds = Array.from({
+    length: days
+  }, (_, i) => i + 1);
+  const th = {
+    position: 'sticky',
+    top: 0,
+    background: '#f2f6fb',
+    fontSize: 9.5,
+    fontWeight: 700,
+    color: '#6c7a8c',
+    padding: '5px 2px',
+    borderBottom: '1px solid rgba(125,145,180,.3)',
+    textAlign: 'center',
+    zIndex: 1
+  };
+  const td = {
+    fontFamily: ROS_MONO,
+    fontSize: 9.4,
+    fontWeight: 700,
+    textAlign: 'center',
+    padding: '3px 1px',
+    borderBottom: '1px solid rgba(125,145,180,.12)',
+    minWidth: 25
+  };
+  const g = grid || {};
+  if (!rows || !rows.length) return React.createElement("div", {
+    style: {
+      padding: 24,
+      textAlign: 'center',
+      color: '#8a97a8',
+      fontSize: 12
+    }
+  }, "No one is on this sheet.");
+  return React.createElement("div", {
+    style: {
+      overflow: 'auto',
+      maxHeight: maxHeight || '62vh',
+      border: '1px solid rgba(125,145,180,.22)',
+      borderRadius: 10,
+      background: '#fff'
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'separate',
+      borderSpacing: 0,
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'left',
+      left: 0,
+      zIndex: 2,
+      minWidth: 160,
+      paddingLeft: 10
+    }
+  }, "Staff"), ds.map(d => {
+    const fri = new Date(year, month, d).getDay() === 5;
+    return React.createElement("th", {
+      key: d,
+      style: {
+        ...th,
+        background: fri ? '#e3edf8' : th.background
+      }
+    }, d, React.createElement("div", {
+      style: {
+        fontWeight: 500,
+        fontSize: 8.5
+      }
+    }, String(rosDow(year, month, d)).slice(0, 2)));
+  }), ['G', 'M', 'E', 'N', 'O'].map(b => React.createElement("th", {
+    key: b,
+    style: {
+      ...th,
+      color: rosBColor(b)
+    }
+  }, b)), React.createElement("th", {
+    style: th
+  }, "Hrs"))), React.createElement("tbody", null, rows.map(r => {
+    const row = g[r.empId] || {};
+    const t = R.totalsFor(row, days);
+    return React.createElement("tr", {
+      key: r.empId
+    }, React.createElement("td", {
+      style: {
+        position: 'sticky',
+        left: 0,
+        background: '#fff',
+        padding: '4px 10px',
+        borderBottom: '1px solid rgba(125,145,180,.12)',
+        fontSize: 11.5,
+        whiteSpace: 'nowrap',
+        maxWidth: 200,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        zIndex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 600,
+        color: '#16202e',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, r.name), React.createElement("div", {
+      style: {
+        fontSize: 9.5,
+        color: '#8a97a8'
+      }
+    }, [r.empIdShown, r.desig].filter(Boolean).join(' · ') || ' ')), ds.map(d => {
+      const c = row[d] || '';
+      const col = c ? rosBColor(R.bucketOf(c)) : null;
+      return React.createElement("td", {
+        key: d,
+        style: {
+          ...td,
+          color: col || '#ccd3dc',
+          background: c ? col + '14' : 'transparent'
+        }
+      }, c || '·');
+    }), ['G', 'M', 'E', 'N', 'O'].map(b => React.createElement("td", {
+      key: b,
+      style: {
+        ...td,
+        color: '#3c4858'
+      }
+    }, t[b] || '')), React.createElement("td", {
+      style: {
+        ...td,
+        color: '#16202e'
+      }
+    }, t.hours || ''));
+  }))));
+}
+function RosSignOff({
+  signers,
+  meta,
+  dept
+}) {
+  const sg = signers || {},
+    m = meta || {};
+  const h = m.history || [];
+  const lastOf = acts => {
+    for (let i = h.length - 1; i >= 0; i--) if (acts.indexOf(h[i].action) >= 0) return {
+      e: h[i],
+      i
+    };
+    return null;
+  };
+  const st = rosStatusNorm(m.status);
+  const inChain = st === 'pending_manager' || st === 'pending_cns' || st === 'approved';
+  const sent = inChain ? lastOf(['send_manager', 'send_cns']) : null;
+  const fwd0 = lastOf(['forward']);
+  const fwd = fwd0 && sent && fwd0.i > sent.i ? fwd0 : null;
+  const ok = st === 'approved' ? lastOf(['approve']) : null;
+  const skipped = sent && sent.e.action === 'send_cns';
+  const boxes = [['Prepared by', sent && m.preparedBy || sg.incharge && sg.incharge.name, 'In-charge · ' + dept, sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge'], ['Checked by', fwd && m.checkedBy || sg.manager && sg.manager.name, 'Manager · ' + dept, fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager'], ['Approved by', ok && m.approvedBy || sg.cns && sg.cns.name, 'Chief of Nursing Services', ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS']];
+  const missing = boxes.filter(b => b[5]).map(b => b[6]);
+  return React.createElement("div", {
+    style: {
+      background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
+      border: '1px solid rgba(255,255,255,.92)',
+      borderRadius: 16,
+      boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
+      padding: '14px 16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 9,
+      marginBottom: 10
+    }
+  }, React.createElement("span", {
+    style: rosBadge('rgba(0,144,202,.12)', '#0072a3', 24, 7)
+  }, React.createElement(Ic, {
+    d: "M4 20h16M6 16l10-10 3 3-10 10H6z",
+    s: 13,
+    sw: 1.9
+  })), React.createElement("span", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: '#16202e'
+    }
+  }, "Sign-off"), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: '#9aa6b4'
+    }
+  }, "names come from Duty Roster \u2192 Setup")), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))',
+      gap: 12
+    }
+  }, boxes.map(([role, name, caption, stamp, done]) => React.createElement("div", {
+    key: role,
+    style: {
+      borderTop: '2px solid ' + (done ? '#1f9d57' : 'rgba(125,145,180,.3)'),
+      paddingTop: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      fontWeight: 700,
+      letterSpacing: .6,
+      textTransform: 'uppercase',
+      color: '#7d8ea8'
+    }
+  }, role), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 700,
+      color: name ? '#16202e' : '#b6c0cc',
+      marginTop: 3
+    }
+  }, name || 'Not set'), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#9aa6b4'
+    }
+  }, caption), React.createElement("span", {
+    style: {
+      display: 'inline-block',
+      marginTop: 5,
+      fontSize: 9,
+      fontWeight: 700,
+      letterSpacing: .4,
+      textTransform: 'uppercase',
+      color: done ? '#157a43' : '#9aa6b4',
+      background: done ? 'rgba(31,157,87,.13)' : 'rgba(125,145,180,.12)',
+      padding: '2px 7px',
+      borderRadius: 8
+    }
+  }, stamp)))), missing.length > 0 && React.createElement("div", {
+    style: {
+      marginTop: 10,
+      fontSize: 11,
+      color: '#b5670a',
+      background: 'rgba(224,138,30,.1)',
+      borderRadius: 8,
+      padding: '6px 10px'
+    }
+  }, missing.join(' and '), " not set for this unit \u2014 an administrator sets it once under ", React.createElement("b", null, "Duty Roster \u2192 Setup"), "."));
+}
+function RosVersions({
+  sheetId,
+  staff,
+  dept,
+  year,
+  month,
+  onClose
+}) {
+  const [list, setList] = useState(null);
+  const [open, setOpen] = useState(null);
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions').then(r => {
+      if (r && r.ok) setList(r.versions || []);else {
+        setErr(r && r.error || 'Could not load the versions.');
+        setList([]);
+      }
+    }).catch(() => {
+      setErr('Could not reach the server.');
+      setList([]);
+    });
+  }, [sheetId]);
+  const show = v => rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions/' + v.revision).then(r => {
+    if (r && r.ok && r.version) setOpen({
+      v,
+      snap: r.version
+    });else rosToast(r && r.error || 'Could not open that version.', 'error');
+  }).catch(() => rosToast('Could not reach the server.', 'error'));
+  const view = open ? rosRowsFrom(open.snap, staff, dept, false) : null;
+  return React.createElement(RosDrawer, {
+    wide: !!open,
+    onClose: onClose,
+    title: open ? 'Version rev ' + open.v.revision : 'Versions',
+    sub: open ? (ROS_HIST_LABEL[open.v.action] || open.v.action || 'Saved') + ' · ' + (open.v.byName || open.v.by || '—') + ' · ' + rosWhen(open.v.at) : 'The sheet as it stood each time it was sent, returned or approved'
+  }, open ? React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      background: 'rgba(106,82,212,.08)',
+      border: '1px solid rgba(106,82,212,.25)',
+      borderRadius: 10,
+      padding: '8px 12px',
+      marginBottom: 12
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: '#5b45c4',
+      flex: 1
+    }
+  }, "Viewing an earlier version \u2014 read only. The current sheet is unchanged."), React.createElement("button", {
+    className: "btn sm",
+    type: "button",
+    onClick: () => setOpen(null)
+  }, "\u2039 All versions")), open.v.note && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#3c4858',
+      marginBottom: 10,
+      whiteSpace: 'pre-wrap'
+    }
+  }, React.createElement("b", null, "Note:"), " ", open.v.note), React.createElement(RosSheetTable, {
+    rows: view.rows,
+    grid: view.grid,
+    year: year,
+    month: month,
+    maxHeight: "72vh"
+  })) : list === null ? React.createElement("div", {
+    style: {
+      color: '#8a97a8',
+      fontSize: 12
+    }
+  }, "Loading\u2026") : !list.length ? React.createElement("div", {
+    style: {
+      color: '#8a97a8',
+      fontSize: 12
+    }
+  }, err || 'No versions yet — a snapshot is kept each time the sheet is sent for review.') : React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, list.map(v => React.createElement("button", {
+    key: v.revision,
+    type: "button",
+    onClick: () => show(v),
+    style: {
+      textAlign: 'left',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      border: '1px solid rgba(125,145,180,.25)',
+      background: '#fff',
+      borderRadius: 10,
+      padding: '9px 12px',
+      cursor: 'pointer',
+      fontFamily: 'inherit'
+    }
+  }, React.createElement("span", {
+    style: {
+      fontFamily: ROS_MONO,
+      fontWeight: 700,
+      fontSize: 12,
+      color: '#0072a3',
+      minWidth: 52
+    }
+  }, "rev ", v.revision), React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'block',
+      fontSize: 12,
+      fontWeight: 700,
+      color: '#16202e'
+    }
+  }, ROS_HIST_LABEL[v.action] || v.action || 'Saved'), React.createElement("span", {
+    style: {
+      display: 'block',
+      fontSize: 10.5,
+      color: '#8a97a8'
+    }
+  }, (v.byName || v.by || '—') + ' · ' + rosWhen(v.at))), React.createElement(RosStatusChip, {
+    st: v.status
+  })))));
 }
 function RosterHome({
   index,
@@ -657,18 +1775,6 @@ function RosterHome({
   };
   const mayReview = !!(sc.can && sc.can.review);
   const [tab, setTab] = useState('mine');
-  if (mayReview && tab === 'access') return React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 14
-    }
-  }, React.createElement(RosterViewSwitch, {
-    tab: tab,
-    setTab: setTab
-  }), React.createElement(RosterAccessReview, {
-    setRoute: setRoute
-  }));
   const depts = useMemo(() => {
     const m = {};
     (staffStore.staff || []).filter(e => e.is_active !== false && !e.former).forEach(e => {
@@ -688,6 +1794,18 @@ function RosterHome({
     return m;
   }, [index.rosters]);
   const recent = (index.rosters || []).slice(0, 12);
+  if (mayReview && tab === 'access') return React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement(RosterViewSwitch, {
+    tab: tab,
+    setTab: setTab
+  }), React.createElement(RosterAccessReview, {
+    setRoute: setRoute
+  }));
   return React.createElement("div", {
     style: {
       display: 'flex',
@@ -782,7 +1900,7 @@ function RosterHome({
       style: {
         padding: 12,
         cursor: 'pointer',
-        borderLeft: '3px solid ' + (ex ? (ROS_STATUS[ex.status] || ROS_STATUS.draft).color : 'transparent')
+        borderLeft: '3px solid ' + (ex ? ROS_STATUS[rosStatusNorm(ex.status)].color : 'transparent')
       },
       onClick: () => setRoute({
         view: 'rosterGrid',
@@ -1360,9 +2478,11 @@ function RosterGrid({
     val: 4,
     sev: 'warning'
   });
-  const [sign, setSign] = useState({});
-  const signers = useRosSigners();
-  const [approvedAt, setApprovedAt] = useState(null);
+  const [meta, setMeta] = useState({});
+  const [sheetCan, setSheetCan] = useState(null);
+  const [signers, setSigners] = useState({});
+  const [panel, setPanel] = useState(null);
+  const decider = useRosDecide();
   const history = useRef([]);
   const saveTimer = useRef(null);
   const toastTimer = useRef(null);
@@ -1408,11 +2528,21 @@ function RosterGrid({
   }, [staff, order, grid, storedNames]);
   const inScope = scope && scope.inScope || (() => true);
   const depts = useMemo(() => [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => e.current_department || 'Unassigned'))].filter(d => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
+  const monthUrl = '/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month;
+  const applyMeta = r => {
+    const d = r.roster;
+    setMeta(d ? {
+      ...d,
+      grid: undefined
+    } : {});
+    setSheetCan(d && d.can || r.can || null);
+    setSigners(r.signers || {});
+  };
   useEffect(() => {
     setLoading(true);
     setLoadError('');
     setConflict('');
-    rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
+    rosApi.get(monthUrl).then(r => {
       if (!r || !r.ok) {
         setLoadError(r && r.error || 'The server did not return the roster.');
         setLoading(false);
@@ -1425,36 +2555,11 @@ function RosterGrid({
       setStoredNames(d && d.names || {});
       setStatus(d && d.status || 'draft');
       setRev(d && d.revision || 0);
-      const ru = d && d.rules || {};
-      setCfg({
-        ...ROS_DEF_CFG,
-        ...(ru.cfg || {})
-      });
-      setEn({
-        ...ROS_DEF_OFF,
-        ...(ru.off || {})
-      });
-      setCustom(Array.isArray(ru.custom) ? ru.custom : []);
-      if (!ru.cfg && ru.minMorning) {
-        setCfg(c => ({
-          ...c,
-          minM: ru.minMorning && ru.minMorning.value || c.minM,
-          minE: ru.minEvening && ru.minEvening.value || c.minE,
-          minN: ru.minNight && ru.minNight.value || c.minN,
-          maxNights: ru.maxConsecNight && ru.maxConsecNight.value || c.maxNights,
-          maxLeavePerDay: ru.leaveClash && ru.leaveClash.value || c.maxLeavePerDay
-        }));
-      }
-      setSign({
-        'Prepared by': d && d.preparedBy || '—',
-        'Checked by': d && d.checkedBy || '—',
-        'Approved by': d && d.approvedBy || '—'
-      });
-      setApprovedAt(d && d.approvedAt ? new Date(d.approvedAt).toLocaleDateString('en-GB', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric'
-      }) : null);
+      const ru = rosRulesOf(d && d.rules);
+      setCfg(ru.cfg);
+      setEn(ru.en);
+      setCustom(ru.custom);
+      applyMeta(r);
       setLoading(false);
       setDirty(false);
       setQueue([]);
@@ -1474,10 +2579,11 @@ function RosterGrid({
     window.addEventListener('mouseup', up);
     return () => window.removeEventListener('mouseup', up);
   }, []);
-  const locked = status === 'approved';
-  const canEdit = !locked && !loadError && !conflict && rosCan('edit');
+  const stNorm = rosStatusNorm(status);
+  const locked = ROS_EDITABLE.indexOf(stNorm) < 0;
+  const canEdit = !loadError && !conflict && (sheetCan ? !!sheetCan.edit : !locked && rosCan('edit'));
   const editBlocked = () => {
-    rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.' : locked ? rosMayApprove() ? 'Published and locked — click “Published” at the top to reopen it for editing.' : 'Published and locked — ask someone with full Duty Roster access to reopen it.' : 'You do not have edit rights on the roster.', 'info');
+    rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.' : stNorm === 'approved' ? 'Approved and locked — an administrator can reopen it for editing.' : stNorm === 'pending_manager' ? 'This roster is with the Manager for checking — ask them to return it if it needs changes.' : stNorm === 'pending_cns' ? 'This roster is with the CNS for approval — ask them to return it if it needs changes.' : 'You do not have edit rights on this roster.', 'info');
   };
   const push = () => {
     history.current.push(JSON.stringify(grid));
@@ -1684,24 +2790,27 @@ function RosterGrid({
       names: rows.reduce((m, r) => {
         if (r.empId) m[r.empId] = r.name || '';
         return m;
-      }, {}),
-      ...(nextStatus ? {
-        status: nextStatus
-      } : {}),
-      preparedBy: sign['Prepared by'] !== '—' ? sign['Prepared by'] || '' : '',
-      checkedBy: sign['Checked by'] !== '—' ? sign['Checked by'] || '' : ''
+      }, {})
     }).then(r => {
       setBusy(false);
       if (r && r.ok) {
         setRev(r.roster && r.roster.revision || rev + 1);
-        setStatus(r.roster && r.roster.status || nextStatus || status);
+        if (r.roster) {
+          setStatus(r.roster.status || status);
+          setMeta(m => ({
+            ...m,
+            ...r.roster,
+            grid: undefined
+          }));
+          if (r.roster.can) setSheetCan(r.roster.can);
+        }
         setDirty(false);
-        if (!quiet) rosToast(nextStatus === 'submitted' ? 'Roster submitted for approval.' : 'Roster saved.');
+        if (!quiet) rosToast('Roster saved.');
         if (onSaved) onSaved();
         return true;
       }
       if (r && r.conflict) setConflict(r.error || 'Someone else saved this roster.');
-      if (r && r.locked) setStatus('approved');
+      if (r && r.locked) refreshMeta();
       rosToast(r && r.error || 'Could not save.', 'error');
       return false;
     }).catch(() => {
@@ -1721,7 +2830,7 @@ function RosterGrid({
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [grid, cfg, en, custom, sign, dirty, retryTick]);
+  }, [grid, cfg, en, custom, dirty, retryTick]);
   const saveRef = useRef(null);
   saveRef.current = save;
   const pendingRef = useRef(false);
@@ -1742,47 +2851,34 @@ function RosterGrid({
       }
     };
   }, []);
-  const setStatusRemote = (st, extra) => {
-    const id = 'ros-' + String(dept).slice(0, 40) + '-' + year + '-' + String(month).padStart(2, '0');
-    setBusy(true);
-    return rosApi.post('/api/rosters/' + encodeURIComponent(id) + '/status', Object.assign({
-      status: st
-    }, extra || {})).then(r => {
-      setBusy(false);
-      if (r && r.ok) {
-        setStatus(st);
-        if (st === 'approved') setApprovedAt(new Date().toLocaleDateString('en-GB', {
-          day: 'numeric',
-          month: 'short',
-          year: 'numeric'
-        }));else setApprovedAt(null);
-        rosToast(st === 'approved' ? 'Roster published and locked.' : 'Roster reopened for editing.');
-        if (onSaved) onSaved();
-        return true;
-      }
-      rosToast(r && r.error || 'Could not change the status.', 'error');
-      return false;
-    }).catch(() => {
-      setBusy(false);
-      return false;
-    });
-  };
-  const publish = () => {
-    if (!rosMayApprove()) {
-      rosToast('Publishing and reopening need full Duty Roster access (Delete). You can still send it for approval.', 'info');
-      return;
+  const refreshMeta = () => rosApi.get(monthUrl).then(r => {
+    if (!r || !r.ok) return;
+    applyMeta(r);
+    if (r.roster) {
+      setStatus(r.roster.status || 'draft');
+      setRev(r.roster.revision || 0);
     }
-    if (locked) {
-      setStatusRemote('draft');
-      return;
-    }
+  }).catch(() => {});
+  const act = async action => {
     if (saveTimer.current) {
       clearTimeout(saveTimer.current);
       saveTimer.current = null;
     }
-    Promise.resolve(save('submitted', true)).then(ok => {
-      if (ok !== false) setStatusRemote('approved');
+    if (canEdit && (dirty || !rev)) {
+      const ok = await save(null, true);
+      if (ok === false) return;
+    }
+    const r = await decider.run({
+      id: meta.id || rosSheetId(dept, year, month),
+      action,
+      unit: dept,
+      period: monthLabel,
+      warnings: totalViol
     });
+    if (r && r.ok) {
+      await refreshMeta();
+      if (onSaved) onSaved();
+    } else if (r && r.code === 'conflict') refreshMeta();
   };
   const ev = useMemo(() => rosEval(grid, rows, days, year, month, cfg, en, custom), [grid, rows, days, year, month, cfg, en, custom]);
   const totalViol = ev.totalViol;
@@ -1962,7 +3058,6 @@ function RosterGrid({
   }, label)));
   if (loadError) return retryBox('The roster for ' + R.MONTHS[month] + ' ' + year + ' did not load.', loadError + ' Nothing is shown, so nothing can be saved over the stored roster.', 'Try again', () => setReloadKey(k => k + 1));
   if (conflict) return retryBox('Someone else saved this roster while you were editing.', conflict + ' Your last changes were not saved. Reload to see the current roster, then make them again.', 'Reload the month', () => setReloadKey(k => k + 1));
-  const published = status === 'approved';
   const showGrid = view === 'month' || view === 'swap';
   const showFooter = view === 'month' || view === 'rules';
   const toolBtnStyle = {
@@ -2075,7 +3170,7 @@ function RosterGrid({
       color: '#6c7a8c',
       marginTop: 2
     }
-  }, monthLabel, " \xB7 ", days, " days \xB7 ", rows.length, " staff \xB7 prepared by the nurse in-charge, approved by the CNS")), React.createElement("div", {
+  }, monthLabel, " \xB7 ", days, " days \xB7 ", rows.length, " staff \xB7 prepared by the in-charge, checked by the Manager, approved by the CNS")), React.createElement("div", {
     style: {
       flex: 1
     }
@@ -2109,18 +3204,7 @@ function RosterGrid({
   }, depts.map(d => React.createElement("option", {
     key: d,
     value: d
-  }, d))), React.createElement("span", {
-    style: {
-      fontSize: 11,
-      fontWeight: 700,
-      padding: '6px 12px',
-      borderRadius: 16,
-      whiteSpace: 'nowrap',
-      color: published ? '#157a43' : '#b5670a',
-      background: published ? 'rgba(31,157,87,.13)' : 'rgba(224,138,30,.14)',
-      border: '1px solid ' + (published ? 'rgba(31,157,87,.28)' : 'rgba(224,138,30,.3)')
-    }
-  }, published ? 'Published' : 'Draft'), React.createElement("button", {
+  }, d))), React.createElement("button", {
     className: "ros-auto",
     onClick: autoFill,
     title: 'Lay ' + ROS_PATTERNS[0][1] + ' across the whole month, staggered nurse by nurse',
@@ -2142,29 +3226,107 @@ function RosterGrid({
     d: "M13 2L4 14h7l-1 8 9-12h-7z",
     s: 14,
     sw: 2
-  }), "Auto-draft"), React.createElement("button", {
-    onClick: publish,
-    disabled: busy,
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 7,
-      border: '1px solid rgba(255,255,255,.4)',
-      background: published ? 'linear-gradient(135deg,#2fbf7f,#157a43)' : 'linear-gradient(135deg,#27a8db,#0072a3)',
-      color: '#fff',
-      padding: '9px 15px',
-      borderRadius: 10,
-      fontSize: 12,
-      fontWeight: 700,
-      cursor: 'pointer',
-      fontFamily: 'inherit',
-      boxShadow: '0 8px 22px rgba(0,144,202,.4)'
-    }
-  }, React.createElement(Ic, {
-    d: "M4 12l5 5L20 6",
-    s: 14,
-    sw: 2.2
-  }), published ? 'Published' : totalViol ? 'Publish anyway' : 'Send for approval'))), React.createElement("div", {
+  }), "Auto-draft"), React.createElement(RosStatusChip, {
+    st: status,
+    big: true
+  }))), (() => {
+    const s = ROS_STATUS[stNorm];
+    const sentBy = meta.sentByName || meta.sentBy;
+    const sent = meta.sentAt ? ' · sent ' + rosWhen(meta.sentAt) + (sentBy ? ' by ' + sentBy : '') : '';
+    const line = stNorm === 'pending_manager' ? 'With ' + (signers.manager && signers.manager.name || 'the Manager') + ' for checking' + sent : stNorm === 'pending_cns' ? 'With ' + (signers.cns && signers.cns.name || 'the CNS') + ' for approval' + sent : stNorm === 'approved' ? 'Approved by ' + (meta.approvedBy || '—') + (meta.approvedAt ? ' · ' + rosWhen(meta.approvedAt) : '') + ' — published and locked' : stNorm === 'returned' ? 'Returned to the in-charge — fix the sheet and send it again' : 'Draft with the in-charge — send it to the Manager (or straight to the CNS) when it is ready';
+    const histN = (meta.history || []).length;
+    return React.createElement("div", {
+      style: {
+        background: 'rgba(255,255,255,.84)',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderLeft: '4px solid ' + s.color,
+        borderRadius: 14,
+        boxShadow: '0 10px 28px rgba(31,59,90,.1)',
+        padding: '11px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+        marginBottom: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        minWidth: 220,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.8,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, line), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c',
+        marginTop: 2
+      }
+    }, rev ? 'Saved · rev ' + rev + (meta.updatedBy ? ' · by ' + meta.updatedBy : '') + (meta.updatedAt ? ' · ' + rosWhen(meta.updatedAt) : '') : 'Not saved yet', dirty ? ' · saving…' : '')), React.createElement("button", {
+      className: "btn sm",
+      type: "button",
+      onClick: () => setPanel('history')
+    }, "History", histN ? ' · ' + histN : ''), React.createElement("button", {
+      className: "btn sm",
+      type: "button",
+      disabled: !rev,
+      onClick: () => setPanel('versions')
+    }, "Versions"), React.createElement("button", {
+      className: "btn sm",
+      type: "button",
+      onClick: () => setRoute({
+        view: 'rosterPrint',
+        dept,
+        year,
+        month
+      })
+    }, "Print"), canEdit && React.createElement("button", {
+      className: "btn sm",
+      type: "button",
+      disabled: busy || !dirty,
+      onClick: () => {
+        if (saveTimer.current) {
+          clearTimeout(saveTimer.current);
+          saveTimer.current = null;
+        }
+        save(null, false);
+      }
+    }, "Save draft"), sheetCan && sheetCan.send && totalViol > 0 && React.createElement("span", {
+      onClick: goRules,
+      title: "Sending is still allowed \u2014 the reviewer sees the same warnings",
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#a92c42',
+        cursor: 'pointer'
+      }
+    }, totalViol, " rule warning", totalViol === 1 ? '' : 's'), React.createElement(RosDecisionButtons, {
+      status: status,
+      can: sheetCan,
+      onAction: act,
+      busy: busy || decider.busy,
+      hasManager: !!signers.manager
+    }));
+  })(), stNorm === 'returned' && React.createElement(RosReturnedBanner, {
+    meta: meta
+  }), decider.modal, panel === 'history' && React.createElement(RosDrawer, {
+    title: "History",
+    sub: dept + ' · ' + monthLabel,
+    onClose: () => setPanel(null)
+  }, React.createElement(RosHistoryTimeline, {
+    history: meta.history
+  })), panel === 'versions' && React.createElement(RosVersions, {
+    sheetId: meta.id || rosSheetId(dept, year, month),
+    staff: staffStore.staff,
+    dept: dept,
+    year: year,
+    month: month,
+    onClose: () => setPanel(null)
+  }), React.createElement("div", {
     style: {
       display: 'grid',
       gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))',
@@ -5362,9 +6524,6 @@ function RosterGrid({
       }
     }, "No custom rules yet \u2014 build one above.")))));
   })(), showFooter && (() => {
-    const allNames = [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => e.name).filter(Boolean))].sort();
-    const approver = sign['Approved by'];
-    const ready = approver && approver !== '—';
     return React.createElement("div", {
       style: {
         display: 'grid',
@@ -5448,170 +6607,14 @@ function RosterGrid({
         flexDirection: 'column',
         gap: 14
       }
-    }, React.createElement("div", {
-      style: {
-        background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))',
-        backdropFilter: 'blur(24px) saturate(1.7)',
-        WebkitBackdropFilter: 'blur(24px) saturate(1.7)',
-        border: '1px solid rgba(255,255,255,.92)',
-        borderRadius: 16,
-        boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)',
-        padding: '14px 16px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 22,
-        flexWrap: 'wrap'
-      }
-    }, React.createElement("div", {
-      style: {
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 9,
-        marginBottom: 4
-      }
-    }, React.createElement("span", {
-      style: rosBadge('rgba(0,144,202,.12)', '#0072a3', 24, 7)
-    }, React.createElement(Ic, {
-      d: "M4 20h16M6 16l10-10 3 3-10 10H6z",
-      s: 13,
-      sw: 1.9
-    })), React.createElement("span", {
-      style: {
-        fontSize: 12.5,
-        fontWeight: 700,
-        color: '#16202e'
-      }
-    }, "Sign-off"), React.createElement("span", {
-      style: {
-        fontSize: 10.5,
-        color: '#9aa6b4'
-      }
-    }, "pick the names, then approve")), [['Prepared by', 'prepare'], ['Checked by', 'check'], ['Approved by', 'approve']].map(([role, chainRole]) => {
-      const val = sign[role] !== undefined && sign[role] !== '' ? sign[role] : '—';
-      const tier = rosTierFor(signers, chainRole);
-      const atTier = rosNamesFor(signers, chainRole);
-      const tierPool = atTier.length ? atTier : chainRole === 'prepare' ? rows.map(r => r.name) : allNames;
-      const base = chainRole === 'prepare' ? rows.map(r => r.name).concat(tierPool.filter(n => !rows.some(r => r.name === n))) : tierPool;
-      const title = tier ? tier.name + (chainRole === 'prepare' ? ' · ' + dept : '') : chainRole === 'prepare' ? 'Prepared in ' + dept : 'No tier marked in Hierarchy';
-      const pool = ['—'].concat(base);
-      const opts = pool.indexOf(val) >= 0 ? pool : [val].concat(pool);
-      const stamped = role === 'Approved by' ? !!approvedAt : val !== '—';
-      return React.createElement("div", {
-        key: role,
-        style: {
-          minWidth: 186,
-          flex: 1
-        }
-      }, React.createElement("div", {
-        style: {
-          fontSize: 9.5,
-          fontWeight: 700,
-          letterSpacing: .6,
-          textTransform: 'uppercase',
-          color: '#7d8ea8'
-        }
-      }, role), React.createElement("select", {
-        value: val,
-        onChange: e => {
-          const v = e.target.value;
-          setSign(s => ({
-            ...s,
-            [role]: v
-          }));
-          setDirty(true);
-        },
-        style: {
-          width: '100%',
-          boxSizing: 'border-box',
-          marginTop: 4,
-          padding: '7px 9px',
-          borderRadius: 8,
-          border: '1px solid ' + (val === '—' ? 'rgba(125,145,180,.3)' : 'rgba(0,144,202,.32)'),
-          background: val === '—' ? 'rgba(255,255,255,.6)' : 'rgba(0,144,202,.07)',
-          fontFamily: 'inherit',
-          fontSize: 12,
-          fontWeight: 600,
-          color: val === '—' ? '#9aa6b4' : '#16202e',
-          outline: 'none'
-        }
-      }, opts.map(v => React.createElement("option", {
-        key: v,
-        value: v
-      }, v))), React.createElement("div", {
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 7,
-          marginTop: 4
-        }
-      }, React.createElement("span", {
-        style: {
-          fontSize: 10.5,
-          color: '#9aa6b4'
-        }
-      }, title), React.createElement("span", {
-        style: {
-          fontSize: 9,
-          fontWeight: 700,
-          letterSpacing: .4,
-          textTransform: 'uppercase',
-          color: stamped ? '#157a43' : '#b6c0cc',
-          background: stamped ? 'rgba(31,157,87,.13)' : 'rgba(125,145,180,.12)',
-          padding: '2px 7px',
-          borderRadius: 8,
-          whiteSpace: 'nowrap'
-        }
-      }, role === 'Approved by' && approvedAt ? 'signed ' + approvedAt : stamped ? 'set' : 'not set')));
-    }), React.createElement("div", {
-      style: {
-        width: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 9,
-        flexWrap: 'wrap',
-        borderTop: '1px solid rgba(125,145,180,.18)',
-        paddingTop: 11,
-        marginTop: 4
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 10.5,
-        color: '#9aa6b4',
-        flex: 1,
-        minWidth: 180
-      }
-    }, approvedAt ? 'Approved on ' + approvedAt + ' — the roster is locked for publication.' : ready ? 'Ready for ' + ((rosTierFor(signers, 'approve') || {}).name || 'the approver') + ' to sign.' : 'Choose an approver above to enable signing.'), React.createElement("button", {
-      onClick: () => {
-        if (!ready || approvedAt) return;
-        Promise.resolve(save('submitted', true)).then(ok => {
-          if (ok !== false) setStatusRemote('approved', {
-            approvedBy: approver
-          });
-        });
+    }, React.createElement(RosSignOff, {
+      signers: signers,
+      meta: {
+        ...meta,
+        status
       },
-      style: {
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        border: '1px solid rgba(255,255,255,.4)',
-        background: approvedAt ? 'linear-gradient(135deg,#2fbf7f,#157a43)' : ready ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,#9fb3c8,#7d8ea8)',
-        color: '#fff',
-        padding: '8px 14px',
-        borderRadius: 9,
-        fontSize: 11.5,
-        fontWeight: 700,
-        cursor: ready ? 'pointer' : 'default',
-        fontFamily: 'inherit',
-        boxShadow: ready && !approvedAt ? '0 7px 18px rgba(0,144,202,.35)' : 'none',
-        opacity: ready || approvedAt ? 1 : .6,
-        flexShrink: 0
-      }
-    }, React.createElement(Ic, {
-      d: "M4 12l5 5L20 6",
-      s: 13,
-      sw: 2.4
-    }), approvedAt ? 'Approved' : 'Sign & approve')))));
+      dept: dept
+    })));
   })(), pick && (() => {
     const vh = window.innerHeight,
       vw = window.innerWidth;
@@ -6613,10 +7616,12 @@ function RosterPrint({
 }) {
   const days = R.daysIn(year, month);
   const [doc, setDoc] = useState(null);
+  const [signers, setSigners] = useState({});
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
       setDoc(r && r.ok ? r.roster : null);
+      setSigners(r && r.ok && r.signers || {});
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [dept, year, month]);
@@ -6655,7 +7660,8 @@ function RosterPrint({
     }
   }, "Loading\u2026");
   const grid = rosMigrateGrid(doc && doc.grid, staff);
-  const sig = window.unicoSig && window.unicoSig.get && window.unicoSig.get() || {};
+  const sig = window.unicoSig && window.unicoSig.load && window.unicoSig.load() || {};
+  const nm = k => signers[k] && signers[k].name || '';
   const cell = {
     border: '1px solid #333',
     padding: '2px 3px',
@@ -6715,7 +7721,7 @@ function RosterPrint({
     style: {
       fontSize: 11
     }
-  }, R.MONTHS[month], " ", year, doc ? ' · revision ' + (doc.revision || 1) + ' · ' + (ROS_STATUS[doc.status] || ROS_STATUS.draft).label : ' · not yet drafted')), React.createElement("table", {
+  }, R.MONTHS[month], " ", year, doc ? ' · revision ' + (doc.revision || 1) + ' · ' + ROS_STATUS[rosStatusNorm(doc.status)].label : ' · not yet drafted')), React.createElement("table", {
     style: {
       borderCollapse: 'collapse',
       width: '100%'
@@ -6824,7 +7830,7 @@ function RosterPrint({
       marginTop: 34,
       fontSize: 10
     }
-  }, [['Prepared By', doc && doc.preparedBy || sig.prepared], ['Checked By', doc && doc.checkedBy || sig.checked], ['Approved By', doc && doc.approvedBy || sig.approved]].map(([l, n]) => React.createElement("div", {
+  }, [['Prepared By', doc && doc.preparedBy || nm('incharge') || sig.prepared], ['Checked By', doc && doc.checkedBy || nm('manager') || sig.reviewed], ['Approved By', doc && doc.approvedBy || nm('cns') || sig.approved]].map(([l, n]) => React.createElement("div", {
     key: l,
     style: {
       borderTop: '1px solid #333',
@@ -6856,7 +7862,7 @@ function RosterView({
       scope: scope,
       setRoute: setRoute
     });
-    if (dept && !scope.loading && !scope.inScope(dept)) return React.createElement(RosterNoAccess, {
+    if (dept && !scope.loading && !scope.inScope(dept) && !(scope.can && scope.can.review)) return React.createElement(RosterNoAccess, {
       dept: dept,
       setRoute: setRoute
     });
@@ -6948,6 +7954,40 @@ function RosterNoAccess({
   }, "Back to my units")));
 }
 window.RosterView = RosterView;
+window.UNICO_ROSTER_KIT = {
+  api: rosApi,
+  toast: rosToast,
+  can: rosCan,
+  portal: rosPortal,
+  key: rosKey,
+  migrateGrid: rosMigrateGrid,
+  sheetId: rosSheetId,
+  when: rosWhen,
+  useRosterIndex,
+  useRosterScope,
+  useRosterStaff,
+  useRosterConfig,
+  loadConfig: rosLoadConfig,
+  useRosDecide,
+  ROS_STATUS,
+  ROS_ACTIONS,
+  ROS_HIST_LABEL,
+  ROS_EDITABLE,
+  statusNorm: rosStatusNorm,
+  RosStatusChip,
+  RosDecisionButtons,
+  RosHistoryTimeline,
+  RosReturnedBanner,
+  RosDrawer,
+  RosSheetTable,
+  RosSignOff,
+  RosVersions,
+  rulesOf: rosRulesOf,
+  findingsOf: rosFindingsOf,
+  rowsFrom: rosRowsFrom,
+  bColor: rosBColor,
+  MONO: ROS_MONO
+};
 })();
 ;
 /* ===== roster-review.jsx ===== */
@@ -6956,2598 +7996,1718 @@ const {
   useState,
   useEffect,
   useMemo,
-  useRef,
   useCallback
 } = React;
 const Ic = window.Ic,
   I = window.I;
 const R = window.UNICO_ROSTER;
 const MK = window.MK;
-const rrApi = {
-  get: u => fetch(u, {
-    headers: {
-      accept: 'application/json'
-    }
-  }).then(r => r.json()),
-  post: (u, b) => fetch(u, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify(b || {})
-  }).then(r => r.json())
-};
-const rrToast = (m, t) => {
-  try {
-    window.UI && window.UI.toast && window.UI.toast(m, t || 'success');
-  } catch (e) {}
-};
-const rrCanDecide = () => {
-  let edit = true,
-    admin = true;
-  try {
-    edit = window.unicoCan ? window.unicoCan('roster', 'edit') : true;
-  } catch (e) {
-    edit = true;
-  }
-  try {
-    const u = window.__UNICO_USER__;
-    admin = !u || u.role === 'Administrator';
-  } catch (e) {
-    admin = true;
-  }
-  return edit && admin;
-};
-const RR_DIVS = [{
-  id: 'cc',
-  label: 'Critical Care',
-  color: '#0090ca'
-}, {
-  id: 'mn',
-  label: 'Maternal & Neonatal',
-  color: '#3ab5a7'
-}, {
-  id: 'ac',
-  label: 'Acute & Peri-op',
-  color: '#6a52d4'
-}, {
-  id: 'other',
-  label: 'Other',
-  color: '#5b6b80'
-}];
-const RR_DIV_BY = {};
-RR_DIVS.forEach(d => {
-  RR_DIV_BY[d.id] = d;
-});
-const RR_DIV_ICON = {
-  cc: 'pulse',
-  mn: 'heart',
-  ac: 'syringe',
-  other: 'bed'
-};
-function rrDivisionOf(dept) {
-  const name = String(dept || '').toUpperCase();
-  const tok = name.split(/[^A-Z0-9]+/).filter(Boolean);
-  const has = w => tok.indexOf(w) >= 0;
-  const says = w => name.indexOf(w) >= 0;
-  if (has('NICU') || has('LDR') || says('NEONAT') || says('LABOUR') || says('LABOR') || says('DELIVERY') || says('MATERNITY') || says('OBSTETRIC')) return 'mn';
-  if (has('ICU') || has('SICU') || has('MICU') || has('CCU') || has('ITU') || has('HDU') || says('CRITICAL') || says('INTENSIVE')) return 'cc';
-  if (has('ER') || has('OT') || has('OR') || says('EMERGENC') || says('THEATRE') || says('THEATER') || says('OPERAT') || says('CATH') || says('ENDOSCOP') || says('RECOVERY') || says('ANAESTH') || says('ANESTH')) return 'ac';
-  return 'other';
-}
-const rrKey = e => 'S' + String(e.id);
-const rrMigrateGrid = (grid, rows) => {
-  const g = grid || {};
-  const keys = Object.keys(g);
-  if (!keys.length) return g;
-  const current = {};
-  rows.forEach(r => {
-    current[r.empId] = 1;
-  });
-  if (keys.every(k => current[k])) return g;
-  const byEmpNo = {};
-  rows.forEach(r => {
-    if (r.empIdShown) byEmpNo[String(r.empIdShown)] = r.empId;
-  });
-  const out = {};
-  keys.forEach(k => {
-    out[byEmpNo[k] || k] = g[k];
-  });
-  return out;
-};
-const rrNeed = (rules, b) => {
-  const r = rules[b === 'M' ? 'minMorning' : b === 'E' ? 'minEvening' : b === 'N' ? 'minNight' : ''];
-  return r && r.on && r.value || 0;
-};
-function rrStandardHours(rules, days) {
-  const off = rules && rules.weeklyOff && rules.weeklyOff.on ? rules.weeklyOff.value : 0;
-  return 8 * Math.max(1, days - Math.ceil(days / 7) * off);
-}
-const rrLoadColor = p => p >= 92 ? '#d23a52' : p >= 82 ? '#e08a1e' : p >= 55 ? '#157a43' : '#0090ca';
-const rrBar = (pct, color) => ({
-  display: 'block',
-  height: '100%',
-  width: Math.max(3, Math.min(100, pct || 0)) + '%',
-  borderRadius: 3,
-  background: 'linear-gradient(90deg,' + color + '99,' + color + ')',
-  animation: MK.ANIM
-});
-const rr1 = n => (Math.round((n || 0) * 10) / 10).toFixed(1);
-const rrFirst = n => String(n || '').split(/\s+/)[0] || '—';
-const rrWhen = ts => ts ? new Date(ts).toLocaleString(undefined, {
-  day: 'numeric',
-  month: 'short',
-  year: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit'
-}) : '—';
-const RR_STATUS = {
-  draft: {
-    label: 'Draft',
-    c: '#b5670a',
-    bg: 'rgba(224,138,30,.14)'
-  },
-  submitted: {
-    label: 'Submitted',
-    c: '#0072a3',
-    bg: 'rgba(0,144,202,.12)'
-  },
-  approved: {
-    label: 'Approved',
-    c: '#157a43',
-    bg: 'rgba(21,122,67,.13)'
-  },
-  none: {
-    label: 'Not drafted',
-    c: '#6c7a8c',
-    bg: 'rgba(125,145,180,.14)'
-  }
-};
-const rrStatusChip = st => {
-  const t = RR_STATUS[st] || RR_STATUS.none;
-  return {
-    fontSize: 10.5,
-    fontWeight: 700,
-    padding: '3px 9px',
-    borderRadius: 12,
-    whiteSpace: 'nowrap',
-    color: t.c,
-    background: t.bg
-  };
-};
-function rrInjectCss() {
-  if (typeof document === 'undefined' || document.getElementById('rr-style')) return;
+(function riCss() {
+  if (typeof document === 'undefined' || document.getElementById('ri-css')) return;
   const el = document.createElement('style');
-  el.id = 'rr-style';
-  el.textContent = ['@keyframes rrBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}', '@keyframes rrLegA{0%,100%{transform:rotate(17deg)}50%{transform:rotate(-17deg)}}', '@keyframes rrLegB{0%,100%{transform:rotate(-17deg)}50%{transform:rotate(17deg)}}', '@keyframes rrArmA{0%,100%{transform:rotate(-15deg)}50%{transform:rotate(15deg)}}', '@keyframes rrArmB{0%,100%{transform:rotate(15deg)}50%{transform:rotate(-15deg)}}', '@keyframes rrDash{to{stroke-dashoffset:-60}}', '@keyframes rrPop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}'].join('');
+  el.id = 'ri-css';
+  el.textContent = '@media (max-width: 960px){ .ri-split{ grid-template-columns: 1fr !important; } .ri-split > div{ position: static !important; } }';
   document.head.appendChild(el);
-}
-function useRosterIndex() {
+})();
+const RI_TABS = [['awaiting', 'Awaiting me'], ['inreview', 'In review'], ['returned', 'Returned'], ['approved', 'Approved'], ['none', 'Not submitted'], ['all', 'All units']];
+const riNorm = r => r.hasSheet ? window.UNICO_ROSTER_KIT.statusNorm(r.status) : 'none';
+const riIn = (tab, r) => {
+  const st = riNorm(r);
+  if (tab === 'awaiting') return !!r.pendingForMe;
+  if (tab === 'inreview') return st === 'pending_manager' || st === 'pending_cns';
+  if (tab === 'returned') return st === 'returned';
+  if (tab === 'approved') return st === 'approved';
+  if (tab === 'none') return st === 'none' || st === 'draft';
+  return true;
+};
+const RI_OVERTIME_H = 200;
+function useRosterReview(year, month) {
+  const K = window.UNICO_ROSTER_KIT;
   const [state, setState] = useState({
-    rosters: [],
+    rows: [],
+    cns: null,
     loading: true,
-    error: null
+    error: ''
   });
-  const load = useCallback(() => rrApi.get('/api/rosters').then(r => {
+  const load = useCallback(() => K.api.get('/api/rosters/review?year=' + year + '&month=' + month).then(r => {
     if (r && r.ok) setState({
-      rosters: r.rosters || [],
+      rows: r.rows || [],
+      cns: r.cns || null,
       loading: false,
-      error: null
+      error: ''
     });else setState(s => ({
       ...s,
       loading: false,
-      error: r && r.error || 'Could not load rosters.'
+      error: r && r.error || 'Could not load the review list.'
     }));
   }).catch(() => setState(s => ({
     ...s,
     loading: false,
     error: 'Could not reach the server.'
-  }))), []);
+  }))), [year, month]);
   useEffect(() => {
+    setState(s => ({
+      ...s,
+      loading: true
+    }));
     load();
+  }, [load]);
+  useEffect(() => {
+    const on = () => load();
+    window.addEventListener('unico:ros-refresh', on);
+    window.addEventListener('focus', on);
+    return () => {
+      window.removeEventListener('unico:ros-refresh', on);
+      window.removeEventListener('focus', on);
+    };
   }, [load]);
   return {
     ...state,
     reload: load
   };
 }
-function useMonthSheets(index, year, month) {
-  const [sheets, setSheets] = useState({});
-  const [loading, setLoading] = useState(true);
-  const req = useRef(0);
-  const depts = useMemo(() => (index.rosters || []).filter(r => r.year === year && r.month === month).map(r => r.dept), [index.rosters, year, month]);
-  const sig = depts.join('|');
-  useEffect(() => {
-    if (index.loading) return;
-    const mine = ++req.current;
-    if (!depts.length) {
-      setSheets({});
-      setLoading(false);
-      return;
-    }
-    setSheets({});
-    setLoading(true);
-    Promise.all(depts.map(d => rrApi.get('/api/rosters/' + encodeURIComponent(d) + '/' + year + '/' + month).then(r => r && r.ok ? r.roster : null).catch(() => null))).then(list => {
-      if (req.current !== mine) return;
-      const m = {};
-      list.forEach((doc, i) => {
-        if (doc) m[depts[i]] = doc;
-      });
-      setSheets(m);
-      setLoading(false);
-    });
-  }, [sig, year, month, index.loading]);
-  return {
-    sheets,
-    loading: loading || index.loading
-  };
-}
-function rrUnitModel(dept, entry, doc, staffRows, year, month, otLimit) {
-  const days = R.daysIn(year, month);
-  const rules = Object.assign({}, R.DEFAULT_RULES, doc && doc.rules || {});
-  const grid = rrMigrateGrid(doc && doc.grid || {}, staffRows);
-  const by = {};
-  staffRows.forEach(s => {
-    by[s.empId] = s;
-  });
-  const rows = [];
-  const seen = {};
-  (doc && doc.order || []).forEach(id => {
-    if (by[id] && !seen[id]) {
-      rows.push(by[id]);
-      seen[id] = 1;
-    }
-  });
-  staffRows.forEach(s => {
-    if (!seen[s.empId]) {
-      rows.push(s);
-      seen[s.empId] = 1;
-    }
-  });
-  Object.keys(grid).forEach(k => {
-    if (seen[k]) return;
-    rows.push({
-      empId: k,
-      empIdShown: '',
-      name: doc && doc.names && doc.names[k] || k,
-      desig: '',
-      offRegister: true
-    });
-    seen[k] = 1;
-  });
-  const std = rrStandardHours(rules, days);
-  const people = rows.map(s => {
-    const t = R.totalsFor(grid[s.empId], days);
-    const duty = t.G + t.M + t.E + t.N;
-    let main = null;
-    if (duty) main = ['M', 'E', 'N', 'G'].reduce((a, b) => t[b] > t[a] ? b : a, 'M');
-    return {
-      ...s,
-      totals: t,
-      hours: t.hours,
-      duty,
-      bucket: main,
-      load: std ? Math.round(t.hours / std * 100) : 0,
-      over: t.hours > otLimit
-    };
-  });
-  const ids = rows.map(s => s.empId);
-  const covByDay = [];
-  for (let d = 1; d <= days; d++) covByDay.push(R.coverageFor(grid, ids, d));
-  const need = {
-    M: rrNeed(rules, 'M'),
-    E: rrNeed(rules, 'E'),
-    N: rrNeed(rules, 'N')
-  };
-  const avgCov = {};
-  const shortDays = {};
-  ['M', 'E', 'N'].forEach(b => {
-    avgCov[b] = days ? covByDay.reduce((a, c) => a + c[b], 0) / days : 0;
-    shortDays[b] = need[b] ? covByDay.filter(c => c[b] < need[b]).length : 0;
-  });
-  const hours = people.reduce((a, p) => a + p.hours, 0);
-  const rostered = people.filter(p => p.duty > 0);
-  return {
-    dept,
-    name: entry && entry.deptName || dept,
-    div: rrDivisionOf(dept),
-    entry: entry || null,
-    doc: doc || null,
-    drafted: !!doc,
-    status: entry && entry.status || null,
-    rules,
-    grid,
-    days,
-    std,
-    rows: people,
-    rostered,
-    covByDay,
-    need,
-    avgCov,
-    shortDays,
-    hours,
-    load: std && people.length ? Math.round(hours / people.length / std * 100) : 0,
-    overCount: people.filter(p => p.over).length,
-    findings: doc ? R.checkRules(grid, rows, year, month, rules) : []
-  };
-}
-function RRHeader({
-  month,
-  year,
-  units,
-  staffTotal,
-  scope,
-  setScope,
-  pending,
-  otLimit,
-  setOtLimit,
-  otRaw,
-  setOtRaw,
-  onApproveAll,
-  busy,
-  canDecide,
-  months,
-  years,
-  setMonth,
-  setYear
-}) {
-  return React.createElement("div", {
-    className: "card",
-    style: {
-      position: 'relative',
-      overflow: 'hidden',
-      padding: '16px 20px',
-      display: 'flex',
-      alignItems: 'center',
-      gap: 16,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("span", {
-    style: {
-      display: 'inline-grid',
-      placeItems: 'center',
-      width: 44,
-      height: 44,
-      borderRadius: 13,
-      background: 'rgba(106,82,212,.15)',
-      color: '#5b45c4',
-      flexShrink: 0
-    }
-  }, React.createElement(Ic, {
-    d: I.grid,
-    s: 21
-  })), React.createElement("div", {
-    style: {
-      minWidth: 230
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 17,
-      fontWeight: 800,
-      letterSpacing: '-.2px',
-      color: MK.INK
-    }
-  }, "Roster full review \u2014 Administrator"), React.createElement("div", {
-    style: {
-      fontSize: 12,
-      color: MK.MUTED,
-      marginTop: 2
-    }
-  }, R.MONTHS[month], " ", year, " \xB7 ", units, " units \xB7 ", staffTotal, " staff \xB7 workload balanced before CNS sign-off")), React.createElement("div", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 9,
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("select", {
-    value: month,
-    onChange: e => setMonth(Number(e.target.value)),
-    title: "Which month to review"
-  }, months.map((m, i) => React.createElement("option", {
-    key: m,
-    value: i
-  }, m))), React.createElement("select", {
-    value: year,
-    onChange: e => setYear(Number(e.target.value)),
-    title: "Which year to review"
-  }, years.map(y => React.createElement("option", {
-    key: y,
-    value: y
-  }, y))), React.createElement("select", {
-    value: scope,
-    onChange: e => setScope(e.target.value),
-    title: "Divisions are derived from each unit's name \u2014 see the workload tree"
-  }, ['All divisions'].concat(RR_DIVS.map(d => d.label)).map(v => React.createElement("option", {
-    key: v,
-    value: v
-  }, v))), React.createElement("label", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6,
-      fontSize: 11.5,
-      color: MK.MUTED
-    },
-    title: "Anyone rostered more than this many paid hours in the month is flagged. Defaults to a full month of 8-hour duties with the unit's own weekly day off."
-  }, "Overtime over", React.createElement("input", {
-    type: "number",
-    min: "40",
-    max: "400",
-    step: "4",
-    value: otRaw,
-    style: {
-      width: 66
-    },
-    onChange: e => {
-      const v = e.target.value;
-      setOtRaw(v);
-      const n = Number(v);
-      if (v !== '' && Number.isFinite(n) && n > 0) setOtLimit(n);
-    },
-    onBlur: () => setOtRaw(String(otLimit))
-  }), "h"), React.createElement("span", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6,
-      fontSize: 11.5,
-      fontWeight: 700,
-      color: '#b5670a',
-      background: 'rgba(224,138,30,.14)',
-      border: '1px solid rgba(224,138,30,.3)',
-      padding: '6px 12px',
-      borderRadius: 16
-    }
-  }, pending, " awaiting decision"), React.createElement("button", {
-    className: "btn",
-    disabled: !canDecide || busy || !pending,
-    onClick: onApproveAll,
-    title: canDecide ? 'Approve every drafted sheet in the current scope' : 'Approving a roster needs administrator access',
-    style: {
-      border: '1px solid rgba(21,122,67,.3)',
-      background: 'linear-gradient(160deg,#1c8f52,#157a43)',
-      color: '#fff',
-      fontWeight: 700
-    }
-  }, React.createElement(Ic, {
-    d: I.check,
-    s: 14
-  }), "Approve all units")));
-}
-function RRKpis({
-  tiles
-}) {
-  return React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(158px,1fr))',
-      gap: 12
-    }
-  }, tiles.map(k => React.createElement("div", {
-    key: k.lbl,
-    className: "card",
-    style: {
-      padding: '13px 15px'
-    },
-    title: k.why
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 10
-    }
-  }, React.createElement("span", {
-    style: {
-      display: 'inline-grid',
-      placeItems: 'center',
-      width: 34,
-      height: 34,
-      borderRadius: 10,
-      flexShrink: 0,
-      color: k.c,
-      background: k.c + '1c'
-    }
-  }, React.createElement(Ic, {
-    d: k.icon,
-    s: 16
-  })), React.createElement("div", {
-    style: {
-      minWidth: 0
-    }
-  }, React.createElement("div", {
-    className: "num",
-    style: {
-      fontSize: 19,
-      fontWeight: 700,
-      lineHeight: 1.15,
-      color: MK.INK
-    }
-  }, k.val), React.createElement("div", {
-    style: {
-      fontSize: 10.5,
-      color: MK.MUTED,
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis'
-    }
-  }, k.lbl))), React.createElement("div", {
-    style: {
-      marginTop: 9,
-      height: 4,
-      borderRadius: 3,
-      background: 'rgba(125,145,180,.18)',
-      overflow: 'hidden'
-    }
-  }, React.createElement("div", {
-    style: rrBar(k.pct, k.c)
-  })))));
-}
-function RRTree({
-  divisions,
-  open,
-  setOpen,
-  q,
-  setQ,
-  matchLabel,
-  sel,
-  setSel,
-  selUnit,
-  setSelUnit,
-  inScope,
-  unrostered,
-  bucket
-}) {
-  const expandAll = () => {
-    const o = {};
-    divisions.forEach(d => {
-      o[d.id] = true;
-      d.units.forEach(u => {
-        o[u.dept] = true;
-      });
-    });
-    setOpen(o);
-  };
-  return React.createElement("div", {
-    className: "card",
-    style: {
-      overflow: 'hidden'
-    }
-  }, React.createElement("div", {
-    className: "card-h",
-    style: {
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("h3", null, "Workload tree"), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("button", {
-    className: "btn",
-    style: {
-      padding: '5px 9px',
-      fontSize: 10.5,
-      fontWeight: 700
-    },
-    onClick: expandAll
-  }, "Expand"), React.createElement("button", {
-    className: "btn",
-    style: {
-      padding: '5px 9px',
-      fontSize: 10.5,
-      fontWeight: 700
-    },
-    onClick: () => setOpen({})
-  }, "Collapse")), React.createElement("div", {
-    style: {
-      padding: '9px 15px',
-      borderBottom: '1px solid ' + MK.LINE,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      background: 'rgba(247,251,255,.55)'
-    }
-  }, React.createElement(Ic, {
-    d: I.search,
-    s: 14,
-    c: "#9aa6b4"
-  }), React.createElement("input", {
-    value: q,
-    onChange: e => setQ(e.target.value),
-    placeholder: "Find a nurse or unit\u2026",
-    style: {
-      flex: 1,
-      minWidth: 0,
-      border: 0,
-      background: 'transparent',
-      padding: 0,
-      fontSize: 12
-    }
-  }), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 10.5,
-      color: MK.FAINT
-    }
-  }, matchLabel)), React.createElement("div", {
-    style: {
-      maxHeight: 552,
-      overflowY: 'auto',
-      padding: '8px 10px 10px'
-    }
-  }, divisions.map(d => {
-    const on = !!open[d.id];
-    const c = d.load == null ? MK.FAINT : rrLoadColor(d.load);
-    const dim = !inScope(d.id);
-    return React.createElement("div", {
-      key: d.id,
-      style: {
-        marginBottom: 6,
-        opacity: dim ? .5 : 1
-      }
-    }, React.createElement("div", {
-      onClick: () => setOpen({
-        ...open,
-        [d.id]: !on
-      }),
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        padding: '7px 9px',
-        borderRadius: 10,
-        cursor: 'pointer',
-        background: 'rgba(255,255,255,.6)',
-        border: '1px solid rgba(255,255,255,.9)'
-      }
-    }, React.createElement("span", {
-      style: {
-        flexShrink: 0,
-        color: '#7d8ea8',
-        display: 'grid',
-        transform: on ? 'rotate(90deg)' : 'none',
-        transition: 'transform .18s'
-      }
-    }, React.createElement(Ic, {
-      d: I.chevR,
-      s: 13,
-      sw: 2.4
-    })), React.createElement("span", {
-      style: {
-        width: 8,
-        height: 8,
-        borderRadius: 3,
-        background: d.color,
-        flexShrink: 0,
-        boxShadow: '0 0 0 3px ' + d.color + '26'
-      }
-    }), React.createElement("span", {
-      style: {
-        fontSize: 12.5,
-        fontWeight: 700,
-        flex: 1,
-        minWidth: 0,
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        color: MK.INK
-      }
-    }, d.label), React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 10.5,
-        color: MK.MUTED
-      }
-    }, d.staff, " staff"), React.createElement("span", {
-      className: "num",
-      title: d.undrafted ? d.undrafted + ' unit(s) in this division have no roster for this month' : '',
-      style: {
-        fontSize: 10,
-        fontWeight: 700,
-        color: c,
-        background: c + '1c',
-        padding: '2px 6px',
-        borderRadius: 6
-      }
-    }, d.load == null ? 'not drafted' : d.load + '%')), React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 8,
-        margin: '2px 8px 0 30px',
-        fontSize: 9.6,
-        color: MK.FAINT
-      }
-    }, React.createElement("span", {
-      className: "num"
-    }, d.on, "/", d.need, " on ", bucket.label.toLowerCase()), React.createElement("span", {
-      style: {
-        flex: 1
-      }
-    }), React.createElement("span", {
-      className: "num"
-    }, d.hours, " h total")), React.createElement("div", {
-      style: {
-        height: 3,
-        margin: '3px 8px 0 30px',
-        borderRadius: 2,
-        background: 'rgba(125,145,180,.16)',
-        overflow: 'hidden'
-      }
-    }, React.createElement("div", {
-      style: rrBar(d.load || 0, c)
-    })), on && React.createElement("div", {
-      style: {
-        padding: '5px 0 2px 14px',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
-        borderLeft: '1px dashed rgba(125,145,180,.35)',
-        margin: '5px 0 0 15px'
-      }
-    }, d.units.map(u => {
-      const uOpen = !!open[u.dept] || q && u.hits.length > 0;
-      const uc = rrLoadColor(u.load);
-      const gap = u.on - u.needShift;
-      const tone = gap < 0 ? '#d23a52' : gap > 0 ? '#0090ca' : '#157a43';
-      return React.createElement("div", {
-        key: u.dept
-      }, React.createElement("div", {
-        onClick: () => setSelUnit(u.dept),
-        style: {
-          display: 'flex',
-          alignItems: 'center',
-          gap: 7,
-          padding: '6px 8px',
-          borderRadius: 9,
-          cursor: 'pointer',
-          background: selUnit === u.dept ? 'rgba(0,144,202,.13)' : 'transparent',
-          border: '1px solid ' + (selUnit === u.dept ? 'rgba(0,144,202,.35)' : 'transparent')
-        }
-      }, React.createElement("span", {
-        onClick: e => {
-          e.stopPropagation();
-          setOpen({
-            ...open,
-            [u.dept]: !open[u.dept]
-          });
-        },
-        style: {
-          display: 'grid',
-          placeItems: 'center',
-          width: 16,
-          height: 16,
-          borderRadius: 5,
-          flexShrink: 0,
-          color: '#7d8ea8',
-          transform: uOpen ? 'rotate(90deg)' : 'none',
-          transition: 'transform .18s'
-        }
-      }, React.createElement(Ic, {
-        d: I.chevR,
-        s: 11,
-        sw: 2.6
-      })), React.createElement("span", {
-        style: {
-          fontSize: 12,
-          fontWeight: 600,
-          flex: 1,
-          minWidth: 0,
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          color: MK.INK
-        }
-      }, u.name), React.createElement("span", {
-        className: "num",
-        title: u.drafted ? u.on + ' of ' + u.needShift + ' required on the ' + bucket.label.toLowerCase() + ' shift' : 'No sheet saved for this month',
-        style: {
-          fontSize: 9.5,
-          fontWeight: 700,
-          color: u.drafted ? tone : MK.FAINT,
-          background: (u.drafted ? tone : '#8aa0b8') + '1c',
-          padding: '2px 6px',
-          borderRadius: 6,
-          flexShrink: 0
-        }
-      }, u.drafted ? u.on + '/' + u.needShift : '—'), React.createElement("span", {
-        className: "num",
-        title: u.drafted ? '' : 'No sheet saved for this month',
-        style: {
-          fontSize: 10,
-          color: MK.FAINT
-        }
-      }, u.drafted ? u.load + '%' : 'not drafted')), React.createElement("div", {
-        style: {
-          display: 'flex',
-          gap: 6,
-          margin: '1px 8px 0 34px',
-          fontSize: 9.4,
-          color: MK.FAINT
-        }
-      }, React.createElement("span", {
-        className: "num"
-      }, u.staff, " staff"), React.createElement("span", {
-        style: {
-          flex: 1
-        }
-      }), React.createElement("span", {
-        className: "num"
-      }, u.hours, " h")), React.createElement("div", {
-        style: {
-          height: 3,
-          margin: '3px 8px 0 34px',
-          borderRadius: 2,
-          background: 'rgba(125,145,180,.16)',
-          overflow: 'hidden'
-        }
-      }, React.createElement("div", {
-        style: rrBar(u.load, uc)
-      })), uOpen && React.createElement("div", {
-        style: {
-          padding: '5px 0 6px 12px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4
-        }
-      }, (q ? u.hits : u.rows).length === 0 && React.createElement("div", {
-        style: {
-          fontSize: 10.5,
-          color: MK.FAINT,
-          padding: '2px 6px'
-        }
-      }, q ? 'Nobody in this unit matches.' : 'No nurse on the register is assigned to this unit.'), (q ? u.hits : u.rows).map(s => {
-        const isSel = sel === s.empId;
-        const bc = s.bucket ? R.BUCKET_COLOR[s.bucket] : '#8aa0b8';
-        return React.createElement("div", {
-          key: s.empId,
-          onClick: () => setSel(isSel ? null : s.empId),
-          title: s.name + ' — ' + (s.desig || 'designation not recorded') + ' · ' + s.duty + ' duty days · ' + s.hours + ' h this month' + (s.over ? ' (over the overtime limit)' : ''),
-          style: {
-            display: 'flex',
-            alignItems: 'center',
-            gap: 7,
-            padding: '5px 8px',
-            borderRadius: 9,
-            cursor: 'pointer',
-            border: '1px solid ' + (isSel ? 'rgba(0,144,202,.55)' : 'rgba(125,145,180,.22)'),
-            background: isSel ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.72)'
-          }
-        }, React.createElement(MK.Av, {
-          name: s.name,
-          empId: s.empId,
-          size: 22,
-          radius: 7
-        }), React.createElement("div", {
-          style: {
-            minWidth: 0,
-            flex: 1
-          }
-        }, React.createElement("div", {
-          style: {
-            fontSize: 11.5,
-            fontWeight: 600,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            color: MK.INK
-          }
-        }, s.name), React.createElement("div", {
-          style: {
-            fontSize: 9.5,
-            color: MK.FAINT,
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis'
-          }
-        }, (s.desig || '—') + ' · ' + (s.empIdShown || (s.offRegister ? 'off the register' : 'no employee no.')))), React.createElement("span", {
-          className: "num",
-          style: {
-            fontSize: 9.5,
-            fontWeight: 700,
-            color: bc,
-            background: bc + '1f',
-            padding: '2px 5px',
-            borderRadius: 5,
-            flexShrink: 0
-          }
-        }, s.bucket || '—'), React.createElement("span", {
-          className: "num",
-          style: {
-            fontSize: 9.5,
-            fontWeight: 700,
-            color: s.over ? '#a92c42' : MK.FAINT,
-            flexShrink: 0
-          }
-        }, s.hours, "h"));
-      })));
-    })));
-  })), React.createElement("div", {
-    style: {
-      padding: '12px 15px 14px',
-      borderTop: '1px solid ' + MK.LINE,
-      background: 'linear-gradient(180deg,rgba(58,181,167,.09),rgba(255,255,255,.4))'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      marginBottom: 8
-    }
-  }, React.createElement(Ic, {
-    d: I.user,
-    s: 14,
-    c: "#3ab5a7"
-  }), React.createElement("span", {
-    style: {
-      fontSize: 10,
-      fontWeight: 800,
-      letterSpacing: '.8px',
-      textTransform: 'uppercase',
-      color: '#7d8ea8'
-    }
-  }, "Not on this month's sheet"), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 11,
-      fontWeight: 700,
-      color: '#2c8f83'
-    }
-  }, unrostered.length, " nurses")), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: 5
-    }
-  }, unrostered.slice(0, 60).map(s => React.createElement("span", {
-    key: s.empId,
-    onClick: () => setSel(sel === s.empId ? null : s.empId),
-    title: s.name + ' · ' + (s.desig || '—') + ' · ' + s.unitName + ' · no duty code entered for this month',
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 4,
-      fontSize: 10,
-      fontWeight: 700,
-      padding: '3px 7px',
-      borderRadius: 7,
-      cursor: 'pointer',
-      whiteSpace: 'nowrap',
-      color: '#1f6f66',
-      background: 'rgba(255,255,255,.9)',
-      border: '1px solid ' + (sel === s.empId ? 'rgba(58,181,167,.8)' : 'rgba(58,181,167,.35)')
-    }
-  }, s.name)), unrostered.length === 0 && React.createElement("span", {
-    style: {
-      fontSize: 10.5,
-      color: MK.FAINT
-    }
-  }, "Everyone in scope has duty on their unit's sheet."), unrostered.length > 60 && React.createElement("span", {
-    style: {
-      fontSize: 10.5,
-      color: MK.FAINT
-    }
-  }, "+", unrostered.length - 60, " more"))));
-}
-function RRZone({
-  u,
-  bucket,
-  day,
-  sel,
-  selUnit,
-  setSelUnit,
-  setSel,
-  inScope
-}) {
-  const cov = u.drafted ? u.covByDay[day - 1] : null;
-  const on = cov ? cov[bucket.id] : 0;
-  const need = u.need[bucket.id] || 0;
-  const gap = on - need;
-  const tone = !u.drafted ? '#8aa0b8' : gap < 0 ? '#d23a52' : gap > 0 ? '#0090ca' : '#157a43';
-  const picked = selUnit === u.dept;
-  const nameOf = {};
-  u.rows.forEach(r => {
-    nameOf[r.empId] = r;
-  });
-  const chips = cov ? cov.names[bucket.id].map(id => nameOf[id]).filter(Boolean) : [];
-  return React.createElement("div", {
-    onClick: () => setSelUnit(u.dept),
-    title: u.name + ' — ' + RR_DIV_BY[u.div].label + ' · ' + u.rows.length + ' nurses on the sheet · ' + (u.drafted ? on + ' of ' + (need || '—') + ' on the ' + bucket.label.toLowerCase() + ' shift' : 'no sheet saved for this month'),
-    style: {
-      boxSizing: 'border-box',
-      padding: '11px 12px',
-      borderRadius: 13,
-      cursor: 'pointer',
-      border: '1.5px solid ' + (picked ? tone + '77' : 'rgba(255,255,255,.95)'),
-      background: 'linear-gradient(160deg,rgba(255,255,255,.9),rgba(236,247,255,.6))',
-      boxShadow: picked ? '0 12px 28px rgba(31,59,90,.16)' : '0 6px 18px rgba(31,59,90,.09)',
-      opacity: inScope(u.div) ? 1 : .45,
-      transition: 'box-shadow .2s,border-color .2s'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 7,
-      marginBottom: 7
-    }
-  }, React.createElement("span", {
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      width: 22,
-      height: 22,
-      borderRadius: 7,
-      flexShrink: 0,
-      color: tone,
-      background: tone + '1c'
-    }
-  }, React.createElement(Ic, {
-    d: I[RR_DIV_ICON[u.div]],
-    s: 13
-  })), React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 700,
-      flex: 1,
-      minWidth: 0,
-      whiteSpace: 'nowrap',
-      overflow: 'hidden',
-      textOverflow: 'ellipsis',
-      color: MK.INK
-    }
-  }, u.name), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 12,
-      fontWeight: 700,
-      color: tone,
-      flexShrink: 0
-    }
-  }, u.drafted ? on + '/' + (need || '—') : '—')), React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      marginBottom: 7
-    }
-  }, React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 9.5,
-      color: MK.FAINT
-    }
-  }, u.rows.length, " on sheet"), React.createElement("span", {
-    style: {
-      flex: 1,
-      height: 3,
-      borderRadius: 2,
-      background: 'rgba(125,145,180,.18)',
-      overflow: 'hidden'
-    }
-  }, React.createElement("span", {
-    style: rrBar(need ? on / need * 100 : u.drafted ? 100 : 0, tone)
-  })), React.createElement("span", {
-    style: {
-      fontSize: 9,
-      fontWeight: 800,
-      letterSpacing: '.4px',
-      textTransform: 'uppercase',
-      color: tone,
-      flexShrink: 0
-    }
-  }, !u.drafted ? 'no sheet' : !need ? 'no minimum set' : gap < 0 ? 'short ' + Math.abs(gap) : gap > 0 ? '+' + gap : 'met')), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: 4,
-      minHeight: 24
-    }
-  }, chips.map(s => React.createElement("span", {
-    key: s.empId,
-    onClick: e => {
-      e.stopPropagation();
-      setSel(sel === s.empId ? null : s.empId);
-    },
-    title: s.name + ' · ' + (s.desig || '—') + ' · ' + (u.grid[s.empId] || {})[day] + ' · ' + s.hours + 'h this month',
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 4,
-      fontSize: 10,
-      fontWeight: 700,
-      padding: '3px 7px',
-      borderRadius: 7,
-      cursor: 'pointer',
-      whiteSpace: 'nowrap',
-      color: MK.INK,
-      background: 'rgba(255,255,255,.9)',
-      border: '1px solid ' + (sel === s.empId ? 'rgba(0,144,202,.6)' : 'rgba(125,145,180,.28)')
-    }
-  }, React.createElement("span", {
-    style: {
-      width: 6,
-      height: 6,
-      borderRadius: '50%',
-      background: s.over ? '#d23a52' : R.BUCKET_COLOR[bucket.id],
-      flexShrink: 0
-    }
-  }), rrFirst(s.name))), chips.length === 0 && React.createElement("span", {
-    style: {
-      fontSize: 9.5,
-      color: '#b6c0cc',
-      fontStyle: 'italic',
-      alignSelf: 'center'
-    }
-  }, u.drafted ? 'no cover on this shift' : 'no roster drafted')));
-}
-function RRCorridor({
-  idx,
-  count,
-  selName,
-  bucket,
-  selStaffName
-}) {
-  const left = 'calc(' + (count ? (idx + 0.5) / count * 100 : 50) + '% - 23px)';
-  const scrub = R.BUCKET_COLOR[bucket.id];
-  const limb = name => ({
-    transformBox: 'fill-box',
-    transformOrigin: 'top center',
-    animation: name + ' .7s ease-in-out infinite'
-  });
-  return React.createElement("div", {
-    style: {
-      position: 'relative',
-      height: 96,
-      margin: '2px 0',
-      borderRadius: 12,
-      background: 'linear-gradient(180deg,rgba(255,255,255,.75),rgba(236,247,255,.5))',
-      border: '1px solid rgba(255,255,255,.9)',
-      overflow: 'hidden'
-    }
-  }, React.createElement("svg", {
-    width: "100%",
-    height: "4",
-    viewBox: "0 0 600 4",
-    preserveAspectRatio: "none",
-    style: {
-      position: 'absolute',
-      left: 0,
-      top: 48
-    }
-  }, React.createElement("line", {
-    x1: "0",
-    y1: "2",
-    x2: "600",
-    y2: "2",
-    stroke: "rgba(0,144,202,.35)",
-    strokeWidth: "3",
-    strokeDasharray: "14 10",
-    style: {
-      animation: 'rrDash 3.2s linear infinite'
-    }
-  })), React.createElement("span", {
-    style: {
-      position: 'absolute',
-      left: 14,
-      top: 8,
-      fontSize: 9,
-      fontWeight: 800,
-      letterSpacing: '.9px',
-      textTransform: 'uppercase',
-      color: MK.FAINT
-    }
-  }, "Main corridor \xB7 nurse station"), React.createElement("span", {
-    style: {
-      position: 'absolute',
-      right: 14,
-      bottom: 8,
-      fontSize: 9.5,
-      color: MK.FAINT
-    }
-  }, selStaffName ? 'reading ' + selStaffName + ' — pick a zone to see their unit' : 'pick a zone to read that unit'), React.createElement("div", {
-    style: {
-      position: 'absolute',
-      left,
-      top: 14,
-      transition: 'left 1.1s cubic-bezier(.35,.7,.3,1)',
-      pointerEvents: 'none'
-    }
-  }, React.createElement("div", {
-    style: {
-      position: 'absolute',
-      left: 42,
-      top: -2,
-      whiteSpace: 'nowrap',
-      fontSize: 10,
-      fontWeight: 700,
-      color: MK.INK,
-      background: 'rgba(255,255,255,.95)',
-      border: '1px solid rgba(125,145,180,.3)',
-      borderRadius: 9,
-      padding: '4px 8px',
-      boxShadow: '0 6px 16px rgba(31,59,90,.14)'
-    }
-  }, "Walking to ", selName, " \xB7 ", bucket.label.toLowerCase()), React.createElement("svg", {
-    width: "46",
-    height: "68",
-    viewBox: "0 0 46 68"
-  }, React.createElement("ellipse", {
-    cx: "23",
-    cy: "64",
-    rx: "12",
-    ry: "3",
-    fill: "rgba(22,32,46,.15)"
-  }), React.createElement("g", {
-    style: {
-      animation: 'rrBob .7s ease-in-out infinite'
-    }
-  }, React.createElement("rect", {
-    x: "17.4",
-    y: "40",
-    width: "5.4",
-    height: "21",
-    rx: "2.7",
-    fill: "#2a3f5c",
-    style: limb('rrLegA')
-  }), React.createElement("rect", {
-    x: "23.2",
-    y: "40",
-    width: "5.4",
-    height: "21",
-    rx: "2.7",
-    fill: "#1d2f47",
-    style: limb('rrLegB')
-  }), React.createElement("rect", {
-    x: "8.6",
-    y: "25",
-    width: "5",
-    height: "18",
-    rx: "2.5",
-    fill: scrub,
-    style: limb('rrArmA')
-  }), React.createElement("rect", {
-    x: "32.4",
-    y: "25",
-    width: "5",
-    height: "18",
-    rx: "2.5",
-    fill: scrub,
-    style: limb('rrArmB')
-  }), React.createElement("path", {
-    d: "M13.6 26c0-5.6 4.2-9.4 9.4-9.4s9.4 3.8 9.4 9.4v16H13.6z",
-    fill: scrub
-  }), React.createElement("path", {
-    d: "M19 17.2l4 5.2 4-5.2",
-    fill: "none",
-    stroke: "rgba(255,255,255,.8)",
-    strokeWidth: "1.6",
-    strokeLinejoin: "round"
-  }), React.createElement("rect", {
-    x: "27.4",
-    y: "27",
-    width: "4.2",
-    height: "5.6",
-    rx: "1.2",
-    fill: "rgba(255,255,255,.9)"
-  }), React.createElement("circle", {
-    cx: "23",
-    cy: "11.8",
-    r: "7.4",
-    fill: "#f3cdae"
-  }), React.createElement("path", {
-    d: "M15.6 11.4c0-5.4 3.2-8.4 7.4-8.4s7.4 3 7.4 8.4c-1.6-2.6-3.4-3.6-7.4-3.6s-5.8 1-7.4 3.6z",
-    fill: "#2b2118"
-  }), React.createElement("path", {
-    d: "M16.4 5.6h13.2l-1.6-3.2H18z",
-    fill: "#fff"
-  }), React.createElement("path", {
-    d: "M23 2.9v1.8M22.1 3.8h1.8",
-    stroke: "#d23a52",
-    strokeWidth: "1.2",
-    strokeLinecap: "round"
-  }), React.createElement("circle", {
-    cx: "20.5",
-    cy: "12.2",
-    r: ".95",
-    fill: "#2b2118"
-  }), React.createElement("circle", {
-    cx: "25.5",
-    cy: "12.2",
-    r: ".95",
-    fill: "#2b2118"
-  }), React.createElement("path", {
-    d: "M21.4 15.1c1 .9 2.2.9 3.2 0",
-    stroke: "#b06a4a",
-    strokeWidth: "1",
-    fill: "none",
-    strokeLinecap: "round"
-  })))));
-}
-function RRUnitDetail({
-  u,
-  bucket,
-  day,
-  month,
-  year,
-  setRoute
-}) {
-  if (!u) return null;
-  const cov = u.drafted ? u.covByDay[day - 1] : null;
-  const nameOf = {};
-  u.rows.forEach(r => {
-    nameOf[r.empId] = r;
-  });
-  const dayFindings = u.findings.filter(f => f.day === day);
-  return React.createElement("div", {
-    style: {
-      margin: '12px 16px 0',
-      padding: '12px 14px',
-      borderRadius: 13,
-      background: 'rgba(255,255,255,.7)',
-      border: '1px solid rgba(255,255,255,.95)'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 9,
-      flexWrap: 'wrap',
-      marginBottom: 9
-    }
-  }, React.createElement("span", {
-    style: {
-      width: 8,
-      height: 8,
-      borderRadius: 3,
-      background: RR_DIV_BY[u.div].color,
-      flexShrink: 0
-    }
-  }), React.createElement("div", {
-    style: {
-      minWidth: 0
-    }
-  }, React.createElement("div", {
-    style: {
-      fontSize: 13,
-      fontWeight: 700,
-      color: MK.INK
-    }
-  }, u.name), React.createElement("div", {
-    style: {
-      fontSize: 10.5,
-      color: MK.FAINT
-    }
-  }, RR_DIV_BY[u.div].label, " \xB7 ", R.MONTHS[month], " ", day, ", ", year)), React.createElement("span", {
-    style: rrStatusChip(u.status || 'none')
-  }, (RR_STATUS[u.status] || RR_STATUS.none).label), u.entry && React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 10.5,
-      color: MK.FAINT
-    }
-  }, "v", u.entry.revision || 1), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), setRoute && React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'rosterGrid',
-      dept: u.dept,
-      year,
-      month
-    })
-  }, "Open the grid"), setRoute && u.drafted && React.createElement("button", {
-    className: "btn",
-    onClick: () => setRoute({
-      view: 'rosterPrint',
-      dept: u.dept,
-      year,
-      month
-    })
-  }, "Print sheet")), !u.drafted ? React.createElement("div", {
-    style: {
-      fontSize: 11.5,
-      color: MK.MUTED
-    }
-  }, "No sheet has been saved for ", u.name, " in ", R.MONTHS[month], " ", year, ", so there is nothing to review for this unit yet.") : React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))',
-      gap: 12
-    }
-  }, React.createElement("div", null, React.createElement("div", {
-    style: {
-      fontSize: 10,
-      fontWeight: 800,
-      letterSpacing: '.7px',
-      textTransform: 'uppercase',
-      color: '#7d8ea8',
-      marginBottom: 6
-    }
-  }, "Cover on ", R.MONTHS[month], " ", day), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 5
-    }
-  }, ['M', 'E', 'N', 'G'].map(b => {
-    const meta = R.BUCKETS.find(x => x.id === b);
-    const n = cov[b],
-      need = u.need[b] || 0;
-    const bad = need && n < need;
-    return React.createElement("div", {
-      key: b,
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        fontSize: 11.4
-      }
-    }, React.createElement("span", {
-      style: {
-        minWidth: 58,
-        fontWeight: 700,
-        color: meta.color
-      }
-    }, meta.label), React.createElement("span", {
-      className: "num",
-      style: {
-        fontWeight: 700,
-        color: bad ? '#a92c42' : MK.INK
-      }
-    }, n, need ? ' / ' + need : ''), React.createElement("span", {
-      style: {
-        fontSize: 10.4,
-        color: MK.FAINT
-      }
-    }, need ? bad ? 'below the unit minimum' : 'meets the unit minimum' : 'no minimum set'));
-  }))), React.createElement("div", null, React.createElement("div", {
-    style: {
-      fontSize: 10,
-      fontWeight: 800,
-      letterSpacing: '.7px',
-      textTransform: 'uppercase',
-      color: '#7d8ea8',
-      marginBottom: 6
-    }
-  }, "On ", bucket.label.toLowerCase(), " duty"), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 4,
-      maxHeight: 148,
-      overflowY: 'auto'
-    }
-  }, cov.names[bucket.id].length === 0 && React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: MK.FAINT
-    }
-  }, "Nobody is on the ", bucket.label.toLowerCase(), " shift that day."), cov.names[bucket.id].map(id => {
-    const s = nameOf[id];
-    if (!s) return null;
-    return React.createElement("div", {
-      key: id,
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 7,
-        fontSize: 11.4
-      }
-    }, React.createElement(MK.Av, {
-      name: s.name,
-      empId: s.empId,
-      size: 20,
-      radius: 6
-    }), React.createElement("span", {
-      style: {
-        flex: 1,
-        minWidth: 0,
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        color: MK.INK
-      }
-    }, s.name), React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 10,
-        fontWeight: 700,
-        color: R.BUCKET_COLOR[bucket.id]
-      }
-    }, (u.grid[id] || {})[day]), React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 10,
-        color: s.over ? '#a92c42' : MK.FAINT
-      }
-    }, s.hours, "h"));
-  }))), React.createElement("div", null, React.createElement("div", {
-    style: {
-      fontSize: 10,
-      fontWeight: 800,
-      letterSpacing: '.7px',
-      textTransform: 'uppercase',
-      color: '#7d8ea8',
-      marginBottom: 6
-    }
-  }, "Rule findings"), React.createElement("div", {
-    style: {
-      fontSize: 11.4,
-      color: MK.MUTED,
-      marginBottom: 5
-    }
-  }, React.createElement("span", {
-    className: "num",
-    style: {
-      fontWeight: 700,
-      color: u.findings.length ? '#b5670a' : '#157a43'
-    }
-  }, u.findings.length), " this month \xB7 ", React.createElement("span", {
-    className: "num"
-  }, dayFindings.length), " on this day"), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 4,
-      maxHeight: 130,
-      overflowY: 'auto'
-    }
-  }, (dayFindings.length ? dayFindings : u.findings.slice(0, 6)).map((f, i) => React.createElement("div", {
-    key: i,
-    style: {
-      display: 'flex',
-      gap: 7,
-      alignItems: 'baseline',
-      fontSize: 11
-    }
-  }, React.createElement("span", {
-    className: "tag num",
-    style: {
-      minWidth: 38,
-      textAlign: 'center'
-    }
-  }, R.MONTHS[month].slice(0, 3), " ", f.day), React.createElement("span", {
-    style: {
-      color: f.severity === 'high' ? '#d23a52' : f.severity === 'medium' ? '#e07a2a' : MK.MUTED
-    }
-  }, f.text))), u.findings.length === 0 && React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: '#157a43'
-    }
-  }, "Every rule this unit set passes.")))));
-}
-function RRDiagram({
-  units,
-  scoped,
-  bucket,
-  setBucket,
-  day,
-  setDay,
-  days,
-  month,
-  year,
-  sel,
-  setSel,
-  selUnit,
-  setSelUnit,
-  inScope,
-  setRoute
-}) {
-  const half = Math.ceil(units.length / 2);
-  const top = units.slice(0, half),
-    bottom = units.slice(half);
-  const idx = Math.max(0, units.findIndex(u => u.dept === selUnit));
-  const selected = units.find(u => u.dept === selUnit) || units[0] || null;
-  const selStaff = sel ? units.reduce((a, u) => a || u.rows.find(r => r.empId === sel), null) || null : null;
-  const lanes = R.BUCKETS.filter(b => b.id !== 'O').map(b => {
-    const people = [];
-    let need = 0;
-    let notDrafted = 0;
-    scoped.forEach(u => {
-      if (!u.drafted) {
-        notDrafted++;
-        return;
-      }
-      need += u.need[b.id] || 0;
-      const cov = u.covByDay[day - 1];
-      cov.names[b.id].forEach(id => {
-        const s = u.rows.find(r => r.empId === id);
-        if (s) people.push({
-          ...s,
-          unit: u.name
-        });
-      });
-    });
-    return {
-      b,
-      people,
-      need,
-      notDrafted
-    };
-  });
-  const grid = list => React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))',
-      gap: 10
-    }
-  }, list.map(u => React.createElement(RRZone, {
-    key: u.dept,
-    u: u,
-    bucket: bucket,
-    day: day,
-    sel: sel,
-    setSel: setSel,
-    selUnit: selUnit,
-    setSelUnit: setSelUnit,
-    inScope: inScope
-  })));
-  return React.createElement("div", {
-    className: "card",
-    style: {
-      overflow: 'hidden'
-    }
-  }, React.createElement("div", {
-    className: "card-h",
-    style: {
-      flexWrap: 'wrap'
-    }
-  }, React.createElement("h3", null, "Hospital environment"), React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: MK.FAINT
-    }
-  }, "every unit as a zone \xB7 click a zone to read it \xB7 the counts are that unit's own minimum"), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("label", {
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 6,
-      fontSize: 11,
-      color: MK.MUTED
-    }
-  }, "Day", React.createElement("select", {
-    value: day,
-    onChange: e => setDay(Number(e.target.value)),
-    style: {
-      padding: '4px 7px'
-    }
-  }, Array.from({
-    length: days
-  }, (_, i) => i + 1).map(d => React.createElement("option", {
-    key: d,
-    value: d
-  }, d)))), React.createElement("div", {
-    style: {
-      display: 'inline-flex',
-      background: 'rgba(255,255,255,.6)',
-      border: '1px solid rgba(255,255,255,.95)',
-      borderRadius: 10,
-      padding: 3,
-      gap: 2
-    }
-  }, R.BUCKETS.filter(b => b.id !== 'O').map(b => React.createElement("button", {
-    key: b.id,
-    onClick: () => setBucket(b.id),
-    title: b.label + ' duty codes',
-    style: {
-      border: 0,
-      borderRadius: 8,
-      padding: '6px 12px',
-      fontSize: 11.5,
-      fontWeight: 700,
-      cursor: 'pointer',
-      fontFamily: 'inherit',
-      color: bucket.id === b.id ? '#fff' : MK.MUTED,
-      background: bucket.id === b.id ? 'linear-gradient(160deg,' + b.color + ',' + b.color + 'cc)' : 'transparent'
-    }
-  }, b.label)))), React.createElement("div", {
-    style: {
-      position: 'relative',
-      padding: 16,
-      background: 'linear-gradient(180deg,rgba(233,243,252,.55),rgba(255,255,255,.3))'
-    }
-  }, React.createElement("div", {
-    style: {
-      position: 'absolute',
-      inset: 16,
-      borderRadius: 14,
-      border: '1px dashed rgba(125,145,180,.35)',
-      pointerEvents: 'none'
-    }
-  }), React.createElement("div", {
-    style: {
-      position: 'relative',
-      display: 'flex',
-      flexDirection: 'column',
-      gap: 10
-    }
-  }, grid(top), React.createElement(RRCorridor, {
-    idx: idx,
-    count: units.length,
-    selName: selected ? selected.name : '—',
-    bucket: bucket,
-    selStaffName: selStaff ? rrFirst(selStaff.name) : ''
-  }), grid(bottom))), React.createElement(RRUnitDetail, {
-    u: selected,
-    bucket: bucket,
-    day: day,
-    month: month,
-    year: year,
-    setRoute: setRoute
-  }), React.createElement("div", {
-    style: {
-      padding: '12px 16px 14px',
-      marginTop: 12,
-      borderTop: '1px solid ' + MK.LINE,
-      background: 'rgba(247,251,255,.5)'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 9,
-      marginBottom: 9
-    }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 10,
-      fontWeight: 800,
-      letterSpacing: '.8px',
-      textTransform: 'uppercase',
-      color: '#7d8ea8'
-    }
-  }, "Shift belt"), React.createElement("span", {
-    style: {
-      fontSize: 10.5,
-      color: MK.FAINT
-    }
-  }, "click a lane to read that shift \xB7 edit shifts on the unit's grid")), React.createElement("div", {
-    style: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit,minmax(230px,1fr))',
-      gap: 10
-    }
-  }, lanes.map(l => React.createElement("div", {
-    key: l.b.id,
-    onClick: () => setBucket(l.b.id),
-    style: {
-      boxSizing: 'border-box',
-      padding: '11px 12px',
-      borderRadius: 12,
-      cursor: 'pointer',
-      border: '1.5px solid ' + (bucket.id === l.b.id ? l.b.color + '66' : 'rgba(255,255,255,.95)'),
-      background: 'linear-gradient(160deg,rgba(255,255,255,.88),rgba(236,247,255,.55))'
-    }
-  }, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      marginBottom: 8
-    }
-  }, React.createElement("span", {
-    style: {
-      width: 9,
-      height: 9,
-      borderRadius: '50%',
-      background: l.b.color,
-      flexShrink: 0,
-      boxShadow: '0 0 0 3px ' + l.b.color + '2b'
-    }
-  }), React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 700,
-      color: MK.INK
-    }
-  }, l.b.label, " shift"), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 11.5,
-      fontWeight: 700,
-      color: l.need && l.people.length < l.need ? '#a92c42' : '#157a43'
-    }
-  }, l.people.length, "/", l.need || '—')), React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: 4
-    }
-  }, l.people.slice(0, 40).map(s => React.createElement("span", {
-    key: s.unit + s.empId,
-    title: s.name + ' · ' + s.unit,
-    style: {
-      display: 'inline-flex',
-      alignItems: 'center',
-      fontSize: 10,
-      fontWeight: 700,
-      padding: '3px 7px',
-      borderRadius: 7,
-      whiteSpace: 'nowrap',
-      color: MK.INK,
-      background: 'rgba(255,255,255,.85)',
-      border: '1px solid rgba(125,145,180,.26)'
-    }
-  }, rrFirst(s.name))), l.people.length === 0 && React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: MK.FAINT
-    }
-  }, "nobody rostered on this shift that day"), l.people.length > 40 && React.createElement("span", {
-    style: {
-      fontSize: 10,
-      color: MK.FAINT
-    }
-  }, "+", l.people.length - 40)))))));
-}
-const RR_HEAD = {
-  background: 'linear-gradient(180deg,#f6fafe,#e9f1fa)',
-  padding: '8px 12px',
-  fontSize: 9.5,
+const riPerson = p => p && p.name ? p.name : null;
+const riSentShown = st => st === 'pending_manager' || st === 'pending_cns' || st === 'approved' || st === 'returned';
+const RI_TH = {
+  textAlign: 'left',
+  padding: '9px 12px',
+  fontSize: 10,
+  fontWeight: 800,
   letterSpacing: '.5px',
   textTransform: 'uppercase',
   color: '#7d8ea8',
-  borderBottom: '1px solid rgba(125,145,180,.28)',
-  whiteSpace: 'nowrap'
+  borderBottom: '1px solid rgba(125,145,180,.25)',
+  whiteSpace: 'nowrap',
+  background: 'rgba(242,246,251,.7)'
 };
-const RR_CELL = {
-  padding: '8px 10px',
-  borderBottom: '1px solid rgba(125,145,180,.14)'
+const RI_TD = {
+  padding: '9px 12px',
+  fontSize: 12,
+  color: '#3c4858',
+  borderBottom: '1px solid rgba(125,145,180,.14)',
+  verticalAlign: 'middle'
 };
-function RRQueue({
-  units,
-  bucket,
-  inScope,
-  selUnit,
-  setSelUnit,
-  onDecide,
-  busy,
-  canDecide,
-  month,
-  year
+function RiKpi({
+  label,
+  value,
+  color,
+  on,
+  onClick
 }) {
-  const btn = (active, tone) => ({
-    border: '1px solid ' + (active ? tone + '59' : 'rgba(125,145,180,.3)'),
-    background: active ? tone + '29' : 'rgba(255,255,255,.8)',
-    color: active ? tone : MK.MUTED,
-    padding: '5px 10px',
-    borderRadius: 8,
-    fontSize: 10.5,
-    fontWeight: 700,
-    cursor: 'pointer',
-    fontFamily: 'inherit'
-  });
-  return React.createElement("div", {
-    className: "card",
+  return React.createElement("button", {
+    type: "button",
+    onClick: onClick,
     style: {
-      overflow: 'hidden'
+      textAlign: 'left',
+      fontFamily: 'inherit',
+      cursor: 'pointer',
+      border: '1px solid ' + (on ? color + '66' : 'rgba(255,255,255,.92)'),
+      background: on ? color + '12' : 'linear-gradient(152deg,rgba(255,255,255,.8),rgba(236,247,255,.5))',
+      borderRadius: 14,
+      padding: '11px 14px',
+      boxShadow: '0 8px 24px rgba(31,59,90,.08)'
     }
   }, React.createElement("div", {
-    className: "card-h",
     style: {
-      flexWrap: 'wrap'
+      fontFamily: "'IBM Plex Mono',monospace",
+      fontSize: 20,
+      fontWeight: 700,
+      color: value ? color : '#9aa6b4',
+      lineHeight: 1.1
     }
-  }, React.createElement("h3", null, "Unit review queue"), React.createElement("span", {
+  }, value), React.createElement("div", {
     style: {
       fontSize: 11,
-      color: MK.FAINT
+      color: '#6c7a8c',
+      marginTop: 2
     }
-  }, "coverage read for the ", bucket.label.toLowerCase(), " shift \xB7 averaged over ", R.MONTHS[month], " ", year)), React.createElement("div", {
-    style: {
-      overflowX: 'auto'
-    }
-  }, React.createElement("table", {
-    style: {
-      borderCollapse: 'collapse',
-      width: '100%',
-      fontSize: 11.5,
-      minWidth: 720
-    }
-  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
-    style: {
-      ...RR_HEAD,
-      textAlign: 'left'
-    }
-  }, "Unit"), React.createElement("th", {
-    style: {
-      ...RR_HEAD,
-      textAlign: 'center'
-    }
-  }, "Staff"), React.createElement("th", {
-    style: {
-      ...RR_HEAD,
-      textAlign: 'left'
-    }
-  }, "Avg workload"), React.createElement("th", {
-    style: {
-      ...RR_HEAD,
-      textAlign: 'center'
-    }
-  }, "Cover M \xB7 E \xB7 N"), React.createElement("th", {
-    style: {
-      ...RR_HEAD,
-      textAlign: 'center'
-    }
-  }, "Overtime"), React.createElement("th", {
-    style: {
-      ...RR_HEAD,
-      textAlign: 'center'
-    }
-  }, "Status"), React.createElement("th", {
-    style: {
-      ...RR_HEAD,
-      textAlign: 'right'
-    }
-  }, "Decision"))), React.createElement("tbody", null, units.map(u => {
-    const c = rrLoadColor(u.load);
-    return React.createElement("tr", {
-      key: u.dept,
-      onClick: () => setSelUnit(u.dept),
-      style: {
-        opacity: inScope(u.div) ? 1 : .45,
-        background: selUnit === u.dept ? 'rgba(0,144,202,.07)' : 'transparent',
-        cursor: 'pointer'
-      }
-    }, React.createElement("td", {
-      style: {
-        ...RR_CELL,
-        padding: '8px 12px'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8
-      }
-    }, React.createElement("span", {
-      style: {
-        width: 8,
-        height: 8,
-        borderRadius: 3,
-        background: RR_DIV_BY[u.div].color,
-        flexShrink: 0
-      }
-    }), React.createElement("div", {
-      style: {
-        minWidth: 0
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 12,
-        fontWeight: 600,
-        whiteSpace: 'nowrap',
-        color: MK.INK
-      }
-    }, u.name), React.createElement("div", {
-      style: {
-        fontSize: 9.5,
-        color: MK.FAINT,
-        whiteSpace: 'nowrap'
-      }
-    }, RR_DIV_BY[u.div].label)))), React.createElement("td", {
-      className: "num",
-      style: {
-        ...RR_CELL,
-        textAlign: 'center'
-      }
-    }, u.rows.length), React.createElement("td", {
-      style: RR_CELL
-    }, u.drafted ? React.createElement("div", {
-      style: {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6
-      },
-      title: 'Mean of ' + u.hours + ' rostered hours over ' + u.rows.length + ' staff, against a full month of ' + u.std + ' h'
-    }, React.createElement("span", {
-      style: {
-        flex: 1,
-        height: 5,
-        borderRadius: 3,
-        background: 'rgba(125,145,180,.18)',
-        overflow: 'hidden',
-        minWidth: 54
-      }
-    }, React.createElement("span", {
-      style: rrBar(u.load, c)
-    })), React.createElement("span", {
-      className: "num",
-      style: {
-        fontSize: 10.5,
-        fontWeight: 700,
-        color: c,
-        minWidth: 30
-      }
-    }, u.load, "%")) : React.createElement("span", {
-      style: {
-        fontSize: 10.5,
-        color: MK.FAINT
-      }
-    }, "\u2014")), React.createElement("td", {
-      style: RR_CELL
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 4,
-        justifyContent: 'center'
-      }
-    }, ['M', 'E', 'N'].map(b => {
-      const need = u.need[b] || 0;
-      const ok = u.drafted && (!need || u.shortDays[b] === 0);
-      return React.createElement("span", {
-        key: b,
-        className: "num",
-        title: u.drafted ? R.BUCKETS.find(x => x.id === b).label + ': ' + rr1(u.avgCov[b]) + ' staff a day on average, minimum ' + (need || 'not set') + ', ' + u.shortDays[b] + ' day(s) below it' : 'No sheet saved for this month',
-        style: {
-          display: 'inline-grid',
-          placeItems: 'center',
-          minWidth: 30,
-          height: 22,
-          padding: '0 4px',
-          borderRadius: 6,
-          fontSize: 10.5,
-          fontWeight: 700,
-          color: !u.drafted ? MK.FAINT : ok ? '#157a43' : '#a92c42',
-          background: !u.drafted ? 'rgba(125,145,180,.12)' : ok ? 'rgba(21,122,67,.13)' : 'rgba(210,58,82,.14)',
-          border: '1px solid ' + (!u.drafted ? 'rgba(125,145,180,.2)' : ok ? 'rgba(21,122,67,.25)' : 'rgba(210,58,82,.3)')
-        }
-      }, u.drafted ? rr1(u.avgCov[b]) : '—');
-    }))), React.createElement("td", {
-      style: {
-        ...RR_CELL,
-        textAlign: 'center'
-      }
-    }, React.createElement("span", {
-      style: {
-        fontSize: 10.5,
-        fontWeight: 700,
-        color: u.overCount ? '#b5670a' : MK.FAINT,
-        background: u.overCount ? 'rgba(224,138,30,.14)' : 'transparent',
-        padding: u.overCount ? '2px 7px' : 0,
-        borderRadius: 6
-      }
-    }, !u.drafted ? '—' : u.overCount ? u.overCount + ' flagged' : 'clear')), React.createElement("td", {
-      style: {
-        ...RR_CELL,
-        textAlign: 'center'
-      }
-    }, React.createElement("span", {
-      style: rrStatusChip(u.status || 'none')
-    }, (RR_STATUS[u.status] || RR_STATUS.none).label)), React.createElement("td", {
-      style: {
-        ...RR_CELL,
-        padding: '8px 12px'
-      }
-    }, React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 5,
-        justifyContent: 'flex-end'
-      }
-    }, React.createElement("button", {
-      disabled: !u.drafted || !canDecide || busy,
-      style: btn(u.status === 'approved', '#157a43'),
-      title: !u.drafted ? 'Nothing has been saved for this unit yet' : canDecide ? 'Approve and lock this sheet' : 'Approving a roster needs administrator access',
-      onClick: e => {
-        e.stopPropagation();
-        onDecide(u, 'approved');
-      }
-    }, "Approve"), React.createElement("button", {
-      disabled: !u.drafted || !canDecide || busy,
-      style: btn(u.status === 'draft' && !!u.entry, '#a92c42'),
-      title: !u.drafted ? 'Nothing has been saved for this unit yet' : 'Send the sheet back to the nurse in-charge as a draft',
-      onClick: e => {
-        e.stopPropagation();
-        onDecide(u, 'draft');
-      }
-    }, "Return"))));
-  }), units.length === 0 && React.createElement("tr", null, React.createElement("td", {
-    colSpan: "7",
-    style: {
-      ...RR_CELL,
-      textAlign: 'center',
-      color: MK.MUTED,
-      padding: 22
-    }
-  }, "No units to review."))))));
+  }, label));
 }
-function rrAuditEntries(units) {
-  const out = [];
-  units.forEach(u => {
-    const e = u.entry;
-    if (!e) return;
-    if (e.createdAt) out.push({
-      ts: e.createdAt,
-      kind: 'in',
-      text: u.name + ' roster created',
-      meta: (e.createdBy || 'unknown') + ' · ' + rrWhen(e.createdAt)
-    });
-    if (e.updatedAt) out.push({
-      ts: e.updatedAt,
-      kind: 'in',
-      text: u.name + ' roster last saved — revision v' + (e.revision || 1),
-      meta: (e.updatedBy || 'unknown') + ' · ' + rrWhen(e.updatedAt)
-    });
-    if (e.status === 'approved' && (e.approvedAt || e.statusAt)) {
-      const ts = e.approvedAt || e.statusAt;
-      out.push({
-        ts,
-        kind: 'ok',
-        text: u.name + ' roster approved',
-        meta: (e.approvedBy || e.statusBy || 'unknown') + ' · ' + rrWhen(ts)
-      });
-    } else if (e.statusAt) {
-      out.push({
-        ts: e.statusAt,
-        kind: e.status === 'draft' ? 'warn' : 'in',
-        text: u.name + (e.status === 'draft' ? ' roster reopened as a draft' : ' roster submitted for review'),
-        meta: (e.statusBy || 'unknown') + ' · ' + rrWhen(e.statusAt)
-      });
-    }
-  });
-  return out.sort((a, b) => b.ts - a.ts);
-}
-function RRAudit({
-  entries,
-  month,
-  year
-}) {
-  return React.createElement("div", {
-    className: "card",
-    style: {
-      overflow: 'hidden'
-    }
-  }, React.createElement("div", {
-    className: "card-h"
-  }, React.createElement("h3", null, "Audit trail"), React.createElement("span", {
-    style: {
-      flex: 1
-    }
-  }), React.createElement("span", {
-    className: "num",
-    style: {
-      fontSize: 10.5,
-      color: MK.FAINT
-    }
-  }, entries.length, " entries")), React.createElement("div", {
-    style: {
-      padding: '10px 15px',
-      borderBottom: '1px solid ' + MK.LINE,
-      background: 'rgba(224,138,30,.08)',
-      fontSize: 10.8,
-      color: '#8a5a12',
-      lineHeight: 1.5
-    }
-  }, React.createElement("strong", null, "Not a change log."), " The roster store records only the last writer on each sheet \u2014 created, last saved, and the last status change \u2014 so those are the stamps listed here. Individual shift edits are not recorded anywhere, so a full per-change history cannot be shown."), React.createElement("div", {
-    style: {
-      maxHeight: 300,
-      overflowY: 'auto'
-    }
-  }, entries.length === 0 && React.createElement("div", {
-    style: {
-      padding: 20,
-      textAlign: 'center',
-      fontSize: 11.5,
-      color: MK.MUTED
-    }
-  }, "No sheet has been saved for ", R.MONTHS[month], " ", year, ", so there are no stamps to show."), entries.map((e, i) => {
-    const c = e.kind === 'warn' ? '#d23a52' : e.kind === 'in' ? '#0090ca' : '#157a43';
-    const icon = e.kind === 'warn' ? I.edit : e.kind === 'in' ? I.download : I.check;
-    return React.createElement("div", {
-      key: i,
-      style: {
-        display: 'flex',
-        gap: 10,
-        padding: '10px 15px',
-        borderBottom: '1px solid rgba(125,145,180,.14)',
-        animation: i === 0 ? 'rrPop .28s cubic-bezier(.2,.7,.3,1) both' : 'none'
-      }
-    }, React.createElement("span", {
-      style: {
-        display: 'grid',
-        placeItems: 'center',
-        width: 24,
-        height: 24,
-        borderRadius: 8,
-        flexShrink: 0,
-        color: c,
-        background: c + '1c'
-      }
-    }, React.createElement(Ic, {
-      d: icon,
-      s: 12,
-      sw: 2.2
-    })), React.createElement("div", {
-      style: {
-        minWidth: 0,
-        flex: 1
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        fontWeight: 600,
-        lineHeight: 1.4,
-        color: MK.INK
-      }
-    }, e.text), React.createElement("div", {
-      style: {
-        fontSize: 9.5,
-        color: MK.FAINT,
-        marginTop: 2
-      }
-    }, e.meta)));
-  })));
-}
-function RosterReviewFull({
-  dept,
+function RiPreview({
+  row,
   year,
   month,
+  staff,
+  onBack,
+  onDecide,
+  busy,
   setRoute
 }) {
-  const staffStore = window.useStaffStore();
-  const index = useRosterIndex();
-  const now = new Date();
-  useEffect(() => {
-    rrInjectCss();
-  }, []);
-  const [y, setY] = useState(Number(year) || now.getFullYear());
-  const [m, setM] = useState(Number.isInteger(Number(month)) ? Number(month) : now.getMonth());
-  const [scope, setScope] = useState('All divisions');
-  const [bucketId, setBucketId] = useState('M');
-  const [dayRaw, setDay] = useState(() => now.getFullYear() === (Number(year) || now.getFullYear()) ? now.getDate() : 1);
-  const [open, setOpen] = useState({
-    cc: true,
-    mn: true,
-    ac: true,
-    other: true
+  const K = window.UNICO_ROSTER_KIT;
+  const [doc, setDoc] = useState(null);
+  const [extra, setExtra] = useState({
+    signers: {},
+    can: null
   });
-  const [q, setQ] = useState('');
-  const [sel, setSel] = useState(null);
-  const [selUnit, setSelUnit] = useState(dept || null);
-  const [busy, setBusy] = useState(false);
-  const days = R.daysIn(y, m);
-  const day = Math.min(Math.max(1, dayRaw), days);
-  const jumped = useRef(false);
-  useEffect(() => {
-    if (jumped.current || index.loading || year != null) return;
-    const first = (index.rosters || [])[0];
-    if (first) {
-      setY(first.year);
-      setM(first.month);
-    }
-    jumped.current = true;
-  }, [index.loading, index.rosters, year]);
-  const {
-    sheets,
-    loading
-  } = useMonthSheets(index, y, m);
-  const entries = useMemo(() => {
-    const map = {};
-    (index.rosters || []).forEach(r => {
-      if (r.year === y && r.month === m) map[r.dept] = r;
-    });
-    return map;
-  }, [index.rosters, y, m]);
-  const staffByDept = useMemo(() => {
-    const map = {};
-    (staffStore.staff || []).filter(e => e.is_active !== false && !e.former).forEach(e => {
-      const d = e.current_department || 'Unassigned';
-      (map[d] = map[d] || []).push({
-        empId: rrKey(e),
-        empIdShown: e.emp_id || '',
-        name: e.name,
-        desig: e.designation,
-        role: e.role
+  const [err, setErr] = useState('');
+  const dept = row.sheetDept || row.deptName;
+  const load = useCallback(() => K.api.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
+    if (r && r.ok) {
+      setDoc(r.roster || null);
+      setExtra({
+        signers: r.signers || {},
+        can: r.roster && r.roster.can || r.can || null
       });
-    });
-    Object.keys(map).forEach(d => map[d].sort((a, b) => String(a.name).localeCompare(String(b.name))));
-    return map;
-  }, [staffStore.staff]);
-  const stdMonth = 8 * Math.max(1, days - Math.ceil(days / 7));
-  const [otLimit, setOtLimit] = useState(stdMonth);
-  const [otRaw, setOtRaw] = useState(String(stdMonth));
-  const otTouched = useRef(false);
+      setErr('');
+    } else setErr(r && r.error || 'Could not load the sheet.');
+  }).catch(() => setErr('Could not reach the server.')), [dept, year, month]);
   useEffect(() => {
-    if (!otTouched.current) setOtLimit(stdMonth);
-  }, [stdMonth]);
-  const setOt = v => {
-    otTouched.current = true;
-    setOtLimit(v);
-  };
-  const units = useMemo(() => {
-    const names = {};
-    Object.keys(staffByDept).forEach(d => {
-      names[d] = 1;
+    load();
+  }, [load]);
+  const view = useMemo(() => doc ? K.rowsFrom(doc, staff, dept) : {
+    rows: [],
+    grid: {}
+  }, [doc, staff, dept]);
+  const ev = useMemo(() => doc ? K.findingsOf(view.grid, view.rows, year, month, doc.rules) : null, [doc, view, year, month]);
+  const stats = useMemo(() => {
+    const days = R.daysIn(year, month);
+    let hours = 0,
+      shifts = 0,
+      over = 0;
+    view.rows.forEach(x => {
+      const t = R.totalsFor(view.grid[x.empId] || {}, days);
+      hours += t.hours;
+      shifts += t.G + t.M + t.E + t.N;
+      if (t.hours > RI_OVERTIME_H) over++;
     });
-    Object.keys(entries).forEach(d => {
-      names[d] = 1;
-    });
-    Object.keys(sheets).forEach(d => {
-      names[d] = 1;
-    });
-    return Object.keys(names).map(d => rrUnitModel(d, entries[d], sheets[d], staffByDept[d] || [], y, m, otLimit)).sort((a, b) => RR_DIVS.findIndex(x => x.id === a.div) - RR_DIVS.findIndex(x => x.id === b.div) || String(a.name).localeCompare(String(b.name)));
-  }, [staffByDept, entries, sheets, y, m, otLimit]);
-  const bucket = R.BUCKETS.find(b => b.id === bucketId) || R.BUCKETS[1];
-  const inScope = useCallback(divId => scope === 'All divisions' || (RR_DIV_BY[divId] || {}).label === scope, [scope]);
-  const scoped = useMemo(() => units.filter(u => inScope(u.div)), [units, inScope]);
-  useEffect(() => {
-    if (!units.length) return;
-    if (!selUnit || !units.some(u => u.dept === selUnit)) setSelUnit(units[0].dept);
-  }, [units, selUnit]);
-  const staffTotal = scoped.reduce((a, u) => a + u.rows.length, 0);
-  const rosteredTotal = scoped.reduce((a, u) => a + u.rostered.length, 0);
-  const overTotal = scoped.reduce((a, u) => a + u.overCount, 0);
-  const draftedUnits = scoped.filter(u => u.drafted);
-  const approvedUnits = scoped.filter(u => u.status === 'approved');
-  const toApprove = draftedUnits.filter(u => u.status !== 'approved' && u.entry && u.entry.id);
-  const pending = toApprove.length;
-  const gapUnits = draftedUnits.filter(u => u.need[bucket.id] && u.shortDays[bucket.id] > 0);
-  const unrostered = useMemo(() => {
-    const out = [];
-    scoped.forEach(u => u.rows.forEach(s => {
-      if (!s.duty) out.push({
-        ...s,
-        unitName: u.name
-      });
-    }));
-    return out.sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }, [scoped]);
-  const tiles = [{
-    lbl: 'Staff in review',
-    val: String(staffTotal),
-    icon: I.user,
-    c: '#0090ca',
-    pct: 100,
-    why: 'Every active nurse on the register whose department is one of the units in scope, plus anyone still on a saved sheet who has since left the register.'
-  }, {
-    lbl: 'Rostered this month',
-    val: String(rosteredTotal),
-    icon: I.check,
-    c: '#157a43',
-    pct: staffTotal ? rosteredTotal / staffTotal * 100 : 0,
-    why: 'Staff with at least one duty code on their unit\'s sheet for this month. (The mockup counted "deployed to a unit"; every staff record already carries a department, so this counts the roster instead.)'
-  }, {
-    lbl: 'Not on any sheet',
-    val: String(unrostered.length),
-    icon: I.plus,
-    c: '#3ab5a7',
-    pct: staffTotal ? unrostered.length / staffTotal * 100 : 0,
-    why: 'Staff in scope with no duty code at all this month. There is no float pool in this system, so this is the honest reading of "who is spare".'
-  }, {
-    lbl: bucket.label + ' gaps',
-    val: String(gapUnits.length),
-    icon: I.pulse,
-    c: gapUnits.length ? '#d23a52' : '#157a43',
-    pct: draftedUnits.length ? gapUnits.length / draftedUnits.length * 100 : 0,
-    why: 'Units with a saved sheet that fall below their OWN minimum on the ' + bucket.label.toLowerCase() + ' shift on at least one day of the month.'
-  }, {
-    lbl: 'Over ' + otLimit + ' h this month',
-    val: String(overTotal),
-    icon: I.cal,
-    c: '#e08a1e',
-    pct: staffTotal ? overTotal / staffTotal * 100 : 0,
-    why: 'Paid hours from the shift legend, summed over the month per person, compared with the overtime line in the header.'
-  }, {
-    lbl: 'Units approved',
-    val: approvedUnits.length + '/' + scoped.length,
-    icon: I.check,
-    c: '#6a52d4',
-    pct: scoped.length ? approvedUnits.length / scoped.length * 100 : 0,
-    why: 'Sheets whose stored status is "approved", out of every unit in scope (drafted or not).'
-  }];
-  const query = q.trim().toLowerCase();
-  const divisions = useMemo(() => RR_DIVS.map(d => {
-    const list = units.filter(u => u.div === d.id).map(u => ({
-      ...u,
-      needShift: u.need[bucket.id] || 0,
-      on: u.drafted ? u.covByDay[day - 1][bucket.id] : 0,
-      hits: query ? u.rows.filter(s => (s.name + ' ' + (s.desig || '')).toLowerCase().indexOf(query) >= 0) : [],
-      staff: u.rows.length
-    }));
-    const staff = list.reduce((a, u) => a + u.rows.length, 0);
-    const hours = list.reduce((a, u) => a + u.hours, 0);
-    const drafted = list.filter(u => u.drafted);
-    const undrafted = list.length - drafted.length;
-    const stdSum = drafted.reduce((a, u) => a + u.std * u.rows.length, 0);
     return {
-      ...d,
-      units: list,
-      staff,
       hours,
-      undrafted,
-      load: stdSum ? Math.round(hours / stdSum * 100) : null,
-      on: drafted.reduce((a, u) => a + u.on, 0),
-      need: drafted.reduce((a, u) => a + u.needShift, 0)
+      shifts,
+      over
     };
-  }).filter(d => d.units.length), [units, bucket, day, query]);
-  const matchCount = query ? units.reduce((a, u) => a + u.rows.filter(s => (s.name + ' ' + (s.desig || '')).toLowerCase().indexOf(query) >= 0).length, 0) : 0;
-  const matchLabel = query ? matchCount + ' match' + (matchCount === 1 ? '' : 'es') : units.reduce((a, u) => a + u.rows.length, 0) + ' staff';
-  const decide = (u, status) => {
-    if (!u.entry || !u.entry.id) return;
-    setBusy(true);
-    rrApi.post('/api/rosters/' + encodeURIComponent(u.entry.id) + '/status', {
-      status
-    }).then(r => {
-      if (r && r.ok) {
-        rrToast(u.name + (status === 'approved' ? ' approved' : ' returned to the nurse in-charge'), 'success');
-        index.reload();
-      } else rrToast(r && r.error || 'Could not change the status.', 'error');
-    }).catch(() => rrToast('Could not reach the server.', 'error')).then(() => setBusy(false));
+  }, [view, year, month]);
+  const decide = action => onDecide({
+    ...row,
+    id: doc && doc.id || row.id
+  }, action).then(r => {
+    if (r && r.ok) load();
+  });
+  const period = R.MONTHS[month] + ' ' + year;
+  const card = {
+    background: 'linear-gradient(152deg,rgba(255,255,255,.82),rgba(236,247,255,.5))',
+    border: '1px solid rgba(255,255,255,.92)',
+    borderRadius: 16,
+    boxShadow: '0 12px 34px rgba(31,59,90,.11)',
+    padding: '14px 16px'
   };
-  const approveAll = () => {
-    const todo = toApprove;
-    if (!todo.length) return;
-    setBusy(true);
-    Promise.all(todo.map(u => rrApi.post('/api/rosters/' + encodeURIComponent(u.entry.id) + '/status', {
-      status: 'approved'
-    }).catch(() => null))).then(res => {
-      const ok = res.filter(r => r && r.ok).length;
-      rrToast(ok + ' of ' + todo.length + ' unit rosters approved and released to the CNS', ok === todo.length ? 'success' : 'error');
-      index.reload();
-      setBusy(false);
-    });
-  };
-  const years = useMemo(() => {
-    const s = {};
-    (index.rosters || []).forEach(r => {
-      s[r.year] = 1;
-    });
-    s[now.getFullYear()] = 1;
-    s[y] = 1;
-    return Object.keys(s).map(Number).sort((a, b) => b - a);
-  }, [index.rosters, y]);
-  const audit = useMemo(() => rrAuditEntries(scoped), [scoped]);
-  const body = React.createElement("div", {
+  return React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
       gap: 14
     }
-  }, React.createElement(RRHeader, {
-    month: m,
-    year: y,
-    months: R.MONTHS,
-    years: years,
-    setMonth: setM,
-    setYear: setY,
-    units: scoped.length,
-    staffTotal: staffTotal,
-    scope: scope,
-    setScope: setScope,
-    pending: pending,
-    otLimit: otLimit,
-    setOtLimit: setOt,
-    otRaw: otRaw,
-    setOtRaw: setOtRaw,
-    onApproveAll: approveAll,
-    busy: busy,
-    canDecide: rrCanDecide()
-  }), React.createElement(RRKpis, {
-    tiles: tiles
-  }), index.error && React.createElement("div", {
-    className: "card",
+  }, React.createElement("div", {
     style: {
-      padding: 14,
-      color: '#a92c42',
+      ...card,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 12,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    type: "button",
+    onClick: onBack
+  }, "\u2039 Back to the list"), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 200
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 15.5,
+      fontWeight: 800,
+      color: '#16202e'
+    }
+  }, row.deptName, " \xB7 ", period), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#6c7a8c'
+    }
+  }, doc ? 'rev ' + (doc.revision || 0) + (doc.updatedBy ? ' · last saved by ' + doc.updatedBy + ' · ' + K.when(doc.updatedAt) : '') : 'No sheet saved for this month')), React.createElement(K.RosStatusChip, {
+    st: doc ? doc.status : null,
+    big: true
+  }), React.createElement("button", {
+    className: "btn sm",
+    type: "button",
+    onClick: () => setRoute({
+      view: 'rosterGrid',
+      dept,
+      year,
+      month
+    })
+  }, "Open in editor"), doc && React.createElement("button", {
+    className: "btn sm",
+    type: "button",
+    onClick: () => setRoute({
+      view: 'rosterPrint',
+      dept,
+      year,
+      month
+    })
+  }, "Print")), err && React.createElement("div", {
+    style: {
+      ...card,
+      color: '#b4232f',
+      fontSize: 12.5
+    }
+  }, err), doc && K.statusNorm(doc.status) === 'returned' && React.createElement(K.RosReturnedBanner, {
+    meta: doc
+  }), doc && React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(0,1fr) 330px',
+      gap: 14,
+      alignItems: 'start'
+    },
+    className: "ri-split"
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))',
+      gap: 10
+    }
+  }, [['Staff on sheet', view.rows.length, '#0072a3'], ['Shifts', stats.shifts, '#2b9488'], ['Total hours', stats.hours, '#5b45c4'], ['Over ' + RI_OVERTIME_H + ' h', stats.over, stats.over ? '#b5670a' : '#157a43'], ['Rule warnings', ev ? ev.totalViol : 0, ev && ev.totalViol ? '#b4232f' : '#157a43']].map(([l, v, c]) => React.createElement("div", {
+    key: l,
+    style: {
+      ...card,
+      padding: '10px 12px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontFamily: "'IBM Plex Mono',monospace",
+      fontSize: 18,
+      fontWeight: 700,
+      color: c
+    }
+  }, v), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c'
+    }
+  }, l)))), React.createElement(K.RosSheetTable, {
+    rows: view.rows,
+    grid: view.grid,
+    year: year,
+    month: month,
+    maxHeight: "56vh"
+  }), ev && React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: '#16202e',
+      marginBottom: 8
+    }
+  }, "Rule checks ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: '#8a97a8'
+    }
+  }, "\xB7 ", ev.okRules, " of ", ev.rules.length, " clear")), ev.rules.map(([rule, base, list], i) => React.createElement("div", {
+    key: rule + i,
+    style: {
+      display: 'flex',
+      gap: 10,
+      padding: '6px 0',
+      borderTop: i ? '1px solid rgba(125,145,180,.12)' : 0
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      marginTop: 5,
+      flexShrink: 0,
+      background: list.length ? '#d23a52' : '#1f9d57'
+    }
+  }), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      color: '#16202e'
+    }
+  }, rule), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: '#6c7a8c'
+    }
+  }, list.length ? list.slice(0, 3).join(' · ') + (list.length > 3 ? ' +' + (list.length - 3) + ' more' : '') : base)), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      color: list.length ? '#a92c42' : '#157a43'
+    }
+  }, list.length || 'ok')))), React.createElement(K.RosSignOff, {
+    signers: extra.signers,
+    meta: doc,
+    dept: row.deptName
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14,
+      position: 'sticky',
+      top: 12
+    }
+  }, React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: '#7d8ea8',
+      marginBottom: 8
+    }
+  }, "Decision"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#16202e',
+      fontWeight: 600,
+      marginBottom: 4
+    }
+  }, doc.sentAt && riSentShown(K.statusNorm(doc.status)) ? 'Sent ' + K.when(doc.sentAt) + ' by ' + (doc.sentByName || doc.sentBy || '—') : 'With the in-charge — not sent for review yet'), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#6c7a8c',
+      marginBottom: 12
+    }
+  }, ev && ev.totalViol ? ev.totalViol + ' rule warning' + (ev.totalViol === 1 ? '' : 's') + ' on this sheet. ' : 'No rule warnings. ', stats.over ? stats.over + ' staff over ' + RI_OVERTIME_H + ' h.' : ''), K.RosDecisionButtons({
+    status: doc.status,
+    can: extra.can,
+    onAction: decide,
+    busy,
+    hasManager: !!(extra.signers && extra.signers.manager)
+  }) || React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#8a97a8'
+    }
+  }, "No step for you on this sheet right now.")), React.createElement("div", {
+    style: card
+  }, React.createElement("div", {
+    style: {
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: .5,
+      textTransform: 'uppercase',
+      color: '#7d8ea8',
+      marginBottom: 10
+    }
+  }, "History"), React.createElement(K.RosHistoryTimeline, {
+    history: doc.history
+  })))), !doc && !err && React.createElement("div", {
+    style: {
+      ...card,
+      textAlign: 'center',
+      padding: 34,
+      color: '#6c7a8c',
+      fontSize: 12.5
+    }
+  }, row.hasSheet ? 'Loading the sheet…' : 'Nobody has started this unit’s ' + period + ' roster yet.'));
+}
+function RosterReviewFull({
+  setRoute,
+  year: y0,
+  month: m0
+}) {
+  const K = window.UNICO_ROSTER_KIT;
+  const now = new Date();
+  const [year, setYear] = useState(Number(y0) || now.getFullYear());
+  const [month, setMonth] = useState(Number.isInteger(Number(m0)) && m0 != null ? Number(m0) : now.getMonth());
+  const [tab, setTab] = useState(null);
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(null);
+  const review = useRosterReview(year, month);
+  const staffStore = K.useRosterStaff();
+  const scope = K.useRosterScope();
+  const decider = K.useRosDecide();
+  const counts = useMemo(() => {
+    const c = {};
+    RI_TABS.forEach(([t]) => {
+      c[t] = review.rows.filter(r => riIn(t, r)).length;
+    });
+    return c;
+  }, [review.rows]);
+  const curTab = tab || (counts.awaiting ? 'awaiting' : 'all');
+  const rows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return review.rows.filter(r => riIn(curTab, r)).filter(r => !needle || [r.deptName, riPerson(r.incharge), riPerson(r.manager)].join(' ').toLowerCase().indexOf(needle) >= 0);
+  }, [review.rows, curTab, q]);
+  const period = R.MONTHS[month] + ' ' + year;
+  const onDecide = (row, action) => decider.run({
+    id: row.id,
+    action,
+    unit: row.deptName,
+    period,
+    warnings: 0
+  }).then(r => {
+    if (r && r.ok) review.reload();
+    return r;
+  });
+  const may = scope.can || {};
+  if (!scope.loading && !may.review && !may.setup) {
+    return React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        padding: 44,
+        textAlign: 'center',
+        gap: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        opacity: .35
+      }
+    }, React.createElement(Ic, {
+      d: I.lock || I.grid,
+      s: 32
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 14.5
+      }
+    }, "The review inbox is for Managers and the CNS"), React.createElement("div", {
+      className: "sub",
+      style: {
+        maxWidth: 440
+      }
+    }, "An administrator gives an account its roster role under ", React.createElement("b", null, "Users & Roles \u2192 Manage \u2192 Duty roster role"), ", and the units it checks under ", React.createElement("b", null, "Duty Roster \u2192 Setup"), ".")));
+  }
+  return React.createElement("div", {
+    className: "mk-scope",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, decider.modal, open ? React.createElement(RiPreview, {
+    row: open,
+    year: year,
+    month: month,
+    staff: staffStore.staff,
+    busy: decider.busy,
+    setRoute: setRoute,
+    onBack: () => {
+      setOpen(null);
+      review.reload();
+    },
+    onDecide: onDecide
+  }) : React.createElement(React.Fragment, null, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: MK.iconBadge('teal', 32)
+  }, React.createElement(Ic, {
+    d: I.check || I.grid,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15.5,
+      color: '#16202e'
+    }
+  }, "Roster review \u2014 ", period), React.createElement("div", {
+    className: "sub"
+  }, may.role === 'cns' ? 'Every unit. Approve what the Managers forwarded, or return it with a note.' : may.role === 'manager' ? 'Your units. Forward checked rosters to the CNS, or return them with a note.' : 'Every unit, where its roster is in the review chain.', review.cns && review.cns.name ? ' · CNS: ' + review.cns.name : '')), React.createElement("select", {
+    value: month,
+    onChange: e => {
+      setMonth(Number(e.target.value));
+      setOpen(null);
+    }
+  }, R.MONTHS.map((m, i) => React.createElement("option", {
+    key: m,
+    value: i
+  }, m))), React.createElement("select", {
+    value: year,
+    onChange: e => {
+      setYear(Number(e.target.value));
+      setOpen(null);
+    }
+  }, [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1].map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, y))))), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))',
+      gap: 10
+    }
+  }, React.createElement(RiKpi, {
+    label: "Awaiting me",
+    value: counts.awaiting,
+    color: "#d23a52",
+    on: curTab === 'awaiting',
+    onClick: () => setTab('awaiting')
+  }), React.createElement(RiKpi, {
+    label: "In review",
+    value: counts.inreview,
+    color: "#0072a3",
+    on: curTab === 'inreview',
+    onClick: () => setTab('inreview')
+  }), React.createElement(RiKpi, {
+    label: "Returned",
+    value: counts.returned,
+    color: "#b4232f",
+    on: curTab === 'returned',
+    onClick: () => setTab('returned')
+  }), React.createElement(RiKpi, {
+    label: "Approved",
+    value: counts.approved,
+    color: "#157a43",
+    on: curTab === 'approved',
+    onClick: () => setTab('approved')
+  }), React.createElement(RiKpi, {
+    label: "Not submitted",
+    value: counts.none,
+    color: "#b5670a",
+    on: curTab === 'none',
+    onClick: () => setTab('none')
+  }), React.createElement(RiKpi, {
+    label: "Units",
+    value: counts.all,
+    color: "#16202e",
+    on: curTab === 'all',
+    onClick: () => setTab('all')
+  })), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    className: "seg"
+  }, RI_TABS.map(([t, l]) => React.createElement("button", {
+    key: t,
+    type: "button",
+    className: curTab === t ? 'on' : '',
+    onClick: () => setTab(t)
+  }, l, counts[t] ? ' · ' + counts[t] : ''))), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("input", {
+    value: q,
+    onChange: e => setQ(e.target.value),
+    placeholder: "Find a unit or person\u2026",
+    style: {
+      minWidth: 200,
+      padding: '7px 10px',
+      borderRadius: 8,
+      border: '1px solid rgba(125,145,180,.35)',
+      fontFamily: 'inherit',
       fontSize: 12
     }
-  }, index.error), loading ? React.createElement("div", {
-    className: "card",
+  })), React.createElement("div", {
+    className: "card-b",
+    style: {
+      overflow: 'auto',
+      padding: 0
+    }
+  }, review.loading && !review.rows.length ? React.createElement("div", {
+    className: "sub",
+    style: {
+      padding: 22,
+      textAlign: 'center'
+    }
+  }, "Loading\u2026") : review.error ? React.createElement("div", {
+    style: {
+      padding: 22,
+      textAlign: 'center',
+      color: '#b4232f',
+      fontSize: 12.5
+    }
+  }, review.error) : !rows.length ? React.createElement("div", {
+    style: {
+      padding: 34,
+      textAlign: 'center',
+      color: '#6c7a8c',
+      fontSize: 12.5
+    }
+  }, curTab === 'awaiting' ? 'Nothing is waiting for you this month.' : 'No units here.') : React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, ['Unit', 'In-charge', 'Manager', 'Staff', 'Status', 'Sent', 'Last saved', 'Steps'].map(h => React.createElement("th", {
+    key: h,
+    style: {
+      ...RI_TH,
+      textAlign: h === 'Steps' ? 'right' : h === 'Staff' ? 'center' : 'left'
+    }
+  }, h)))), React.createElement("tbody", null, rows.map(r => {
+    const st = riNorm(r);
+    return React.createElement("tr", {
+      key: (r.dept || '') + '|' + (r.id || r.deptName),
+      onClick: () => setOpen(r),
+      style: {
+        cursor: 'pointer',
+        background: r.pendingForMe ? 'rgba(210,58,82,.04)' : st === 'returned' ? 'rgba(210,58,82,.03)' : undefined
+      }
+    }, React.createElement("td", {
+      style: {
+        ...RI_TD,
+        fontWeight: 700,
+        color: '#16202e'
+      }
+    }, r.pendingForMe && React.createElement("span", {
+      title: "Waiting for you",
+      style: {
+        display: 'inline-block',
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: '#d23a52',
+        marginRight: 7,
+        verticalAlign: 'middle'
+      }
+    }), r.deptName, r.dept === null && React.createElement("span", {
+      className: "sub",
+      style: {
+        fontWeight: 500
+      }
+    }, " \xB7 unmapped")), React.createElement("td", {
+      style: RI_TD
+    }, riPerson(r.incharge) || React.createElement("span", {
+      style: {
+        color: '#b5670a',
+        fontSize: 11
+      }
+    }, "not set")), React.createElement("td", {
+      style: RI_TD
+    }, riPerson(r.manager) || React.createElement("span", {
+      style: {
+        color: '#b5670a',
+        fontSize: 11
+      }
+    }, "not set")), React.createElement("td", {
+      style: {
+        ...RI_TD,
+        textAlign: 'center',
+        fontFamily: "'IBM Plex Mono',monospace"
+      }
+    }, r.hasSheet ? r.staffCount || 0 : '—'), React.createElement("td", {
+      style: RI_TD
+    }, r.hasSheet ? React.createElement(K.RosStatusChip, {
+      st: r.status
+    }) : React.createElement(K.RosStatusChip, {
+      st: null
+    }), st === 'returned' && r.returnNote && React.createElement("div", {
+      className: "sub",
+      title: r.returnNote,
+      style: {
+        fontSize: 10.5,
+        maxWidth: 220,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+        marginTop: 2
+      }
+    }, "\u201C", r.returnNote, "\u201D")), React.createElement("td", {
+      style: {
+        ...RI_TD,
+        whiteSpace: 'nowrap',
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, r.sentAt && riSentShown(st) ? K.when(r.sentAt) + (r.sentByName || r.sentBy ? ' · ' + (r.sentByName || r.sentBy) : '') : '—'), React.createElement("td", {
+      style: {
+        ...RI_TD,
+        whiteSpace: 'nowrap',
+        fontSize: 11.5,
+        color: '#6c7a8c'
+      }
+    }, r.updatedAt ? K.when(r.updatedAt) + (r.updatedBy ? ' · ' + r.updatedBy : '') : '—'), React.createElement("td", {
+      style: {
+        ...RI_TD,
+        textAlign: 'right'
+      },
+      onClick: e => e.stopPropagation()
+    }, React.createElement("div", {
+      style: {
+        display: 'inline-flex',
+        gap: 6,
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        flexWrap: 'wrap'
+      }
+    }, r.hasSheet && r.can && (r.can.forward || r.can.approve || r.can.return) ? React.createElement(K.RosDecisionButtons, {
+      status: r.status,
+      can: {
+        forward: r.can.forward,
+        approve: r.can.approve,
+        return: r.can.return
+      },
+      onAction: a => onDecide(r, a),
+      busy: decider.busy,
+      compact: true
+    }) : null, React.createElement("button", {
+      className: "btn sm",
+      type: "button",
+      onClick: () => r.hasSheet ? setOpen(r) : setRoute({
+        view: 'rosterGrid',
+        dept: r.sheetDept || r.deptName,
+        year,
+        month
+      })
+    }, r.hasSheet ? 'Open' : 'Open sheet'))));
+  })))))));
+}
+window.RosterReviewFull = RosterReviewFull;
+window.RosterInbox = RosterReviewFull;
+})();
+;
+/* ===== roster-staff.jsx ===== */
+(function(){
+const {
+  useState,
+  useEffect,
+  useMemo
+} = React;
+const Ic = window.Ic,
+  I = window.I;
+const R = window.UNICO_ROSTER;
+const MK = window.MK;
+const rsMonthKey = (y, m) => y + '-' + String(m + 1).padStart(2, '0');
+const rsMonthsBack = n => {
+  const d = new Date();
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const x = new Date(d.getFullYear(), d.getMonth() - i, 1);
+    out.push([x.getFullYear(), x.getMonth()]);
+  }
+  return out;
+};
+const rsEsc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+})[c]);
+function rsTotals(cells, y, m) {
+  const days = R.daysIn(y, m);
+  const t = R.totalsFor(cells || {}, days);
+  let off = 0;
+  for (let d = 1; d <= days; d++) {
+    const c = cells && cells[d];
+    if (c && R.isOff(c)) off++;
+  }
+  return {
+    ...t,
+    off,
+    duty: t.G + t.M + t.E + t.N
+  };
+}
+function RosterStaffView({
+  staffId: sid0,
+  setRoute
+}) {
+  const K = window.UNICO_ROSTER_KIT;
+  const store = K.useRosterStaff();
+  const staff = useMemo(() => (store.staff || []).filter(e => e && e.id != null && !e.former), [store.staff]);
+  const [sel, setSel] = useState(sid0 ? String(sid0) : '');
+  const [q, setQ] = useState('');
+  const [pickOpen, setPickOpen] = useState(false);
+  const range = rsMonthsBack(24);
+  const [from, setFrom] = useState(rsMonthKey(...range[5]));
+  const [to, setTo] = useState(rsMonthKey(...range[0]));
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState('');
+  const person = staff.find(e => String(e.id) === sel) || null;
+  const matches = useMemo(() => {
+    const n = q.trim().toLowerCase();
+    if (!n) return staff.slice(0, 12);
+    return staff.filter(e => [e.name, e.emp_id, e.current_department, e.designation].join(' ').toLowerCase().indexOf(n) >= 0).slice(0, 12);
+  }, [staff, q]);
+  useEffect(() => {
+    if (!sel) {
+      setData(null);
+      return;
+    }
+    setData(null);
+    setErr('');
+    const [a, b] = from <= to ? [from, to] : [to, from];
+    K.api.get('/api/rosters/staff/' + encodeURIComponent(sel) + '?from=' + a + '&to=' + b).then(r => {
+      if (r && r.ok) setData(r.months || r.rosters || r.rows || []);else {
+        setErr(r && r.error || 'Could not load this person’s roster.');
+        setData([]);
+      }
+    }).catch(() => {
+      setErr('Could not reach the server.');
+      setData([]);
+    });
+  }, [sel, from, to]);
+  const months = useMemo(() => {
+    const [a, b] = from <= to ? [from, to] : [to, from];
+    const out = [];
+    const [ay, am] = a.split('-').map(Number),
+      [by, bm] = b.split('-').map(Number);
+    for (let y = by, m = bm - 1; y > ay || y === ay && m >= am - 1; m--) {
+      if (m < 0) {
+        m = 11;
+        y--;
+        if (y < ay) break;
+      }
+      const sheets = (data || []).filter(x => x.year === y && x.month === m);
+      out.push({
+        y,
+        m,
+        sheets
+      });
+    }
+    return out;
+  }, [data, from, to]);
+  const sum = useMemo(() => {
+    const s = {
+      duty: 0,
+      N: 0,
+      leave: 0,
+      off: 0,
+      hours: 0,
+      months: 0
+    };
+    months.forEach(mo => mo.sheets.forEach(x => {
+      const t = rsTotals(x.cells, mo.y, mo.m);
+      s.duty += t.duty;
+      s.N += t.N;
+      s.leave += t.leave;
+      s.off += t.off;
+      s.hours += t.hours;
+      s.months++;
+    }));
+    return s;
+  }, [months]);
+  const print = async () => {
+    if (!person) return;
+    const w = window.open('', '_blank');
+    try {
+      await K.api.post('/api/rosters/print', {
+        kind: 'staff',
+        target: person.name,
+        detail: from + ' – ' + to
+      });
+      if (!w) {
+        K.toast('Allow pop-ups for this site to print.', 'error');
+        return;
+      }
+      const css = '@page{size:A4 landscape;margin:10mm}*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:9pt/1.35 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:16px}@media print{body{padding:0}}' + '.lh{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding-bottom:8px;border-bottom:1px solid #d9e2ec}.lh img{height:40px}.lh .tt{text-align:right}' + '.lh .kind{font-size:7.5pt;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;color:#0072a3}.lh h1{margin:3px 0 0;font-size:15pt;color:#0d1b2e}.bar{height:3px;background:linear-gradient(90deg,#0072a3,#27a8db 55%,#3ab5a7)}' + '.hd{display:flex;gap:26px;margin:10px 0 8px;font-size:10pt}.hd b{font-weight:700}' + 'table{border-collapse:collapse;width:100%;font-size:7.4pt}th{background:#0d3a5c;color:#fff;font-weight:700;padding:4px 2px;border:1px solid #0d3a5c}' + 'td{padding:3px 2px;border:1px solid #c9d3de;text-align:center}td.l{text-align:left;white-space:nowrap}tfoot td{font-weight:700;background:#e6f1f8}' + '.end{margin-top:14px;padding-top:6px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:7.5pt;color:#7b8796}.cr{margin-top:5px;text-align:center;font-size:6.5px;color:#a3adba}';
+      const dayHead = Array.from({
+        length: 31
+      }, (_, i) => '<th>' + (i + 1) + '</th>').join('');
+      const body = months.map(mo => {
+        if (!mo.sheets.length) return '<tr><td class="l">' + rsEsc(R.MONTHS[mo.m].slice(0, 3) + ' ' + mo.y) + '</td><td class="l">—</td>' + '<td colspan="31" style="color:#9aa6b4">no sheet</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>';
+        return mo.sheets.map(x => {
+          const t = rsTotals(x.cells, mo.y, mo.m);
+          const days = R.daysIn(mo.y, mo.m);
+          const cells = Array.from({
+            length: 31
+          }, (_, i) => '<td' + (i >= days ? ' style="background:#f1f4f8"' : '') + '>' + rsEsc((x.cells || {})[i + 1] || '') + '</td>').join('');
+          return '<tr><td class="l">' + rsEsc(R.MONTHS[mo.m].slice(0, 3) + ' ' + mo.y) + '</td><td class="l">' + rsEsc(x.deptName || x.dept) + '</td>' + cells + '<td>' + t.duty + '</td><td>' + t.N + '</td><td>' + t.off + '</td><td>' + t.leave + '</td><td>' + t.hours + '</td><td>' + rsEsc(K.ROS_STATUS[K.statusNorm(x.status)].label) + '</td></tr>';
+        }).join('');
+      }).join('');
+      const at = new Date().toLocaleString('en-GB', {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      });
+      const me = window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username) || '—';
+      const html = '<header class="lh"><img src="' + rsEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"><div class="tt"><div class="kind">Nursing Services · Duty Roster</div><h1>Individual Duty Record</h1></div></header><div class="bar"></div>' + '<div class="hd"><span>Name: <b>' + rsEsc(person.name) + '</b></span><span>Emp no: <b>' + rsEsc(person.emp_id || '—') + '</b></span><span>Designation: <b>' + rsEsc(person.designation || '—') + '</b></span><span>Period: <b>' + rsEsc(from + ' to ' + to) + '</b></span></div>' + '<table><thead><tr><th>Month</th><th>Unit</th>' + dayHead + '<th>Duty</th><th>Nights</th><th>Off</th><th>Leave</th><th>Hours</th><th>Status</th></tr></thead><tbody>' + body + '</tbody>' + '<tfoot><tr><td class="l" colspan="33">Total · ' + sum.months + ' rostered month' + (sum.months === 1 ? '' : 's') + '</td><td>' + sum.duty + '</td><td>' + sum.N + '</td><td>' + sum.off + '</td><td>' + sum.leave + '</td><td>' + sum.hours + '</td><td></td></tr></tfoot></table>' + '<div class="end"><span>Printed by ' + rsEsc(me) + ' on ' + rsEsc(at) + ' from UNICO.</span><span>Approved sheets are final; others may still change.</span></div>' + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div>';
+      w.document.open();
+      w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + rsEsc(person.name + ' — duty record') + '</title><style>' + css + '</style></head><body>' + html + '<script>window.onload=function(){setTimeout(function(){window.print();},150);};<\/script></body></html>');
+      w.document.close();
+    } catch (e) {
+      if (w) w.close();
+      K.toast('Could not print.', 'error');
+    }
+  };
+  const cell = {
+    fontFamily: K.MONO,
+    fontSize: 8.8,
+    fontWeight: 700,
+    textAlign: 'center',
+    padding: '4px 0',
+    borderBottom: '1px solid rgba(125,145,180,.12)',
+    minWidth: 21
+  };
+  const th = {
+    position: 'sticky',
+    top: 0,
+    background: '#f2f6fb',
+    fontSize: 9,
+    fontWeight: 700,
+    color: '#6c7a8c',
+    padding: '6px 1px',
+    borderBottom: '1px solid rgba(125,145,180,.3)',
+    textAlign: 'center',
+    zIndex: 1
+  };
+  return React.createElement("div", {
+    className: "mk-scope",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: MK.iconBadge('teal', 32)
+  }, React.createElement(Ic, {
+    d: I.user || I.users || I.grid,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 200
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15.5,
+      color: '#16202e'
+    }
+  }, "Staff roster"), React.createElement("div", {
+    className: "sub"
+  }, "One person's shifts across months and units")), React.createElement("div", {
+    style: {
+      position: 'relative',
+      minWidth: 260
+    }
+  }, React.createElement("input", {
+    value: pickOpen ? q : person ? person.name + (person.emp_id ? ' · ' + person.emp_id : '') : q,
+    onFocus: () => {
+      setPickOpen(true);
+      setQ('');
+    },
+    onBlur: () => setTimeout(() => setPickOpen(false), 150),
+    onChange: e => setQ(e.target.value),
+    placeholder: "Find a nurse or PCA \u2014 name, emp no, unit\u2026",
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '8px 11px',
+      borderRadius: 9,
+      border: '1px solid rgba(125,145,180,.4)',
+      fontFamily: 'inherit',
+      fontSize: 12.5
+    }
+  }), pickOpen && React.createElement("div", {
+    style: {
+      position: 'absolute',
+      left: 0,
+      right: 0,
+      top: '100%',
+      marginTop: 4,
+      background: '#fff',
+      border: '1px solid rgba(125,145,180,.3)',
+      borderRadius: 10,
+      boxShadow: '0 16px 40px rgba(16,32,46,.18)',
+      zIndex: 50,
+      maxHeight: 320,
+      overflow: 'auto'
+    }
+  }, !matches.length && React.createElement("div", {
+    className: "sub",
+    style: {
+      padding: 12
+    }
+  }, "No one matches."), matches.map(e => React.createElement("div", {
+    key: e.id,
+    onMouseDown: () => {
+      setSel(String(e.id));
+      setPickOpen(false);
+      setQ('');
+    },
+    style: {
+      padding: '8px 12px',
+      cursor: 'pointer',
+      borderBottom: '1px solid rgba(125,145,180,.1)'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: '#16202e'
+    }
+  }, e.name), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#8a97a8'
+    }
+  }, [e.emp_id, e.designation, e.current_department].filter(Boolean).join(' · ')))))), React.createElement("span", {
+    className: "sub"
+  }, "From"), React.createElement("select", {
+    value: from,
+    onChange: e => setFrom(e.target.value)
+  }, range.map(([y, m]) => React.createElement("option", {
+    key: 'f' + y + m,
+    value: rsMonthKey(y, m)
+  }, R.MONTHS[m].slice(0, 3), " ", y))), React.createElement("span", {
+    className: "sub"
+  }, "to"), React.createElement("select", {
+    value: to,
+    onChange: e => setTo(e.target.value)
+  }, range.map(([y, m]) => React.createElement("option", {
+    key: 't' + y + m,
+    value: rsMonthKey(y, m)
+  }, R.MONTHS[m].slice(0, 3), " ", y))), person && K.can('print') && React.createElement("button", {
+    className: "btn sm",
+    type: "button",
+    onClick: print
+  }, "Print"))), !person ? React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
     style: {
       display: 'grid',
       placeItems: 'center',
       padding: 40,
-      color: MK.MUTED
-    }
-  }, "Loading ", R.MONTHS[m], " ", y, "\u2026") : React.createElement(React.Fragment, null, draftedUnits.length === 0 && React.createElement("div", {
-    className: "card",
-    style: {
-      display: 'grid',
-      placeItems: 'center',
-      padding: 28,
-      gap: 6,
-      textAlign: 'center'
+      textAlign: 'center',
+      gap: 6
     }
   }, React.createElement("div", {
     style: {
       opacity: .35
     }
   }, React.createElement(Ic, {
-    d: I.grid,
+    d: I.user || I.users || I.grid,
     s: 30
   })), React.createElement("div", {
     style: {
-      fontWeight: 600,
-      color: MK.INK
+      fontWeight: 600
     }
-  }, "No roster has been saved for ", R.MONTHS[m], " ", y), React.createElement("div", {
+  }, "Pick a person to see their roster"), React.createElement("div", {
     className: "sub",
     style: {
-      maxWidth: 460
+      maxWidth: 420
     }
-  }, "Every unit below is listed from the staff register, but there is no sheet to review yet \u2014 coverage, workload and overtime stay blank until a unit saves one.")), React.createElement("div", {
+  }, "Every month they were on a unit's sheet, with their shift on each day and the month's totals."))) : React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       display: 'grid',
-      gridTemplateColumns: 'minmax(300px,352px) minmax(0,1fr)',
-      gap: 14,
-      alignItems: 'start'
+      gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))',
+      gap: 10
     }
-  }, React.createElement(RRTree, {
-    divisions: divisions,
-    open: open,
-    setOpen: setOpen,
-    q: q,
-    setQ: setQ,
-    matchLabel: matchLabel,
-    sel: sel,
-    setSel: setSel,
-    selUnit: selUnit,
-    setSelUnit: setSelUnit,
-    inScope: inScope,
-    unrostered: unrostered,
-    bucket: bucket
-  }), React.createElement(RRDiagram, {
-    units: units,
-    scoped: scoped,
-    bucket: bucket,
-    setBucket: setBucketId,
-    day: day,
-    setDay: setDay,
-    days: days,
-    month: m,
-    year: y,
-    sel: sel,
-    setSel: setSel,
-    selUnit: selUnit,
-    setSelUnit: setSelUnit,
-    inScope: inScope,
-    setRoute: setRoute
+  }, [['Rostered months', sum.months, '#0072a3'], ['Duty shifts', sum.duty, '#2b9488'], ['Night shifts', sum.N, '#5b45c4'], ['Rest days', sum.off, '#7d8ea8'], ['Leave days', sum.leave, '#b5670a'], ['Hours', sum.hours, '#16202e']].map(([l, v, c]) => React.createElement("div", {
+    key: l,
+    className: "card",
+    style: {
+      padding: '11px 14px'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontFamily: K.MONO,
+      fontSize: 19,
+      fontWeight: 700,
+      color: c
+    }
+  }, v), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: '#6c7a8c'
+    }
+  }, l)))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", {
+    style: {
+      margin: 0
+    }
+  }, person.name), React.createElement("div", {
+    className: "sub"
+  }, [person.emp_id, person.designation, person.current_department].filter(Boolean).join(' · '))), React.createElement("div", {
+    className: "card-b",
+    style: {
+      padding: 0,
+      overflow: 'auto'
+    }
+  }, err && React.createElement("div", {
+    style: {
+      padding: 14,
+      color: '#b4232f',
+      fontSize: 12.5
+    }
+  }, err), data === null ? React.createElement("div", {
+    className: "sub",
+    style: {
+      padding: 22,
+      textAlign: 'center'
+    }
+  }, "Loading\u2026") : React.createElement("table", {
+    style: {
+      borderCollapse: 'separate',
+      borderSpacing: 0,
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'left',
+      paddingLeft: 12,
+      minWidth: 82
+    }
+  }, "Month"), React.createElement("th", {
+    style: {
+      ...th,
+      textAlign: 'left',
+      minWidth: 120
+    }
+  }, "Unit"), Array.from({
+    length: 31
+  }, (_, i) => React.createElement("th", {
+    key: i,
+    style: th
+  }, i + 1)), [['Duty', '#16202e'], ['M', K.bColor('M')], ['E', K.bColor('E')], ['N', K.bColor('N')], ['Off', '#7d8ea8'], ['Lv', '#b5670a'], ['Hrs', '#16202e']].map(([l, c]) => React.createElement("th", {
+    key: l,
+    style: {
+      ...th,
+      color: c,
+      minWidth: 26
+    }
+  }, l)), React.createElement("th", {
+    style: {
+      ...th,
+      minWidth: 96
+    }
+  }, "Status"))), React.createElement("tbody", null, months.map(mo => {
+    const label = R.MONTHS[mo.m].slice(0, 3) + ' ' + mo.y;
+    const days = R.daysIn(mo.y, mo.m);
+    if (!mo.sheets.length) return React.createElement("tr", {
+      key: label
+    }, React.createElement("td", {
+      style: {
+        ...cell,
+        fontFamily: 'inherit',
+        textAlign: 'left',
+        paddingLeft: 12,
+        fontWeight: 600,
+        color: '#3c4858'
+      }
+    }, label), React.createElement("td", {
+      colSpan: 40,
+      style: {
+        ...cell,
+        fontFamily: 'inherit',
+        fontWeight: 500,
+        color: '#9aa6b4',
+        textAlign: 'left'
+      }
+    }, "Not on any roster this month"));
+    return mo.sheets.map(x => {
+      const t = rsTotals(x.cells, mo.y, mo.m);
+      return React.createElement("tr", {
+        key: label + x.id
+      }, React.createElement("td", {
+        style: {
+          ...cell,
+          fontFamily: 'inherit',
+          textAlign: 'left',
+          paddingLeft: 12,
+          fontWeight: 600,
+          color: '#16202e'
+        }
+      }, label), React.createElement("td", {
+        style: {
+          ...cell,
+          fontFamily: 'inherit',
+          textAlign: 'left',
+          fontWeight: 600,
+          color: '#0072a3',
+          cursor: 'pointer',
+          whiteSpace: 'nowrap'
+        },
+        title: "Open this unit's sheet",
+        onClick: () => setRoute({
+          view: 'rosterGrid',
+          dept: x.dept,
+          year: mo.y,
+          month: mo.m
+        })
+      }, x.deptName || x.dept), Array.from({
+        length: 31
+      }, (_, i) => {
+        const d = i + 1;
+        const c = (x.cells || {})[d] || '';
+        if (d > days) return React.createElement("td", {
+          key: d,
+          style: {
+            ...cell,
+            background: 'rgba(125,145,180,.08)'
+          }
+        });
+        const col = c ? K.bColor(R.bucketOf(c)) : null;
+        return React.createElement("td", {
+          key: d,
+          title: c ? c + ((R.BY_CODE[c] || {}).label ? ' — ' + R.BY_CODE[c].label : '') : '',
+          style: {
+            ...cell,
+            color: col || '#ccd3dc',
+            background: c ? col + '14' : 'transparent'
+          }
+        }, c || '·');
+      }), [t.duty, t.M, t.E, t.N, t.off, t.leave, t.hours].map((v, i) => React.createElement("td", {
+        key: i,
+        style: {
+          ...cell,
+          color: '#3c4858'
+        }
+      }, v || '')), React.createElement("td", {
+        style: {
+          ...cell,
+          fontFamily: 'inherit'
+        }
+      }, React.createElement(K.RosStatusChip, {
+        st: x.status
+      })));
+    });
+  })))))));
+}
+window.RosterStaffView = RosterStaffView;
+})();
+;
+/* ===== roster-setup.jsx ===== */
+(function(){
+const {
+  useState,
+  useEffect,
+  useMemo
+} = React;
+const Ic = window.Ic,
+  I = window.I;
+const MK = window.MK;
+const RS_ROLE_LABEL = {
+  incharge: 'In-charge',
+  manager: 'Manager',
+  cns: 'CNS'
+};
+function RosterSetup() {
+  const K = window.UNICO_ROSTER_KIT;
+  const scope = K.useRosterScope();
+  const [cfg, setCfg] = useState(null);
+  const [people, setPeople] = useState([]);
+  const [draft, setDraft] = useState(null);
+  const [q, setQ] = useState('');
+  const [onlyUnset, setOnlyUnset] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const fromCfg = c => {
+    const d = {};
+    (c.depts || []).forEach(x => {
+      d[x.id] = {
+        incharge: x.incharge && x.incharge.username || '',
+        manager: x.manager && x.manager.username || ''
+      };
+    });
+    return {
+      cns: c.cns && c.cns.username || '',
+      depts: d
+    };
+  };
+  const load = () => Promise.all([K.api.get('/api/rosters/config'), K.api.get('/api/rosters/reviewers')]).then(([c, p]) => {
+    if (!c || !c.ok) {
+      setErr(c && c.error || 'Could not load the setup.');
+      return;
+    }
+    setCfg(c);
+    setDraft(fromCfg(c));
+    setErr('');
+    setPeople(p && p.ok && (p.reviewers || p.users || p.people) || []);
+  }).catch(() => setErr('Could not reach the server.'));
+  useEffect(() => {
+    load();
+  }, []);
+  const may = scope.can || {};
+  const dirty = useMemo(() => !!(cfg && draft && JSON.stringify(fromCfg(cfg)) !== JSON.stringify(draft)), [cfg, draft]);
+  const depts = cfg && cfg.depts || [];
+  const unsetN = depts.filter(x => draft && (!draft.depts[x.id] || !draft.depts[x.id].incharge || !draft.depts[x.id].manager)).length + (draft && !draft.cns ? 1 : 0);
+  useEffect(() => {
+    const warn = e => {
+      if (dirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty]);
+  if (!scope.loading && !may.setup) {
+    return React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        padding: 44,
+        textAlign: 'center',
+        gap: 8
+      }
+    }, React.createElement("div", {
+      style: {
+        opacity: .35
+      }
+    }, React.createElement(Ic, {
+      d: I.lock || I.grid,
+      s: 32
+    })), React.createElement("div", {
+      style: {
+        fontWeight: 700,
+        fontSize: 14.5
+      }
+    }, "Administrators only"), React.createElement("div", {
+      className: "sub",
+      style: {
+        maxWidth: 420
+      }
+    }, "Roster setup decides who prepares, checks and approves every unit's roster.")));
+  }
+  if (err) return React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      color: '#b4232f',
+      padding: 24
+    }
+  }, err, " ", React.createElement("button", {
+    className: "btn sm",
+    onClick: load
+  }, "Try again")));
+  if (!cfg || !draft) return React.createElement("div", {
+    className: "sub",
+    style: {
+      padding: 30,
+      textAlign: 'center'
+    }
+  }, "Loading\u2026");
+  const byUser = {};
+  people.forEach(u => {
+    byUser[u.username] = u;
+  });
+  const optionsFor = (role, deptId, current) => {
+    const list = people.filter(u => u.rosterRole === role || u.rosterRole === 'admin');
+    const covers = u => (u.rosterDepartments || []).indexOf(deptId) >= 0;
+    const sorted = list.slice().sort((a, b) => (a.rosterRole === 'admin') - (b.rosterRole === 'admin') || covers(b) - covers(a) || String(a.name).localeCompare(String(b.name)));
+    if (current && !sorted.some(u => u.username === current)) sorted.unshift(byUser[current] || {
+      username: current,
+      name: current + ' (no roster role)'
+    });
+    return sorted;
+  };
+  const setSlot = (id, slot, v) => setDraft(d => ({
+    ...d,
+    depts: {
+      ...d.depts,
+      [id]: {
+        ...(d.depts[id] || {}),
+        [slot]: v
+      }
+    }
+  }));
+  const save = () => {
+    setBusy(true);
+    const body = {
+      cns: draft.cns ? {
+        username: draft.cns
+      } : null,
+      depts: {}
+    };
+    Object.keys(draft.depts).forEach(id => {
+      const x = draft.depts[id];
+      body.depts[id] = {
+        incharge: x.incharge ? {
+          username: x.incharge
+        } : null,
+        manager: x.manager ? {
+          username: x.manager
+        } : null
+      };
+    });
+    K.api.put('/api/rosters/config', body).then(r => {
+      setBusy(false);
+      if (r && r.ok) {
+        K.toast('Roster setup saved.');
+        if (r.depts) {
+          setCfg(r);
+          setDraft(fromCfg(r));
+        } else load();
+        K.loadConfig(true);
+        try {
+          window.dispatchEvent(new Event('unico:ros-refresh'));
+        } catch (e) {}
+      } else K.toast(r && r.error || 'Could not save the setup.', 'error');
+    }).catch(() => {
+      setBusy(false);
+      K.toast('Could not reach the server.', 'error');
+    });
+  };
+  const needle = q.trim().toLowerCase();
+  const shown = depts.filter(x => {
+    const s = draft.depts[x.id] || {};
+    if (onlyUnset && s.incharge && s.manager) return false;
+    return !needle || String(x.name).toLowerCase().indexOf(needle) >= 0;
+  });
+  const sel = (value, onChange, opts, missing) => React.createElement("select", {
+    value: value,
+    onChange: e => onChange(e.target.value),
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '7px 9px',
+      borderRadius: 8,
+      border: '1px solid ' + (missing ? 'rgba(224,138,30,.55)' : 'rgba(125,145,180,.35)'),
+      background: missing ? 'rgba(224,138,30,.06)' : '#fff',
+      fontFamily: 'inherit',
+      fontSize: 12,
+      color: value ? '#16202e' : '#9aa6b4'
+    }
+  }, React.createElement("option", {
+    value: ""
+  }, "\u2014 not set \u2014"), opts.map(u => React.createElement("option", {
+    key: u.username,
+    value: u.username
+  }, u.name, u.rosterRole === 'admin' ? ' · Administrator' : u.title ? ' · ' + u.title : '')));
+  const nRole = r => people.filter(u => u.rosterRole === r).length;
+  return React.createElement("div", {
+    className: "mk-scope",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 14,
+      paddingBottom: dirty ? 70 : 0
+    }
+  }, React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("div", {
+    style: MK.iconBadge('teal', 32)
+  }, React.createElement(Ic, {
+    d: I.users || I.grid,
+    s: 16
   })), React.createElement("div", {
     style: {
-      display: 'grid',
-      gridTemplateColumns: 'minmax(0,1fr) 340px',
-      gap: 14,
-      alignItems: 'start'
+      flex: 1,
+      minWidth: 240
     }
-  }, React.createElement(RRQueue, {
-    units: units,
-    bucket: bucket,
-    inScope: inScope,
-    selUnit: selUnit,
-    setSelUnit: setSelUnit,
-    onDecide: decide,
-    busy: busy,
-    canDecide: rrCanDecide(),
-    month: m,
-    year: y
-  }), React.createElement(RRAudit, {
-    entries: audit,
-    month: m,
-    year: y
-  }))));
-  return React.createElement("div", {
-    className: "mk-scope"
-  }, body);
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 15.5,
+      color: '#16202e'
+    }
+  }, "Roster setup \u2014 who prepares, checks and approves"), React.createElement("div", {
+    className: "sub"
+  }, "Set once. The names fill every roster's sign-off and decide whose inbox a sent roster lands in.")), unsetN > 0 && React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#b5670a',
+      background: 'rgba(224,138,30,.13)',
+      padding: '5px 11px',
+      borderRadius: 14
+    }
+  }, unsetN, " slot", unsetN === 1 ? '' : 's', " not set")), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'minmax(220px,360px) 1fr',
+      gap: 16,
+      alignItems: 'center'
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: .6,
+      textTransform: 'uppercase',
+      color: '#7d8ea8',
+      marginBottom: 4
+    }
+  }, "Chief of Nursing Services \xB7 approves every unit"), sel(draft.cns, v => setDraft(d => ({
+    ...d,
+    cns: v
+  })), optionsFor('cns', null, draft.cns), !draft.cns)), React.createElement("div", {
+    className: "sub",
+    style: {
+      fontSize: 11.5,
+      lineHeight: 1.6
+    }
+  }, "Accounts with a roster role: ", React.createElement("b", null, nRole('cns')), " CNS \xB7 ", React.createElement("b", null, nRole('manager')), " Manager \xB7 ", React.createElement("b", null, nRole('incharge')), " In-charge. Someone missing from a list? Give their account a ", React.createElement("b", null, "Duty roster role"), " under Users & Roles \u2192 Manage. People whose roster units include a department are listed first for it."))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      display: 'flex',
+      gap: 10,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("h3", {
+    style: {
+      margin: 0
+    }
+  }, "Departments"), React.createElement("span", {
+    className: "sub"
+  }, depts.length, " departments"), React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("label", {
+    className: "sub",
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      cursor: 'pointer'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: onlyUnset,
+    onChange: e => setOnlyUnset(e.target.checked)
+  }), "Only incomplete"), React.createElement("input", {
+    value: q,
+    onChange: e => setQ(e.target.value),
+    placeholder: "Find a department\u2026",
+    style: {
+      minWidth: 190,
+      padding: '7px 10px',
+      borderRadius: 8,
+      border: '1px solid rgba(125,145,180,.35)',
+      fontFamily: 'inherit',
+      fontSize: 12
+    }
+  })), React.createElement("div", {
+    className: "card-b",
+    style: {
+      overflow: 'auto',
+      padding: 0
+    }
+  }, React.createElement("table", {
+    className: "tbl",
+    style: {
+      width: '100%'
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      width: '30%'
+    }
+  }, "Department"), React.createElement("th", null, "In-charge ", React.createElement("span", {
+    className: "sub",
+    style: {
+      fontWeight: 500
+    }
+  }, "\xB7 prepares")), React.createElement("th", null, "Manager ", React.createElement("span", {
+    className: "sub",
+    style: {
+      fontWeight: 500
+    }
+  }, "\xB7 checks")))), React.createElement("tbody", null, shown.map(x => {
+    const s = draft.depts[x.id] || {
+      incharge: '',
+      manager: ''
+    };
+    return React.createElement("tr", {
+      key: x.id
+    }, React.createElement("td", {
+      style: {
+        fontWeight: 600
+      }
+    }, x.name), React.createElement("td", {
+      style: {
+        minWidth: 200
+      }
+    }, sel(s.incharge, v => setSlot(x.id, 'incharge', v), optionsFor('incharge', x.id, s.incharge), !s.incharge)), React.createElement("td", {
+      style: {
+        minWidth: 200
+      }
+    }, sel(s.manager, v => setSlot(x.id, 'manager', v), optionsFor('manager', x.id, s.manager), !s.manager)));
+  }), !shown.length && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 3,
+    className: "sub",
+    style: {
+      textAlign: 'center',
+      padding: 22
+    }
+  }, depts.length ? 'No departments match.' : 'No departments found — departments come from Department Setup.')))))), dirty && React.createElement("div", {
+    style: {
+      position: 'sticky',
+      bottom: 10,
+      zIndex: 20,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      background: '#16202e',
+      color: '#fff',
+      borderRadius: 12,
+      padding: '10px 16px',
+      boxShadow: '0 14px 36px rgba(16,32,46,.35)'
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: 1,
+      fontSize: 12.5,
+      fontWeight: 600
+    }
+  }, "Unsaved changes to the roster setup"), React.createElement("button", {
+    className: "btn sm",
+    type: "button",
+    disabled: busy,
+    onClick: () => setDraft(fromCfg(cfg))
+  }, "Discard"), React.createElement("button", {
+    className: "btn pri sm",
+    type: "button",
+    disabled: busy,
+    onClick: save
+  }, busy ? 'Saving…' : 'Save setup')));
 }
-window.RosterReviewFull = RosterReviewFull;
+window.RosterSetup = RosterSetup;
 })();

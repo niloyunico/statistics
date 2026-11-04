@@ -82,7 +82,7 @@ const UNICO_MODULE_VIEWS = {
   // the two old route names onto the staff module so old links still land somewhere.
   perf:   ['perfHome','perfForm','perfPrint','perfAchievements','perfIncidents','perfCompare','perfRisk','perfBoard'],
   attrition:['perfAttrition'],
-  roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
+  roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','rosterStaff','rosterSetup','manpower'],
   datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory','dsHandHygiene'],
   mydept: ['myDept'],
   devdays:['devDaysEntry','devDaysReview','devDaysSummary','devDaysSettings'],
@@ -224,6 +224,10 @@ function unicoSubMenus(){
       (out[m]=out[m]||[]).push([s.view, s.label, s.match||[s.view]]);
     });
   });
+  // The Duty Roster's screens are tabs, not sidebar rows, so they are listed by hand.
+  // Setup is an administrator's own screen: nothing to grant.
+  out.roster=[['rosterHome','Rosters',['rosterHome','rosterGrid','rosterReview','rosterPrint']],
+    ['rosterFullReview','Review inbox',['rosterFullReview']], ['rosterStaff','Staff roster',['rosterStaff']], ['manpower','Manpower',['manpower']]];
   return (unicoSubMenusMemo=out);
 }
 // Is `view` behind a sub-menu this person may not open? A view no sub-menu claims (a module's
@@ -268,19 +272,21 @@ function unicoRefreshPerms(){
     // degraded = the server could not read the account: its empty perms are not a revocation.
     if(!j||!j.ok||j.degraded||!j.perms||typeof j.perms!=='object'||Array.isArray(j.perms)) return false;
     const staffScope=j.staffScope||u.staffScope;
+    // The Duty Roster role (In-charge / Manager / CNS) shows or hides the Review inbox tab.
+    const rosterRole=typeof j.rosterRole==='string'?(j.rosterRole==='admin'?'':j.rosterRole):(u.rosterRole||'');
     // The Data Submission assignment travels too (departments, areas, indicators, screens, kinds,
     // enterDen): changing it no longer signs the person out, so the tab must pick it up live.
     const ds=(j.user&&j.user.dsScope&&typeof j.user.dsScope==='object')?j.user.dsScope:null;
     const DS_KEYS=['departments','qualityAreas','allQualityAreas','qualityIndicators','submitKinds','dsScreens','subMenus','enterDen'];
     const dsChanged=!!ds&&DS_KEYS.some(k=>JSON.stringify(ds[k]==null?null:ds[k])!==JSON.stringify(u[k]==null?null:u[k]));
-    if(JSON.stringify(j.perms)===JSON.stringify(u.perms||null) && staffScope===u.staffScope && !dsChanged) return false;
+    if(JSON.stringify(j.perms)===JSON.stringify(u.perms||null) && staffScope===u.staffScope && rosterRole===(u.rosterRole||'') && !dsChanged) return false;
     const appJob=window.unicoRefreshAppData ? window.unicoRefreshAppData({includeNew:true}) : Promise.resolve([]);
     const jobs=[appJob];
     try{ if(window.UNICO&&window.UNICO.refreshDepartments) jobs.push(window.UNICO.refreshDepartments()); }catch(e){}
     try{ if(window.refreshQualitySeed) jobs.push(window.refreshQualitySeed()); }catch(e){}
     return Promise.all(jobs.map(p=>Promise.resolve(p).catch(()=>null))).then(res=>{
       if(res[0]===null) return false;   // overlay not refreshed: keep the old grant, retry next round
-      Object.assign(u,{perms:j.perms,staffScope});
+      Object.assign(u,{perms:j.perms,staffScope,rosterRole});
       if(ds) DS_KEYS.forEach(k=>{ if(Object.prototype.hasOwnProperty.call(ds,k)) u[k]=ds[k]; });
       try{ window.dispatchEvent(new CustomEvent('unico:perms-changed',{detail:{perms:j.perms}})); }catch(e){}
       return true;
@@ -448,7 +454,7 @@ const UNICO_WS = [
        its own destination: `mods` lists every module this one row can open, and the
        sub-items below carry the module each of them needs. */
     { id:'staff',       label:'Staff Management', icon:I.steth, home:'staffHome', mods:['staff','perf','attrition','roster'],
-      on:v=>['staff','perf','attrition','roster'].indexOf(unicoModuleOf(v))>=0 },
+      on:v=>['staff','perf','attrition','roster'].indexOf(unicoModuleOf(v))>=0, badge:'ros' },
     // Access Control — accounts and per-person access (access-control.jsx). Same 'users'
     // permission as Settings; it just has its own door now instead of a Settings tab.
     { id:'access',      label:'Access Control',  icon:I.shield, home:'users',       on:v=>unicoModuleOf(v)==='users' },
@@ -484,10 +490,21 @@ const UNICO_VIEW_TABS = [
     ['perfHome','Overview'], ['perfAchievements','Achievements'], ['perfIncidents','Incidents'],
     ['perfBoard','Recognition'], ['perfAttrition','Attrition & Exits'], ['perfCompare','By Department'],
   ]},
+  // A third element names who the tab is for: 'review' = the Managers and the CNS (their
+  // inbox), 'admin' = administrators (Setup). The server enforces both; this only keeps
+  // a tab off the strip for someone it would only ever turn away.
   { mod:'roster', hide:['rosterPrint'], parent:{ rosterGrid:'rosterHome', rosterReview:'rosterHome' }, tabs:[
-    ['rosterHome','Rosters'], ['manpower','Manpower'], ['rosterFullReview','Full Review'],
+    ['rosterHome','Rosters'], ['rosterFullReview','Review inbox','review'], ['rosterStaff','Staff roster'],
+    ['manpower','Manpower'], ['rosterSetup','Setup','admin'],
   ]},
 ];
+function unicoTabForOk(who){
+  if(!who) return true;
+  const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
+  if(!u || u.role==='Administrator') return true;
+  if(who==='review') return u.rosterRole==='manager' || u.rosterRole==='cns';
+  return false;
+}
 function unicoViewTabs(view){
   for(let i=0;i<UNICO_VIEW_TABS.length;i++){
     const g=UNICO_VIEW_TABS[i];
@@ -502,7 +519,7 @@ function ViewTabs({ view, setRoute }){
   const g = unicoViewTabs(view);
   if(!g) return null;
   // Only the tabs this account may open (Performance and Attrition are separate permissions).
-  const tabs=g.tabs.filter(([v])=>!window.unicoCanAccessView||window.unicoCanAccessView(v));
+  const tabs=g.tabs.filter(([v,,who])=>unicoTabForOk(who) && (!window.unicoCanAccessView||window.unicoCanAccessView(v)));
   if(tabs.length<2) return null;
   return (
     <div className="seg" style={{alignSelf:'flex-start',maxWidth:'100%',flexWrap:'wrap',marginBottom:12}}>
@@ -719,6 +736,9 @@ function Sidebar({route, setRoute, collapsed, depts}){
   // Device Days: missed + returned days to send, and days waiting for review (unicoUseDevDaysAlerts).
   const ddAlerts = unicoUseDevDaysAlerts(unicoCanAccessModule('devdays'));
   const ddBadge = ddAlerts ? (ddAlerts.total||0)+(ddAlerts.pendingReview||0) : 0;
+  // Duty Roster: rosters waiting for this person's step + their units' rosters returned to them.
+  const rosPend = unicoUseRosterPending(unicoCanAccessModule('roster'));
+  const rosBadge = rosPend ? (rosPend.pending||0)+(rosPend.returned||0) : 0;
   // Data Collection: submissions waiting for approval, published by the top bar (unicoUsePending).
   const [dcBadge,setDcBadge]=React.useState(()=>window.__UNICO_DC_PENDING__||0);
   React.useEffect(()=>{ const h=(e)=>setDcBadge((e&&e.detail)||0); window.addEventListener('unico:dc-pending',h); return ()=>window.removeEventListener('unico:dc-pending',h); },[]);
@@ -761,7 +781,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
             {g.sec && <div className="sb-sec">{g.sec}</div>}
             {items.map(it=>{
               const active = it.on(view);
-              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='dd' ? ddBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
+              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='dd' ? ddBadge : it.badge==='ros' ? rosBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
               const badge = badgeN>0 ? badgeN : null;
               const auto = !!AUTO_OPEN[it.id];
               const itSub = auto && folded[it.id] ? [] : subFor(it, active);
@@ -784,6 +804,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
                           style={s.divider&&si>0?{marginTop:7,paddingTop:9,borderTop:'1px solid rgba(255,255,255,.10)'}:null}>
                           <span className="dot"/><span className="lbl">{s.label}</span>
                           {s.view==='dsMissing'&&dsBadge>0&&<span className="badge alert num" style={{marginLeft:'auto'}}>{dsBadge}</span>}
+                          {s.view==='rosterHome'&&rosBadge>0&&<span className="badge alert num" style={{marginLeft:'auto'}} title={(rosPend.pending||0)+' waiting for your review · '+(rosPend.returned||0)+' returned to you'}>{rosBadge}</span>}
                           {s.view==='dcReview'&&dcBadge>0&&<span className="badge alert num" style={{marginLeft:'auto'}} title={dcBadge+' waiting for approval'}>{dcBadge}</span>}
                         </div>
                       ))}
@@ -899,6 +920,34 @@ function PeriodPill({period, setPeriod, depts=[]}){
    and (reviewers) days waiting. Polled every 60 s and on focus; published as
    window.__UNICO_DD_ALERTS__ + 'unico:dd-alerts' so the Device Days screens share one answer.
    Once a day, on the first answer with missed days, a notice names them. */
+/* Duty Roster: rosters waiting for THIS person's step (a Manager's checks, the CNS's
+   approvals) and, for an in-charge, their units' rosters returned to them. Polled every 60 s,
+   on focus and after any roster step ('unico:ros-refresh'); published as
+   window.__UNICO_ROS_PENDING__ + 'unico:ros-pending'. */
+function unicoUseRosterPending(enabled){
+  const [a,setA]=React.useState(()=>window.__UNICO_ROS_PENDING__||null);
+  React.useEffect(()=>{
+    if(!enabled) return;
+    let live=true;
+    const run=()=>{
+      if(document.visibilityState==='hidden') return;
+      fetch('/api/rosters/review/count',{credentials:'same-origin',cache:'no-store'})
+        .then(r=>r.ok?r.json():null).then(j=>{
+          if(!live||!j||!j.ok) return;
+          setA(j);
+          try{ window.__UNICO_ROS_PENDING__=j; window.dispatchEvent(new CustomEvent('unico:ros-pending',{detail:j})); }catch(e){}
+        }).catch(()=>{});
+    };
+    run();
+    const t=setInterval(run,60000);
+    const vis=()=>{ if(document.visibilityState==='visible') run(); };
+    window.addEventListener('unico:ros-refresh',run);
+    window.addEventListener('unico:data-refreshed',run);
+    document.addEventListener('visibilitychange',vis);
+    return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:ros-refresh',run); window.removeEventListener('unico:data-refreshed',run); document.removeEventListener('visibilitychange',vis); };
+  },[enabled]);
+  return enabled?a:null;
+}
 function unicoUseDevDaysAlerts(enabled){
   const [a,setA]=React.useState(()=>window.__UNICO_DD_ALERTS__||null);
   React.useEffect(()=>{

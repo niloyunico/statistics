@@ -2125,6 +2125,9 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   // old tier gave it (signoffInherited), and only sends one once somebody picks.
   const [signoff,setSignoff]=useState(editing&&typeof initial.signoff==='string'?initial.signoff:'');
   const [signoffSet,setSignoffSet]=useState(!editing||!initial.signoffInherited);
+  // Their place in the Duty Roster review chain: an In-charge prepares and sends, a Manager
+  // checks and forwards, the CNS approves. Which units they hold is Duty Roster → Setup.
+  const [rosterRole,setRosterRole]=useState(editing&&typeof initial.rosterRole==='string'?initial.rosterRole:'');
   const [copyFrom,setCopyFrom]=useState('');
   // The editor is split into sections (tabs) instead of one long form; Save covers all of them.
   const [sec,setSec]=useState('account');
@@ -2385,6 +2388,8 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
       // Sign-off is sent once somebody has chosen it, so opening a legacy account and saving
       // an unrelated field never freezes the sign-off it still reads from its old tier.
       if(!isColl&&signoffSet) payload.signoff=signoff||'';
+      // Only when it changed, so saving an unrelated field never rewrites it.
+      if(!isColl&&!isAdmin&&(!editing||rosterRole!==(initial.rosterRole||''))) payload.rosterRole=rosterRole||'';
       // Send `role` only when the admin actually changed it: an account the form cannot
       // represent must never be silently re-roled by an unrelated edit.
       if(!editing||backendRole!==(initial.role||'User')) payload.role=backendRole;
@@ -2596,6 +2601,22 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                     style={{font:'inherit',cursor:'pointer',padding:'5px 12px',borderRadius:16,fontSize:12,fontWeight:600,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>{l}</button>
                 );})}
                 {!signoffSet&&<span style={{fontSize:10.5,color:'#8a5a00'}}>Carried over from the old hierarchy — pick one to set it on this person.</span>}
+              </div>
+            </div>}
+            {curSec==='account'&&!isColl&&!isAdmin&&<div>
+              <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:6}}>Duty roster role <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· their place in the roster review chain</span></div>
+              <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+                {[['','None'],['incharge','In-charge · prepares'],['manager','Manager · checks'],['cns','CNS · approves']].map(([v,l])=>{ const on=rosterRole===v; return (
+                  <button key={v||'none'} type="button" onClick={()=>setRosterRole(v)}
+                    style={{font:'inherit',cursor:'pointer',padding:'5px 12px',borderRadius:16,fontSize:12,fontWeight:600,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>{l}</button>
+                );})}
+              </div>
+              <div style={{fontSize:10.5,color:'var(--muted)',marginTop:6,lineHeight:1.6}}>
+                {rosterRole==='manager'?'They get a Review inbox for the units they check, and forward each roster to the CNS or return it with a note.'
+                  :rosterRole==='cns'?'They get the Review inbox for every unit and give the final approval. Pick them as the CNS under Duty Roster → Setup.'
+                  :rosterRole==='incharge'?'They can be picked as a unit’s In-charge under Duty Roster → Setup, and their name fills “Prepared by”.'
+                  :'Takes no part in the roster review. Which units a person prepares or checks is set under Duty Roster → Setup.'}
+                {' '}They still need Duty Roster access (view) for their units.
               </div>
             </div>}
           </div>
@@ -2974,6 +2995,10 @@ function ActivityLog(){
     password_changed:{l:'Password changed',c:'#e08a1e'}, password_changed_self:{l:'Password changed',c:'#e08a1e'},
     photo_upload:{l:'Photo uploaded',c:'#3ab5a7'}, photo_delete:{l:'Photo deleted',c:'#d23a52'},
     roster_saved:{l:'Duty roster saved',c:'#1f9d57'}, roster_deleted:{l:'Duty roster deleted',c:'#d23a52'},
+    roster_sent:{l:'Duty roster sent for review',c:'#0090ca'}, roster_forwarded:{l:'Duty roster forwarded to CNS',c:'#6a52d4'},
+    roster_approved:{l:'Duty roster approved',c:'#1f9d57'}, roster_returned:{l:'Duty roster returned',c:'#d23a52'},
+    roster_reopened:{l:'Duty roster reopened',c:'#e08a1e'}, roster_config:{l:'Roster setup changed',c:'#e08a1e'},
+    roster_print:{l:'Duty roster printed',c:'#3ab5a7'},
     submission_sent:{l:'Submission sent',c:'#0090ca'}, staff_request:{l:'Staff change request',c:'#e08a1e'},
     performance_saved:{l:'Performance saved',c:'#6a52d4'}, quality_saved:{l:'Quality data saved',c:'#3ab5a7'},
     user_account_changed:{l:'User account changed',c:'#e08a1e'}, user_account_deleted:{l:'User account deleted',c:'#d23a52'},

@@ -288,6 +288,12 @@ const staffArr = [
       + (offenders.length ? '\n        ' + offenders.join('\n        ') : ''), offenders.length === 0);
   }
 
+  console.log('\n== duty roster review role ==');
+  eq('the four values are kept', ['', 'incharge', 'manager', 'cns'].map(access.cleanRosterRole), ['', 'incharge', 'manager', 'cns']);
+  eq('case and whitespace are forgiven', access.cleanRosterRole('  CNS '), 'cns');
+  eq('anything else takes no part', [access.cleanRosterRole('boss'), access.cleanRosterRole(null), access.cleanRosterRole(42)], ['', '', '']);
+  eq('exported alongside the roster scope helpers', access.ROSTER_ROLES.join(','), ',incharge,manager,cns');
+
   console.log('\n== verb -> action mapping ==');
   eq('GET', access.actionForMethod('GET'), 'view');
   eq('POST', access.actionForMethod('POST'), 'add');

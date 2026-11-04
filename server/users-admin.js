@@ -250,10 +250,12 @@ function cleanLevel(v, role, tiers) {
 // on the server by access.filterStaff(); see server/access.js.
 const cleanStaffScope = access.cleanStaffScope;
 const cleanRosterScope = access.cleanRosterScope;
+// Falls back to the workflow module directly: a few tests fake ./access with only the helpers they need.
+const cleanRosterRole = access.cleanRosterRole || require('./roster-workflow').cleanRosterRole;
 
 // Changing any of these must invalidate every token the account already holds —
 // otherwise a revoked permission stays live for the rest of the 12h token TTL.
-const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'unitLead', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen', 'myDepartments', 'deviceDepartments'];
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'rosterRole', 'unitLead', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen', 'myDepartments', 'deviceDepartments'];
 // Compare only what actually CHANGED. The update object always carries a few scope
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
@@ -357,6 +359,9 @@ function safe(u) {
     // May a ward in-charge BUILD their unit's roster in the portal (never approve it)?
     // Off unless granted; an administrator needs no grant.
     rosterEdit: role === 'Administrator' ? true : u.rosterEdit === true,
+    // Place in the Duty Roster review chain ('' | incharge | manager | cns). An
+    // administrator needs none: they hold every roster right already.
+    rosterRole: role === 'Administrator' ? '' : cleanRosterRole(u.rosterRole),
     // Data Submission holder who runs a unit (its staff list, staff requests, dashboard).
     unitLead: u.unitLead === true,
     enterDen: u.enterDen === true,
@@ -798,6 +803,7 @@ function mount(app, opts) {
         rosterScope: role === 'Administrator' ? 'all' : (cleanRosterScope(b.rosterScope) || (rosterHeld ? 'all' : null)),
         rosterDepartments: cleanList(b.rosterDepartments),
         rosterEdit: role === 'Administrator' ? true : b.rosterEdit === true,
+        rosterRole: role === 'Administrator' ? '' : cleanRosterRole(b.rosterRole),
         unitLead: role === 'User' && b.unitLead === true,
         enterDen: role === 'User' && b.enterDen === true,
         // Staff app holders: the phone feature set they get.
@@ -905,7 +911,7 @@ function mount(app, opts) {
       // Row-level staff scope. Administrators are always unrestricted.
       if (role === 'Administrator') {
         set.staffScope = 'all';
-        set.rosterScope = 'all'; set.rosterDepartments = []; set.rosterEdit = true;
+        set.rosterScope = 'all'; set.rosterDepartments = []; set.rosterEdit = true; set.rosterRole = '';
       } else {
         if (b.staffScope !== undefined) set.staffScope = cleanStaffScope(b.staffScope);
         if (b.staffId !== undefined) set.staffId = (b.staffId === 0 || b.staffId) ? b.staffId : null;
@@ -917,6 +923,7 @@ function mount(app, opts) {
         if (b.rosterScope !== undefined) set.rosterScope = cleanRosterScope(b.rosterScope) || 'all';
         if (b.rosterDepartments !== undefined) set.rosterDepartments = cleanList(b.rosterDepartments);
         if (b.rosterEdit !== undefined) set.rosterEdit = b.rosterEdit === true;
+        if (b.rosterRole !== undefined) set.rosterRole = cleanRosterRole(b.rosterRole);
         if (b.unitLead !== undefined) set.unitLead = role === 'User' && b.unitLead === true;
         if (b.enterDen !== undefined) set.enterDen = role === 'User' && b.enterDen === true;
         if (b.appRole !== undefined) set.appRole = b.appRole === 'pca' ? 'pca' : 'nurse';

@@ -12564,13 +12564,13 @@
       if (!ref || this.state.demo) return;
       tryApi('/api/rosters/' + encodeURIComponent(ref.dept) + '/' + ref.year + '/' + ref.month).then(r => {
         if (!r || !r.ok || !r.roster) return this.toastMsg('Roster not found.');
-        const me = this.state.me || {};
-        return api('/api/rosters', {
-          method: 'PUT',
-          body: Object.assign({}, r.roster, {
-            status,
-            approvedBy: status === 'approved' ? me.name || me.username : r.roster.approvedBy
-          })
+        const action = status === 'approved' ? 'approve' : 'return';
+        return api('/api/rosters/' + encodeURIComponent(r.roster.id) + '/transition', {
+          method: 'POST',
+          body: {
+            action,
+            note: action === 'return' ? 'Returned from the Admin App' : ''
+          }
         }).then(() => tryApi('/api/rosters')).then(x => {
           if (x && x.ok) this.setState(s => ({
             live: Object.assign({}, s.live, {

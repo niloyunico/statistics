@@ -8,6 +8,27 @@
 process.env.MONGODB_URI = '';
 const assert = require('node:assert/strict');
 const express = require('express');
+
+/* Fakes, installed before anything loads them: the department map names the canonical
+   units the review inbox and the setup are rowed by; the users store feeds the setup
+   pickers; the activity log is captured so the hand-overs can be checked for logging. */
+const logged = [];
+const fake = (rel, exports) => { const p = require.resolve(rel); require.cache[p] = { id: p, filename: p, loaded: true, exports }; };
+const ACCOUNTS = [
+  { username: 'admin', name: 'Administrator', role: 'Administrator', active: true },
+  { username: 'rahima', name: 'Rahima Akter', role: 'User', active: true, rosterRole: 'incharge', rosterScope: 'departments', rosterDepartments: ['micu'] },
+  { username: 'farida', name: 'Farida Begum', role: 'User', active: true, rosterRole: 'manager', rosterScope: 'departments', rosterDepartments: [] },
+  { username: 'nasrin', name: 'Nasrin Sultana', role: 'User', active: true, rosterRole: 'cns' },
+  { username: 'gone', name: 'Left Already', role: 'User', active: false, rosterRole: 'manager' },
+  { username: 'plain', name: 'No Role', role: 'User', active: true },
+];
+const fakeUsers = {
+  findOne: async (q) => ACCOUNTS.find((u) => u.username === q.username) || null,
+  find: (q) => ({ toArray: async () => ACCOUNTS.filter((u) => !(q && q.active && q.active.$ne === false) || u.active !== false), sort() { return this; } }),
+};
+fake('../db', { getDbHandle: async () => null, getUsers: async () => fakeUsers, getDepartments: async () => [], getAppData: async () => ({}), getStaff: async () => [] });
+fake('../deptmap', { get: async () => ({ byId: { micu: { id: 'micu', name: 'Medical ICU' }, ccu: { id: 'ccu', name: 'CCU' }, nicu: { id: 'nicu', name: 'NICU' }, __hospital__: { id: '__hospital__', name: 'Overall Hospital', qualityOnly: true } }, qkToId: {}, idToQk: {} }), HOSPITAL: '__hospital__' });
+fake('../activity-log', { log: async (req, action, opts) => { logged.push({ action, by: req.access && req.access.username, opts }); } });
 const roster = require('../duty-roster');
 
 const USERS = {
@@ -30,10 +51,18 @@ const USERS = {
   wardLead: { unrestricted: false, role: 'incharge', perms: {}, departments: ['ccu'], qualityAreas: ['Overall Hospital'], rosterEdit: true },
   // Never assigned (no rosterScope at all) + unrestricted staff scope = the old reach.
   legacy: { unrestricted: false, role: 'User', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all' },
+  /* The review chain. The in-charge builds MICU; the manager is named for MICU on the
+     setup screen and holds no unit assignment at all (review reach comes from the setup);
+     the CNS holds the module view-only — approving is her ROLE, not a module action. */
+  rahima: { unrestricted: false, username: 'rahima', name: 'Rahima Akter', role: 'User', rosterRole: 'incharge', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: ['micu'] },
+  farida: { unrestricted: false, username: 'farida', name: 'Farida Begum', role: 'User', rosterRole: 'manager', perms: { roster: ['view'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: [] },
+  nasrin: { unrestricted: false, username: 'nasrin', name: 'Nasrin Sultana', role: 'User', rosterRole: 'cns', perms: { roster: ['view'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'all' },
+  // A second CNS-role holder who prepares a unit too: must not sign what she sent.
+  dual: { unrestricted: false, username: 'dual', name: 'Dual Role', role: 'User', rosterRole: 'cns', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'all' },
 };
 const app = express();
 app.use(express.json());
-const as = (req, res, next) => { req.access = USERS[req.headers['x-user'] || 'admin']; next(); };
+const as = (req, res, next) => { const u = USERS[req.headers['x-user'] || 'admin']; req.access = u; req.user = { sub: u.username || req.headers['x-user'] || 'admin', name: u.name || 'Administrator' }; next(); };
 roster.mount(app, { requireApi: as, requireRead: as });
 
 (async () => {
@@ -53,7 +82,7 @@ roster.mount(app, { requireApi: as, requireRead: as });
     r = await put({ ...month, grid: { S1: { 1: 'E' } }, names: { S1: 'Rahima' }, baseRevision: 1 });
     assert.equal(r.status, 200);
     assert.equal(r.body.roster.note, 'Eid week', 'note kept');
-    assert.equal(r.body.roster.status, 'submitted', 'status kept');
+    assert.equal(r.body.roster.status, 'pending_cns', 'status kept (a legacy submit lands as pending_cns; an administrator may still save while pending)');
     assert.equal(r.body.roster.names.S2, 'Karim', 'a name no longer on the payload is kept on the sheet');
 
     // A browser still on revision 1 cannot erase revision 2.
@@ -61,9 +90,11 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.equal(r.status, 409); assert.equal(r.body.conflict, true);
     assert.equal((await call('GET', '/api/rosters/MICU/2026/8')).body.roster.grid.S1['1'], 'E', 'the newer cells survive');
 
-    // A save can never approve.
-    r = await put({ ...month, grid: { S1: { 1: 'E' } }, status: 'approved', baseRevision: 2 });
-    assert.equal(r.body.roster.status, 'submitted');
+    // A save can never approve — and says which keys it ignored.
+    r = await put({ ...month, grid: { S1: { 1: 'E' } }, status: 'approved', approvedBy: 'Somebody', baseRevision: 2 });
+    assert.equal(r.body.roster.status, 'pending_cns');
+    assert.deepEqual(r.body.ignored, ['status', 'approvedBy'], 'the save reports what it did not honour');
+    assert.equal(r.body.roster.approvedBy, '', 'a payload never names the approver');
 
     // Approve, then a pending "draft" autosave lands: refused, sheet untouched.
     r = await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-08') + '/status', { status: 'approved' });
@@ -138,9 +169,10 @@ roster.mount(app, { requireApi: as, requireRead: as });
     // The one status move they hold is "hand it in".
     const ccuOct = encodeURIComponent('ros-CCU-2026-10');
     assert.equal((await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'approved' }, 'wardLead')).status, 403, 'an in-charge cannot approve their own roster');
-    assert.equal((await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'draft' }, 'wardLead')).status, 403, 'nor reopen one');
+    assert.equal((await call('GET', '/api/rosters/CCU/2026/10')).body.roster.status, 'draft', '...and the refused attempt did not hand the sheet in as a side effect');
+    assert.notEqual((await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'draft' }, 'wardLead')).status, 200, 'nor reopen one');
     let sub = await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'submitted' }, 'wardLead');
-    assert.equal(sub.status, 200); assert.equal(sub.body.roster.status, 'submitted', 'submitted for approval');
+    assert.equal(sub.status, 200); assert.equal(sub.body.roster.status, 'pending_cns', 'submitted for approval (the legacy route sends straight to the CNS)');
     assert.equal((await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-10') + '/status', { status: 'submitted' }, 'wardLead')).status, 403, 'and only for their own unit');
 
     // Once an administrator publishes it, it is locked against them like everyone else.
@@ -149,6 +181,166 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.equal((await call('POST', '/api/rosters/' + ccuOct + '/status', { status: 'submitted' }, 'wardLead')).status, 409, 'and cannot be re-submitted');
     assert.equal((await call('GET', '/api/rosters/CCU/2026/10')).body.roster.grid.S9['1'], 'M3', 'the published cells survive');
 
+
+    /* ================= the review chain ================= */
+    const T = (id, action, note, user) => call('POST', '/api/rosters/' + encodeURIComponent(id) + '/transition', { action, note }, user);
+    const micuNov = 'ros-MICU-2026-10';
+    const sheetOf = async (dept, y, m, user) => (await call('GET', '/api/rosters/' + dept + '/' + y + '/' + m, null, user)).body;
+
+    // Setup: who prepares, checks and approves. Administrator only; accounts must exist and be active.
+    assert.equal((await call('PUT', '/api/rosters/config', { cns: { username: 'nasrin' } }, 'icu')).status, 403, 'setup is administrator-only');
+    assert.equal((await call('PUT', '/api/rosters/config', { depts: { nowhere: { manager: { username: 'farida' } } } })).status, 400, 'an unknown department is refused');
+    assert.equal((await call('PUT', '/api/rosters/config', { depts: { micu: { manager: { username: 'gone' } } } })).status, 400, 'an inactive account is refused');
+    assert.equal((await call('PUT', '/api/rosters/config', { depts: { micu: { manager: { username: 'nobody' } } } })).status, 400, 'an unknown account is refused');
+    let cfgR = await call('PUT', '/api/rosters/config', { cns: { username: 'nasrin' }, depts: { micu: { incharge: { username: 'rahima' }, manager: { username: 'farida' } }, ccu: { incharge: { username: 'rahima' } } } });
+    assert.equal(cfgR.status, 200); assert.equal(cfgR.body.cns.name, 'Nasrin Sultana');
+    assert.ok(logged.some((l) => l.action === 'roster_config'), 'the setup change is logged');
+    const cfgGet = (await call('GET', '/api/rosters/config', null, 'icu')).body;
+    assert.deepEqual(cfgGet.depts.map((d) => d.id), ['ccu', 'micu', 'nicu'], 'every canonical unit is listed, named or not');
+    assert.equal(cfgGet.depts.find((d) => d.id === 'micu').manager.username, 'farida');
+    assert.equal(cfgGet.depts.find((d) => d.id === 'nicu').manager, null);
+    const reviewers = (await call('GET', '/api/rosters/reviewers')).body.reviewers;
+    assert.deepEqual(reviewers.map((r) => r.username + ':' + r.rosterRole).sort(), ['admin:admin', 'farida:manager', 'nasrin:cns', 'rahima:incharge'], 'active role holders plus administrators, nobody else');
+    assert.ok(reviewers.every((r) => r.perms === undefined && r.passwordHash === undefined), 'names and roster fields only');
+
+    // The account-level flags the screens are built from.
+    let can = (await call('GET', '/api/rosters/scope', null, 'farida')).body.can;
+    assert.ok(can.forward && can.return && can.review && !can.approve && !can.reopen && !can.setup && !can.edit, 'a manager checks, returns and reviews; never approves, edits or sets up');
+    can = (await call('GET', '/api/rosters/scope', null, 'nasrin')).body.can;
+    assert.ok(can.approve && can.return && can.review && !can.forward && !can.reopen && can.role === 'cns', 'the CNS approves and returns');
+    can = (await call('GET', '/api/rosters/scope', null, 'rahima')).body.can;
+    assert.ok(can.send && can.edit && !can.review && can.role === 'incharge', 'the in-charge sends');
+    assert.equal((await call('GET', '/api/rosters/scope', null, 'admin')).body.can.setup, true);
+
+    // A unit with no sheet yet still answers with the names to print.
+    let empty = await sheetOf('NICU', 2026, 10, 'admin');
+    assert.equal(empty.roster, null); assert.equal(empty.signers.incharge, null, 'nobody set for NICU yet'); assert.equal(empty.signers.cns.name, 'Nasrin Sultana');
+    assert.equal(empty.can.send, true, 'a brand-new sheet may be sent once saved');
+
+    // draft -> send to manager -> forward -> approve
+    r = await put({ dept: 'MICU', year: 2026, month: 10, grid: { S1: { 1: 'M3', 2: 'E4' }, S2: { 1: 'N1' } }, names: { S1: 'Rahima', S2: 'Karim' }, baseRevision: 1 }, 'rahima');
+    assert.equal(r.status, 200); assert.deepEqual(r.body.roster.staffIds.sort(), ['S1', 'S2'], 'the staff index is kept on the sheet');
+    assert.equal(r.body.roster.can.send, true); assert.equal(r.body.roster.signers.manager.name, 'Farida Begum');
+    assert.equal((await T(micuNov, 'forward', '', 'rahima')).status, 409, 'a draft cannot be forwarded (bad state)');
+    assert.equal((await T(micuNov, 'approve', '', 'nasrin')).body.code, 'bad_state');
+    assert.equal((await T(micuNov, 'send_manager', '', 'farida')).status, 403, 'the manager does not send');
+    r = await T(micuNov, 'send_manager', '', 'rahima');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.status, 'pending_manager'); assert.equal(r.body.roster.stage, 'manager');
+    assert.equal(r.body.roster.preparedBy, 'Rahima Akter'); assert.equal(r.body.roster.sentBy, 'rahima');
+    assert.equal((await put({ dept: 'MICU', year: 2026, month: 10, grid: { S1: { 1: 'M3' } }, baseRevision: 2 }, 'rahima')).status, 409, 'the author cannot edit a sheet with the manager');
+    assert.equal((await put({ dept: 'MICU', year: 2026, month: 10, grid: { S1: { 1: 'M3', 2: 'E4' }, S2: { 1: 'N1' } }, baseRevision: 2 }, 'admin')).status, 200, 'an administrator may still save it');
+    assert.equal((await sheetOf('MICU', 2026, 10, 'admin')).roster.status, 'pending_manager', 'without changing its status');
+    assert.equal((await T(micuNov, 'approve', '', 'nasrin')).status, 409, 'the CNS cannot approve what is still with the manager');
+    assert.equal((await T(micuNov, 'forward', '', 'icu')).status, 403, 'a unit editor cannot forward');
+    // The manager sees the sheet through the setup, with no unit assignment of her own.
+    assert.equal((await sheetOf('MICU', 2026, 10, 'farida')).roster.status, 'pending_manager', 'the named manager reads the sheet');
+    assert.equal((await call('GET', '/api/rosters/CCU/2026/10', null, 'farida')).status, 403, 'but not a unit she is not named for');
+    r = await T(micuNov, 'forward', '', 'farida');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.status, 'pending_cns'); assert.equal(r.body.roster.checkedBy, 'Farida Begum'); assert.equal(r.body.roster.checkedByUser, 'farida');
+    assert.equal((await T(micuNov, 'forward', '', 'farida')).status, 409, 'cannot forward twice');
+    assert.equal((await T(micuNov, 'approve', '', 'farida')).status, 403, 'a manager never approves');
+    assert.equal((await T(micuNov, 'approve', '', 'rahima')).status, 403, 'nor does the in-charge');
+    r = await T(micuNov, 'approve', '', 'nasrin');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.status, 'approved'); assert.equal(r.body.roster.approvedBy, 'Nasrin Sultana'); assert.ok(r.body.roster.approvedAt);
+    assert.deepEqual(r.body.roster.history.map((h) => h.action), ['send_manager', 'forward', 'approve'], 'three history rows');
+    assert.equal(r.body.roster.history[0].byName, 'Rahima Akter');
+    assert.equal((await put({ dept: 'MICU', year: 2026, month: 10, grid: {}, baseRevision: 3 }, 'rahima')).body.locked, true, 'approved = locked');
+    assert.equal((await T(micuNov, 'reopen', '', 'nasrin')).status, 403, 'the CNS cannot reopen');
+    assert.equal((await sheetOf('MICU', 2026, 10, 'icu')).roster.status, 'approved', 'a unit editor reads the published sheet');
+    assert.deepEqual(logged.filter((l) => /^roster_(sent|forwarded|approved)$/.test(l.action)).map((l) => l.action).slice(-3), ['roster_sent', 'roster_forwarded', 'roster_approved'], 'each hand-over is logged');
+
+    // Versions: one snapshot per revision, the grid as it was when sent.
+    let vs = (await call('GET', '/api/rosters/' + micuNov + '/versions', null, 'farida')).body.versions;
+    assert.deepEqual(vs.map((v) => v.revision + ':' + v.action), ['3:approve', '2:send_manager'], 'the send (rev 2) and, after the admin save, the forward+approve (rev 3) share one snapshot per revision');
+    assert.equal(vs[0].grid, undefined, 'the list carries no grid');
+    const v2 = (await call('GET', '/api/rosters/' + micuNov + '/versions/2', null, 'rahima')).body.version;
+    assert.equal(v2.grid.S1['2'], 'E4'); assert.equal(v2.status, 'pending_manager');
+    assert.equal((await call('GET', '/api/rosters/' + micuNov + '/versions/9', null, 'rahima')).status, 404);
+    assert.equal((await call('GET', '/api/rosters/' + micuNov + '/versions', null, 'noUnits')).status, 403, 'versions follow the sheet visibility');
+
+    r = await T(micuNov, 'reopen', '', 'admin');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.status, 'draft'); assert.equal(r.body.roster.history.length, 4);
+
+    // return -> edit resumes as draft -> resend straight to the CNS
+    await T(micuNov, 'send_manager', '', 'rahima');
+    r = await T(micuNov, 'return', 'Night cover on 14-16 is short.', 'farida');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.status, 'returned'); assert.equal(r.body.roster.returnStage, 'manager');
+    assert.equal(r.body.roster.returnNote, 'Night cover on 14-16 is short.'); assert.equal(r.body.roster.returnedByName, 'Farida Begum');
+    assert.equal((await T(micuNov, 'return', '', 'farida')).status, 409, 'cannot return a returned sheet');
+    r = await put({ dept: 'MICU', year: 2026, month: 10, grid: { S1: { 1: 'M3', 14: 'N1' } }, baseRevision: 3 }, 'rahima');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.status, 'draft', 'editing a returned sheet makes it a draft again');
+    assert.equal(r.body.roster.history.slice(-1)[0].action, 'resume');
+    assert.equal(r.body.roster.returnNote, 'Night cover on 14-16 is short.', 'the note stays until it is resent');
+    r = await T(micuNov, 'send_cns', '', 'rahima');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.status, 'pending_cns'); assert.equal(r.body.roster.returnNote, '', 'a resend clears the note (history keeps it)');
+    assert.equal((await T(micuNov, 'forward', '', 'farida')).body.code, 'bad_state', 'the manager was skipped; nothing for her to forward');
+    r = await T(micuNov, 'return', '', 'nasrin');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.returnStage, 'cns'); assert.equal(r.body.roster.returnNote, '', 'a note is optional');
+    assert.ok(logged.filter((l) => l.action === 'roster_returned').length === 2);
+
+    // The CNS cannot sign a sheet she sent herself; an administrator can.
+    await put({ dept: 'CCU', year: 2026, month: 11, grid: { S9: { 1: 'M' } }, baseRevision: 0 }, 'dual');
+    assert.equal((await T('ros-CCU-2026-11', 'send_cns', '', 'dual')).status, 200);
+    r = await T('ros-CCU-2026-11', 'approve', '', 'dual');
+    assert.equal(r.status, 403); assert.match(r.body.error, /yourself/);
+    assert.equal((await T('ros-CCU-2026-11', 'approve', '', 'nasrin')).status, 200, 'another CNS may');
+
+    // A legacy 'submitted' row: read as pending_cns, approvable, never rewritten by a read.
+    assert.equal((await put({ dept: 'NICU', year: 2026, month: 10, grid: { S5: { 1: 'M' } }, status: 'submitted', baseRevision: 0 })).body.roster.status, 'pending_cns');
+    const nicuLegacy = roster.__mem().find((x) => x.id === 'ros-NICU-2026-10'); nicuLegacy.status = 'submitted';   // what an old deployment stored
+    let got = await sheetOf('NICU', 2026, 10, 'nasrin');
+    assert.equal(got.roster.status, 'pending_cns'); assert.equal(got.roster.legacyStatus, 'submitted');
+    assert.equal(nicuLegacy.status, 'submitted', 'reading did not rewrite the stored row');
+    assert.equal((await T('ros-NICU-2026-10', 'approve', '', 'nasrin')).status, 200, 'the conditional write matches the legacy spelling');
+
+    // The review inbox: every canonical unit, sheet or not, with what is waiting on ME.
+    await put({ dept: 'MICU', year: 2026, month: 11, grid: { S1: { 1: 'M' } }, baseRevision: 0 }, 'rahima');
+    await T('ros-MICU-2026-11', 'send_manager', '', 'rahima');
+    assert.equal((await call('GET', '/api/rosters/review?year=2026&month=11', null, 'rahima')).status, 403, 'the inbox is for reviewers');
+    let inbox = (await call('GET', '/api/rosters/review?year=2026&month=11', null, 'farida')).body;
+    assert.deepEqual(inbox.rows.map((x) => x.dept), ['micu'], 'a manager sees only the units she is named for');
+    assert.equal(inbox.rows[0].pendingForMe, true); assert.equal(inbox.rows[0].status, 'pending_manager'); assert.equal(inbox.rows[0].incharge.name, 'Rahima Akter'); assert.equal(inbox.rows[0].can.forward, true);
+    inbox = (await call('GET', '/api/rosters/review?year=2026&month=11', null, 'nasrin')).body;
+    assert.deepEqual(inbox.rows.map((x) => x.dept + ':' + (x.hasSheet ? x.status : 'none') + ':' + x.pendingForMe), ['ccu:approved:false', 'micu:pending_manager:false', 'nicu:none:false'], 'the CNS sees every unit, including the one with no sheet, and nothing waits on her yet');
+    assert.equal(inbox.rows.find((x) => x.dept === 'nicu').sheetDept, 'NICU', 'a unit with no sheet still names where to open one');
+    assert.equal(inbox.rows.find((x) => x.dept === 'ccu').approvedBy, 'Nasrin Sultana');
+    let cnt = (await call('GET', '/api/rosters/review/count?year=2026&month=11', null, 'farida')).body;
+    assert.deepEqual([cnt.pending, cnt.returned], [1, 0]);
+    await T('ros-MICU-2026-11', 'forward', '', 'farida');
+    cnt = (await call('GET', '/api/rosters/review/count?year=2026&month=11', null, 'nasrin')).body;
+    assert.equal(cnt.pending, 1, 'now it waits on the CNS');
+    assert.equal((await call('GET', '/api/rosters/review/count?year=2026&month=11', null, 'farida')).body.pending, 0);
+    await T('ros-MICU-2026-11', 'return', 'see me', 'nasrin');
+    cnt = (await call('GET', '/api/rosters/review/count?year=2026&month=11', null, 'rahima')).body;
+    assert.deepEqual([cnt.pending, cnt.returned], [0, 1], 'the author is told a sheet came back');
+    assert.equal((await call('GET', '/api/rosters', null, 'farida')).body.rosters.every((x) => x.dept === 'MICU'), true, 'the index follows the same reach');
+
+    // Staff-wise history across months, within scope, published-only for a collector.
+    let hist = (await call('GET', '/api/rosters/staff/1?from=2026-09&to=2026-12', null, 'rahima')).body;
+    assert.deepEqual(hist.months.map((m) => m.year + '-' + m.month + ':' + m.status), ['2026-8:approved', '2026-10:returned', '2026-11:returned'], 'S1 appears in every MICU month in range (from/to are calendar months), oldest first');
+    assert.equal(hist.months[1].cells['14'], 'N1');
+    hist = (await call('GET', '/api/rosters/staff/S1?from=2026-11&to=2026-11', null, 'rahima')).body;
+    assert.equal(hist.months.length, 1, 'the range is honoured, and S-prefixed ids work');
+    assert.deepEqual((await call('GET', '/api/rosters/staff/1?from=2026-09&to=2026-12', null, 'incharge')).body.months.map((m) => m.status), ['approved'], 'a plain portal account sees its own ward published sheets only');
+    assert.equal((await call('GET', '/api/rosters/staff/9?from=2026-09&to=2026-12', null, 'incharge')).body.months.length, 0, 'and nothing of another ward');
+    assert.equal((await call('GET', '/api/rosters/staff/9?from=2026-09&to=2026-12', null, 'wardLead')).body.months.length, 4, 'the granted in-charge sees every CCU month, drafts included');
+    assert.equal((await call('GET', '/api/rosters/staff/abc', null)).status, 400);
+
+    // The legacy status route still works, mapped onto the chain, and ignores the caller's name.
+    await T('ros-MICU-2026-11', 'send_cns', '', 'rahima');   // from returned, straight to the CNS
+    r = await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-11') + '/status', { status: 'approved', approvedBy: 'Imposter' }, 'nasrin');
+    assert.equal(r.status, 200); assert.equal(r.body.roster.approvedBy, 'Nasrin Sultana', 'the payload name is ignored');
+    r = await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-11') + '/status', { status: 'draft' }, 'nasrin');
+    assert.equal(r.status, 403, 'draft on an approved sheet is a reopen, administrator only');
+    assert.equal((await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-11') + '/status', { status: 'draft' }, 'admin')).body.roster.status, 'draft');
+    r = await call('POST', '/api/rosters/' + encodeURIComponent('ros-MICU-2026-11') + '/status', { status: 'approved' }, 'admin');
+    assert.equal(r.body.roster.status, 'approved'); assert.deepEqual(r.body.roster.history.slice(-2).map((h) => h.action), ['send_cns', 'approve'], 'approving a draft through the old route sends then approves');
+
+    // The print log.
+    assert.equal((await call('POST', '/api/rosters/print', { kind: 'staff', target: 'Rahima', detail: 'May-Nov 2026' }, 'rahima')).body.ok, true);
+    assert.ok(logged.some((l) => l.action === 'roster_print' && l.opts.target === 'Rahima'));
+
+    console.log('DUTY_ROSTER_CHAIN_PASS: setup, roles, send/forward/approve/return/resume/reopen, versions, legacy rows, inbox + badge, staff history, compat route');
     console.log('DUTY_ROSTER_TEST_PASS: approved lock, revision guard, kept note/status/names, no approve-by-save, per-unit roster assignment, in-charge build+submit without approve');
   } finally { server.close(); }
 })().catch((e) => { console.error(e); process.exitCode = 1; });

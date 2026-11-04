@@ -169,6 +169,7 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
               {row('Created',acDate(u.createdAt))}
               {row('Last changed',acDate(u.updatedAt))}
               {t!=='portal'&&row('Report sign-off',({prepare:'Prepares',check:'Checks',approve:'Approves'})[u.signoff]||'Takes no part')}
+              {t!=='portal'&&row('Duty roster role',({incharge:'In-charge · prepares',manager:'Manager · checks',cns:'CNS · approves'})[u.rosterRole]||'None')}
             </div>
           </div></div>
 

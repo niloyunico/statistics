@@ -34,46 +34,6 @@ const rosApi = {
 };
 const rosToast = (m, t) => { try { window.UI && window.UI.toast && window.UI.toast(m, t || 'success'); } catch (e) {} };
 const rosCan = (a) => { try { return window.unicoCan ? window.unicoCan('roster', a) : true; } catch (e) { return true; } };
-// Publishing (approve-and-lock) and reopening are the roster's most privileged actions, so
-// they follow its top PERMISSION rather than the backend role -- a Chief of Nursing Services
-// granted full Duty Roster access signs off her own rosters. Mirrors the same test in
-// server/duty-roster.js; unicoCan returns true for administrators and open local mode.
-const rosMayApprove = () => { try { return window.unicoCan ? window.unicoCan('roster', 'delete') : true; } catch (e) { return true; } };
-
-/* ---- WHO SIGNS ----
-   The three sign-off boxes used to name job titles in the markup ("CNS", "Chief of
-   Nursing Services"), which meant the roster carried its own idea of the hierarchy and
-   could not follow the hospital when it renamed a tier. Each box now asks the LADDER:
-   the tier marked "Prepares" drafts, the one marked "Checks" reviews, the one marked
-   "Approves" signs. Settings → Users & Roles → Hierarchy is where those marks live.
-   Names + titles only (/api/signatories), so a ward in-charge filling the boxes in does
-   not need Administration rights. */
-let ROS_SIGNERS = null, ROS_SIGNERS_REQ = null;
-function rosLoadSigners() {
-  if (ROS_SIGNERS) return Promise.resolve(ROS_SIGNERS);
-  if (ROS_SIGNERS_REQ) return ROS_SIGNERS_REQ;
-  ROS_SIGNERS_REQ = fetch('/api/signatories', { credentials: 'same-origin' })
-    .then((r) => r.json())
-    .then((j) => { ROS_SIGNERS = (j && j.ok) ? j : { signatories: [], tiers: [] }; ROS_SIGNERS_REQ = null; return ROS_SIGNERS; })
-    // Unreachable (or not permitted): fall back to the open list below, never an empty box.
-    .catch(() => { ROS_SIGNERS = { signatories: [], tiers: [] }; ROS_SIGNERS_REQ = null; return ROS_SIGNERS; });
-  return ROS_SIGNERS_REQ;
-}
-function useRosSigners() {
-  const [v, setV] = React.useState(ROS_SIGNERS);
-  React.useEffect(() => { let live = true; rosLoadSigners().then((x) => { if (live) setV(x); }); return () => { live = false; }; }, []);
-  return v || ROS_SIGNERS || { signatories: [], tiers: [] };
-}
-// The tier that holds a given place in the chain, and the people at it.
-const rosTierFor = (sg, role) => (sg.tiers || []).find((t) => t.signoff === role) || null;
-const rosNamesFor = (sg, role) => (sg.signatories || []).filter((u) => u.signoff === role).map((u) => u.name);
-
-const ROS_STATUS = {
-  draft: { label: 'Draft', color: '#e0a12a' },
-  submitted: { label: 'Submitted', color: '#27a8db' },
-  approved: { label: 'Approved', color: '#1f9d63' },
-};
-
 /* The key a roster row is stored under.
    NOT the employee number: two pairs of serving staff share one, and 39 people have
    none at all. The staff record's own id is unique; the employee number is display. */
@@ -381,10 +341,455 @@ function ShiftLegend({ compact }) {
   );
 }
 
-function RosStatusChip({ st }) {
-  const map = { draft: 'In progress', submitted: 'Awaiting discussion', approved: 'Actioned' };
-  const label = (ROS_STATUS[st || 'draft'] || ROS_STATUS.draft).label;
-  return <span style={MK.stChip(map[st] || 'Not started')}>{label}</span>;
+const rosPortal = (n) => (window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
+
+/* ---- THE REVIEW CHAIN ----
+   The in-charge drafts the sheet and sends it to the unit's Manager (or straight to the
+   CNS, with a warning). The Manager forwards it to the CNS or returns it; the CNS approves
+   it or returns it. A return may carry a note and always flags the sheet red.
+
+   The SERVER decides every step (server/roster-workflow.js) and says, per sheet, which
+   steps this account may take (`roster.can`). The screen only offers those — it never
+   works out a right of its own, so the button shown and the API answer cannot disagree.
+   Who is the In-charge / Manager / CNS is set once by an administrator (Duty Roster →
+   Setup) and arrives with the sheet as `signers`. */
+const ROS_STATUS = {
+  draft: { label: 'Draft', color: '#b5670a', bg: 'rgba(224,138,30,.14)' },
+  pending_manager: { label: 'Pending Manager', color: '#0072a3', bg: 'rgba(0,144,202,.12)' },
+  pending_cns: { label: 'Pending CNS', color: '#5b45c4', bg: 'rgba(106,82,212,.13)' },
+  approved: { label: 'Approved', color: '#157a43', bg: 'rgba(31,157,87,.13)' },
+  returned: { label: 'Returned', color: '#b4232f', bg: 'rgba(210,58,82,.12)' },
+  none: { label: 'Not submitted', color: '#7d8ea8', bg: 'rgba(125,145,180,.14)' },
+};
+// Sheets handed in before the chain existed say 'submitted' — they were waiting for the CNS.
+const rosStatusNorm = (st) => (st === 'submitted' ? 'pending_cns' : ROS_STATUS[st] ? st : (st ? 'draft' : 'none'));
+const ROS_EDITABLE = ['draft', 'returned'];
+const ROS_SEND_ICON = 'M22 2L11 13M22 2l-7 20-4-9-9-4z';
+const ROS_ACTIONS = {
+  send_manager: { label: 'Send to Manager', done: 'Sent to the Manager for checking.', tone: 'pri', icon: ROS_SEND_ICON },
+  send_cns: { label: 'Send to CNS', done: 'Sent straight to the CNS for approval.', tone: 'ghost', icon: ROS_SEND_ICON },
+  forward: { label: 'Forward to CNS', done: 'Forwarded to the CNS for approval.', tone: 'pri', icon: 'M5 12h14M13 6l6 6-6 6' },
+  approve: { label: 'Approve', done: 'Roster approved and locked.', tone: 'ok', icon: 'M4 12l5 5L20 6' },
+  return: { label: 'Return', done: 'Roster returned to the in-charge.', tone: 'danger', icon: 'M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3' },
+  reopen: { label: 'Reopen', done: 'Roster reopened for editing.', tone: 'ghost', icon: 'M1 4v6h6M3.5 15a9 9 0 102.1-9.4L1 10' },
+};
+const ROS_HIST_LABEL = { send_manager: 'Sent to Manager', send_cns: 'Sent straight to CNS', forward: 'Forwarded to CNS', approve: 'Approved', return: 'Returned', reopen: 'Reopened', resume: 'Edited after return', edit: 'Edited during review', create: 'Created' };
+const rosWhen = (t) => {
+  if (!t) return '';
+  const d = new Date(t);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ', ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+};
+// Same id the server builds (rosterId cuts the department to 40 characters). Only a
+// fallback: a loaded sheet carries its own id.
+const rosSheetId = (dept, year, month) => 'ros-' + String(dept).slice(0, 40) + '-' + year + '-' + String(month).padStart(2, '0');
+
+/* Who sits where in the chain, per department (Duty Roster → Setup). Names only — every
+   roster viewer may read it, only an administrator may change it. Cached for the session;
+   the setup screen reloads it after a save. */
+let ROS_CFG = null, ROS_CFG_REQ = null;
+function rosLoadConfig(force) {
+  if (ROS_CFG && !force) return Promise.resolve(ROS_CFG);
+  if (ROS_CFG_REQ && !force) return ROS_CFG_REQ;
+  ROS_CFG_REQ = rosApi.get('/api/rosters/config')
+    .then((j) => { ROS_CFG = (j && j.ok) ? j : { cns: null, depts: [] }; ROS_CFG_REQ = null; return ROS_CFG; })
+    .catch(() => { ROS_CFG_REQ = null; return ROS_CFG || { cns: null, depts: [] }; });
+  return ROS_CFG_REQ;
+}
+function useRosterConfig() {
+  const [v, setV] = useState(ROS_CFG);
+  useEffect(() => { let live = true; rosLoadConfig().then((x) => { if (live) setV(x); }); return () => { live = false; }; }, []);
+  const reload = React.useCallback(() => rosLoadConfig(true).then((x) => { setV(x); return x; }), []);
+  return { cns: (v && v.cns) || null, depts: (v && v.depts) || [], updatedAt: v && v.updatedAt, loading: !v, reload };
+}
+
+/* The rule set a stored sheet carries, in the shape rosEval wants. New sheets store the
+   design's cfg/off/custom; older ones only the legacy minMorning/... keys. */
+const rosRulesOf = (ru) => {
+  ru = ru || {};
+  let cfg = { ...ROS_DEF_CFG, ...(ru.cfg || {}) };
+  if (!ru.cfg && ru.minMorning) {
+    cfg = {
+      ...cfg,
+      minM: (ru.minMorning && ru.minMorning.value) || cfg.minM,
+      minE: (ru.minEvening && ru.minEvening.value) || cfg.minE,
+      minN: (ru.minNight && ru.minNight.value) || cfg.minN,
+      maxNights: (ru.maxConsecNight && ru.maxConsecNight.value) || cfg.maxNights,
+      maxLeavePerDay: (ru.leaveClash && ru.leaveClash.value) || cfg.maxLeavePerDay,
+    };
+  }
+  return { cfg, en: { ...ROS_DEF_OFF, ...(ru.off || {}) }, custom: Array.isArray(ru.custom) ? ru.custom : [] };
+};
+// One rule engine for the editor AND every review screen, so the count the in-charge saw
+// when sending is the count the Manager and the CNS see when deciding.
+const rosFindingsOf = (grid, rows, year, month, rules) => {
+  const r = rosRulesOf(rules);
+  return rosEval(grid || {}, rows || [], R.daysIn(year, month), year, month, r.cfg, r.en, r.custom);
+};
+
+/* The rows a stored sheet shows outside the editor (review preview, versions).
+   Order as saved; people no longer on the register keep the name stored with the sheet. */
+const rosRowsFrom = (doc, staff, dept, withRegister) => {
+  const all = {};
+  (staff || []).forEach((e) => { all[rosKey(e)] = e; });
+  const reg = withRegister === false ? [] : (staff || [])
+    .filter((e) => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept)
+    .map((e) => ({ empId: rosKey(e), empIdShown: e.emp_id || '', name: e.name, desig: e.designation }));
+  const known = Object.keys(all).map((k) => ({ empId: k, empIdShown: all[k].emp_id || '' }));
+  const grid = rosMigrateGrid(doc && doc.grid, known);
+  const names = (doc && doc.names) || {};
+  const seen = {}, out = [];
+  const add = (id) => {
+    if (!id || seen[id]) return; seen[id] = 1;
+    const e = all[id];
+    out.push(e ? { empId: id, empIdShown: e.emp_id || '', name: e.name, desig: e.designation }
+      : { empId: id, empIdShown: '', name: names[id] || id, desig: '' });
+  };
+  ((doc && doc.order) || []).forEach((id) => { if (grid[id] || reg.some((r) => r.empId === id)) add(id); });
+  Object.keys(grid).forEach(add);
+  reg.forEach((r) => add(r.empId));
+  return { rows: out, grid };
+};
+
+function RosStatusChip({ st, stage, big }) {
+  const s = ROS_STATUS[rosStatusNorm(st)];
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: big ? 11.5 : 10.5, fontWeight: 700, padding: big ? '6px 12px' : '3px 9px', borderRadius: 14, whiteSpace: 'nowrap', color: s.color, background: s.bg, border: '1px solid ' + s.color + '33' }}>
+      <span style={{ width: 7, height: 7, borderRadius: '50%', background: s.color }} />{s.label}{stage ? ' · ' + stage : ''}
+    </span>
+  );
+}
+
+/* The steps this account may take on one sheet, in the order a reviewer reads them:
+   the soft way out first (Return / Send to CNS), the main step last. */
+function RosDecisionButtons({ status, can, onAction, busy, compact, hasManager }) {
+  const c = can || {};
+  const resend = rosStatusNorm(status) === 'returned';
+  const tones = {
+    pri: { background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', border: '1px solid transparent', boxShadow: '0 6px 16px rgba(0,144,202,.28)' },
+    ok: { background: 'linear-gradient(135deg,#2fbf7f,#157a43)', color: '#fff', border: '1px solid transparent', boxShadow: '0 6px 16px rgba(31,157,87,.28)' },
+    danger: { background: 'rgba(210,58,82,.07)', color: '#b4232f', border: '1px solid rgba(210,58,82,.35)' },
+    ghost: { background: 'rgba(255,255,255,.9)', color: '#0072a3', border: '1px solid rgba(0,114,163,.3)' },
+  };
+  const btn = (a, label) => {
+    const m = ROS_ACTIONS[a];
+    const noMgr = a === 'send_manager' && hasManager === false;
+    const dis = busy || noMgr;
+    return (
+      <button key={a} type="button" disabled={dis} onClick={(e) => { e.stopPropagation(); onAction(a); }}
+        title={noMgr ? 'No Manager is set for this unit — an administrator sets one under Duty Roster → Setup.' : ''}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: compact ? '5px 10px' : '8px 14px', borderRadius: 9, fontSize: compact ? 11 : 12, fontWeight: 700, fontFamily: 'inherit', cursor: dis ? 'default' : 'pointer', opacity: dis ? .5 : 1, whiteSpace: 'nowrap', ...tones[m.tone] }}>
+        <Ic d={m.icon} s={compact ? 12 : 13} sw={2.2} />{label || m.label}
+      </button>
+    );
+  };
+  const out = [];
+  if (c.send) { out.push(btn('send_cns', resend ? 'Resend to CNS' : null)); out.push(btn('send_manager', resend ? 'Resend to Manager' : null)); }
+  if (c.return) out.push(btn('return'));
+  if (c.forward) out.push(btn('forward'));
+  if (c.approve) out.push(btn('approve'));
+  if (c.reopen) out.push(btn('reopen'));
+  if (!out.length) return null;
+  return <div style={{ display: 'inline-flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' }}>{out}</div>;
+}
+
+// Return note. Optional by design: a reviewer may send a sheet back with or without a
+// reason, and the return is red-flagged on the sheet either way.
+function RosNoteModal({ what, busy, onCancel, onConfirm }) {
+  const [note, setNote] = useState('');
+  const presets = ['Night cover is below the minimum', 'Rule warnings are not resolved', 'Wrong staff on the sheet', 'Leave clash', 'Too many consecutive nights'];
+  useEffect(() => {
+    const k = (e) => { if (e.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  return rosPortal(
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9000, background: 'rgba(16,32,46,.42)', display: 'grid', placeItems: 'center', padding: 16 }} onMouseDown={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
+      <div style={{ width: 'min(520px,100%)', background: 'var(--panel,#fff)', borderRadius: 14, boxShadow: '0 24px 60px rgba(16,32,46,.3)', overflow: 'hidden' }}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid rgba(125,145,180,.18)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ display: 'inline-grid', placeItems: 'center', width: 30, height: 30, borderRadius: 9, background: 'rgba(210,58,82,.12)', color: '#b4232f' }}><Ic d={ROS_ACTIONS.return.icon} s={15} sw={2.2} /></span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 800, fontSize: 14.5, color: '#16202e' }}>Return this roster</div>
+            <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>{what} goes back to the in-charge, flagged red.</div>
+          </div>
+        </div>
+        <div style={{ padding: '14px 18px' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#6c7a8c', textTransform: 'uppercase', letterSpacing: .5, marginBottom: 6 }}>Reason <span style={{ textTransform: 'none', fontWeight: 500 }}>(optional)</span></div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+            {presets.map((p) => (
+              <button key={p} type="button" onClick={() => setNote((n) => ((n ? n.replace(/\s*$/, '') + '\n' : '') + p).slice(0, 500))}
+                style={{ border: '1px solid rgba(125,145,180,.35)', background: 'rgba(125,145,180,.08)', color: '#3c4858', borderRadius: 14, padding: '4px 10px', fontSize: 11, fontFamily: 'inherit', cursor: 'pointer' }}>{p}</button>
+            ))}
+          </div>
+          <textarea value={note} onChange={(e) => setNote(e.target.value.slice(0, 500))} rows={4} autoFocus
+            placeholder="What should the in-charge fix? Leave blank to return without a note."
+            style={{ width: '100%', boxSizing: 'border-box', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', padding: '9px 11px', fontFamily: 'inherit', fontSize: 12.5, resize: 'vertical', outline: 'none' }} />
+          <div style={{ fontSize: 10.5, color: '#9aa6b4', textAlign: 'right' }}>{note.length}/500</div>
+        </div>
+        <div style={{ padding: '12px 18px', borderTop: '1px solid rgba(125,145,180,.18)', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button className="btn" type="button" onClick={onCancel} disabled={busy}>Cancel</button>
+          <button type="button" disabled={busy} onClick={() => onConfirm(note.trim())}
+            style={{ border: 0, borderRadius: 9, padding: '8px 16px', fontWeight: 700, fontSize: 12.5, fontFamily: 'inherit', cursor: 'pointer', color: '#fff', background: 'linear-gradient(135deg,#e8697f,#b4232f)' }}>
+            {note.trim() ? 'Return with note' : 'Return without note'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* Runs one step of the chain: asks first (every step changes who holds the sheet), then
+   posts it. Returns the server's answer; `modal` must be rendered by the caller. */
+function useRosDecide() {
+  const [ask, setAsk] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const post = (id, action, note) => {
+    setBusy(true);
+    return rosApi.post('/api/rosters/' + encodeURIComponent(id) + '/transition', { action, note: note || '' }).then((r) => {
+      setBusy(false);
+      if (r && r.ok) {
+        rosToast(ROS_ACTIONS[action].done);
+        try { window.dispatchEvent(new Event('unico:ros-refresh')); } catch (e) { /* old browser */ }
+        return r;
+      }
+      rosToast((r && r.error) || 'Could not complete that step.', 'error');
+      return r || { ok: false };
+    }).catch(() => { setBusy(false); rosToast('Could not reach the server.', 'error'); return { ok: false }; });
+  };
+  const run = async ({ id, action, unit, period, warnings }) => {
+    const what = unit + ' · ' + period;
+    if (action === 'return') {
+      const note = await new Promise((resolve) => setAsk({ what, resolve }));
+      if (note === null) return { ok: false, cancelled: true };
+      return post(id, action, note);
+    }
+    const warn = warnings ? ' It still has ' + warnings + ' rule warning' + (warnings === 1 ? '' : 's') + '.' : '';
+    const msgs = {
+      send_manager: ['Send to the Manager?', what + ' goes to the unit Manager for checking. It is locked while it is with them.' + warn],
+      send_cns: ['Send straight to the CNS?', 'This skips the Manager check. ' + what + ' goes directly to the CNS for approval.' + warn, true],
+      forward: ['Forward to the CNS?', 'You have checked ' + what + '. It goes to the CNS for final approval.'],
+      approve: ['Approve this roster?', what + ' becomes the published roster and is locked.' + warn],
+      reopen: ['Reopen this roster?', what + ' goes back to draft so it can be edited. It has to be sent for review again.', true],
+    };
+    const m = msgs[action];
+    if (m) {
+      const UI = window.UI || {};
+      const yes = UI.confirm ? await UI.confirm({ title: m[0], message: m[1], confirmLabel: ROS_ACTIONS[action].label, danger: !!m[2] }) : true;
+      if (!yes) return { ok: false, cancelled: true };
+    }
+    return post(id, action, '');
+  };
+  const modal = ask ? <RosNoteModal what={ask.what} busy={busy} onCancel={() => { ask.resolve(null); setAsk(null); }} onConfirm={(n) => { ask.resolve(n); setAsk(null); }} /> : null;
+  return { run, modal, busy };
+}
+
+// The sheet's own story, newest first: every send, forward, return and approval.
+function RosHistoryTimeline({ history, empty }) {
+  const list = (history || []).slice().reverse();
+  if (!list.length) return <div style={{ padding: '10px 2px', fontSize: 12, color: '#8a97a8' }}>{empty || 'Nothing yet — the history starts the first time this sheet is sent for review.'}</div>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {list.map((h, i) => {
+        const c = h.action === 'return' ? '#b4232f' : h.action === 'approve' ? '#157a43' : ROS_STATUS[rosStatusNorm(h.to)].color;
+        return (
+          <div key={i} style={{ display: 'flex', gap: 10 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 12, flexShrink: 0 }}>
+              <span style={{ width: 10, height: 10, borderRadius: '50%', background: c, marginTop: 4, boxShadow: '0 0 0 3px ' + c + '22' }} />
+              {i < list.length - 1 && <span style={{ flex: 1, width: 2, background: 'rgba(125,145,180,.25)', marginTop: 3 }} />}
+            </div>
+            <div style={{ minWidth: 0, flex: 1, paddingBottom: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#16202e' }}>{ROS_HIST_LABEL[h.action] || h.action} <span style={{ fontWeight: 500, color: '#6c7a8c' }}>· {h.byName || h.by || '—'}</span></div>
+              <div style={{ fontSize: 10.5, color: '#8a97a8' }}>{rosWhen(h.at)}{h.revision != null ? ' · rev ' + h.revision : ''}</div>
+              {h.action === 'return' && !h.note && <div style={{ marginTop: 4, fontSize: 11, color: '#8c1d2a', fontStyle: 'italic' }}>No reason given</div>}
+              {h.note && <div style={{ marginTop: 4, fontSize: 11.5, color: h.action === 'return' ? '#8c1d2a' : '#3c4858', background: h.action === 'return' ? 'rgba(210,58,82,.08)' : 'rgba(125,145,180,.1)', borderLeft: '3px solid ' + c, padding: '5px 8px', borderRadius: 6, whiteSpace: 'pre-wrap' }}>{h.note}</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// The red flag a returned sheet carries until it is sent again.
+function RosReturnedBanner({ meta }) {
+  const m = meta || {};
+  const by = m.returnedByName || m.returnedBy || 'the reviewer';
+  const stage = m.returnStage === 'manager' ? 'Manager' : m.returnStage === 'cns' ? 'CNS' : '';
+  return (
+    <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', background: 'rgba(210,58,82,.07)', border: '1px solid rgba(210,58,82,.3)', borderLeft: '4px solid #b4232f', borderRadius: 12, padding: '11px 15px', marginBottom: 14 }}>
+      <span style={{ display: 'inline-grid', placeItems: 'center', width: 28, height: 28, borderRadius: 8, background: 'rgba(210,58,82,.14)', color: '#b4232f', flexShrink: 0 }}><Ic d={ROS_ACTIONS.return.icon} s={14} sw={2.2} /></span>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 800, color: '#8c1d2a' }}>Returned by {by}{stage ? ' (' + stage + ')' : ''}{m.returnedAt ? ' · ' + rosWhen(m.returnedAt) : ''}</div>
+        <div style={{ fontSize: 12, color: m.returnNote ? '#5a1620' : '#9a5a63', marginTop: 3, whiteSpace: 'pre-wrap', fontStyle: m.returnNote ? 'normal' : 'italic' }}>{m.returnNote || 'No reason given.'}</div>
+        <div style={{ fontSize: 10.5, color: '#9a5a63', marginTop: 4 }}>Fix the sheet, then send it again. The return stays in the sheet's history.</div>
+      </div>
+    </div>
+  );
+}
+
+// A side drawer (history, versions). Portalled: the glass cards trap position:fixed.
+function RosDrawer({ title, sub, onClose, children, wide }) {
+  useEffect(() => {
+    const k = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  return rosPortal(
+    <div style={{ position: 'fixed', inset: 0, zIndex: 8500, background: 'rgba(16,32,46,.32)', display: 'flex', justifyContent: 'flex-end' }} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ width: wide ? 'min(1180px,100%)' : 'min(420px,100%)', height: '100%', background: 'var(--panel,#fff)', boxShadow: '-18px 0 50px rgba(16,32,46,.22)', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid rgba(125,145,180,.18)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 800, fontSize: 14.5, color: '#16202e' }}>{title}</div>
+            {sub && <div style={{ fontSize: 11.5, color: '#6c7a8c' }}>{sub}</div>}
+          </div>
+          <button className="btn sm" type="button" onClick={onClose}>Close</button>
+        </div>
+        <div style={{ flex: 1, overflow: 'auto', padding: '14px 18px' }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* A stored sheet, read-only: the codes coloured by bucket, the per-person totals.
+   Used wherever a roster is LOOKED AT rather than edited — review, versions, staff view. */
+function RosSheetTable({ rows, grid, year, month, maxHeight }) {
+  const days = R.daysIn(year, month);
+  const ds = Array.from({ length: days }, (_, i) => i + 1);
+  const th = { position: 'sticky', top: 0, background: '#f2f6fb', fontSize: 9.5, fontWeight: 700, color: '#6c7a8c', padding: '5px 2px', borderBottom: '1px solid rgba(125,145,180,.3)', textAlign: 'center', zIndex: 1 };
+  const td = { fontFamily: ROS_MONO, fontSize: 9.4, fontWeight: 700, textAlign: 'center', padding: '3px 1px', borderBottom: '1px solid rgba(125,145,180,.12)', minWidth: 25 };
+  const g = grid || {};
+  if (!rows || !rows.length) return <div style={{ padding: 24, textAlign: 'center', color: '#8a97a8', fontSize: 12 }}>No one is on this sheet.</div>;
+  return (
+    <div style={{ overflow: 'auto', maxHeight: maxHeight || '62vh', border: '1px solid rgba(125,145,180,.22)', borderRadius: 10, background: '#fff' }}>
+      <table style={{ borderCollapse: 'separate', borderSpacing: 0, width: '100%' }}>
+        <thead>
+          <tr>
+            <th style={{ ...th, textAlign: 'left', left: 0, zIndex: 2, minWidth: 160, paddingLeft: 10 }}>Staff</th>
+            {ds.map((d) => {
+              const fri = new Date(year, month, d).getDay() === 5;
+              return <th key={d} style={{ ...th, background: fri ? '#e3edf8' : th.background }}>{d}<div style={{ fontWeight: 500, fontSize: 8.5 }}>{String(rosDow(year, month, d)).slice(0, 2)}</div></th>;
+            })}
+            {['G', 'M', 'E', 'N', 'O'].map((b) => <th key={b} style={{ ...th, color: rosBColor(b) }}>{b}</th>)}
+            <th style={th}>Hrs</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const row = g[r.empId] || {};
+            const t = R.totalsFor(row, days);
+            return (
+              <tr key={r.empId}>
+                <td style={{ position: 'sticky', left: 0, background: '#fff', padding: '4px 10px', borderBottom: '1px solid rgba(125,145,180,.12)', fontSize: 11.5, whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', zIndex: 1 }}>
+                  <div style={{ fontWeight: 600, color: '#16202e', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</div>
+                  <div style={{ fontSize: 9.5, color: '#8a97a8' }}>{[r.empIdShown, r.desig].filter(Boolean).join(' · ') || ' '}</div>
+                </td>
+                {ds.map((d) => {
+                  const c = row[d] || '';
+                  const col = c ? rosBColor(R.bucketOf(c)) : null;
+                  return <td key={d} style={{ ...td, color: col || '#ccd3dc', background: c ? col + '14' : 'transparent' }}>{c || '·'}</td>;
+                })}
+                {['G', 'M', 'E', 'N', 'O'].map((b) => <td key={b} style={{ ...td, color: '#3c4858' }}>{t[b] || ''}</td>)}
+                <td style={{ ...td, color: '#16202e' }}>{t.hours || ''}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* Prepared / Checked / Approved — filled from Duty Roster → Setup, never typed per sheet.
+   Before a step happens the box shows who WILL sign; after it, who did and when. */
+function RosSignOff({ signers, meta, dept }) {
+  const sg = signers || {}, m = meta || {};
+  const h = m.history || [];
+  const lastOf = (acts) => { for (let i = h.length - 1; i >= 0; i--) if (acts.indexOf(h[i].action) >= 0) return { e: h[i], i }; return null; };
+  const st = rosStatusNorm(m.status);
+  const inChain = st === 'pending_manager' || st === 'pending_cns' || st === 'approved';
+  const sent = inChain ? lastOf(['send_manager', 'send_cns']) : null;
+  const fwd0 = lastOf(['forward']);
+  const fwd = fwd0 && sent && fwd0.i > sent.i ? fwd0 : null;
+  const ok = st === 'approved' ? lastOf(['approve']) : null;
+  const skipped = sent && sent.e.action === 'send_cns';
+  const boxes = [
+    ['Prepared by', (sent && m.preparedBy) || (sg.incharge && sg.incharge.name), 'In-charge · ' + dept, sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge'],
+    ['Checked by', (fwd && m.checkedBy) || (sg.manager && sg.manager.name), 'Manager · ' + dept, fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager'],
+    ['Approved by', (ok && m.approvedBy) || (sg.cns && sg.cns.name), 'Chief of Nursing Services', ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS'],
+  ];
+  const missing = boxes.filter((b) => b[5]).map((b) => b[6]);
+  return (
+    <div style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))', border: '1px solid rgba(255,255,255,.92)', borderRadius: 16, boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)', padding: '14px 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: 10 }}>
+        <span style={rosBadge('rgba(0,144,202,.12)', '#0072a3', 24, 7)}><Ic d="M4 20h16M6 16l10-10 3 3-10 10H6z" s={13} sw={1.9} /></span>
+        <span style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>Sign-off</span>
+        <span style={{ fontSize: 10.5, color: '#9aa6b4' }}>names come from Duty Roster → Setup</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
+        {boxes.map(([role, name, caption, stamp, done]) => (
+          <div key={role} style={{ borderTop: '2px solid ' + (done ? '#1f9d57' : 'rgba(125,145,180,.3)'), paddingTop: 8 }}>
+            <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: .6, textTransform: 'uppercase', color: '#7d8ea8' }}>{role}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: name ? '#16202e' : '#b6c0cc', marginTop: 3 }}>{name || 'Not set'}</div>
+            <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{caption}</div>
+            <span style={{ display: 'inline-block', marginTop: 5, fontSize: 9, fontWeight: 700, letterSpacing: .4, textTransform: 'uppercase', color: done ? '#157a43' : '#9aa6b4', background: done ? 'rgba(31,157,87,.13)' : 'rgba(125,145,180,.12)', padding: '2px 7px', borderRadius: 8 }}>{stamp}</span>
+          </div>
+        ))}
+      </div>
+      {missing.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 11, color: '#b5670a', background: 'rgba(224,138,30,.1)', borderRadius: 8, padding: '6px 10px' }}>
+          {missing.join(' and ')} not set for this unit — an administrator sets it once under <b>Duty Roster → Setup</b>.
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* Every saved revision that was sent, returned or approved is kept as a snapshot, so the
+   sheet as it stood at each step can be looked at again. Read-only. */
+function RosVersions({ sheetId, staff, dept, year, month, onClose }) {
+  const [list, setList] = useState(null);
+  const [open, setOpen] = useState(null);     // { revision, snap }
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions')
+      .then((r) => { if (r && r.ok) setList(r.versions || []); else { setErr((r && r.error) || 'Could not load the versions.'); setList([]); } })
+      .catch(() => { setErr('Could not reach the server.'); setList([]); });
+  }, [sheetId]);
+  const show = (v) => rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions/' + v.revision)
+    .then((r) => { if (r && r.ok && r.version) setOpen({ v, snap: r.version }); else rosToast((r && r.error) || 'Could not open that version.', 'error'); })
+    .catch(() => rosToast('Could not reach the server.', 'error'));
+  const view = open ? rosRowsFrom(open.snap, staff, dept, false) : null;
+  return (
+    <RosDrawer wide={!!open} onClose={onClose}
+      title={open ? 'Version rev ' + open.v.revision : 'Versions'}
+      sub={open ? (ROS_HIST_LABEL[open.v.action] || open.v.action || 'Saved') + ' · ' + (open.v.byName || open.v.by || '—') + ' · ' + rosWhen(open.v.at) : 'The sheet as it stood each time it was sent, returned or approved'}>
+      {open ? (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(106,82,212,.08)', border: '1px solid rgba(106,82,212,.25)', borderRadius: 10, padding: '8px 12px', marginBottom: 12 }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: '#5b45c4', flex: 1 }}>Viewing an earlier version — read only. The current sheet is unchanged.</span>
+            <button className="btn sm" type="button" onClick={() => setOpen(null)}>‹ All versions</button>
+          </div>
+          {open.v.note && <div style={{ fontSize: 12, color: '#3c4858', marginBottom: 10, whiteSpace: 'pre-wrap' }}><b>Note:</b> {open.v.note}</div>}
+          <RosSheetTable rows={view.rows} grid={view.grid} year={year} month={month} maxHeight="72vh" />
+        </div>
+      ) : list === null ? <div style={{ color: '#8a97a8', fontSize: 12 }}>Loading…</div>
+        : !list.length ? <div style={{ color: '#8a97a8', fontSize: 12 }}>{err || 'No versions yet — a snapshot is kept each time the sheet is sent for review.'}</div>
+        : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {list.map((v) => (
+              <button key={v.revision} type="button" onClick={() => show(v)}
+                style={{ textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, border: '1px solid rgba(125,145,180,.25)', background: '#fff', borderRadius: 10, padding: '9px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
+                <span style={{ fontFamily: ROS_MONO, fontWeight: 700, fontSize: 12, color: '#0072a3', minWidth: 52 }}>rev {v.revision}</span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#16202e' }}>{ROS_HIST_LABEL[v.action] || v.action || 'Saved'}</span>
+                  <span style={{ display: 'block', fontSize: 10.5, color: '#8a97a8' }}>{(v.byName || v.by || '—') + ' · ' + rosWhen(v.at)}</span>
+                </span>
+                <RosStatusChip st={v.status} />
+              </button>
+            ))}
+          </div>
+        )}
+    </RosDrawer>
+  );
 }
 
 /* ================= 1. HOME / INDEX ================= */
@@ -399,13 +804,10 @@ function RosterHome({ index, staffStore, scope, setRoute }) {
      people's units in front of someone who just wants to open their own. */
   const mayReview = !!(sc.can && sc.can.review);
   const [tab, setTab] = useState('mine');
-  if (mayReview && tab === 'access') return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <RosterViewSwitch tab={tab} setTab={setTab} />
-      <RosterAccessReview setRoute={setRoute} />
-    </div>
-  );
 
+  // Every hook runs on every render. These two used to sit below the "Access & coverage"
+  // early return, so switching to that tab rendered two hooks fewer and React threw #300
+  // ("Rendered fewer hooks than expected") — the whole app went to the error screen.
   const depts = useMemo(() => {
     const m = {};
     (staffStore.staff || []).filter((e) => e.is_active !== false && !e.former)
@@ -424,6 +826,13 @@ function RosterHome({ index, staffStore, scope, setRoute }) {
   }, [index.rosters]);
 
   const recent = (index.rosters || []).slice(0, 12);
+
+  if (mayReview && tab === 'access') return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <RosterViewSwitch tab={tab} setTab={setTab} />
+      <RosterAccessReview setRoute={setRoute} />
+    </div>
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -459,7 +868,7 @@ function RosterHome({ index, staffStore, scope, setRoute }) {
             {depts.map(([d, n]) => {
               const ex = byKey[d + '|' + year + '|' + month];
               return (
-                <div key={d} className="card" style={{ padding: 12, cursor: 'pointer', borderLeft: '3px solid ' + (ex ? (ROS_STATUS[ex.status] || ROS_STATUS.draft).color : 'transparent') }}
+                <div key={d} className="card" style={{ padding: 12, cursor: 'pointer', borderLeft: '3px solid ' + (ex ? ROS_STATUS[rosStatusNorm(ex.status)].color : 'transparent') }}
                   onClick={() => setRoute({ view: 'rosterGrid', dept: d, year, month })}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -744,10 +1153,12 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const [custom, setCustom] = useState([]);
   const [draft, setDraft] = useState({ name: '', scope: 'day', metric: 'onDuty', op: '<', val: 4, sev: 'warning' });
 
-  // sign-off
-  const [sign, setSign] = useState({});
-  const signers = useRosSigners();   // who prepares / checks / approves, per the hierarchy
-  const [approvedAt, setApprovedAt] = useState(null);
+  // the review chain — what the server says about this sheet
+  const [meta, setMeta] = useState({});           // history, sent / returned / approved stamps, id
+  const [sheetCan, setSheetCan] = useState(null); // the steps THIS account may take (server/roster-workflow.js)
+  const [signers, setSigners] = useState({});     // { incharge, manager, cns } from Duty Roster → Setup
+  const [panel, setPanel] = useState(null);       // 'history' | 'versions' | null
+  const decider = useRosDecide();
 
   const history = useRef([]);
   const saveTimer = useRef(null);
@@ -789,9 +1200,16 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     // now — dropping it would leave the switcher showing a different unit than the grid.
     .filter((d) => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
 
+  const monthUrl = '/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month;
+  const applyMeta = (r) => {
+    const d = r.roster;
+    setMeta(d ? { ...d, grid: undefined } : {});
+    setSheetCan((d && d.can) || r.can || null);
+    setSigners(r.signers || {});
+  };
   useEffect(() => {
     setLoading(true); setLoadError(''); setConflict('');
-    rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then((r) => {
+    rosApi.get(monthUrl).then((r) => {
       if (!r || !r.ok) {
         setLoadError((r && r.error) || 'The server did not return the roster.');
         setLoading(false); setDirty(false);
@@ -803,23 +1221,10 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       setStoredNames((d && d.names) || {});
       setStatus((d && d.status) || 'draft');
       setRev((d && d.revision) || 0);
-      const ru = (d && d.rules) || {};
       // New sheets store the design's shape; older ones stored the legacy keys.
-      setCfg({ ...ROS_DEF_CFG, ...(ru.cfg || {}) });
-      setEn({ ...ROS_DEF_OFF, ...(ru.off || {}) });
-      setCustom(Array.isArray(ru.custom) ? ru.custom : []);
-      if (!ru.cfg && ru.minMorning) {
-        setCfg((c) => ({
-          ...c,
-          minM: (ru.minMorning && ru.minMorning.value) || c.minM,
-          minE: (ru.minEvening && ru.minEvening.value) || c.minE,
-          minN: (ru.minNight && ru.minNight.value) || c.minN,
-          maxNights: (ru.maxConsecNight && ru.maxConsecNight.value) || c.maxNights,
-          maxLeavePerDay: (ru.leaveClash && ru.leaveClash.value) || c.maxLeavePerDay,
-        }));
-      }
-      setSign({ 'Prepared by': (d && d.preparedBy) || '—', 'Checked by': (d && d.checkedBy) || '—', 'Approved by': (d && d.approvedBy) || '—' });
-      setApprovedAt(d && d.approvedAt ? new Date(d.approvedAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : null);
+      const ru = rosRulesOf(d && d.rules);
+      setCfg(ru.cfg); setEn(ru.en); setCustom(ru.custom);
+      applyMeta(r);
       setLoading(false); setDirty(false);
       setQueue([]); history.current = [];
     }).catch(() => { setLoadError('Could not reach the server.'); setLoading(false); setDirty(false); });
@@ -832,12 +1237,19 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     return () => window.removeEventListener('mouseup', up);
   }, []);
 
-  const locked = status === 'approved';
-  const canEdit = !locked && !loadError && !conflict && rosCan('edit');
+  /* Editable only while the sheet is with the in-charge (draft, or returned to them).
+     Once sent it is the reviewer's to return, and an approved sheet is locked until an
+     administrator reopens it. The server answers per sheet (`can.edit`); the fallback is
+     only for an older server that does not send it. */
+  const stNorm = rosStatusNorm(status);
+  const locked = ROS_EDITABLE.indexOf(stNorm) < 0;
+  const canEdit = !loadError && !conflict && (sheetCan ? !!sheetCan.edit : (!locked && rosCan('edit')));
   const editBlocked = () => {
     rosToast(conflict ? 'Someone else saved this roster. Reload the month before editing.'
-      : locked ? (rosMayApprove() ? 'Published and locked — click “Published” at the top to reopen it for editing.' : 'Published and locked — ask someone with full Duty Roster access to reopen it.')
-      : 'You do not have edit rights on the roster.', 'info');
+      : stNorm === 'approved' ? 'Approved and locked — an administrator can reopen it for editing.'
+      : stNorm === 'pending_manager' ? 'This roster is with the Manager for checking — ask them to return it if it needs changes.'
+      : stNorm === 'pending_cns' ? 'This roster is with the CNS for approval — ask them to return it if it needs changes.'
+      : 'You do not have edit rights on this roster.', 'info');
   };
 
   // push() — one history entry per gesture, so a whole paint stroke is ONE undo.
@@ -982,25 +1394,27 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
         leaveClash: { on: en.leave !== false, value: cfg.maxLeavePerDay, label: 'Maximum staff away on the same day', unit: 'per day' },
       },
       names: rows.reduce((m, r) => { if (r.empId) m[r.empId] = r.name || ''; return m; }, {}),
-      // Status only when this save deliberately changes it. An autosave carrying the
-      // status it LOADED moved a roster that was submitted from the phone back to draft.
-      ...(nextStatus ? { status: nextStatus } : {}),
-      preparedBy: sign['Prepared by'] !== '—' ? (sign['Prepared by'] || '') : '',
-      checkedBy: sign['Checked by'] !== '—' ? (sign['Checked by'] || '') : '',
+      // No status and no signer names: a save never moves the sheet along the chain (that
+      // is the transition route), and the names come from Duty Roster → Setup. Saving a
+      // RETURNED sheet puts it back to draft on the server.
     }).then((r) => {
       setBusy(false);
       if (r && r.ok) {
         setRev((r.roster && r.roster.revision) || rev + 1);
-        setStatus((r.roster && r.roster.status) || nextStatus || status);
+        if (r.roster) {
+          setStatus(r.roster.status || status);
+          setMeta((m) => ({ ...m, ...r.roster, grid: undefined }));
+          if (r.roster.can) setSheetCan(r.roster.can);
+        }
         setDirty(false);
-        if (!quiet) rosToast(nextStatus === 'submitted' ? 'Roster submitted for approval.' : 'Roster saved.');
+        if (!quiet) rosToast('Roster saved.');
         if (onSaved) onSaved();
         return true;
       }
       // Refused for a reason retrying cannot fix: stop editing (which also stops the
       // autosave) and say why, instead of re-sending the same refused grid forever.
       if (r && r.conflict) setConflict(r.error || 'Someone else saved this roster.');
-      if (r && r.locked) setStatus('approved');
+      if (r && r.locked) refreshMeta();
       rosToast((r && r.error) || 'Could not save.', 'error');
       return false;
     }).catch(() => {
@@ -1017,7 +1431,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => { saveTimer.current = null; save(null, true); }, 1600);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [grid, cfg, en, custom, sign, dirty, retryTick]);   // eslint-disable-line
+  }, [grid, cfg, en, custom, dirty, retryTick]);   // eslint-disable-line
 
   // Leaving the sheet — another month or unit remounts it, or the person opens another
   // module — must not drop edits still waiting for the 1.6 s autosave. The refs carry
@@ -1033,34 +1447,22 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     };
   }, []);
 
-  const setStatusRemote = (st, extra) => {
-    // Same id the server builds (rosterId cuts the department to 40 characters) — a long
-    // multi-unit department string otherwise answered "Roster not found" on Publish.
-    const id = 'ros-' + String(dept).slice(0, 40) + '-' + year + '-' + String(month).padStart(2, '0');
-    setBusy(true);
-    return rosApi.post('/api/rosters/' + encodeURIComponent(id) + '/status', Object.assign({ status: st }, extra || {})).then((r) => {
-      setBusy(false);
-      if (r && r.ok) {
-        setStatus(st);
-        if (st === 'approved') setApprovedAt(new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }));
-        else setApprovedAt(null);
-        rosToast(st === 'approved' ? 'Roster published and locked.' : 'Roster reopened for editing.');
-        if (onSaved) onSaved();
-        return true;
-      }
-      rosToast((r && r.error) || 'Could not change the status.', 'error');
-      return false;
-    }).catch(() => { setBusy(false); return false; });
-  };
+  // Re-read the sheet's status, rights and history after a step, without reloading the grid.
+  const refreshMeta = () => rosApi.get(monthUrl).then((r) => {
+    if (!r || !r.ok) return;
+    applyMeta(r);
+    if (r.roster) { setStatus(r.roster.status || 'draft'); setRev(r.roster.revision || 0); }
+  }).catch(() => {});
 
-  // Publish — approve-and-lock; clicking again reopens (admin only, like the design's toggle).
-  const publish = () => {
-    if (!rosMayApprove()) { rosToast('Publishing and reopening need full Duty Roster access (Delete). You can still send it for approval.', 'info'); return; }
-    if (locked) { setStatusRemote('draft'); return; }
-    // Cancel a pending autosave: firing after the approval it would hit the lock (and,
-    // before the server guard, used to un-publish the roster).
+  // One step of the review chain (send / forward / approve / return / reopen).
+  const act = async (action) => {
+    // A pending autosave firing after the step would hit the lock — cancel it, and send
+    // what is on screen: unsaved edits (or a sheet never saved at all) are saved first.
     if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
-    Promise.resolve(save('submitted', true)).then((ok) => { if (ok !== false) setStatusRemote('approved'); });
+    if (canEdit && (dirty || !rev)) { const ok = await save(null, true); if (ok === false) return; }
+    const r = await decider.run({ id: meta.id || rosSheetId(dept, year, month), action, unit: dept, period: monthLabel, warnings: totalViol });
+    if (r && r.ok) { await refreshMeta(); if (onSaved) onSaved(); }
+    else if (r && r.code === 'conflict') refreshMeta();
   };
 
   /* ---- derived ---- */
@@ -1160,7 +1562,6 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   if (conflict) return retryBox('Someone else saved this roster while you were editing.',
     conflict + ' Your last changes were not saved. Reload to see the current roster, then make them again.', 'Reload the month', () => setReloadKey((k) => k + 1));
 
-  const published = status === 'approved';
   const showGrid = view === 'month' || view === 'swap';
   const showFooter = view === 'month' || view === 'rules';
   const toolBtnStyle = { display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(255,255,255,.9)', background: 'rgba(255,255,255,.78)', color: '#3c4858', padding: '6px 12px', borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0, boxShadow: '0 3px 10px rgba(31,59,90,.08)' };
@@ -1186,7 +1587,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
         </span>
         <div style={{ position: 'relative', minWidth: 210 }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: '#16202e', letterSpacing: -.2 }}>Duty roster — {dept}</div>
-          <div style={{ fontSize: 12, color: '#6c7a8c', marginTop: 2 }}>{monthLabel} · {days} days · {rows.length} staff · prepared by the nurse in-charge, approved by the CNS</div>
+          <div style={{ fontSize: 12, color: '#6c7a8c', marginTop: 2 }}>{monthLabel} · {days} days · {rows.length} staff · prepared by the in-charge, checked by the Manager, approved by the CNS</div>
         </div>
         <div style={{ flex: 1 }} />
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
@@ -1194,17 +1595,52 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
             style={{ boxSizing: 'border-box', padding: '8px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12, color: '#16202e', outline: 'none' }}>
             {depts.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
-          <span style={{ fontSize: 11, fontWeight: 700, padding: '6px 12px', borderRadius: 16, whiteSpace: 'nowrap', color: published ? '#157a43' : '#b5670a', background: published ? 'rgba(31,157,87,.13)' : 'rgba(224,138,30,.14)', border: '1px solid ' + (published ? 'rgba(31,157,87,.28)' : 'rgba(224,138,30,.3)') }}>
-            {published ? 'Published' : 'Draft'}
-          </span>
           <button className="ros-auto" onClick={autoFill} title={'Lay ' + ROS_PATTERNS[0][1] + ' across the whole month, staggered nurse by nurse'} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(106,82,212,.32)', background: 'rgba(106,82,212,.1)', color: '#5b45c4', padding: '9px 14px', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
             <Ic d="M13 2L4 14h7l-1 8 9-12h-7z" s={14} sw={2} />Auto-draft
           </button>
-          <button onClick={publish} disabled={busy} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.4)', background: published ? 'linear-gradient(135deg,#2fbf7f,#157a43)' : 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '9px 15px', borderRadius: 10, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
-            <Ic d="M4 12l5 5L20 6" s={14} sw={2.2} />{published ? 'Published' : (totalViol ? 'Publish anyway' : 'Send for approval')}
-          </button>
+          <RosStatusChip st={status} big />
         </div>
       </div>
+
+      {/* review chain — where the sheet is, who has it, and the steps this account may take */}
+      {(() => {
+        const s = ROS_STATUS[stNorm];
+        const sentBy = meta.sentByName || meta.sentBy;
+        const sent = meta.sentAt ? ' · sent ' + rosWhen(meta.sentAt) + (sentBy ? ' by ' + sentBy : '') : '';
+        const line = stNorm === 'pending_manager' ? 'With ' + ((signers.manager && signers.manager.name) || 'the Manager') + ' for checking' + sent
+          : stNorm === 'pending_cns' ? 'With ' + ((signers.cns && signers.cns.name) || 'the CNS') + ' for approval' + sent
+          : stNorm === 'approved' ? 'Approved by ' + (meta.approvedBy || '—') + (meta.approvedAt ? ' · ' + rosWhen(meta.approvedAt) : '') + ' — published and locked'
+          : stNorm === 'returned' ? 'Returned to the in-charge — fix the sheet and send it again'
+          : 'Draft with the in-charge — send it to the Manager (or straight to the CNS) when it is ready';
+        const histN = (meta.history || []).length;
+        return (
+          <div style={{ background: 'rgba(255,255,255,.84)', border: '1px solid rgba(255,255,255,.95)', borderLeft: '4px solid ' + s.color, borderRadius: 14, boxShadow: '0 10px 28px rgba(31,59,90,.1)', padding: '11px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+            <div style={{ minWidth: 220, flex: 1 }}>
+              <div style={{ fontSize: 12.8, fontWeight: 700, color: '#16202e' }}>{line}</div>
+              <div style={{ fontSize: 11, color: '#6c7a8c', marginTop: 2 }}>
+                {rev ? 'Saved · rev ' + rev + (meta.updatedBy ? ' · by ' + meta.updatedBy : '') + (meta.updatedAt ? ' · ' + rosWhen(meta.updatedAt) : '') : 'Not saved yet'}
+                {dirty ? ' · saving…' : ''}
+              </div>
+            </div>
+            <button className="btn sm" type="button" onClick={() => setPanel('history')}>History{histN ? ' · ' + histN : ''}</button>
+            <button className="btn sm" type="button" disabled={!rev} onClick={() => setPanel('versions')}>Versions</button>
+            <button className="btn sm" type="button" onClick={() => setRoute({ view: 'rosterPrint', dept, year, month })}>Print</button>
+            {canEdit && <button className="btn sm" type="button" disabled={busy || !dirty} onClick={() => { if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; } save(null, false); }}>Save draft</button>}
+            {sheetCan && sheetCan.send && totalViol > 0 && (
+              <span onClick={goRules} title="Sending is still allowed — the reviewer sees the same warnings" style={{ fontSize: 11, fontWeight: 700, color: '#a92c42', cursor: 'pointer' }}>{totalViol} rule warning{totalViol === 1 ? '' : 's'}</span>
+            )}
+            <RosDecisionButtons status={status} can={sheetCan} onAction={act} busy={busy || decider.busy} hasManager={!!signers.manager} />
+          </div>
+        );
+      })()}
+      {stNorm === 'returned' && <RosReturnedBanner meta={meta} />}
+      {decider.modal}
+      {panel === 'history' && (
+        <RosDrawer title="History" sub={dept + ' · ' + monthLabel} onClose={() => setPanel(null)}>
+          <RosHistoryTimeline history={meta.history} />
+        </RosDrawer>
+      )}
+      {panel === 'versions' && <RosVersions sheetId={meta.id || rosSheetId(dept, year, month)} staff={staffStore.staff} dept={dept} year={year} month={month} onClose={() => setPanel(null)} />}
 
       {/* KPI strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12, marginBottom: 14 }}>
@@ -2102,9 +2538,6 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
 
       {/* ---- footer: rule checks · sign-off ---- */}
       {showFooter && (() => {
-        const allNames = [...new Set((staffStore.staff || []).filter((e) => e.is_active !== false && !e.former).map((e) => e.name).filter(Boolean))].sort();
-        const approver = sign['Approved by'];
-        const ready = approver && approver !== '—';
         return (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 14 }}>
             <div data-rules="1" style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))', backdropFilter: 'blur(24px) saturate(1.7)', WebkitBackdropFilter: 'blur(24px) saturate(1.7)', border: '1px solid rgba(255,255,255,.92)', borderRadius: 16, boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)', overflow: 'hidden' }}>
@@ -2130,58 +2563,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
               </div>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))', backdropFilter: 'blur(24px) saturate(1.7)', WebkitBackdropFilter: 'blur(24px) saturate(1.7)', border: '1px solid rgba(255,255,255,.92)', borderRadius: 16, boxShadow: '0 14px 40px rgba(31,59,90,.13),inset 0 1px 0 rgba(255,255,255,.95)', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 22, flexWrap: 'wrap' }}>
-                <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, marginBottom: 4 }}>
-                  <span style={rosBadge('rgba(0,144,202,.12)', '#0072a3', 24, 7)}><Ic d="M4 20h16M6 16l10-10 3 3-10 10H6z" s={13} sw={1.9} /></span>
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>Sign-off</span>
-                  <span style={{ fontSize: 10.5, color: '#9aa6b4' }}>pick the names, then approve</span>
-                </div>
-                {[['Prepared by', 'prepare'], ['Checked by', 'check'], ['Approved by', 'approve']].map(([role, chainRole]) => {
-                  const val = sign[role] !== undefined && sign[role] !== '' ? sign[role] : '—';
-                  const tier = rosTierFor(signers, chainRole);
-                  const atTier = rosNamesFor(signers, chainRole);
-                  /* Prepared by is the person who built this sheet, so the unit's own
-                     rostered staff come first — an in-charge, an acting in-charge or a
-                     staff nurse is whoever actually drafted it. Checked and Approved are
-                     the people AT those tiers. With no tier marked (or the list
-                     unreachable) every name stays available, so the boxes never become
-                     unfillable because the ladder is not set up yet. */
-                  const tierPool = atTier.length ? atTier : (chainRole === 'prepare' ? rows.map((r) => r.name) : allNames);
-                  const base = chainRole === 'prepare'
-                    ? rows.map((r) => r.name).concat(tierPool.filter((n) => !rows.some((r) => r.name === n)))
-                    : tierPool;
-                  const title = tier ? tier.name + (chainRole === 'prepare' ? ' · ' + dept : '') : (chainRole === 'prepare' ? 'Prepared in ' + dept : 'No tier marked in Hierarchy');
-                  const pool = ['—'].concat(base);
-                  const opts = pool.indexOf(val) >= 0 ? pool : [val].concat(pool);
-                  const stamped = role === 'Approved by' ? !!approvedAt : val !== '—';
-                  return (
-                    <div key={role} style={{ minWidth: 186, flex: 1 }}>
-                      <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: .6, textTransform: 'uppercase', color: '#7d8ea8' }}>{role}</div>
-                      <select value={val} onChange={(e) => { const v = e.target.value; setSign((s) => ({ ...s, [role]: v })); setDirty(true); }}
-                        style={{ width: '100%', boxSizing: 'border-box', marginTop: 4, padding: '7px 9px', borderRadius: 8, border: '1px solid ' + (val === '—' ? 'rgba(125,145,180,.3)' : 'rgba(0,144,202,.32)'), background: val === '—' ? 'rgba(255,255,255,.6)' : 'rgba(0,144,202,.07)', fontFamily: 'inherit', fontSize: 12, fontWeight: 600, color: val === '—' ? '#9aa6b4' : '#16202e', outline: 'none' }}>
-                        {opts.map((v) => <option key={v} value={v}>{v}</option>)}
-                      </select>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 4 }}>
-                        <span style={{ fontSize: 10.5, color: '#9aa6b4' }}>{title}</span>
-                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: .4, textTransform: 'uppercase', color: stamped ? '#157a43' : '#b6c0cc', background: stamped ? 'rgba(31,157,87,.13)' : 'rgba(125,145,180,.12)', padding: '2px 7px', borderRadius: 8, whiteSpace: 'nowrap' }}>
-                          {role === 'Approved by' && approvedAt ? 'signed ' + approvedAt : (stamped ? 'set' : 'not set')}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
-                <div style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', borderTop: '1px solid rgba(125,145,180,.18)', paddingTop: 11, marginTop: 4 }}>
-                  <div style={{ fontSize: 10.5, color: '#9aa6b4', flex: 1, minWidth: 180 }}>
-                    {approvedAt ? 'Approved on ' + approvedAt + ' — the roster is locked for publication.'
-                      : ready ? ('Ready for ' + ((rosTierFor(signers, 'approve') || {}).name || 'the approver') + ' to sign.')
-                      : 'Choose an approver above to enable signing.'}
-                  </div>
-                  <button onClick={() => { if (!ready || approvedAt) return; Promise.resolve(save('submitted', true)).then((ok) => { if (ok !== false) setStatusRemote('approved', { approvedBy: approver }); }); }}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(255,255,255,.4)', background: approvedAt ? 'linear-gradient(135deg,#2fbf7f,#157a43)' : ready ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'linear-gradient(135deg,#9fb3c8,#7d8ea8)', color: '#fff', padding: '8px 14px', borderRadius: 9, fontSize: 11.5, fontWeight: 700, cursor: ready ? 'pointer' : 'default', fontFamily: 'inherit', boxShadow: ready && !approvedAt ? '0 7px 18px rgba(0,144,202,.35)' : 'none', opacity: ready || approvedAt ? 1 : .6, flexShrink: 0 }}>
-                    <Ic d="M4 12l5 5L20 6" s={13} sw={2.4} />{approvedAt ? 'Approved' : 'Sign & approve'}
-                  </button>
-                </div>
-              </div>
+              <RosSignOff signers={signers} meta={{ ...meta, status }} dept={dept} />
             </div>
           </div>
         );
@@ -2452,10 +2834,11 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
 function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const days = R.daysIn(year, month);
   const [doc, setDoc] = useState(null);
+  const [signers, setSigners] = useState({});
   const [loading, setLoading] = useState(true);
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month)
-      .then((r) => { setDoc(r && r.ok ? r.roster : null); setLoading(false); }).catch(() => setLoading(false));
+      .then((r) => { setDoc(r && r.ok ? r.roster : null); setSigners((r && r.ok && r.signers) || {}); setLoading(false); }).catch(() => setLoading(false));
   }, [dept, year, month]);
 
   const staff = useMemo(() => (staffStore.staff || [])
@@ -2474,7 +2857,9 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
 
   if (loading) return <div style={{ display: 'grid', placeItems: 'center', height: '40vh', color: 'var(--muted,#8aa0b8)' }}>Loading…</div>;
   const grid = rosMigrateGrid(doc && doc.grid, staff);
-  const sig = (window.unicoSig && window.unicoSig.get && window.unicoSig.get()) || {};
+  // unicoSig has load(), not get() — the old call always printed empty boxes.
+  const sig = (window.unicoSig && window.unicoSig.load && window.unicoSig.load()) || {};
+  const nm = (k) => (signers[k] && signers[k].name) || '';
   const cell = { border: '1px solid #333', padding: '2px 3px', fontSize: 8.6, textAlign: 'center' };
 
   return (
@@ -2491,7 +2876,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
       <div id="pdf-root" style={{ background: '#fff', color: '#111', padding: '16px 18px', borderRadius: 8, overflow: 'auto' }}>
         <div style={{ textAlign: 'center', marginBottom: 8 }}>
           <div style={{ fontSize: 14, fontWeight: 700 }}>Duty Roster For {dept}</div>
-          <div style={{ fontSize: 11 }}>{R.MONTHS[month]} {year}{doc ? ' · revision ' + (doc.revision || 1) + ' · ' + (ROS_STATUS[doc.status] || ROS_STATUS.draft).label : ' · not yet drafted'}</div>
+          <div style={{ fontSize: 11 }}>{R.MONTHS[month]} {year}{doc ? ' · revision ' + (doc.revision || 1) + ' · ' + ROS_STATUS[rosStatusNorm(doc.status)].label : ' · not yet drafted'}</div>
         </div>
 
         <table style={{ borderCollapse: 'collapse', width: '100%' }}>
@@ -2534,7 +2919,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
         <div style={{ marginTop: 8, fontSize: 8.4 }}><ShiftLegend compact /></div>
 
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 24, marginTop: 34, fontSize: 10 }}>
-          {[['Prepared By', doc && doc.preparedBy || sig.prepared], ['Checked By', doc && doc.checkedBy || sig.checked], ['Approved By', doc && doc.approvedBy || sig.approved]].map(([l, n]) => (
+          {[['Prepared By', (doc && doc.preparedBy) || nm('incharge') || sig.prepared], ['Checked By', (doc && doc.checkedBy) || nm('manager') || sig.reviewed], ['Approved By', (doc && doc.approvedBy) || nm('cns') || sig.approved]].map(([l, n]) => (
             <div key={l} style={{ borderTop: '1px solid #333', paddingTop: 4 }}>
               <div style={{ fontWeight: 700 }}>{l}</div>
               <div>{n || ''}</div>
@@ -2561,7 +2946,9 @@ function RosterView({ view, dept, year, month, setRoute }) {
     // route), but a bookmark or a stale link would otherwise land on an editor that
     // fails silently on save — say so plainly instead. Only once the scope is known:
     // while it loads every unit is treated as allowed, so a slow answer never blocks.
-    if (dept && !scope.loading && !scope.inScope(dept)) return <RosterNoAccess dept={dept} setRoute={setRoute} />;
+    // A reviewer (Manager / CNS) may open a unit sent to them that they do not roster
+    // themselves; the server still decides per sheet and answers 403 otherwise.
+    if (dept && !scope.loading && !scope.inScope(dept) && !(scope.can && scope.can.review)) return <RosterNoAccess dept={dept} setRoute={setRoute} />;
     switch (view) {
       case 'rosterGrid': return <RosterGrid key={dept + '|' + y + '|' + m} staffStore={staffStore} scope={scope} dept={dept} year={y} month={m} setRoute={setRoute} onSaved={index.reload} />;
       // The old coverage-and-rules route now lands on the same screen, open on Rules & policy.
@@ -2589,3 +2976,16 @@ function RosterNoAccess({ dept, setRoute }) {
 }
 
 window.RosterView = RosterView;
+
+/* The roster's shared pieces, for the other screens of the module (review inbox, staff
+   roster, setup, manpower). One copy of each — the review screen used to keep its own
+   key / grid-migration / index hook, and the two drifted. */
+window.UNICO_ROSTER_KIT = {
+  api: rosApi, toast: rosToast, can: rosCan, portal: rosPortal,
+  key: rosKey, migrateGrid: rosMigrateGrid, sheetId: rosSheetId, when: rosWhen,
+  useRosterIndex, useRosterScope, useRosterStaff, useRosterConfig, loadConfig: rosLoadConfig, useRosDecide,
+  ROS_STATUS, ROS_ACTIONS, ROS_HIST_LABEL, ROS_EDITABLE, statusNorm: rosStatusNorm,
+  RosStatusChip, RosDecisionButtons, RosHistoryTimeline, RosReturnedBanner, RosDrawer, RosSheetTable, RosSignOff, RosVersions,
+  rulesOf: rosRulesOf, findingsOf: rosFindingsOf, rowsFrom: rosRowsFrom,
+  bColor: rosBColor, MONO: ROS_MONO,
+};
