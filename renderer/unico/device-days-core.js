@@ -114,28 +114,44 @@
   }
 
   // Row checks the server enforces and the sheet shows live. Returns an error string or null.
-  function validateRow(r) {
-    for (const f of FIELDS) {
+  // `fields` = the form's columns (fieldsOf); every column after Total Patients is a count of
+  // patients, so none may exceed it.
+  function validateRow(r, fields) {
+    const list = fields || FIELDS;
+    for (const f of list) {
       const v = r[f.id];
       if (v === '' || v == null) return f.label + ' is required.';
       if (!Number.isInteger(+v) || +v < 0 || +v > 9999) return f.label + ' must be a whole number from 0 to 9999.';
     }
-    for (const d of DEVICES) if (+r[d] > +r.total) return FIELDS.find((f) => f.id === d).label + ' cannot be more than Total Patients.';
+    for (const f of list) if (f.id !== 'total' && +r[f.id] > +r.total) return f.label + ' cannot be more than Total Patients.';
     if (r.time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(r.time)) return 'Time must be HH:MM.';
     return null;
   }
 
   // Sum of the given rows (only those with a status in `statuses`, all when omitted).
-  function totals(rows, statuses) {
+  function totals(rows, statuses, fields) {
+    const list = fields || FIELDS;
     const out = { days: 0 };
-    FIELDS.forEach((f) => { out[f.id] = 0; });
+    list.forEach((f) => { out[f.id] = 0; });
     (rows || []).forEach((r) => {
       if (!r || r.removedAt || (statuses && statuses.indexOf(r.status) < 0)) return;
       out.days++;
-      FIELDS.forEach((f) => { out[f.id] += +r[f.id] || 0; });
+      list.forEach((f) => { out[f.id] += +r[f.id] || 0; });
     });
     return out;
   }
+  /* The form's columns: the four built-in device counts, then the administrator's own columns
+     (config.fields, e.g. "Patients with NG tube"). A custom column's id is its data key and is
+     never changed; "removing" one only hides it (active:false), so its saved values stay. */
+  const cleanCustom = (list) => (Array.isArray(list) ? list : []).filter((f) => f && /^c_[a-z0-9_]{1,40}$/.test(f.id) && f.label)
+    .map((f) => ({ id: f.id, label: String(f.label).slice(0, 80), short: String(f.short || f.label).slice(0, 24), active: f.active !== false, custom: true }));
+  const fieldsOf = (cfgDoc, includeHidden) => FIELDS.concat(cleanCustom(cfgDoc && cfgDoc.fields).filter((f) => includeHidden || f.active));
+  const customId = (label, taken) => {
+    const base = 'c_' + (String(label || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 30) || 'col');
+    let id = base, n = 2; while ((taken || []).indexOf(id) >= 0) id = base + '_' + (n++);
+    return id;
+  };
+
   // Device utilisation ratio, e.g. central-line days ÷ patient days, as a % (null when no patient days).
   const utilisation = (t, field) => (t && t.total > 0 ? Math.round((t[field] / t.total) * 1000) / 10 : null);
 
@@ -154,7 +170,7 @@
     FIELDS, DEVICES, FREQS, DEFAULT_CFG, MONS, QI_FIELD,
     isDate, isMonth, addDays, dow, monthOf, daysInMonth, monthDays, fmtDay, fmtMonth, monthKey,
     hospitalNow, cutoffMin, cfgOf, periodOf, dueOf, dayState, validateRow, totals, utilisation,
-    fieldForIndicator,
+    fieldForIndicator, fieldsOf, cleanCustom, customId,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   if (root) root.UNICO_DD = API;

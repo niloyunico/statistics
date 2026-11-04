@@ -15,7 +15,7 @@
 const access = require('./access');
 const deptmap = require('./deptmap');
 const activity = require('./activity-log');
-const { getDbHandle, getDepartments } = require('./db');
+const { getDbHandle, getDepartments, getUsers } = require('./db');
 const DD = require('../renderer/unico/device-days-core.js');
 
 const COLL = 'deviceDays';
@@ -113,23 +113,88 @@ const clean = (r) => { if (!r) return null; const { _id, history, ...rest } = r;
 const actor = (req, a) => (a && a.username) || (req.user && req.user.sub) || 'local';
 const nameOf = (req, a) => (a && a.name) || (req.user && req.user.name) || actor(req, a);
 const num = (v) => (v === '' || v == null ? v : Number(v));
-const pickRow = (b) => {
+// `fields` = the form's columns (DD.fieldsOf(config)): the built-in four plus the administrator's own.
+const pickRow = (b, fields) => {
   const out = { time: String(b.time || '').slice(0, 5) };
-  DD.FIELDS.forEach((f) => { out[f.id] = num(b[f.id]); });
+  (fields || DD.FIELDS).forEach((f) => { out[f.id] = num(b[f.id]); });
   return out;
 };
-const changesOf = (before, after) => DD.FIELDS.concat([{ id: 'time' }]).filter((f) => before && String(before[f.id]) !== String(after[f.id]))
-  .map((f) => f.id + ': ' + before[f.id] + ' → ' + after[f.id]).join(', ');
+const changesOf = (before, after, fields) => (fields || DD.FIELDS).concat([{ id: 'time' }]).filter((f) => before && String(before[f.id] == null ? '' : before[f.id]) !== String(after[f.id] == null ? '' : after[f.id]))
+  .map((f) => f.id + ': ' + (before[f.id] == null ? '—' : before[f.id]) + ' → ' + after[f.id]).join(', ');
+
+/* ---- responsible persons ----
+   "Responsible for department X" is not a second list: it is an account holding Device Days Add
+   with X among its deviceDepartments — exactly what Access Control edits. Settings reads and
+   writes that, so the two screens can never disagree. */
+const ACT_ORDER = ['view', 'edit', 'add', 'delete', 'print'];
+function actsOf(v) {
+  if (Array.isArray(v)) return ACT_ORDER.filter((x) => v.indexOf(x) >= 0);
+  const i = ['none', 'view', 'edit', 'add', 'delete'].indexOf(String(v || 'none'));
+  return i <= 0 ? [] : ['view', 'edit', 'add', 'delete'].slice(0, i);
+}
+const eligible = (u) => u && u.username && u.active !== false && (u.role || 'User') === 'User' && u.perms && typeof u.perms === 'object';
+async function userList() {
+  const col = await getUsers().catch(() => null);
+  if (!col || typeof col.find !== 'function') return null;
+  return { col, users: await col.find({}).toArray() };
+}
+const personOf = (u) => ({ username: u.username, name: u.name || u.username, designation: u.designation || u.title || '', devdays: actsOf(u.perms.devdays), deviceDepartments: Array.isArray(u.deviceDepartments) ? u.deviceDepartments.map(String) : [] });
+const isResponsible = (p, deptId) => p.devdays.indexOf('add') >= 0 && p.deviceDepartments.indexOf(deptId) >= 0;
 
 // Day states for every day of a month, plus totals.
-function monthView(ym, rows, cfg, now) {
+function monthView(ym, rows, cfg, now, fields) {
   const byDate = {};
   rows.forEach((r) => { byDate[r.date] = r; });
   const days = DD.monthDays(ym).map((date) => {
     const r = byDate[date] || null;
     return { date, state: DD.dayState(date, r, cfg, now), period: DD.periodOf(date, cfg), due: DD.dueOf(date, cfg), row: clean(r) };
   });
-  return { days, all: DD.totals(rows), approved: DD.totals(rows, ['approved']) };
+  return { days, all: DD.totals(rows, null, fields), approved: DD.totals(rows, ['approved'], fields) };
+}
+
+/* Make exactly `wanted[deptId]` the responsible people of each listed department, by editing
+   their accounts. Added: the department joins their deviceDepartments and Device Days gains
+   View + Add (merged — nothing they hold is taken away); if they held no Device Days before, the
+   account is marked devdaysAuto. Removed: the department leaves their list; only an account whose
+   Device Days came from being responsible (devdaysAuto) loses the module when no department is
+   left. Administrators, portal roles, unknown names and '*' holders are never touched. */
+async function applyResponsibles(req, wanted) {
+  const ul = await userList();
+  if (!ul) return { granted: 0, removed: 0, skipped: ['user accounts are not available here'] };
+  const work = {};
+  const get = (u) => (work[u.username] = work[u.username] || { u, deps: Array.isArray(u.deviceDepartments) ? u.deviceDepartments.map(String) : [], acts: actsOf(u.perms.devdays), auto: u.devdaysAuto === true, log: [] });
+  const skipped = [];
+  let granted = 0, removed = 0;
+  Object.keys(wanted).slice(0, 300).forEach((deptId) => {
+    const want = [...new Set((Array.isArray(wanted[deptId]) ? wanted[deptId] : []).map(String))];
+    const cur = ul.users.filter((u) => eligible(u) && isResponsible(personOf(u), deptId)).map((u) => u.username);
+    want.filter((n) => cur.indexOf(n) < 0).forEach((n) => {
+      const u = ul.users.find((x) => x.username === n);
+      if (!eligible(u)) { skipped.push(n + ': not a user account'); return; }
+      const w = get(u);
+      if (w.deps.indexOf('*') >= 0) { skipped.push(n + ': already has all departments'); return; }
+      if (!w.acts.length) w.auto = true;
+      ['view', 'add'].forEach((x) => { if (w.acts.indexOf(x) < 0) w.acts.push(x); });
+      w.acts = ACT_ORDER.filter((x) => w.acts.indexOf(x) >= 0);
+      if (w.deps.indexOf(deptId) < 0) w.deps.push(deptId);
+      w.log.push('+' + deptId); granted++;
+    });
+    cur.filter((n) => want.indexOf(n) < 0).forEach((n) => {
+      const w = get(ul.users.find((x) => x.username === n));
+      w.deps = w.deps.filter((x) => x !== deptId);
+      if (!w.deps.length && w.auto) { w.acts = []; w.auto = false; }
+      w.log.push('-' + deptId); removed++;
+    });
+  });
+  for (const name of Object.keys(work)) {
+    const w = work[name];
+    if (!w.log.length) continue;
+    const perms = Object.assign({}, w.u.perms, { devdays: w.acts.length ? w.acts : 'none' });
+    await ul.col.updateOne({ username: name }, { $set: { perms, deviceDepartments: w.deps, devdaysAuto: w.auto, updatedAt: Date.now() } });
+    try { access.invalidate(name); } catch (e) { }
+    activity.log(req, 'devdays_access', { target: name, detail: 'Device Days responsible ' + w.log.join(' ') + ' → ' + (w.acts.join('+') || 'none') + ' · ' + (w.deps.join(', ') || 'no departments') });
+  }
+  return { granted, removed, skipped };
 }
 
 /* ------------------------------------------------------------------ mount --- */
@@ -162,7 +227,7 @@ function mount(app, opts) {
     try {
       const a = await resolve(req, res, 'view'); if (!a) return;
       const cfg = await getConfig();
-      res.json({ ok: true, departments: await myDepts(a, cfg), today: DD.hospitalNow(now()).date, user: actor(req, a), ...rights(a) });
+      res.json({ ok: true, departments: await myDepts(a, cfg), fields: DD.fieldsOf(cfg), today: DD.hospitalNow(now()).date, user: actor(req, a), ...rights(a) });
     } catch (e) { fail(res, e, 'Could not load Device Days.'); }
   });
 
@@ -174,9 +239,10 @@ function mount(app, opts) {
       const deptId = String(req.query.dept || '');
       const ym = DD.isMonth(req.query.month) ? req.query.month : DD.hospitalNow(now()).date.slice(0, 7);
       if (!inScope(a, deptId)) return res.status(403).json({ ok: false, error: 'This department is not one of yours.' });
-      const cfg = cfgFor(await getConfig(), deptId);
+      const cfgDoc = await getConfig();
+      const cfg = cfgFor(cfgDoc, deptId), fields = DD.fieldsOf(cfgDoc);
       const rows = await findRows({ depts: [deptId], from: ym + '-01', to: ym + '-31' });
-      res.json({ ok: true, dept: deptId, month: ym, cfg, today: DD.hospitalNow(now()).date, ...monthView(ym, rows, cfg, now()) });
+      res.json({ ok: true, dept: deptId, month: ym, cfg, fields, today: DD.hospitalNow(now()).date, ...monthView(ym, rows, cfg, now(), fields) });
     } catch (e) { fail(res, e, 'Could not load the month.'); }
   });
 
@@ -187,13 +253,17 @@ function mount(app, opts) {
       const deptId = String(req.params.dept || ''), date = String(req.params.date || '');
       if (!DD.isDate(date)) return res.status(400).json({ ok: false, error: 'Invalid date.' });
       if (!inScope(a, deptId)) return res.status(403).json({ ok: false, error: 'This department is not one of yours.' });
-      const cfg = cfgFor(await getConfig(), deptId);
+      const cfgDoc = await getConfig();
+      const cfg = cfgFor(cfgDoc, deptId), fields = DD.fieldsOf(cfgDoc);
       if (!cfg.tracked) return res.status(400).json({ ok: false, error: 'This department is not set up for Device Days.' });
       if (date > DD.hospitalNow(now()).date) return res.status(400).json({ ok: false, error: 'You cannot enter a day that has not come yet.' });
       const b = (req.body && typeof req.body === 'object') ? req.body : {};
-      const vals = pickRow(b);
+      // Admin entry: an administrator's figures are final — saved Approved, no review step.
+      if (b.approve === true && !a.unrestricted) return res.status(403).json({ ok: false, error: 'Only an administrator can save a day as approved.' });
+      const adminEntry = b.approve === true && !!a.unrestricted;
+      const vals = pickRow(b, fields);
       if (!vals.time) vals.time = cfg.census || '08:00';
-      const err = DD.validateRow(vals);
+      const err = DD.validateRow(vals, fields);
       if (err) return res.status(400).json({ ok: false, error: err });
 
       const id = deptId + ':' + date;
@@ -208,20 +278,26 @@ function mount(app, opts) {
       if (live && base != null && live.updatedAt !== base) return res.status(409).json({ ok: false, error: 'Someone else changed this day. Reload to see their version.', row: clean(live) });
 
       const t = now(), who = actor(req, a);
-      const changes = changesOf(live, vals);
-      if (live && !changes) return res.json({ ok: true, row: clean(live), unchanged: true });
+      const changes = changesOf(live, vals, fields);
+      if (live && !changes && !(adminEntry && live.status !== 'approved')) return res.json({ ok: true, row: clean(live), unchanged: true });
       const doc = Object.assign({}, cur || {}, vals, {
         _id: id, deptId, date,
-        status: locked ? 'submitted' : (live && live.status === 'returned' ? 'returned' : 'draft'),
+        status: adminEntry ? 'approved' : locked ? 'submitted' : (live && live.status === 'returned' ? 'returned' : 'draft'),
         enteredBy: (live && live.enteredBy) || who, enteredAt: (live && live.enteredAt) || t,
         updatedBy: who, updatedAt: t,
       });
       delete doc.removedAt; delete doc.removedBy;
-      if (locked) { doc.reviewedBy = null; doc.reviewedAt = null; }
-      doc.history = ((cur && cur.history) || []).concat([{ at: t, by: who, action: !live ? (cur ? 'restore' : 'create') : (locked ? 'correct' : 'edit'), changes: changes || 'new' }]).slice(-100);
+      if (adminEntry) {
+        if (!doc.submittedBy) { doc.submittedBy = who; doc.submittedName = nameOf(req, a); doc.submittedAt = t; }
+        doc.periodKey = doc.periodKey || DD.periodOf(date, cfg).key;
+        doc.reviewedBy = who; doc.reviewedName = nameOf(req, a); doc.reviewedAt = t; doc.returnReason = null;
+      } else if (locked) { doc.reviewedBy = null; doc.reviewedAt = null; }
+      const action = adminEntry ? (live ? 'admin-correct' : 'admin-entry') : !live ? (cur ? 'restore' : 'create') : (locked ? 'correct' : 'edit');
+      doc.history = ((cur && cur.history) || []).concat([{ at: t, by: who, action, changes: changes || 'new' }]).slice(-100);
       const ok = await putRow(doc, cur ? cur.updatedAt : null);
       if (!ok) return res.status(409).json({ ok: false, error: 'Someone else changed this day. Reload to see their version.' });
-      if (locked) activity.log(req, 'devdays_edit', { target: id, detail: (live.status === 'approved' ? 'approved row corrected, back to review · ' : '') + changes });
+      if (adminEntry) activity.log(req, 'devdays_edit', { target: id, detail: 'admin entry, saved approved · ' + (changes || 'new') });
+      else if (locked) activity.log(req, 'devdays_edit', { target: id, detail: (live.status === 'approved' ? 'approved row corrected, back to review · ' : '') + changes });
       res.json({ ok: true, row: clean(doc) });
     } catch (e) { fail(res, e, 'Could not save the day.'); }
   });
@@ -264,7 +340,7 @@ function mount(app, opts) {
       const cfg = await getConfig();
       const depts = await myDepts(a, cfg);
       const rows = await findRows({ depts: depts.map((d) => d.id), statuses: ['submitted'] });
-      res.json({ ok: true, departments: depts, rows: rows.map(clean), me: actor(req, a), isAdmin: !!a.unrestricted });
+      res.json({ ok: true, departments: depts, fields: DD.fieldsOf(cfg), rows: rows.map(clean), me: actor(req, a), isAdmin: !!a.unrestricted });
     } catch (e) { fail(res, e, 'Could not load the review queue.'); }
   });
 
@@ -326,6 +402,7 @@ function mount(app, opts) {
       const months = [];
       for (let m = from; m <= to && months.length < 36;) { months.push(m); const y = +m.slice(0, 4), mo = +m.slice(5, 7); m = mo === 12 ? (y + 1) + '-01' : y + '-' + String(mo + 1).padStart(2, '0'); }
       const cfg = await getConfig();
+      const fields = DD.fieldsOf(cfg);
       let depts = await myDepts(a, cfg);
       if (req.query.dept) depts = depts.filter((d) => d.id === String(req.query.dept));
       const rows = await findRows({ depts: depts.map((d) => d.id), from: from + '-01', to: to + '-31' });
@@ -335,7 +412,7 @@ function mount(app, opts) {
           id: d.id, name: d.name, frequency: d.cfg.frequency,
           months: months.map((ym) => {
             const mr = mine.filter((r) => r.date.slice(0, 7) === ym);
-            const v = monthView(ym, mr, d.cfg, now());
+            const v = monthView(ym, mr, d.cfg, now(), fields);
             const count = (s) => v.days.filter((x) => x.state === s).length;
             return { month: ym, approved: v.approved, missing: count('missing'), submitted: count('submitted'), returned: count('returned'), open: count('open'),
               due: v.days.filter((x) => x.state !== 'future' && x.state !== 'not-due').length,
@@ -343,7 +420,7 @@ function mount(app, opts) {
           }),
         };
       });
-      res.json({ ok: true, from, to, months, departments: out });
+      res.json({ ok: true, from, to, months, fields, departments: out });
     } catch (e) { fail(res, e, 'Could not build the summary.'); }
   });
 
@@ -388,7 +465,11 @@ function mount(app, opts) {
       if (!a.unrestricted) return res.status(403).json({ ok: false, error: 'Only an administrator can change Device Days settings.' });
       const cfg = await getConfig();
       const list = await allDepts();
-      res.json({ ok: true, departments: list.map((d) => ({ id: d.id, name: d.name, cfg: cfgFor(cfg, d.id) })) });
+      const ul = await userList();
+      const people = ul ? ul.users.filter(eligible).map(personOf).sort((x, y) => String(x.name).localeCompare(String(y.name))) : null;
+      res.json({ ok: true, departments: list.map((d) => ({ id: d.id, name: d.name, cfg: cfgFor(cfg, d.id),
+        responsibles: people ? people.filter((p) => isResponsible(p, d.id)).map((p) => p.username) : [] })),
+        fields: DD.fieldsOf(cfg, true), people: people || [], peopleAvailable: !!people });
     } catch (e) { fail(res, e, 'Could not load the settings.'); }
   });
 
@@ -396,8 +477,11 @@ function mount(app, opts) {
     try {
       const a = await resolve(req, res, 'view'); if (!a) return;
       if (!a.unrestricted) return res.status(403).json({ ok: false, error: 'Only an administrator can change Device Days settings.' });
-      const b = (req.body && typeof req.body === 'object' && req.body.depts && typeof req.body.depts === 'object') ? req.body.depts : null;
-      if (!b) return res.status(400).json({ ok: false, error: 'Nothing to save.' });
+      const body = (req.body && typeof req.body === 'object') ? req.body : {};
+      const b = (body.depts && typeof body.depts === 'object') ? body.depts : {};
+      const wantFields = Array.isArray(body.fields) ? body.fields : null;
+      const wantResp = (body.responsibles && typeof body.responsibles === 'object') ? body.responsibles : null;
+      if (!Object.keys(b).length && !wantFields && !wantResp) return res.status(400).json({ ok: false, error: 'Nothing to save.' });
       const cfg = await getConfig();
       const depts = Object.assign({}, cfg.depts || {});
       const changed = [];
@@ -413,9 +497,27 @@ function mount(app, opts) {
         };
         if (JSON.stringify(depts[id] || null) !== JSON.stringify(next)) { changed.push(id + (next.tracked ? ' ' + next.frequency : ' off')); depts[String(id).slice(0, 60)] = next; }
       });
-      await saveConfig({ _id: 'config', depts, updatedAt: now(), updatedBy: actor(req, a) });
+      // Form columns: existing ids are kept exactly (an id is the data key); a column that is left
+      // out of the request is kept too — "removing" one is active:false, never deletion.
+      let fields = DD.cleanCustom(cfg.fields).map((f) => ({ id: f.id, label: f.label, short: f.short, active: f.active }));
+      if (wantFields) {
+        wantFields.slice(0, 30).forEach((w) => {
+          if (!w || !String(w.label || '').trim()) return;
+          const label = String(w.label).trim().slice(0, 80), short = String(w.short || w.label).trim().slice(0, 24);
+          const hit = w.id && fields.find((f) => f.id === w.id);
+          if (hit) {
+            const next = { id: hit.id, label, short, active: w.active !== false };
+            if (JSON.stringify(next) !== JSON.stringify(hit)) { changed.push('column ' + hit.id + (next.active ? '' : ' hidden')); Object.assign(hit, next); }
+          } else if (!w.id) {
+            const id = DD.customId(label, fields.map((f) => f.id).concat(DD.FIELDS.map((f) => f.id)));
+            fields.push({ id, label, short, active: true }); changed.push('column ' + id + ' added');
+          }
+        });
+      }
+      await saveConfig(Object.assign({}, cfg, { _id: 'config', depts, fields, updatedAt: now(), updatedBy: actor(req, a) }));
       if (changed.length) activity.log(req, 'devdays_config', { target: 'Device Days', detail: changed.join(', ').slice(0, 900) });
-      res.json({ ok: true, changed: changed.length });
+      const resp = wantResp ? await applyResponsibles(req, wantResp) : { granted: 0, removed: 0, skipped: [] };
+      res.json({ ok: true, changed: changed.length, responsibles: resp });
     } catch (e) { fail(res, e, 'Could not save the settings.'); }
   });
 

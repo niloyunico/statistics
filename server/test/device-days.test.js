@@ -4,7 +4,14 @@ const assert = require('node:assert/strict');
 
 const logged = [];
 const fake = (rel, exports) => { const p = require.resolve(rel); require.cache[p] = { id: p, filename: p, loaded: true, exports }; };
-fake('../db', { getDbHandle: async () => null, getDepartments: async () => [{ id: 'sicu', name: 'Surgical ICU' }, { id: 'micu', name: 'Medical ICU' }], getUsers: async () => null });
+const USERS = [
+  { username: 'resp1', name: 'Resp One', role: 'User', perms: { stats: ['view'] } },
+  { username: 'hand', name: 'Hand Granted', role: 'User', perms: { devdays: ['view', 'add', 'print'] }, deviceDepartments: ['micu'] },
+  { username: 'boss', name: 'Admin', role: 'Administrator', perms: null },
+  { username: 'allx', name: 'All Depts', role: 'User', perms: { devdays: ['view', 'add'] }, deviceDepartments: ['*'] },
+];
+const usersCol = { find: () => ({ toArray: async () => USERS }), updateOne: async (q, u) => { const x = USERS.find((y) => y.username === q.username); if (x) Object.assign(x, u.$set); return { matchedCount: x ? 1 : 0 }; } };
+fake('../db', { getDbHandle: async () => null, getDepartments: async () => [{ id: 'sicu', name: 'Surgical ICU' }, { id: 'micu', name: 'Medical ICU' }], getUsers: async () => usersCol });
 fake('../deptmap', { get: async () => ({ byId: {} }) });
 fake('../activity-log', { log: (req, action, opts) => logged.push({ action, opts }) });
 
@@ -157,6 +164,56 @@ const row = (o) => Object.assign({ time: '08:00', total: 10, peripheral: 6, cent
   assert.equal((await call('POST /api/device-days/print', nurse, { body: { dept: 'sicu', month: '2026-11' } })).status, 403);
   assert.equal((await call('POST /api/device-days/print', reviewer, { body: { dept: 'sicu', month: '2026-11' } })).status, 200);
   assert.equal(logged.pop().action, 'devdays_print');
+
+  /* ---- round 2: admin entry ---- */
+  assert.equal((await put(nurse, '2026-11-01', row({ approve: true }))).status, 403, 'only an administrator saves as approved');
+  r = await put(admin, '2026-11-01', row({ approve: true }));
+  assert.equal(r.body.row.status, 'approved', 'admin entry is final');
+  assert.equal(r.body.row.reviewedBy, 'admin'); assert.equal(r.body.row.history.slice(-1)[0].action, 'admin-entry');
+  assert.equal(logged.pop().action, 'devdays_edit');
+  r = await put(admin, '2026-11-01', row({ approve: true, peripheral: 9 }));
+  assert.equal(r.body.row.status, 'approved', 'admin correction stays approved'); assert.equal(r.body.row.history.slice(-1)[0].action, 'admin-correct');
+  logged.pop();
+
+  /* ---- custom columns ---- */
+  r = await call('PUT /api/device-days/config', admin, { body: { fields: [{ label: 'Patients with NG tube', short: 'NG tube' }] } });
+  let cfgR = await call('GET /api/device-days/config', admin);
+  const ng = cfgR.body.fields.find((f) => f.custom);
+  assert.equal(ng.id, 'c_patients_with_ng_tube'); assert.equal(cfgR.body.fields.length, 6);
+  assert.equal(cfgR.body.departments.find((d) => d.id === 'sicu').cfg.tracked, true, 'saving columns keeps department settings');
+  assert.equal((await put(nurse, '2026-11-04', row())).status, 400, 'a new column is required on new entries');
+  assert.equal((await put(nurse, '2026-11-04', row({ [ng.id]: 11 }))).status, 400, 'a new column cannot exceed total');
+  r = await put(nurse, '2026-11-04', row({ [ng.id]: 4 }));
+  assert.equal(r.body.row[ng.id], 4);
+  month = await call('GET /api/device-days', nurse, { query: { dept: 'sicu', month: '2026-11' } });
+  assert.ok(month.body.fields.some((f) => f.id === ng.id)); assert.equal(month.body.all[ng.id], 4, 'custom column is summed');
+  await call('PUT /api/device-days/config', admin, { body: { fields: [{ id: ng.id, label: 'Patients with NG tube', short: 'NG tube', active: false }] } });
+  cfgR = await call('GET /api/device-days/config', admin);
+  assert.equal(cfgR.body.fields.find((f) => f.id === ng.id).active, false, 'hidden, not deleted');
+  assert.equal((await call('GET /api/device-days/meta', nurse)).body.fields.length, 5, 'hidden column leaves the form');
+  assert.equal(dd._mem.rows.get('sicu:2026-11-04')[ng.id], 4, 'its saved value is kept');
+  r = await call('PUT /api/device-days/config', admin, { body: { fields: [] } });
+  assert.equal((await call('GET /api/device-days/config', admin)).body.fields.length, 6, 'a column left out of a save is kept');
+
+  /* ---- responsible persons ---- */
+  logged.length = 0;
+  r = await call('PUT /api/device-days/config', admin, { body: { responsibles: { sicu: ['resp1', 'hand', 'boss', 'allx', 'ghost'] } } });
+  assert.equal(r.body.responsibles.granted, 2, 'resp1 + hand');
+  assert.ok(r.body.responsibles.skipped.length >= 3, 'admin, all-departments holder and unknown names are skipped');
+  const u = (n) => USERS.find((x) => x.username === n);
+  assert.deepEqual(u('resp1').perms.devdays, ['view', 'add']); assert.deepEqual(u('resp1').deviceDepartments, ['sicu']); assert.equal(u('resp1').devdaysAuto, true);
+  assert.deepEqual(u('resp1').perms.stats, ['view'], 'other modules untouched');
+  assert.deepEqual(u('hand').perms.devdays, ['view', 'add', 'print'], 'hand-granted rights kept'); assert.deepEqual(u('hand').deviceDepartments, ['micu', 'sicu']);
+  assert.equal(u('boss').perms, null, 'administrator untouched'); assert.deepEqual(u('allx').deviceDepartments, ['*']);
+  assert.ok(logged.filter((x) => x.action === 'devdays_access').length === 2);
+  cfgR = await call('GET /api/device-days/config', admin);
+  assert.deepEqual(cfgR.body.departments.find((d) => d.id === 'sicu').responsibles.sort(), ['hand', 'resp1']);
+  assert.ok(cfgR.body.people.some((p) => p.username === 'resp1') && !cfgR.body.people.some((p) => p.username === 'boss'));
+  r = await call('PUT /api/device-days/config', admin, { body: { responsibles: { sicu: [] } } });
+  assert.equal(r.body.responsibles.removed, 2);
+  assert.equal(u('resp1').perms.devdays, 'none', 'auto-granted account loses the module with its last department'); assert.equal(u('resp1').devdaysAuto, false);
+  assert.deepEqual(u('hand').perms.devdays, ['view', 'add', 'print'], 'hand-granted account keeps its rights'); assert.deepEqual(u('hand').deviceDepartments, ['micu']);
+  assert.equal((await call('PUT /api/device-days/config', nurse, { body: { responsibles: { sicu: ['resp1'] } } })).status, 403, 'only an administrator assigns');
 
   console.log('device-days: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

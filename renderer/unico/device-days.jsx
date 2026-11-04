@@ -17,7 +17,7 @@
 (function () {
   const { useState, useEffect, useMemo, useRef, useCallback } = React;
   const DD = window.UNICO_DD;
-  const F = DD.FIELDS;
+  const F = DD.FIELDS;   // built-in columns; every screen shadows this with the server's list (custom columns included)
   const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const toast = (m, t) => { if (window.UI && window.UI.toast) window.UI.toast(m, t); };
@@ -149,6 +149,9 @@
     const [busy, setBusy] = useState('');
     const [flash, setFlash] = useState('');
     const [unlocked, setUnlocked] = useState({});   // sent / approved days a reviewer opened with "Correct"
+    // Administrators: "Admin entry" saves straight to Approved (no review). Remembered in this browser.
+    const [adminMode, setAdminModeS] = useState(() => lsGet('unico_dd_admin_entry') !== '0');
+    const setAdminMode = (v) => { setAdminModeS(v); lsSet('unico_dd_admin_entry', v ? '1' : '0'); };
     const scrolled = useRef('');
     const rowRefs = useRef({});
 
@@ -181,6 +184,8 @@
     if (!meta.departments.length) return <NoDepts meta={meta} />;
     const deptObj = meta.departments.find((d) => d.id === dept) || meta.departments[0];
     const cfg = deptObj.cfg;
+    const F = (data && data.fields) || meta.fields || DD.FIELDS;
+    const adminEntry = meta.isAdmin && adminMode;
 
     const valOf = (d, f) => { const e = edits[d.date]; if (e && Object.prototype.hasOwnProperty.call(e, f)) return e[f]; return d.row ? (d.row[f] == null ? '' : String(d.row[f])) : ''; };
     const rowVals = (d) => { const o = { time: valOf(d, 'time') || cfg.census || '08:00' }; F.forEach((f) => { o[f.id] = valOf(d, f.id); }); return o; };
@@ -188,7 +193,7 @@
     const editable = (d) => {
       if (d.state === 'future') return false;
       const st = d.row && d.row.status;
-      if (st === 'submitted' || st === 'approved') return meta.canReview && !!unlocked[d.date];
+      if (st === 'submitted' || st === 'approved') return adminEntry || (meta.canReview && !!unlocked[d.date]);
       return meta.canAdd || meta.canReview;
     };
     const setVal = (date, f, v) => setEdits((e) => Object.assign({}, e, { [date]: Object.assign({}, e[date] || {}, { [f]: v }) }));
@@ -196,7 +201,7 @@
       const v = rowVals(d);
       const any = F.some((f) => v[f.id] !== '');
       if (!any) return null;
-      return DD.validateRow(v);
+      return DD.validateRow(v, F);
     };
     const badField = (d, f) => {
       const v = rowVals(d); const x = v[f];
@@ -207,15 +212,15 @@
 
     async function saveRow(d, quiet) {
       const v = rowVals(d);
-      const e = DD.validateRow(v);
+      const e = DD.validateRow(v, F);
       if (e) { if (!quiet) toast(DD.fmtDay(d.date) + ': ' + e, 'error'); return false; }
       const locked = d.row && (d.row.status === 'submitted' || d.row.status === 'approved');
-      if (locked && !quiet) {
+      if (locked && !quiet && !adminEntry) {
         const ok = await confirmBox({ title: 'Correct a sent day?', message: DD.fmtDay(d.date) + ' has already been ' + (d.row.status === 'approved' ? 'approved' : 'sent') + '. Your correction is recorded in its history and the day goes back to review.', confirmLabel: 'Save correction' });
         if (!ok) return false;
       }
       try {
-        const j = await api('/api/device-days/' + encodeURIComponent(dept) + '/' + d.date, { method: 'PUT', body: JSON.stringify(Object.assign({}, v, { baseUpdatedAt: d.row ? d.row.updatedAt : null })) });
+        const j = await api('/api/device-days/' + encodeURIComponent(dept) + '/' + d.date, { method: 'PUT', body: JSON.stringify(Object.assign({}, v, { baseUpdatedAt: d.row ? d.row.updatedAt : null }, adminEntry ? { approve: true } : {})) });
         setEdits((x) => { const n = Object.assign({}, x); delete n[d.date]; return n; });
         setUnlocked((x) => { const n = Object.assign({}, x); delete n[d.date]; return n; });
         setData((cur) => cur && Object.assign({}, cur, { days: cur.days.map((x) => (x.date === d.date ? Object.assign({}, x, { row: j.row, state: DD.dayState(x.date, j.row, cfg) }) : x)) }));
@@ -233,7 +238,7 @@
       let ok = true;
       for (const d of list) { if (!(await saveRow(d, true))) ok = false; }
       setBusy('');
-      if (ok) toast(list.length === 1 ? 'Saved.' : list.length + ' days saved.', 'success');
+      if (ok) toast((list.length === 1 ? 'Saved' : list.length + ' days saved') + (adminEntry ? ' as approved.' : '.'), 'success');
       else toast('Some days were not saved — check the rows marked in red.', 'error');
       load(); refreshBadge();
       return ok;
@@ -291,6 +296,12 @@
           <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>Sends <b style={{ color: 'var(--ink-2)' }}>{FREQ_LABEL[cfg.frequency].toLowerCase()}</b>
             {cfg.frequency === 'daily' ? ' · by ' + cfg.cutoff + ' each day' : ' · by ' + cfg.cutoff + ' the day after the ' + (cfg.frequency === 'weekly' ? 'week (' + WD[cfg.weekStart] + '–' + WD[(cfg.weekStart + 6) % 7] + ')' : 'month') + ' ends'}</span>
           <span style={{ flex: 1 }} />
+          {meta.isAdmin && (
+            <label title="On: what you type is saved as Approved straight away (no review). Off: you enter and send like a department." style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12, fontWeight: 700, cursor: 'pointer', padding: '5px 10px', borderRadius: 8, border: '1px solid ' + (adminMode ? '#9fdcc0' : 'var(--line)'), background: adminMode ? '#e7f6ed' : '#fff', color: adminMode ? '#14713f' : 'var(--ink-2)' }}>
+              <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={adminMode} onChange={(e) => setAdminMode(e.target.checked)} />
+              Admin entry · saves as Approved
+            </label>
+          )}
           {meta.canPrint && data && <button className="btn sm" onClick={() => printSheet(deptObj, month, data)}>Print sheet</button>}
         </div>
 
@@ -361,8 +372,8 @@
                           {e && <div className="dd-err">{e}</div>}
                         </td>
                         <td style={{ textAlign: 'right' }}>
-                          {dirty(d) && <button className="btn pri sm" disabled={!!e || !!busy} onClick={() => saveRow(d).then((ok) => { if (ok) { toast('Saved ' + DD.fmtDay(d.date) + '.', 'success'); refreshBadge(); } })}>Save</button>}
-                          {!dirty(d) && d.row && meta.canReview && (d.row.status === 'submitted' || d.row.status === 'approved') && !unlocked[d.date] && <button className="dd-icon-btn" title="Reviewer: correct this sent day (logged, goes back to review)" onClick={() => setUnlocked((x) => Object.assign({}, x, { [d.date]: true }))}>Correct</button>}
+                          {dirty(d) && <button className="btn pri sm" disabled={!!e || !!busy} onClick={() => saveRow(d).then((ok) => { if (ok) { toast('Saved ' + DD.fmtDay(d.date) + (adminEntry ? ' as approved.' : '.'), 'success'); refreshBadge(); } })}>{adminEntry ? 'Save ✓' : 'Save'}</button>}
+                          {!dirty(d) && !adminEntry && d.row && meta.canReview && (d.row.status === 'submitted' || d.row.status === 'approved') && !unlocked[d.date] && <button className="dd-icon-btn" title="Reviewer: correct this sent day (logged, goes back to review)" onClick={() => setUnlocked((x) => Object.assign({}, x, { [d.date]: true }))}>Correct</button>}
                           {!dirty(d) && unlocked[d.date] && <button className="dd-icon-btn" onClick={() => setUnlocked((x) => { const n = Object.assign({}, x); delete n[d.date]; return n; })}>Cancel</button>}
                           {!dirty(d) && d.row && meta.canDelete && d.row.status !== 'approved' && <button className="dd-icon-btn" title="Remove this day" onClick={() => removeRow(d)}>Remove</button>}
                           {!dirty(d) && d.row && d.row.history && d.row.history.length > 1 && <span title={d.row.history.slice(-5).map((h) => when(h.at) + ' · ' + h.by + ' · ' + h.action + (h.changes ? ' (' + h.changes + ')' : '')).join('\n')} style={{ marginLeft: 6, fontSize: 11, color: 'var(--muted)', cursor: 'help' }}>history</span>}
@@ -381,15 +392,16 @@
           )}
         </div>
 
-        {data && (meta.canAdd || meta.canReview) && (dirtyN > 0 || unsentN > 0) && (
+        {data && (meta.canAdd || meta.canReview) && (dirtyN > 0 || (unsentN > 0 && !adminEntry)) && (
           <div className="card dd-send">
             <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>
               {dirtyN > 0 && <b>{dirtyN} unsaved change{dirtyN > 1 ? 's' : ''}. </b>}
-              {unsentN > 0 && <span>{unsentN} saved day{unsentN > 1 ? 's' : ''} not sent yet.</span>}
+              {unsentN > 0 && !adminEntry && <span>{unsentN} saved day{unsentN > 1 ? 's' : ''} not sent yet.</span>}
+              {adminEntry && <span style={{ color: '#14713f' }}>Admin entry is on: saved days are approved straight away.</span>}
             </span>
             <span style={{ flex: 1 }} />
-            {dirtyN > 0 && <button className="btn sm" disabled={!!busy} onClick={saveAll}>{busy === 'save' ? 'Saving…' : 'Save all'}</button>}
-            {meta.canAdd && <button className="btn pri sm" disabled={!!busy} onClick={send}>{busy === 'send' ? 'Sending…' : cfg.frequency === 'daily' ? 'Send to review' : 'Send ' + (cfg.frequency === 'weekly' ? 'week' : 'month') + ' to review'}</button>}
+            {dirtyN > 0 && <button className={'btn sm' + (adminEntry ? ' pri' : '')} disabled={!!busy} onClick={saveAll}>{busy === 'save' ? 'Saving…' : adminEntry ? 'Save all as approved' : 'Save all'}</button>}
+            {meta.canAdd && !adminEntry && <button className="btn pri sm" disabled={!!busy} onClick={send}>{busy === 'send' ? 'Sending…' : cfg.frequency === 'daily' ? 'Send to review' : 'Send ' + (cfg.frequency === 'weekly' ? 'week' : 'month') + ' to review'}</button>}
           </div>
         )}
       </div>
@@ -407,6 +419,7 @@
     useEffect(() => { load(); }, []);
     if (err) return <div className="card" style={{ color: err ? 'var(--rose)' : '' }}>{err}</div>;
     if (!q) return <div className="card" style={{ color: 'var(--muted)' }}>Loading…</div>;
+    const F = q.fields || DD.FIELDS;
     const names = {}; q.departments.forEach((d) => { names[d.id] = d.name; });
     const groups = {};
     q.rows.forEach((r) => { const k = r.deptId + '|' + (r.periodKey || r.date); (groups[k] = groups[k] || { dept: r.deptId, period: r.periodKey || r.date, rows: [] }).rows.push(r); });
@@ -439,7 +452,7 @@
         {list.map((g) => {
           const gIds = g.rows.filter((r) => !own(r)).map((r) => r.id);
           const allOn = gIds.length && gIds.every((id) => pick[id]);
-          const t = DD.totals(g.rows);
+          const t = DD.totals(g.rows, null, F);
           return (
             <div key={g.dept + g.period} className="card" style={{ padding: 0, overflow: 'hidden' }}>
               <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderBottom: '1px solid var(--line-2)' }}>
@@ -496,11 +509,12 @@
     if (metaErr) return <div className="card" style={{ color: 'var(--rose)' }}>{metaErr}</div>;
     if (!meta) return <div className="card" style={{ color: 'var(--muted)' }}>Loading…</div>;
     if (!meta.departments.length) return <NoDepts meta={meta} />;
+    const F = (s && s.fields) || meta.fields || DD.FIELDS;
     const grand = { days: 0 }; F.forEach((f) => { grand[f.id] = 0; });
     let missing = 0, waiting = 0;
-    (s ? s.departments : []).forEach((d) => d.months.forEach((m) => { grand.days += m.approved.days; F.forEach((f) => { grand[f.id] += m.approved[f.id]; }); missing += m.missing; waiting += m.submitted; }));
+    (s ? s.departments : []).forEach((d) => d.months.forEach((m) => { grand.days += m.approved.days; F.forEach((f) => { grand[f.id] += m.approved[f.id] || 0; }); missing += m.missing; waiting += m.submitted; }));
     const series = s ? s.months.map((ym) => ({ mon: DD.MONS[+ym.slice(5) - 1], v: s.departments.reduce((a, d) => a + ((d.months.find((m) => m.month === ym) || { approved: {} }).approved[metric] || 0), 0) })) : [];
-    const mf = F.find((f) => f.id === metric);
+    const mf = F.find((f) => f.id === metric) || F[0];
     return (
       <div className="dd-wrap">
         <div className="card dd-bar">
@@ -523,7 +537,7 @@
           <React.Fragment>
             <div className="dd-kpis">
               <div className="card dd-kpi"><span>Patient days</span><b>{grand.total}</b><small>{grand.days} approved day-records</small></div>
-              {DD.DEVICES.map((k) => { const f = F.find((x) => x.id === k); const u = DD.utilisation(grand, k); return (
+              {F.filter((x) => x.id !== 'total').map((f) => { const k = f.id; const u = DD.utilisation(grand, k); return (
                 <div key={k} className="card dd-kpi"><span>{f.short} days</span><b>{grand[k]}</b><small>{u == null ? '—' : u + '% utilisation'}</small></div>); })}
               <div className="card dd-kpi" style={{ borderColor: missing ? '#f3c2cb' : undefined }}><span>Missed days</span><b style={{ color: missing ? 'var(--rose)' : undefined }}>{missing}</b><small>{waiting} waiting for review</small></div>
             </div>
@@ -565,33 +579,98 @@
   }
 
   /* ============================================================= SETTINGS === */
+  // Pick people for one department: chips for the current ones, a searchable list to add more.
+  function PeoplePicker({ value, people, fixed, onChange }) {
+    const [open, setOpen] = useState(false);
+    const [q, setQ] = useState('');
+    const byName = {}; people.forEach((p) => { byName[p.username] = p; });
+    const needle = q.trim().toLowerCase();
+    const options = people.filter((p) => value.indexOf(p.username) < 0 && fixed.indexOf(p.username) < 0)
+      .filter((p) => !needle || (p.name + ' ' + p.username + ' ' + p.designation).toLowerCase().indexOf(needle) >= 0).slice(0, 40);
+    const remove = async (u) => {
+      const p = byName[u] || { name: u };
+      const ok = await confirmBox({ title: 'Remove ' + p.name + '?', message: p.name + ' will no longer be responsible for this department. If Device Days was given to them only for this, it is switched off for them.', confirmLabel: 'Remove' });
+      if (ok) onChange(value.filter((x) => x !== u));
+    };
+    const chip = { display: 'inline-flex', alignItems: 'center', gap: 5, padding: '2px 4px 2px 9px', borderRadius: 14, fontSize: 11.5, fontWeight: 600, border: '1px solid var(--blue)', background: 'var(--blue-50)', color: 'var(--blue-700)', margin: '2px 4px 2px 0' };
+    return (
+      <div style={{ minWidth: 220, maxWidth: 360, whiteSpace: 'normal' }}>
+        {value.map((u) => <span key={u} style={chip} title={(byName[u] && byName[u].designation) || u}>{(byName[u] && byName[u].name) || u}<button type="button" onClick={() => remove(u)} aria-label="Remove" style={{ border: 0, background: 'transparent', color: 'inherit', cursor: 'pointer', fontSize: 13, lineHeight: 1, padding: '0 3px' }}>×</button></span>)}
+        {fixed.map((u) => <span key={u} style={Object.assign({}, chip, { borderStyle: 'dashed', paddingRight: 9, opacity: .8 })} title="All departments — set in Access Control">{(byName[u] && byName[u].name) || u} · all</span>)}
+        <button type="button" className="dd-icon-btn" onClick={() => setOpen((o) => !o)}>+ Add</button>
+        {open && (
+          <div style={{ marginTop: 6, width: 280, maxWidth: '100%', background: '#fff', border: '1px solid var(--line)', borderRadius: 9, boxShadow: '0 10px 28px rgba(13,27,46,.16)', padding: 8 }}>
+            <input autoFocus className="dd-sel" style={{ width: '100%', maxWidth: 'none', marginBottom: 6 }} placeholder="Search people…" value={q} onChange={(e) => setQ(e.target.value)} />
+            <div style={{ maxHeight: 220, overflow: 'auto' }}>
+              {!options.length && <div style={{ fontSize: 11.5, color: 'var(--muted)', padding: 6 }}>No one else to add.</div>}
+              {options.map((p) => (
+                <button key={p.username} type="button" onClick={() => { onChange(value.concat([p.username])); setQ(''); }}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', border: 0, background: 'transparent', padding: '6px 8px', borderRadius: 6, cursor: 'pointer', font: 'inherit', fontSize: 12 }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--blue-50)'; }} onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                  <b>{p.name}</b> <span style={{ color: 'var(--muted)', fontSize: 11 }}>{p.designation || p.username}{p.devdays.length ? ' · has Device Days' : ''}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{ textAlign: 'right', marginTop: 4 }}><button type="button" className="dd-icon-btn" onClick={() => setOpen(false)}>Done</button></div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function Settings() {
     const [list, setList] = useState(null);
+    const [people, setPeople] = useState([]);
+    const [peopleOk, setPeopleOk] = useState(true);
+    const [fields, setFields] = useState([]);
     const [err, setErr] = useState('');
     const [busy, setBusy] = useState(false);
     const [filter, setFilter] = useState('');
     const [changed, setChanged] = useState({});
-    const load = () => api('/api/device-days/config').then((j) => { setList(j.departments); setChanged({}); }).catch((e) => setErr(e.message));
+    const [respChanged, setRespChanged] = useState({});
+    const [fieldsDirty, setFieldsDirty] = useState(false);
+    const [newCol, setNewCol] = useState({ label: '', short: '' });
+    const load = () => api('/api/device-days/config').then((j) => {
+      setList(j.departments); setPeople(j.people || []); setPeopleOk(j.peopleAvailable !== false);
+      setFields((j.fields || []).filter((f) => f.custom)); setChanged({}); setRespChanged({}); setFieldsDirty(false);
+    }).catch((e) => setErr(e.message));
     useEffect(() => { load(); }, []);
     if (err) return <div className="card" style={{ color: 'var(--rose)' }}>{err}</div>;
     if (!list) return <div className="card" style={{ color: 'var(--muted)' }}>Loading…</div>;
     const set = (id, k, v) => { setList((l) => l.map((d) => (d.id === id ? Object.assign({}, d, { cfg: Object.assign({}, d.cfg, { [k]: v }) }) : d))); setChanged((c) => Object.assign({}, c, { [id]: true })); };
+    const setResp = (id, v) => { setList((l) => l.map((d) => (d.id === id ? Object.assign({}, d, { responsibles: v }) : d))); setRespChanged((c) => Object.assign({}, c, { [id]: true })); };
+    const allDepts = people.filter((p) => p.devdays.indexOf('add') >= 0 && p.deviceDepartments.indexOf('*') >= 0).map((p) => p.username);
+    const setField = (i, k, v) => { setFields((fs) => fs.map((f, j) => (j === i ? Object.assign({}, f, { [k]: v }) : f))); setFieldsDirty(true); };
+    const addCol = () => {
+      const label = newCol.label.trim();
+      if (!label) { toast('Write the column name, e.g. "Patients with NG tube".', 'error'); return; }
+      setFields((fs) => fs.concat([{ label, short: newCol.short.trim() || label, active: true, isNew: true }])); setNewCol({ label: '', short: '' }); setFieldsDirty(true);
+    };
+    const n = Object.keys(changed).length + Object.keys(respChanged).length + (fieldsDirty ? 1 : 0);
     const save = async () => {
+      if (!n) return;
+      const body = {};
       const depts = {}; list.filter((d) => changed[d.id]).forEach((d) => { depts[d.id] = d.cfg; });
-      if (!Object.keys(depts).length) return;
+      if (Object.keys(depts).length) body.depts = depts;
+      const resp = {}; list.filter((d) => respChanged[d.id]).forEach((d) => { resp[d.id] = d.responsibles || []; });
+      if (Object.keys(resp).length) body.responsibles = resp;
+      if (fieldsDirty) body.fields = fields.map((f) => (f.isNew ? { label: f.label, short: f.short } : { id: f.id, label: f.label, short: f.short, active: f.active }));
       setBusy(true);
-      try { const j = await api('/api/device-days/config', { method: 'PUT', body: JSON.stringify({ depts }) }); toast(j.changed + ' department setting(s) saved.', 'success'); load(); refreshBadge(); }
-      catch (e) { toast(e.message, 'error'); }
+      try {
+        const j = await api('/api/device-days/config', { method: 'PUT', body: JSON.stringify(body) });
+        const r = j.responsibles || {};
+        toast('Saved.' + (r.granted ? ' ' + r.granted + ' responsible person(s) added.' : '') + (r.removed ? ' ' + r.removed + ' removed.' : '') + (r.skipped && r.skipped.length ? ' Skipped: ' + r.skipped.join('; ') : ''), r.skipped && r.skipped.length ? 'warn' : 'success');
+        load(); refreshBadge();
+      } catch (e) { toast(e.message, 'error'); }
       setBusy(false);
     };
     const shown = list.filter((d) => !filter || d.name.toLowerCase().indexOf(filter.toLowerCase()) >= 0);
-    const n = Object.keys(changed).length;
     return (
       <div className="dd-wrap">
         <div className="card" style={{ padding: '12px 14px', fontSize: 12.5, color: 'var(--ink-2)' }}>
           Tick the departments that keep the <b>Record of Device Insertion Days</b>. Each fills one row per day; <b>how often they send</b> decides when a day counts as missed:
           daily — that day by the cut-off time; weekly — the day after the week ends; monthly — the day after the month ends. Days before the <b>start date</b> are never counted as missed.
-          Who may enter, review or print is set per person in Access Control → Device Days.
+          A department's <b>responsible people</b> see Device Days in their menu and can enter and send its sheet; reviewers (Access Control → Device Days → Edit) approve it.
         </div>
         <div className="card dd-bar">
           <input className="dd-sel" placeholder="Search departments" value={filter} onChange={(e) => setFilter(e.target.value)} />
@@ -602,12 +681,15 @@
         <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
           <div className="dd-scroll">
             <table className="dd-tbl">
-              <thead><tr><th>Tracked</th><th>Department</th><th>Sends</th><th>Week starts</th><th>Start date</th><th>Census time</th><th>Cut-off</th></tr></thead>
+              <thead><tr><th>Tracked</th><th>Department</th><th>Responsible (enter &amp; send)</th><th>Sends</th><th>Week starts</th><th>Start date</th><th>Census time</th><th>Cut-off</th></tr></thead>
               <tbody>
                 {shown.map((d) => (
                   <tr key={d.id} className={d.cfg.tracked ? 'dd-st-approved' : ''}>
                     <td><input type="checkbox" style={{ width: 'auto' }} checked={!!d.cfg.tracked} onChange={(e) => set(d.id, 'tracked', e.target.checked)} /></td>
-                    <td><b>{d.name}</b>{changed[d.id] && <span className="dd-chip returned" style={{ marginLeft: 6 }}>unsaved</span>}</td>
+                    <td><b>{d.name}</b>{(changed[d.id] || respChanged[d.id]) && <span className="dd-chip returned" style={{ marginLeft: 6 }}>unsaved</span>}</td>
+                    <td>{peopleOk
+                      ? (d.cfg.tracked ? <PeoplePicker value={d.responsibles || []} people={people} fixed={allDepts} onChange={(v) => setResp(d.id, v)} /> : <span style={{ fontSize: 11, color: 'var(--muted)' }}>tick Tracked first</span>)
+                      : <span style={{ fontSize: 11, color: 'var(--muted)' }}>accounts unavailable</span>}</td>
                     <td><select className="dd-sel" disabled={!d.cfg.tracked} value={d.cfg.frequency} onChange={(e) => set(d.id, 'frequency', e.target.value)}>{DD.FREQS.map((f) => <option key={f} value={f}>{FREQ_LABEL[f]}</option>)}</select></td>
                     <td><select className="dd-sel" disabled={!d.cfg.tracked || d.cfg.frequency !== 'weekly'} value={d.cfg.weekStart} onChange={(e) => set(d.id, 'weekStart', +e.target.value)}>{WD.map((w, i) => <option key={i} value={i}>{w}</option>)}</select></td>
                     <td><input type="date" style={{ width: 140, textAlign: 'left' }} disabled={!d.cfg.tracked} value={d.cfg.startDate || ''} onChange={(e) => set(d.id, 'startDate', e.target.value)} /></td>
@@ -618,6 +700,39 @@
               </tbody>
             </table>
           </div>
+        </div>
+
+        <div className="card" style={{ padding: '14px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+            <b style={{ fontSize: 14 }}>Form columns</b>
+            <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>What each department counts every day. Every column is a number of patients, never more than Total Patients.</span>
+          </div>
+          <div className="dd-scroll">
+            <table className="dd-tbl" style={{ maxWidth: 760 }}>
+              <thead><tr><th>Column</th><th>Short name (sheet header)</th><th>Status</th></tr></thead>
+              <tbody>
+                {DD.FIELDS.map((f) => <tr key={f.id}><td>{f.label}</td><td style={{ color: 'var(--muted)' }}>{f.short}</td><td><span className="dd-chip not-due">built in</span></td></tr>)}
+                {fields.map((f, i) => (
+                  <tr key={f.id || 'new' + i} className={f.active === false ? 'dd-st-future' : ''}>
+                    <td><input style={{ width: 260, textAlign: 'left' }} value={f.label} onChange={(e) => setField(i, 'label', e.target.value)} /></td>
+                    <td><input style={{ width: 150, textAlign: 'left' }} value={f.short} onChange={(e) => setField(i, 'short', e.target.value)} /></td>
+                    <td>
+                      {f.isNew ? <span className="dd-chip returned">new · unsaved</span>
+                        : f.active === false ? <span className="dd-chip not-due">hidden · data kept</span> : <span className="dd-chip approved">in use</span>}
+                      {!f.isNew && <button type="button" className="dd-icon-btn" style={{ marginLeft: 6 }} onClick={() => setField(i, 'active', f.active === false)}>{f.active === false ? 'Show' : 'Hide'}</button>}
+                      {f.isNew && <button type="button" className="dd-icon-btn" style={{ marginLeft: 6 }} onClick={() => { setFields((fs) => fs.filter((_, j) => j !== i)); setFieldsDirty(true); }}>Cancel</button>}
+                    </td>
+                  </tr>
+                ))}
+                <tr>
+                  <td><input style={{ width: 260, textAlign: 'left' }} placeholder="New column, e.g. Patients with NG tube" value={newCol.label} onChange={(e) => setNewCol((c) => Object.assign({}, c, { label: e.target.value }))} onKeyDown={(e) => { if (e.key === 'Enter') addCol(); }} /></td>
+                  <td><input style={{ width: 150, textAlign: 'left' }} placeholder="Short, e.g. NG tube" value={newCol.short} onChange={(e) => setNewCol((c) => Object.assign({}, c, { short: e.target.value }))} onKeyDown={(e) => { if (e.key === 'Enter') addCol(); }} /></td>
+                  <td><button type="button" className="btn sm" onClick={addCol}>+ Add column</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 6 }}>Hiding a column takes it off the sheet and the printout; the figures already saved in it are kept and come back if you show it again. Remember to press Save.</div>
         </div>
       </div>
     );
@@ -662,6 +777,7 @@
   }
   // The paper form, one A4 portrait page per month: every day, a Total row, sign-off lines.
   function printSheet(dept, month, data) {
+    const F = data.fields || DD.FIELDS;
     const rows = data.days.map((d) => {
       const r = d.row;
       const cls = d.state === 'missing' ? 'ms' : d.state === 'returned' ? 'rt' : '';
@@ -669,7 +785,7 @@
         + F.map((f) => '<td>' + esc(r ? r[f.id] : '') + '</td>').join('')
         + '<td class="st">' + esc(d.state === 'future' ? '' : (STATE_LABEL[d.state] || '')) + '</td></tr>';
     }).join('');
-    const t = DD.totals(data.days.map((d) => d.row).filter(Boolean));
+    const t = DD.totals(data.days.map((d) => d.row).filter(Boolean), null, F);
     const body = letterhead('Infection Prevention & Control', 'Record of Device Insertion Days')
       + '<div class="hd"><span>Department: <b>' + esc(dept.name) + '</b></span><span>Month: <b>' + esc(DD.fmtMonth(month)) + '</b></span></div>'
       + '<table><thead><tr><th>Date</th><th>Time</th>' + F.map((f) => '<th>' + esc(f.label.replace('Patients with ', 'Total Patients with ')) + '</th>').join('') + '<th>Status</th></tr></thead><tbody>' + rows + '</tbody>'
@@ -679,6 +795,7 @@
     openPrint({ kind: 'sheet', dept: dept.id, month }, dept.name + ' — Device Insertion Days ' + DD.fmtMonth(month), { css: '@page{size:A4 portrait;margin:12mm}' + PRINT_CSS, body });
   }
   function printSummary(s, scope) {
+    const F = s.fields || DD.FIELDS;
     const rows = s.departments.map((d) => d.months.map((m, i) => '<tr><td class="l">' + (i === 0 ? '<b>' + esc(d.name) + '</b>' : '') + '</td><td class="l">' + esc(DD.fmtMonth(m.month)) + '</td>'
       + F.map((f) => '<td>' + (m.approved.days ? m.approved[f.id] : '—') + '</td>').join('')
       + '<td>' + (DD.utilisation(m.approved, 'central') == null ? '—' : DD.utilisation(m.approved, 'central') + '%') + '</td><td>' + m.approved.days + ' / ' + m.due + '</td><td>' + (m.missing || '') + '</td></tr>').join('')).join('');
