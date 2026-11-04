@@ -32,6 +32,10 @@ function RoleBadge({role}){
   return <span style={{display:'inline-flex',alignItems:'center',gap:5,fontSize:10.5,fontWeight:700,padding:'2px 8px',borderRadius:5,color:c,background:c+'16',letterSpacing:.3}}>{role||'Nurse'}</span>;
 }
 
+// Staff-group icons, shared by the dashboard cards and the directory tabs.
+const IC_USERS='M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8';
+const IC_CAP='M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5';
+
 /* NURSE OR PCA IS A FILTER, NOT A DESTINATION. Nurse Management and PCA Management
    were two sidebar entries over one roster; they are one Staff Management workspace
    now, so the screens that are still written per role (the dashboard and the
@@ -513,8 +517,6 @@ function WorkforceDashboard({store, setRoute, role='Nurse', group=role}){
   const deptCount=new Set(list.map(e=>staffCanonDept(e.current_department))).size;
   const canAdd=!window.unicoCan||window.unicoCan('staff','add');
   const showComp=group==='Nurse'||group==='PCA';
-  const IC_USERS='M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8';
-  const IC_CAP='M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5';
   const IC_WARN='M12 3l9.5 17h-19zM12 10v4.5M12 17.3v.2';
   const IC_BUILD='M4 21V5a1 1 0 011-1h8a1 1 0 011 1v16M14 9h5a1 1 0 011 1v11M3 21h18M8 8h2M8 12h2M8 16h2M17 13v.01M17 17v.01';
   const KPIS=[
@@ -910,8 +912,17 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
   const [training,setTraining]=React.useState(M.training||'');
   const [sortBy,setSortBy]=React.useState(M.sortBy||(recentDays?'entry':'name'));
   const [showInactive,setShowInactive]=React.useState(!!M.showInactive);
+  /* THE STAFF GROUP IS A TAB ON THIS PAGE, NOT A ROUTE. Switching it used to setRoute() to
+     nurses / pca / trainees, which changed the breadcrumb and, for Trainee, moved the
+     sidebar off "Directory" — it felt like leaving the page. The route's `group` is only
+     the tab it OPENS on; a route change that keeps this component mounted (sidebar
+     Directory while on Trainee Directory) re-seeds it. Only the all-staff Directory
+     reopens on the remembered tab: a nurses / pca / trainees link means that group. */
+  const [tab,setTab]=React.useState((group==='All'&&M.tab)||group);
+  const [seededFrom,setSeededFrom]=React.useState(group);
+  if(seededFrom!==group){ setSeededFrom(group); setTab(group); }
   // Remember the filters as they change…
-  React.useEffect(()=>{ DIR_MEMO[memoKey]=Object.assign({},DIR_MEMO[memoKey],{q,chip,dept,desig,vacc,qual,expB,training,sortBy,showInactive}); });
+  React.useEffect(()=>{ DIR_MEMO[memoKey]=Object.assign({},DIR_MEMO[memoKey],{q,chip,dept,desig,vacc,qual,expB,training,sortBy,showInactive,tab}); });
   // …and the scroll position, tracked live (an unmount-time read is too late: the
   // list is gone and .content has already collapsed by the time cleanup runs).
   React.useEffect(()=>{
@@ -922,10 +933,11 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
     el.addEventListener('scroll',onScroll,{passive:true});
     return ()=>el.removeEventListener('scroll',onScroll);
   },[]);  // eslint-disable-line
-  const tone= role==='PCA'?'#6a52d4':'#0090ca';
+  const tabRole= tab==='PCA'?'PCA':tab==='All'?role:'Nurse';
+  const tone= tabRole==='PCA'?'#6a52d4':'#0090ca';
   const roster=recentDays?(updates?S.recentStaffUpdates:S.recentStaffEntries)(store.staff,recentDays):store.staff;
-  const all=roster.filter(e=>S.matchesStaffGroup(e,group));
-  const label=({All:'All Staff',Nurse:'Nurse',Trainee:'Trainee Nurse',PCA:'PCA'})[group];
+  const all=roster.filter(e=>S.matchesStaffGroup(e,tab));
+  const label=({All:'All Staff',Nurse:'Nurse',Trainee:'Trainee Nurse',PCA:'PCA'})[tab];
   /* Appraisal standing, merged in from the Performance module — the reason that module
      no longer keeps a staff directory of its own. Null for an account without 'perf',
      and the column, the chips and the sort all disappear with it. */
@@ -941,10 +953,10 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
     // row is staff x records, and this roster is ~200 people against a growing register.
     const by={}; (apprData.appraisals||[]).forEach(x=>{ const k=String(x&&x.empId); (by[k]||(by[k]=[])).push(x); });
     const now=new Date(); const m={};
-    store.staff.forEach(e=>{ if(!S.matchesStaffGroup(e,group)) return;
+    store.staff.forEach(e=>{ if(!S.matchesStaffGroup(e,tab)) return;
       m[e.id]=A_.standing(e,by[String(e.emp_id||e.id)]||[],now); });
     return m;
-  },[apprOn,apprData,store.staff,group]);
+  },[apprOn,apprData,store.staff,tab]);
   const stOf=(e)=>standing?standing[e.id]:null;
   const active=all.filter(e=>e.is_active&&!e.former);
   const base=all.filter(e=>showInactive||(e.is_active&&!e.former));
@@ -1005,12 +1017,21 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
         <div style={{flexShrink:0}}><div style={{fontSize:22,fontWeight:800,color:'var(--ink)',letterSpacing:'-.3px',whiteSpace:'nowrap'}}>{recentDays?recentTitle:label+' Directory'}</div>
           <div style={{fontSize:12,color:'var(--muted)'}}>{recentDays?`Staff records ${updates?'updated':'added'} in the last ${recentDays} days, including today · Bangladesh time`:`Dedicated ${label} roster`}{!showInactive&&all.length>active.length?` · ${all.length-active.length} inactive hidden`:''}</div></div>
         <span className="spacer" style={{flex:1}}/>
-        {!recentDays&&<RoleSwitch role={group} setRoute={setRoute} views={{All:'staffAll',Nurse:'nurses',Trainee:'trainees',PCA:'pca'}}/>}
         {recentDays>0&&store.refresh&&<button className="btn sm" disabled={store.refreshing} onClick={()=>store.refresh()}>{store.refreshing?'Refreshing…':'Refresh'}</button>}
         <button className="btn sm" onClick={()=>setShowInactive(v=>!v)}>{showInactive?'Hide inactive':'Show inactive'}</button>
-        {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role,designation:group==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {recentDays?'Staff':group==='Trainee'?'Trainee Nurse':role}</button>}
+        {(!window.unicoCan||window.unicoCan('staff','add'))&&<button className="btn pri sm" style={{background:tone,borderColor:tone}} onClick={()=>setRoute({view:'staffForm',role:tabRole,designation:tab==='Trainee'?'Trainee Nurse':''})}><Ic d={I.plus} s={15}/>Add {recentDays?'Staff':tab==='Trainee'?'Trainee Nurse':tab==='All'?'Staff':tabRole}</button>}
         <span className="num" style={{fontSize:12.5,color:'var(--muted)',fontWeight:600}}>{active.length} employee(s)</span>
       </div>
+
+      {/* staff-group tabs — swap the list in place (see `tab` above) */}
+      {!recentDays&&(()=>{ const counts=S.staffCounts(store.staff);
+        return <div role="tablist" style={{display:'flex',gap:4,borderBottom:'1px solid var(--line)',flexWrap:'wrap'}}>
+          {[['All','All Staff','#0090ca',IC_USERS],['Nurse','Nurses','#0090ca',I.steth],['PCA','PCA','#6a52d4',I.user],['Trainee','Trainee Nurses','#0090ca',IC_CAP]].map(([v,l,c,ic])=>{ const on=tab===v;
+            return <button key={v} role="tab" aria-selected={on} onClick={()=>setTab(v)} style={{display:'inline-flex',alignItems:'center',gap:7,padding:'9px 16px',marginBottom:-1,
+              border:0,borderBottom:'2.5px solid '+(on?c:'transparent'),background:'transparent',cursor:'pointer',fontFamily:'inherit',fontSize:13.5,fontWeight:on?700:600,color:on?c:'var(--muted)'}}>
+              <span style={{width:26,height:26,borderRadius:7,display:'grid',placeItems:'center',background:on?c+'1a':'var(--panel-2)'}}><Ic d={ic} s={15} c={on?c:'currentColor'}/></span>
+              {l}<span className="num" style={{fontSize:11,fontWeight:700,padding:'1px 7px',borderRadius:10,background:on?c+'1a':'var(--panel-2)',color:on?c:'var(--faint)'}}>{counts[v]||0}</span></button>; })}
+        </div>; })()}
 
       {/* quick chips */}
       {recentDays>0&&store.refreshError&&<div role="alert" className="card" style={{padding:'10px 14px',color:'var(--neg)'}}>{store.refreshError}</div>}
