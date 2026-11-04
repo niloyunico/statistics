@@ -215,5 +215,14 @@ const row = (o) => Object.assign({ time: '08:00', total: 10, peripheral: 6, cent
   assert.deepEqual(u('hand').perms.devdays, ['view', 'add', 'print'], 'hand-granted account keeps its rights'); assert.deepEqual(u('hand').deviceDepartments, ['micu']);
   assert.equal((await call('PUT /api/device-days/config', nurse, { body: { responsibles: { sicu: ['resp1'] } } })).status, 403, 'only an administrator assigns');
 
+  /* ---- bulk approve (Review → Approve all): one call, everything waiting approved, the rest skipped ---- */
+  r = await call('POST /api/device-days/submit', nurse, { body: { dept: 'sicu', from: '2026-11-01', to: '2026-11-30' } });
+  assert.equal(r.body.sent, 2, '2 and 4 Nov sent');
+  assert.equal((await call('GET /api/device-days/review', reviewer)).body.rows.length, 2);
+  r = await call('POST /api/device-days/review', reviewer, { body: { ids: ['sicu:2026-11-02', 'sicu:2026-11-04', 'sicu:2026-11-03', 'micu:2026-11-01'], action: 'approve' } });
+  assert.equal(r.body.done, 2); assert.equal(r.body.skipped.length, 2, 'already approved / unknown rows are skipped, not failed');
+  assert.equal((await call('GET /api/device-days/review', reviewer)).body.rows.length, 0, 'queue empty');
+  assert.equal(logged.pop().action, 'devdays_approve');
+
   console.log('device-days: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

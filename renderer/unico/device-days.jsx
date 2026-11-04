@@ -87,6 +87,22 @@
 .dd-empty{padding:26px 10px;text-align:center;color:var(--muted);font-size:12.5px}
 .dd-icon-btn{border:1px solid var(--line);background:#fff;border-radius:6px;padding:3px 8px;font:inherit;font-size:11px;font-weight:600;color:var(--ink-2);cursor:pointer}
 .dd-icon-btn:disabled{opacity:.45;cursor:default}
+.dd-rv-bar{position:sticky;top:-22px;z-index:3;display:flex;flex-direction:column;gap:8px;padding:10px 14px;box-shadow:0 6px 22px rgba(13,27,46,.10)}
+.dd-rv-row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.dd-rv-all{display:inline-flex;gap:6px;align-items:center;font-size:12.5px;font-weight:600;color:var(--ink-2);cursor:pointer;white-space:nowrap}
+.dd-rv-head{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-bottom:1px solid var(--line-2);background:linear-gradient(180deg,#fff,#f7fbfe)}
+.dd-rv-sub{font-size:11.5px;color:var(--muted);margin-top:1px}
+.dd-rv-tog{border:1px solid var(--line);background:#fff;color:var(--ink-2);font-size:11px;cursor:pointer;width:24px;height:24px;border-radius:6px;line-height:1;flex:none}
+.dd-rv-tog:hover{background:var(--blue-50)}
+.dd-rv-tog svg{display:block;margin:auto;transition:transform .15s}.dd-rv-tog[aria-expanded=false] svg{transform:rotate(-90deg)}
+.dd-tbl input[type=checkbox]{width:auto;padding:0}
+@media screen and (max-width:820px){.dd-rv-bar{top:-14px}}@media (max-width:720px){.dd-rv-bar{position:static}}
+.dd-rv .dd-tbl th{position:static}
+.dd-rv .dd-tbl td{padding:6px 8px}
+.dd-rv-sent{font-size:11.5px;color:var(--ink-2)}.dd-rv-sent small{display:block;color:var(--muted);font-size:10.5px}
+.dd-sep td{background:#f3f6fa;color:var(--muted);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:4px 10px!important}
+.dd-picked td{background:var(--blue-50)}
+.dd-sel.bad{border-color:var(--rose);box-shadow:0 0 0 2px rgba(210,58,82,.15)}
 @media (max-width:720px){.dd-tbl input{width:58px}.dd-tbl input[type=time]{width:84px}}
 `;
   function useStyles() {
@@ -409,82 +425,172 @@
   }
 
   /* =============================================================== REVIEW === */
+  // One card per department (all its waiting days in one table) under a sticky bar with
+  // filters, select-all and bulk approve. The server re-checks every id it is sent.
   function ReviewQueue() {
     const [q, setQ] = useState(null);
     const [err, setErr] = useState('');
     const [pick, setPick] = useState({});
     const [reason, setReason] = useState('');
+    const [reasonBad, setReasonBad] = useState(false);
     const [busy, setBusy] = useState(false);
-    const load = () => api('/api/device-days/review').then((j) => { setQ(j); setPick({}); }).catch((e) => setErr(e.message));
+    const [fDept, setFDept] = useState('');
+    const [fMonth, setFMonth] = useState('');
+    const [closed, setClosed] = useState({});
+    const reasonRef = useRef(null);
+    const load = () => api('/api/device-days/review').then((j) => {
+      setQ(j); setPick({});
+      setFDept((d) => (d && j.rows.some((r) => r.deptId === d) ? d : ''));
+      setFMonth((m) => (m && j.rows.some((r) => r.date.slice(0, 7) === m) ? m : ''));
+    }).catch((e) => setErr(e.message));
     useEffect(() => { load(); }, []);
-    if (err) return <div className="card" style={{ color: err ? 'var(--rose)' : '' }}>{err}</div>;
+    if (err) return <div className="card" style={{ color: 'var(--rose)' }}>{err}</div>;
     if (!q) return <div className="card" style={{ color: 'var(--muted)' }}>Loading…</div>;
     const F = q.fields || DD.FIELDS;
-    const names = {}; q.departments.forEach((d) => { names[d.id] = d.name; });
-    const groups = {};
-    q.rows.forEach((r) => { const k = r.deptId + '|' + (r.periodKey || r.date); (groups[k] = groups[k] || { dept: r.deptId, period: r.periodKey || r.date, rows: [] }).rows.push(r); });
-    const list = Object.values(groups).sort((a, b) => (a.rows[0].submittedAt || 0) - (b.rows[0].submittedAt || 0));
+    const deptOf = {}; q.departments.forEach((d) => { deptOf[d.id] = d; });
+    const nameOf = (id) => (deptOf[id] && deptOf[id].name) || id;
     const own = (r) => !q.isAdmin && r.submittedBy === q.me;
-    const ids = Object.keys(pick).filter((k) => pick[k]);
-    const act = async (action, only) => {
-      const sel = only || ids;
+    const plural = (n, w) => n + ' ' + w + (n === 1 ? '' : 's');
+    const byDate = (a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+
+    const visible = q.rows.filter((r) => (!fDept || r.deptId === fDept) && (!fMonth || r.date.slice(0, 7) === fMonth));
+    const approvable = visible.filter((r) => !own(r));
+    const groups = {};
+    visible.forEach((r) => { (groups[r.deptId] = groups[r.deptId] || { dept: r.deptId, rows: [] }).rows.push(r); });
+    const list = Object.values(groups);
+    list.forEach((g) => g.rows.sort(byDate));
+    list.sort((a, b) => byDate(a.rows[0], b.rows[0]) || nameOf(a.dept).localeCompare(nameOf(b.dept)));
+    const ids = approvable.filter((r) => pick[r.id]).map((r) => r.id);
+    const late = visible.filter((r) => r.late).length;
+    const deptCount = {}, monthCount = {};
+    q.rows.forEach((r) => { deptCount[r.deptId] = (deptCount[r.deptId] || 0) + 1; const m = r.date.slice(0, 7); monthCount[m] = (monthCount[m] || 0) + 1; });
+    const allOn = approvable.length > 0 && approvable.every((r) => pick[r.id]);
+    const setMany = (list2, on) => setPick((p) => { const n = Object.assign({}, p); list2.forEach((id) => { n[id] = on; }); return n; });
+
+    // The server takes 400 ids per call; bigger selections go in turns.
+    const act = async (action, sel) => {
       if (!sel.length) return;
-      if (action === 'return' && !reason.trim()) { toast('Write why the days are returned (box above the list).', 'error'); return; }
+      if (action === 'return' && !reason.trim()) {
+        setReasonBad(true); toast('Write why the days are returned.', 'error');
+        if (reasonRef.current) reasonRef.current.focus();
+        return;
+      }
       setBusy(true);
+      let done = 0; const skipped = [];
       try {
-        const j = await api('/api/device-days/review', { method: 'POST', body: JSON.stringify({ ids: sel, action, reason }) });
-        toast((action === 'approve' ? 'Approved ' : 'Returned ') + j.done + ' day(s).' + (j.skipped.length ? ' Skipped ' + j.skipped.length + ': ' + j.skipped[0] : ''), j.skipped.length ? 'warn' : 'success');
+        for (let i = 0; i < sel.length; i += 400) {
+          const j = await api('/api/device-days/review', { method: 'POST', body: JSON.stringify({ ids: sel.slice(i, i + 400), action, reason }) });
+          done += j.done; skipped.push(...(j.skipped || []));
+        }
+        toast((action === 'approve' ? 'Approved ' : 'Returned ') + plural(done, 'day') + '.' + (skipped.length ? ' Skipped ' + skipped.length + ': ' + skipped[0] : ''), skipped.length ? 'warn' : 'success');
         if (action === 'return') setReason('');
-      } catch (e) { toast(e.message, 'error'); }
+      } catch (e) { toast((done ? plural(done, 'day') + ' done, then: ' : '') + e.message, 'error'); }
       setBusy(false); load(); refreshBadge();
     };
-    const periodLabel = (p) => (/^W\d/.test(p) ? 'Week of ' + DD.fmtDay(p.slice(1)) : DD.isMonth(p) ? DD.fmtMonth(p) : DD.isDate(p) ? DD.fmtDay(p) : p);
+    const approveAll = async () => {
+      const n = approvable.length; if (!n) return;
+      const m = new Set(approvable.map((r) => r.deptId)).size;
+      const mine = visible.length - n;
+      const ok = await confirmBox({
+        title: 'Approve ' + plural(n, 'day') + '?',
+        message: 'Approves every waiting day shown (' + plural(n, 'day') + ' from ' + plural(m, 'department') + ').' + (mine ? ' ' + plural(mine, 'day') + ' you sent yourself stay for another reviewer.' : ''),
+        confirmLabel: 'Approve ' + n,
+      });
+      if (ok) act('approve', approvable.map((r) => r.id));
+    };
+    const rangeOf = (rows) => {
+      const a = rows[0].date, b = rows[rows.length - 1].date;
+      if (a === b) return DD.fmtDay(a) + ' ' + a.slice(0, 4);
+      return (a.slice(0, 7) === b.slice(0, 7) ? +a.slice(8) : DD.fmtDay(a)) + '–' + DD.fmtDay(b) + ' ' + b.slice(0, 4);
+    };
+    const periodLabel = (p) => (/^W\d/.test(p) ? 'Week of ' + DD.fmtDay(p.slice(1)) : DD.isMonth(p) ? DD.fmtMonth(p) : '');
+    const cols = F.length + 5;
+
     return (
-      <div className="dd-wrap">
-        <div className="card dd-bar">
-          <b style={{ fontSize: 14 }}>{q.rows.length} day{q.rows.length === 1 ? '' : 's'} waiting for review</b>
-          <span style={{ flex: 1 }} />
-          <input className="dd-sel" style={{ maxWidth: 340, flex: '1 1 240px' }} placeholder="Reason for returning (required to return)" value={reason} onChange={(e) => setReason(e.target.value)} />
-          <button className="btn sm" disabled={!ids.length || busy} onClick={() => act('return')}>Return selected</button>
-          <button className="btn pri sm" disabled={!ids.length || busy} onClick={() => act('approve')}>Approve selected ({ids.length})</button>
+      <div className="dd-wrap dd-rv">
+        <div className="card dd-rv-bar">
+          <div className="dd-rv-row">
+            <b style={{ fontSize: 14 }}>{plural(visible.length, 'day')} waiting for review</b>
+            <span style={{ color: 'var(--muted)', fontSize: 12.5 }}>· {plural(list.length, 'department')}{late ? <span style={{ color: 'var(--rose)', fontWeight: 700 }}> · {late} late</span> : null}</span>
+            <span style={{ flex: 1 }} />
+            <select className="dd-sel" value={fDept} onChange={(e) => { setFDept(e.target.value); setPick({}); }}>
+              <option value="">All departments ({q.rows.length})</option>
+              {Object.keys(deptCount).sort((a, b) => nameOf(a).localeCompare(nameOf(b))).map((id) => <option key={id} value={id}>{nameOf(id)} ({deptCount[id]})</option>)}
+            </select>
+            <select className="dd-sel" value={fMonth} onChange={(e) => { setFMonth(e.target.value); setPick({}); }}>
+              <option value="">All months</option>
+              {Object.keys(monthCount).sort().map((m) => <option key={m} value={m}>{DD.fmtMonth(m)} ({monthCount[m]})</option>)}
+            </select>
+          </div>
+          <div className="dd-rv-row">
+            <label className="dd-rv-all"><input type="checkbox" checked={allOn} disabled={!approvable.length || busy} onChange={() => setMany(approvable.map((r) => r.id), !allOn)} />Select all</label>
+            <input ref={reasonRef} className={'dd-sel' + (reasonBad ? ' bad' : '')} style={{ maxWidth: 360, flex: '1 1 220px' }} placeholder="Reason for returning (required to return)" value={reason} onChange={(e) => { setReason(e.target.value); if (e.target.value.trim()) setReasonBad(false); }} />
+            <span style={{ flex: 1 }} />
+            <button className="btn sm" disabled={!ids.length || busy} onClick={() => act('return', ids)}>Return selected</button>
+            <button className="btn sm" disabled={!ids.length || busy} onClick={() => act('approve', ids)}>Approve selected ({ids.length})</button>
+            <button className="btn pri sm" disabled={!approvable.length || busy} onClick={approveAll}>Approve all ({approvable.length})</button>
+          </div>
         </div>
-        {!list.length && <div className="card dd-empty">Nothing is waiting. Sent days appear here for approval.</div>}
+        {!q.rows.length && <div className="card dd-empty">Nothing is waiting. Sent days appear here for approval.</div>}
+        {q.rows.length > 0 && !visible.length && <div className="card dd-empty">No days match the filter · <button className="dd-icon-btn" onClick={() => { setFDept(''); setFMonth(''); }}>Show all</button></div>}
         {list.map((g) => {
+          const d = deptOf[g.dept] || {};
+          const pk = g.rows[0].periodKey || '';
+          const freq = (d.cfg && d.cfg.frequency) || (/^W\d/.test(pk) ? 'weekly' : DD.isMonth(pk) ? 'monthly' : 'daily');
           const gIds = g.rows.filter((r) => !own(r)).map((r) => r.id);
-          const allOn = gIds.length && gIds.every((id) => pick[id]);
+          const gOn = gIds.length > 0 && gIds.every((id) => pick[id]);
+          const senders = [...new Set(g.rows.map((r) => r.submittedName || r.submittedBy).filter(Boolean))];
+          const gLate = g.rows.filter((r) => r.late).length;
           const t = DD.totals(g.rows, null, F);
+          const isClosed = !!closed[g.dept];
+          // Separator rows: each sending period for weekly / monthly, each month when a daily list spans two.
+          const spans = g.rows[0].date.slice(0, 7) !== g.rows[g.rows.length - 1].date.slice(0, 7);
+          const sepOf = (r) => (freq !== 'daily' ? periodLabel(r.periodKey || '') : spans ? DD.fmtMonth(r.date.slice(0, 7)) : '');
           return (
-            <div key={g.dept + g.period} className="card" style={{ padding: 0, overflow: 'hidden' }}>
-              <div style={{ padding: '10px 14px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', borderBottom: '1px solid var(--line-2)' }}>
-                <input type="checkbox" checked={!!allOn} disabled={!gIds.length} onChange={() => setPick((p) => { const n = Object.assign({}, p); gIds.forEach((id) => { n[id] = !allOn; }); return n; })} />
-                <b>{names[g.dept] || g.dept}</b><span style={{ color: 'var(--muted)', fontSize: 12 }}>{periodLabel(g.period)} · sent by {g.rows[0].submittedName || g.rows[0].submittedBy} · {when(g.rows[0].submittedAt)}</span>
+            <div key={g.dept} className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              <div className="dd-rv-head">
+                <input type="checkbox" checked={gOn} disabled={!gIds.length || busy} title="Select this department's days" onChange={() => setMany(gIds, !gOn)} />
+                <button className="dd-rv-tog" onClick={() => setClosed((c) => Object.assign({}, c, { [g.dept]: !isClosed }))} aria-expanded={!isClosed} title={isClosed ? 'Show days' : 'Hide days'}><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4.5l3 3 3-3" /></svg></button>
+                <div style={{ minWidth: 0 }}>
+                  <b style={{ fontSize: 13.5 }}>{nameOf(g.dept)}</b>
+                  <div className="dd-rv-sub">{plural(g.rows.length, 'day')} · {rangeOf(g.rows)} · {FREQ_LABEL[freq] || freq} · sent by {senders[0] || '—'}{senders.length > 1 ? ' +' + (senders.length - 1) : ''}</div>
+                </div>
+                {gLate > 0 && <span className="dd-chip missing">{gLate} late</span>}
                 <span style={{ flex: 1 }} />
-                <button className="btn pri sm" disabled={!gIds.length || busy} onClick={() => act('approve', gIds)}>Approve {gIds.length} day{gIds.length === 1 ? '' : 's'}</button>
+                <button className="btn pri sm" disabled={!gIds.length || busy} onClick={() => act('approve', gIds)}>Approve {plural(gIds.length, 'day')}</button>
               </div>
-              <div className="dd-scroll">
-                <table className="dd-tbl">
-                  <thead><tr><th /><th>Date</th><th>Time</th>{F.map((f) => <th key={f.id} style={{ textAlign: 'right' }}>{f.short}</th>)}<th>Notes</th></tr></thead>
-                  <tbody>
-                    {g.rows.map((r) => {
-                      const corr = (r.history || []).filter((h) => h.action === 'correct' || h.action === 'edit').slice(-1)[0];
-                      return (
-                        <tr key={r.id}>
-                          <td><input type="checkbox" disabled={own(r)} checked={!!pick[r.id]} onChange={() => setPick((p) => Object.assign({}, p, { [r.id]: !p[r.id] }))} /></td>
-                          <td className="dd-day"><b>{+r.date.slice(8)}</b><small>{WD[DD.dow(r.date)]} {DD.MONS[+r.date.slice(5, 7) - 1]}</small></td>
-                          <td>{r.time}</td>
-                          {F.map((f) => <td key={f.id} style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r[f.id]}</td>)}
-                          <td style={{ whiteSpace: 'normal', fontSize: 11.5, color: 'var(--muted)' }}>
-                            {r.late && <span className="dd-chip missing" style={{ marginRight: 4 }}>late</span>}
-                            {own(r) && <span>You sent this — another reviewer must approve it. </span>}
-                            {corr && <span title={when(corr.at)}>Changed by {corr.by}: {corr.changes}</span>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot><tr><td /><td style={{ textAlign: 'left' }}>Total</td><td />{F.map((f) => <td key={f.id}>{t[f.id]}</td>)}<td /></tr></tfoot>
-                </table>
-              </div>
+              {!isClosed && (
+                <div className="dd-scroll">
+                  <table className="dd-tbl">
+                    <thead><tr><th style={{ width: 28 }} /><th>Date</th><th>Time</th>{F.map((f) => <th key={f.id} style={{ textAlign: 'right' }}>{f.short}</th>)}<th>Sent</th><th>Notes</th></tr></thead>
+                    <tbody>
+                      {g.rows.map((r, i) => {
+                        const corr = (r.history || []).filter((h) => h.action === 'correct' || h.action === 'edit').slice(-1)[0];
+                        const sep = sepOf(r);
+                        const showSep = sep && (i === 0 || sepOf(g.rows[i - 1]) !== sep);
+                        return (
+                          <React.Fragment key={r.id}>
+                            {showSep && <tr className="dd-sep"><td colSpan={cols}>{sep}</td></tr>}
+                            <tr className={pick[r.id] ? 'dd-picked' : ''}>
+                              <td><input type="checkbox" disabled={own(r) || busy} title={own(r) ? 'You sent this — another reviewer must approve it' : ''} checked={!!pick[r.id]} onChange={() => setPick((x) => Object.assign({}, x, { [r.id]: !x[r.id] }))} /></td>
+                              <td className="dd-day"><b>{+r.date.slice(8)}</b><small>{WD[DD.dow(r.date)]} {DD.MONS[+r.date.slice(5, 7) - 1]}</small></td>
+                              <td>{r.time}</td>
+                              {F.map((f) => <td key={f.id} style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r[f.id] == null || r[f.id] === '' ? '—' : r[f.id]}</td>)}
+                              <td className="dd-rv-sent">{r.submittedName || r.submittedBy}<small>{when(r.submittedAt)}</small></td>
+                              <td style={{ whiteSpace: 'normal', fontSize: 11.5, color: 'var(--muted)', minWidth: 120 }}>
+                                {r.late && <span className="dd-chip missing" style={{ marginRight: 4 }}>late</span>}
+                                {own(r) && <span>You sent this — another reviewer must approve it. </span>}
+                                {corr && <span title={when(corr.at)}>Changed by {corr.by}: {corr.changes}</span>}
+                              </td>
+                            </tr>
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot><tr><td /><td style={{ textAlign: 'left' }}>Total</td><td style={{ textAlign: 'left', fontWeight: 600, color: 'var(--muted)' }}>{plural(g.rows.length, 'day')}</td>{F.map((f) => <td key={f.id}>{t[f.id]}</td>)}<td /><td /></tr></tfoot>
+                  </table>
+                </div>
+              )}
             </div>
           );
         })}
