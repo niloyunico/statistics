@@ -133,16 +133,19 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     _dcAllPromise = (async () => {
       const rows = new Map();
       let offset = 0,
-        hhCover = null;
+        hhCover = null,
+        onRecord = null;
       do {
         const r = await dcApi.get('/api/submissions?status=all&limit=1000&offset=' + offset);
         if (!r || !r.ok) throw new Error(r && r.error || 'Could not load submission history');
         (r.submissions || []).forEach(s => rows.set(s.id, s));
         if (r.hhCover) hhCover = r.hhCover;
+        if (r.onRecord) onRecord = r.onRecord;
         offset = r.nextOffset;
       } while (offset != null);
       const list = [...rows.values()];
       if (hhCover) list.hhCover = hhCover;
+      if (onRecord) list.onRecord = onRecord;
       if (gen === _dcGen) {
         _dcAllCache = list;
         _dcAllAt = Date.now();
@@ -153,10 +156,19 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     });
     return _dcAllPromise;
   };
-  const dcSubmissionResponse = (status, force) => dcAllSubmissions(force).then(submissions => ({
-    ok: true,
-    submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status || status === 'pending' && s.status === 'approving')
-  }));
+  const dcSubmissionResponse = (status, force) => dcAllSubmissions(force).then(submissions => {
+    if (!status || status === 'all') return {
+      ok: true,
+      submissions
+    };
+    const list = submissions.filter(s => s.status === status || status === 'pending' && s.status === 'approving');
+    if (submissions.hhCover) list.hhCover = submissions.hhCover;
+    if (submissions.onRecord) list.onRecord = submissions.onRecord;
+    return {
+      ok: true,
+      submissions: list
+    };
+  });
   if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', dcInvalidateSubs);
   const dcSquash = s => String(s == null ? '' : s).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '');
   function dcMyRosterUnitKeys() {
@@ -9465,12 +9477,33 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const f = o => o && o[m] != null && o[m] !== '';
     return f(ind.mNum) || f(ind.months) || ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0;
   };
+  const _dcOnRecord = new WeakMap();
+  const dcOverlayOnRecord = subs => {
+    if (!subs || !subs.onRecord) return null;
+    if (_dcOnRecord.has(subs)) return _dcOnRecord.get(subs);
+    const o = subs.onRecord;
+    const out = {
+      p: new Set(),
+      q: new Map()
+    };
+    (Array.isArray(o.p) ? o.p : []).forEach(r => {
+      if (Array.isArray(r)) out.p.add(r[0] + '|' + r[1]);
+    });
+    (Array.isArray(o.q) ? o.q : []).forEach(r => {
+      if (Array.isArray(r)) out.q.set(r[0] + '|' + r[1] + '|' + r[2], r[3] ? 'notobs' : 'recorded');
+    });
+    _dcOnRecord.set(subs, out);
+    return out;
+  };
   function cpSubmissionStatus(subs, area, ind, month) {
     const matching = (subs || []).filter(s => s.type === 'quality' && s.status !== 'withdrawn' && s.area === area && s.month === month && (s.indicatorId === ind.id || String(s.indicatorName || '').trim().toLowerCase() === String(ind.name || '').trim().toLowerCase()));
     const latest = matching.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))[0];
     if (latest && (latest.status === 'pending' || latest.status === 'approving')) return 'pending';
     if (ind.mNotObserved && ind.mNotObserved[month]) return 'notobs';
     if (cpHasData(ind, month)) return 'recorded';
+    const typed = dcOverlayOnRecord(subs);
+    const ov = typed && typed.q.get(area + '|' + ind.id + '|' + month);
+    if (ov) return ov;
     const approved = matching.find(s => s.status === 'approved');
     if (approved) return approved.notObserved ? 'notobs' : 'recorded';
     return latest && latest.status === 'rejected' ? 'rejected' : 'none';
@@ -9684,6 +9717,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     (dcSubsIndex(subs).qArea.get(area && area.key) || []).forEach(s => {
       if (dcSubIsInd(s, ind)) see(s.month);
     });
+    const typed = dcOverlayOnRecord(subs);
+    if (typed && area && ind) {
+      const pre = area.key + '|' + ind.id + '|';
+      typed.q.forEach((v, k) => {
+        if (k.indexOf(pre) === 0) see(k.slice(pre.length));
+      });
+    }
     return best == null ? null : dcMonthKey(best);
   };
   const dcIndicatorStart = (area, ind, subs, deptStart) => {
@@ -9720,6 +9760,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     };
     (dept.months || []).forEach(see);
     (dcSubsIndex(subs).pDept.get(dept.id) || []).forEach(s => see(s.month));
+    const typed = dcOverlayOnRecord(subs);
+    if (typed) {
+      const pre = dept.id + '|';
+      typed.p.forEach(k => {
+        if (k.indexOf(pre) === 0) see(k.slice(pre.length));
+      });
+    }
     return best == null ? dcYearStart() : dcEarlierMonth(dcMonthKey(best), dcYearStart());
   };
   const _dcHHCover = new WeakMap();
@@ -9754,6 +9801,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   };
   const dcQStatus = (subs, areaKey, ind, m) => {
     const st = cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
+    if ((st === 'none' || st === 'rejected') && ind) {
+      const typed = dcOverlayOnRecord(subs);
+      const ov = typed && typed.q.get(areaKey + '|' + ind.id + '|' + m);
+      if (ov) return ov;
+    }
     if ((st === 'none' || st === 'rejected') && ind && /hand\s*hygiene/i.test(ind.name || '')) {
       const cov = dcHHAuditCover(subs).get(m);
       if (cov && cov.has(areaKey)) return 'pending';
@@ -9765,6 +9817,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const list = (dcSubsIndex(subs).p.get(dept.id + '|' + m) || []).filter(s => s.status !== 'withdrawn');
     if (list.some(s => s.status === 'pending')) return 'pending';
     if (list.some(s => s.status !== 'rejected')) return 'recorded';
+    const typed = dcOverlayOnRecord(subs);
+    if (typed && typed.p.has(dept.id + '|' + m)) return 'recorded';
     return list.length ? 'rejected' : 'none';
   };
   const dcIndDue = (area, ind, m, subs) => !dcNotMeasured(area, ind) && dcMonthDue(dcIndicatorStart(area, ind, subs), m);
@@ -16232,15 +16286,20 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       });
     }));
     const startList = [];
+    const noStart = [];
     const seenUnit = new Set();
     const addStart = (id, name) => {
       if (!id || seenUnit.has(id)) return;
       seenUnit.add(id);
       const s = dcDeptSettings(id).startMonth;
+      const nm = name || (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : id);
       if (s) startList.push({
         id: id,
-        name: name || (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : id),
+        name: nm,
         start: s
+      });else noStart.push({
+        id: id,
+        name: nm
       });
     };
     (depts || []).forEach(d => addStart(d.id, d.name));
@@ -16519,7 +16578,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           }
         }, ownFix ? 'Fix & resend' : label === 'Returned' ? 'Fix & submit' : 'Submit', " \u203A"));
       }));
-    }), (nmList.length > 0 || startList.length > 0) && React.createElement("div", {
+    }), (nmList.length > 0 || startList.length > 0 || noStart.length > 0) && React.createElement("div", {
       style: Object.assign({}, CP_CARD, {
         padding: '13px 16px',
         marginTop: 4
@@ -16547,7 +16606,32 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         background: 'rgba(0,144,202,.08)',
         color: '#0072a3'
       }
-    }, React.createElement("b", null, s.name), " \xB7 Counting from ", monthLabel(s.start)))), nmList.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", {
+    }, React.createElement("b", null, s.name), " \xB7 Counting from ", monthLabel(s.start)))), noStart.length > 0 && React.createElement("div", {
+      style: {
+        marginBottom: nmList.length ? 12 : 0
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6
+      }
+    }, noStart.map(s => React.createElement("span", {
+      key: s.id,
+      style: {
+        fontSize: 11.5,
+        padding: '3px 10px',
+        borderRadius: 12,
+        background: 'rgba(125,145,180,.12)',
+        color: '#5b6878'
+      }
+    }, React.createElement("b", null, s.name), " \xB7 Counting from ", monthLabel(dcYearStart()), " \u2014 no start month set"))), React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#6c7a8c',
+        marginTop: 6
+      }
+    }, "If a unit started reporting later, ask the administrator to set its start month (Data Collection \u2192 Department Setup). Months before it will then stop showing as missing.")), nmList.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", {
       style: {
         fontSize: 11,
         fontWeight: 700,

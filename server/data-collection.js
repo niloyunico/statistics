@@ -630,6 +630,57 @@ async function overlayCustomDept(deptId) {
   });
   return out;
 }
+/* Readings an administrator typed in DIRECTLY — Patient Statistics → Data Entry
+   (unico_store_v3.entries) and the Quality console (unico_quality_v2.depts[area].indPatches /
+   indAdded). They live only in the app overlay, never in `departments`, and every scoped account
+   receives the overlays with their VALUES stripped (web.js scopeQualityOverlay /
+   scopeDeptOverlay). So those months showed as "missing" to the unit's responsible person, and a
+   second report for them passed the on-record check. ONE reader for what the overlay holds:
+   the on-record check, its snapshots and the /api/submissions on-record flags all use it.
+   patient: 'dept|month' -> row; quality: 'area|indicatorId|month' -> reading. */
+async function overlayReadings() {
+  const out = { patient: new Map(), quality: new Map() };
+  let snap;
+  try { snap = await getAppData(); } catch (e) { return out; }
+  const parse = (v) => { if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch (e) { return null; } };
+  const filled = (v) => v !== null && v !== '' && v !== undefined;
+  const st = parse(snap && snap.data && snap.data.unico_store_v3) || {};
+  const deleted = new Set(Array.isArray(st.deleted) ? st.deleted.map(String) : []);
+  (Array.isArray(st.entries) ? st.entries : []).forEach((e) => {
+    if (!e || !e.dept || !e.month || deleted.has(String(e.dept))) return;
+    const row = {}; Object.keys(e.row || {}).forEach((k) => { if (filled(e.row[k])) row[k] = e.row[k]; });
+    if (!Object.keys(row).length) return;
+    const k = String(e.dept) + '|' + e.month;
+    out.patient.set(k, Object.assign({}, out.patient.get(k) || {}, row));
+  });
+  const qv = parse(snap && snap.data && snap.data.unico_quality_v2) || {};
+  Object.keys((qv && qv.depts) || {}).forEach((area) => {
+    const ov = qv.depts[area] || {};
+    const removed = new Set(Array.isArray(ov.indRemoved) ? ov.indRemoved.map(String) : []);
+    const take = (id, o) => {
+      if (!o || id == null || removed.has(String(id))) return;
+      const months = new Set();
+      ['months', 'mNum', 'mNotObserved', 'incidents'].forEach((f) => Object.keys(o[f] || {}).forEach((m) => months.add(m)));
+      months.forEach((m) => {
+        const value = (o.months || {})[m], num = (o.mNum || {})[m], notObserved = !!(o.mNotObserved || {})[m];
+        const incidents = Array.isArray((o.incidents || {})[m]) && o.incidents[m].length ? o.incidents[m] : null;
+        if (!filled(value) && !filled(num) && !notObserved && !incidents) return;
+        const k = area + '|' + id + '|' + m;
+        const prev = out.quality.get(k) || {};
+        out.quality.set(k, {
+          value: filled(value) ? value : prev.value, num: filled(num) ? num : prev.num,
+          den: filled((o.mDen || {})[m]) ? o.mDen[m] : prev.den,
+          notObserved: notObserved || !!prev.notObserved, incidents: incidents || prev.incidents || null,
+          remark: (o.monthRemarks || {})[m] || prev.remark || '',
+        });
+      });
+    };
+    // Added copies first, patches on top — the order quality-store.js mergeDept applies them.
+    (Array.isArray(ov.indAdded) ? ov.indAdded : []).forEach((a) => take(a && a.id, a));
+    Object.keys(ov.indPatches || {}).forEach((id) => take(id, ov.indPatches[id]));
+  });
+  return out;
+}
 // The department doc: the collection's, else the overlay's custom definition (not written).
 async function findDept(c, deptId) {
   const d = await c.findOne({ _id: String(deptId) });
@@ -1230,7 +1281,10 @@ async function patientRowOnRecord(deptId, month) {
   if (idx >= 0) return Object.assign({}, (d.data || [])[idx] || {});
   const cd = await overlayCustomDept(deptId);
   const j = cd ? cd.months.indexOf(month) : -1;
-  return j >= 0 ? Object.assign({}, cd.data[j] || {}) : null;
+  if (j >= 0) return Object.assign({}, cd.data[j] || {});
+  // A month an administrator typed in Data Entry for a collection department.
+  const typed = (await overlayReadings()).patient.get(String(deptId) + '|' + month);
+  return typed ? Object.assign({}, typed) : null;
 }
 async function snapshotPatientPrior(spec) {
   try {
@@ -1240,9 +1294,16 @@ async function snapshotPatientPrior(spec) {
 }
 async function snapshotQualityPrior(spec) {
   try {
-    const d = await qArea(spec.area); if (!d) return null;
-    const ind = (d.indicators || []).find((i) => i.id === spec.indicatorId); if (!ind) return null;
+    const d = await qArea(spec.area);
+    const ind = d && (d.indicators || []).find((i) => i.id === spec.indicatorId);
     const m = spec.month;
+    const filled = (v) => v != null && v !== '';
+    // A reading typed in the Quality console (overlay only) when the database has none.
+    if (!ind || !(filled((ind.months || {})[m]) || filled((ind.mNum || {})[m]) || (ind.mNotObserved || {})[m])) {
+      const typed = (await overlayReadings()).quality.get(spec.area + '|' + spec.indicatorId + '|' + m);
+      if (typed) return Object.assign({ capa: null }, typed, { den: filled(typed.den) ? typed.den : (ind && (ind.mDen || {})[m]) });
+    }
+    if (!ind) return null;
     // remark + CAPA too: an edit request that only changes the note or the incident / CAPA text
     // is a real change, and the comparison pop-up needs what is on record to show it.
     return { value: (ind.months || {})[m], num: (ind.mNum || {})[m], den: (ind.mDen || {})[m], notObserved: !!(ind.mNotObserved || {})[m], incidents: (ind.incidents || {})[m] || null, remark: (ind.monthRemarks || {})[m] || '', capa: (ind.capa || {})[m] || null };
@@ -1264,6 +1325,8 @@ async function onRecordPrior(spec) {
   const area = await qArea(spec.area);
   const ind = area && (area.indicators || []).find((i) => i.id === spec.indicatorId);
   if (ind && (filled((ind.months || {})[m]) || filled((ind.mNum || {})[m]) || (ind.mNotObserved || {})[m])) return snapshotQualityPrior(spec);
+  // Typed in the Quality console: on record too, though only the overlay holds it.
+  if ((await overlayReadings()).quality.has(spec.area + '|' + spec.indicatorId + '|' + m)) return snapshotQualityPrior(spec);
   // An approved report counts even when the stored reading was later cleared or changed.
   const key = dupKeyOf(spec);
   const c = await col('submissions');
@@ -1977,11 +2040,30 @@ function mount(app, opts) {
     do { page = await getSubmissions({ status, limit: 1000, offset }); all.push(...page); offset += page.length; } while (page.length === 1000);
     return all;
   };
+  /* Months an administrator typed in directly (overlayReadings) for the caller's OWN departments,
+     areas and indicators — the same scope filterSubmissionsForUser applies. Their screen never
+     receives those values, so without this the months read as "missing". Flags only, no figures:
+     { p: [[dept, month]], q: [[area, indicatorId, month, notObserved]] }. */
+  const onRecordFlags = async (req) => {
+    const scope = await getUserScope(req.user.sub);
+    if (!scope) return null;
+    const ov = await overlayReadings();
+    const depts = new Set((scope.departments || []).map(String));
+    const areas = scope.allQualityAreas ? null : new Set((scope.qualityAreas || []).map(String));
+    const indOk = indicatorAllowedFor(scope);
+    const p = [], q = [];
+    ov.patient.forEach((row, k) => { const i = k.lastIndexOf('|'); const d = k.slice(0, i); if (depts.has(d)) p.push([d, k.slice(i + 1)]); });
+    ov.quality.forEach((r, k) => {
+      const [area, id, month] = k.split('|');
+      if ((!areas || areas.has(area)) && indOk(area, id)) q.push([area, id, month, !!(r.notObserved && !(r.value != null && r.value !== '') && !(r.num != null && r.num !== ''))]);
+    });
+    return { p, q };
+  };
   app.get('/api/submissions', guard, async (req, res) => {
     try {
       const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 1000);
       const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
-      let subs, nextOffset, hhCover = null;
+      let subs, nextOffset, hhCover = null, onRecord = null;
       if (isPortalReq(req)) {
         // Collectors only see submissions they made or that touch their assignments — and the
         // scope filter must run BEFORE the page is cut. Paging the hospital-wide list first
@@ -1995,12 +2077,13 @@ function mount(app, opts) {
         // and department names only, no figures. A department's HH is reported THROUGH that
         // audit, so it must not show as "missing" to its own collector meanwhile.
         if (!offset) hhCover = hhAuditCover(every);
+        if (!offset) onRecord = await onRecordFlags(req);
       } else {
         subs = await getSubmissions(req.query);
         nextOffset = subs.length === limit ? offset + limit : null;
       }
       res.set('Cache-Control', 'no-store');
-      res.json(Object.assign({ ok: true, submissions: subs, nextOffset }, hhCover ? { hhCover } : {}));
+      res.json(Object.assign({ ok: true, submissions: subs, nextOffset }, hhCover ? { hhCover } : {}, onRecord ? { onRecord } : {}));
     } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.get('/api/submissions/stats', guard, async (req, res) => {

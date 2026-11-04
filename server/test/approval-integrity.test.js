@@ -667,5 +667,35 @@ const quality = async (payload) => (await dc.submitQuality(Object.assign({ area:
     assert.equal(h.status, 'ok');
     assert.equal(h.quarterStatusByFy['2026'].Q3, 'ok'); }
 
+  // Months an administrator typed in directly (overlay only) are on record: a second report is an
+  // edit request, and a scoped person is told they are filled (flags only, own units only).
+  reset();
+  { colOf('departments').docs.push({ _id: 'er', id: 'er', name: 'ER', months: [], data: [], cols: [{ id: 'adm', label: 'Admissions' }],
+      quality: { key: 'ER', name: 'ER', indicators: [{ id: 'falls', name: 'Falls', formula: 'count', months: {} }] } });
+    const store = { custom: [], renames: {}, deleted: [], order: [], entries: [
+      { dept: 'icu', month: 'Aug-26', row: { adm: 11 }, ts: 1 },
+      { dept: 'icu', month: 'Sep-26', row: { adm: '' }, ts: 1 },
+      { dept: 'er', month: 'Aug-26', row: { adm: 3 }, ts: 1 },
+    ] };
+    const qov = { depts: {
+      ICU: { indPatches: { falls: { months: { 'Aug-26': 2 } }, hh: { mNotObserved: { 'Aug-26': true } } } },
+      ER: { indPatches: { falls: { months: { 'Aug-26': 1 } } } },
+    } };
+    appDataFake = () => ({ data: { unico_store_v3: JSON.stringify(store), unico_quality_v2: JSON.stringify(qov) } });
+    await assert.rejects(dc.submitPatient({ department: 'icu', month: 'Aug-26', values: { adm: 12 } }, { submittedBy: 'nurse' }),
+      (e) => e.code === 'exists' && e.prior.values.adm === 11, 'a Data Entry month is on record');
+    assert.ok((await patient('Sep-26', { adm: 4 })).id, 'an all-blank entry is not data');
+    await assert.rejects(quality({ month: 'Aug-26', indicatorId: 'falls', value: 5 }),
+      (e) => e.code === 'exists' && e.prior.value === 2, 'a Quality console month is on record');
+    colOf('users').docs.push({ username: 'or1', name: 'O R', role: 'collector', departments: ['icu'], qualityAreas: ['ICU'], qualityIndicators: { ICU: ['falls', 'hh'] } });
+    const as = { user: { sub: 'or1', role: 'collector', name: 'O R' }, access: { unrestricted: false, role: 'collector' } };
+    const r = await call('GET /api/submissions', { query: { status: 'all' }, as });
+    assert.deepEqual(r.body.onRecord.p, [['icu', 'Aug-26']], 'own department only, blank entries skipped');
+    assert.deepEqual(r.body.onRecord.q.sort(), [['ICU', 'falls', 'Aug-26', false], ['ICU', 'hh', 'Aug-26', true]], 'own area only; not observed flagged');
+    assert.ok(!JSON.stringify(r.body.onRecord).includes('11'), 'no figures are sent');
+    const adm = await call('GET /api/submissions', { query: { status: 'all' } });
+    assert.equal(adm.body.onRecord, undefined, 'administrators read the overlay itself');
+    appDataFake = () => ({ data: {} }); }
+
   console.log('Approval integrity regression checks passed.');
 })().catch((error) => { console.error(error); process.exitCode = 1; });

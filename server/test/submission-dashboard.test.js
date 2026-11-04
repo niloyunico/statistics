@@ -16,6 +16,13 @@ assert.equal(status([submitted, { ...submitted, id: '2', status: 'pending', subm
 assert.equal(status([{ ...submitted, area: 'ER' }]), 'none');
 assert.equal(status([{ ...submitted, month: 'Jul-26' }]), 'none');
 assert.equal(status([{ ...submitted, status: 'rejected' }]), 'rejected');
+// Months an administrator typed in directly arrive as flags (the scoped snapshot has no values).
+const typed = (rows, q) => Object.assign(rows, { onRecord: { p: [], q } });
+assert.equal(status(typed([], [['ICU', 'falls', 'Aug-26', false]])), 'recorded', 'typed in by the administrator');
+assert.equal(status(typed([], [['ICU', 'falls', 'Aug-26', true]])), 'notobs');
+assert.equal(status(typed([{ ...submitted, status: 'rejected' }], [['ICU', 'falls', 'Aug-26', false]])), 'recorded', 'on record despite a returned report');
+assert.equal(status(typed([{ ...submitted, status: 'pending' }], [['ICU', 'falls', 'Aug-26', false]])), 'pending', 'a pending report still shows as sent');
+assert.equal(status(typed([], [['ER', 'falls', 'Aug-26', false]])), 'none', 'another unit\'s month does not count');
 
 const dbPath = require.resolve('../db');
 require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: { getDbHandle: async () => null } };

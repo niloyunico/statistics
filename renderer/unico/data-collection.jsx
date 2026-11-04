@@ -75,26 +75,33 @@
     const gen = _dcGen; _dcPromiseGen = gen;
     _dcAllPromise = (async () => {
       const rows = new Map();
-      let offset = 0, hhCover = null;
+      let offset = 0, hhCover = null, onRecord = null;
       do {
         const r = await dcApi.get('/api/submissions?status=all&limit=1000&offset=' + offset);
         if (!r || !r.ok) throw new Error((r && r.error) || 'Could not load submission history');
         (r.submissions || []).forEach(s => rows.set(s.id, s));
         if (r.hhCover) hhCover = r.hhCover;
+        if (r.onRecord) onRecord = r.onRecord;
         offset = r.nextOffset;
       } while (offset != null);
       const list = [...rows.values()];
       // Departments a pending hospital hand-hygiene audit covers (scoped accounts; see dcQStatus).
       if (hhCover) list.hhCover = hhCover;
+      // Months an administrator typed in directly for this person's units (see dcOverlayOnRecord).
+      if (onRecord) list.onRecord = onRecord;
       if (gen === _dcGen) { _dcAllCache = list; _dcAllAt = Date.now(); }
       return list;
     })().finally(() => { _dcAllPromise = null; });
     return _dcAllPromise;
   };
-  const dcSubmissionResponse = (status, force) => dcAllSubmissions(force).then(submissions => ({
+  const dcSubmissionResponse = (status, force) => dcAllSubmissions(force).then(submissions => {
+    if (!status || status === 'all') return { ok: true, submissions };
     // 'pending' includes 'approving' (an approval that died mid-apply stays so until retried).
-    ok: true, submissions: !status || status === 'all' ? submissions : submissions.filter(s => s.status === status || (status === 'pending' && s.status === 'approving')),
-  }));
+    const list = submissions.filter(s => s.status === status || (status === 'pending' && s.status === 'approving'));
+    if (submissions.hhCover) list.hhCover = submissions.hhCover;
+    if (submissions.onRecord) list.onRecord = submissions.onRecord;
+    return { ok: true, submissions: list };
+  });
   if (typeof window !== 'undefined') window.addEventListener('unico:data-refreshed', dcInvalidateSubs);
   // A duty roster belongs to ONE department. The portal used to show the first roster the
   // server returned — and an in-charge with quality access to many areas is allowed to read many
@@ -3927,6 +3934,21 @@
     const f = (o) => o && o[m] != null && o[m] !== '';
     return f(ind.mNum) || f(ind.months) || (ind.incidents && Array.isArray(ind.incidents[m]) && ind.incidents[m].length > 0);
   };
+  /* Months an administrator typed in directly (Data Entry / Quality console) for a scoped
+     person's units. Those values live only in the app overlay, which this person receives
+     with every value stripped, so the server sends flags instead (/api/submissions
+     `onRecord`). Indexed once per submissions array:
+     { p: Set('dept|month'), q: Map('area|indicatorId|month' -> 'recorded' | 'notobs') }. */
+  const _dcOnRecord = new WeakMap();
+  const dcOverlayOnRecord = (subs) => {
+    if (!subs || !subs.onRecord) return null;
+    if (_dcOnRecord.has(subs)) return _dcOnRecord.get(subs);
+    const o = subs.onRecord; const out = { p: new Set(), q: new Map() };
+    (Array.isArray(o.p) ? o.p : []).forEach((r) => { if (Array.isArray(r)) out.p.add(r[0] + '|' + r[1]); });
+    (Array.isArray(o.q) ? o.q : []).forEach((r) => { if (Array.isArray(r)) out.q.set(r[0] + '|' + r[1] + '|' + r[2], r[3] ? 'notobs' : 'recorded'); });
+    _dcOnRecord.set(subs, out);
+    return out;
+  };
   function cpSubmissionStatus(subs, area, ind, month) {
     // A withdrawn row was never sent: it is neither pending, recorded nor returned.
     const matching = (subs || []).filter(s => s.type === 'quality' && s.status !== 'withdrawn' && s.area === area && s.month === month &&
@@ -3936,6 +3958,9 @@
     if (latest && (latest.status === 'pending' || latest.status === 'approving')) return 'pending';
     if (ind.mNotObserved && ind.mNotObserved[month]) return 'notobs';
     if (cpHasData(ind, month)) return 'recorded';
+    const typed = dcOverlayOnRecord(subs);
+    const ov = typed && typed.q.get(area + '|' + ind.id + '|' + month);
+    if (ov) return ov;
     // Collector snapshots deliberately omit readings. The review record still proves
     // an approved report was submitted; absence from that snapshot is not a gap.
     const approved = matching.find(s => s.status === 'approved');
@@ -4101,6 +4126,8 @@
     ['months', 'mNum', 'mNotObserved'].forEach((f) => { const o = ind && ind[f]; if (o && typeof o === 'object') Object.keys(o).forEach((k) => { if (has(o, k)) see(k); }); });
     if (ind && ind.incidents && typeof ind.incidents === 'object') Object.keys(ind.incidents).forEach((k) => { if (Array.isArray(ind.incidents[k]) && ind.incidents[k].length) see(k); });
     (dcSubsIndex(subs).qArea.get(area && area.key) || []).forEach((s) => { if (dcSubIsInd(s, ind)) see(s.month); });
+    const typed = dcOverlayOnRecord(subs);
+    if (typed && area && ind) { const pre = area.key + '|' + ind.id + '|'; typed.q.forEach((v, k) => { if (k.indexOf(pre) === 0) see(k.slice(pre.length)); }); }
     return best == null ? null : dcMonthKey(best);
   };
   // When an indicator starts being owed: the later of the department's start and the
@@ -4137,6 +4164,8 @@
     const see = (k) => { const r = dcMonthRank(k); if (r != null && (best == null || r < best)) best = r; };
     (dept.months || []).forEach(see);
     (dcSubsIndex(subs).pDept.get(dept.id) || []).forEach((s) => see(s.month));
+    const typed = dcOverlayOnRecord(subs);
+    if (typed) { const pre = dept.id + '|'; typed.p.forEach((k) => { if (k.indexOf(pre) === 0) see(k.slice(pre.length)); }); }
     return best == null ? dcYearStart() : dcEarlierMonth(dcMonthKey(best), dcYearStart());
   };
   /* A department's hand hygiene is reported THROUGH the hospital audit (one submission with a
@@ -4175,6 +4204,12 @@
   };
   const dcQStatus = (subs, areaKey, ind, m) => {
     const st = cpSubmissionStatus(dcSubsIndex(subs).q.get(areaKey + '|' + m) || [], areaKey, ind, m);
+    // The indexed slice does not carry the on-record flags; read them off the whole list.
+    if ((st === 'none' || st === 'rejected') && ind) {
+      const typed = dcOverlayOnRecord(subs);
+      const ov = typed && typed.q.get(areaKey + '|' + ind.id + '|' + m);
+      if (ov) return ov;
+    }
     if ((st === 'none' || st === 'rejected') && ind && /hand\s*hygiene/i.test(ind.name || '')) {
       const cov = dcHHAuditCover(subs).get(m);
       if (cov && cov.has(areaKey)) return 'pending';
@@ -4187,6 +4222,8 @@
     const list = (dcSubsIndex(subs).p.get(dept.id + '|' + m) || []).filter((s) => s.status !== 'withdrawn');
     if (list.some((s) => s.status === 'pending')) return 'pending';
     if (list.some((s) => s.status !== 'rejected')) return 'recorded';
+    const typed = dcOverlayOnRecord(subs);
+    if (typed && typed.p.has(dept.id + '|' + m)) return 'recorded';
     return list.length ? 'rejected' : 'none';
   };
   const dcIndDue = (area, ind, m, subs) => !dcNotMeasured(area, ind) && dcMonthDue(dcIndicatorStart(area, ind, subs), m);
@@ -6620,11 +6657,15 @@ function StaffPrintOptions({role,onDone}){
     const nmList = [];
     qAreas.forEach((a) => a.indicators.forEach((ind) => { const nm = dcNotMeasured(a, ind); if (nm) nmList.push({ key: a.key + '|' + ind.id, unit: a.name || a.key, ind: ind, nm: nm }); }));
     const startList = [];
+    // Units with no start month: counting falls back to January, which is why old months are
+    // listed — say so, so a person knows who can change it (only the administrator can).
+    const noStart = [];
     const seenUnit = new Set();
     const addStart = (id, name) => {
       if (!id || seenUnit.has(id)) return; seenUnit.add(id);
       const s = dcDeptSettings(id).startMonth;
-      if (s) startList.push({ id: id, name: name || (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : id), start: s });
+      const nm = name || (window.DEPTMAP ? window.DEPTMAP.nameFromId(id) : id);
+      if (s) startList.push({ id: id, name: nm, start: s }); else noStart.push({ id: id, name: nm });
     };
     (depts || []).forEach((d) => addStart(d.id, d.name));
     qAreas.forEach((a) => addStart(dcAreaDeptId(a), a.name));
@@ -6708,12 +6749,20 @@ function StaffPrintOptions({role,onDone}){
               );
             })}
 
-        {(nmList.length > 0 || startList.length > 0) && (
+        {(nmList.length > 0 || startList.length > 0 || noStart.length > 0) && (
           <div style={Object.assign({}, CP_CARD, { padding: '13px 16px', marginTop: 4 })}>
             <div style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e', marginBottom: 8 }}>Set by your administrator</div>
             {startList.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: nmList.length ? 12 : 0 }}>
                 {startList.map((s) => <span key={s.id} style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 12, background: 'rgba(0,144,202,.08)', color: '#0072a3' }}><b>{s.name}</b> · Counting from {monthLabel(s.start)}</span>)}
+              </div>
+            )}
+            {noStart.length > 0 && (
+              <div style={{ marginBottom: nmList.length ? 12 : 0 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {noStart.map((s) => <span key={s.id} style={{ fontSize: 11.5, padding: '3px 10px', borderRadius: 12, background: 'rgba(125,145,180,.12)', color: '#5b6878' }}><b>{s.name}</b> · Counting from {monthLabel(dcYearStart())} — no start month set</span>)}
+                </div>
+                <div style={{ fontSize: 11.5, color: '#6c7a8c', marginTop: 6 }}>If a unit started reporting later, ask the administrator to set its start month (Data Collection → Department Setup). Months before it will then stop showing as missing.</div>
               </div>
             )}
             {nmList.length > 0 && (
