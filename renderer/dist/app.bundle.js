@@ -20914,6 +20914,8 @@ function RoleBadge({
     }
   }, role || 'Nurse');
 }
+const IC_USERS = 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8';
+const IC_CAP = 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5';
 function RoleSwitch({
   role,
   setRoute,
@@ -21985,8 +21987,6 @@ function WorkforceDashboard({
   const deptCount = new Set(list.map(e => staffCanonDept(e.current_department))).size;
   const canAdd = !window.unicoCan || window.unicoCan('staff', 'add');
   const showComp = group === 'Nurse' || group === 'PCA';
-  const IC_USERS = 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8M22 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8';
-  const IC_CAP = 'M22 10L12 5 2 10l10 5 10-5zM6 12v5c3 2.5 9 2.5 12 0v-5';
   const IC_WARN = 'M12 3l9.5 17h-19zM12 10v4.5M12 17.3v.2';
   const IC_BUILD = 'M4 21V5a1 1 0 011-1h8a1 1 0 011 1v16M14 9h5a1 1 0 011 1v11M3 21h18M8 8h2M8 12h2M8 16h2M17 13v.01M17 17v.01';
   const KPIS = [['All', 'All Staff', IC_USERS, 'Nurses, trainees & PCA'], ['Nurse', 'Nurses', I.steth, department ? 'Active in the selected department' : 'Active staff members'], ['Trainee', 'Trainee Nurses', IC_CAP, department ? 'Active in the selected department' : 'Active trainee nurses'], ['PCA', 'PCA', I.user, department ? 'Active in the selected department' : 'Active staff members']];
@@ -23195,6 +23195,12 @@ function ManageStaff({
   const [training, setTraining] = React.useState(M.training || '');
   const [sortBy, setSortBy] = React.useState(M.sortBy || (recentDays ? 'entry' : 'name'));
   const [showInactive, setShowInactive] = React.useState(!!M.showInactive);
+  const [tab, setTab] = React.useState(group === 'All' && M.tab || group);
+  const [seededFrom, setSeededFrom] = React.useState(group);
+  if (seededFrom !== group) {
+    setSeededFrom(group);
+    setTab(group);
+  }
   React.useEffect(() => {
     DIR_MEMO[memoKey] = Object.assign({}, DIR_MEMO[memoKey], {
       q,
@@ -23206,7 +23212,8 @@ function ManageStaff({
       expB,
       training,
       sortBy,
-      showInactive
+      showInactive,
+      tab
     });
   });
   React.useEffect(() => {
@@ -23231,15 +23238,16 @@ function ManageStaff({
     });
     return () => el.removeEventListener('scroll', onScroll);
   }, []);
-  const tone = role === 'PCA' ? '#6a52d4' : '#0090ca';
+  const tabRole = tab === 'PCA' ? 'PCA' : tab === 'All' ? role : 'Nurse';
+  const tone = tabRole === 'PCA' ? '#6a52d4' : '#0090ca';
   const roster = recentDays ? (updates ? S.recentStaffUpdates : S.recentStaffEntries)(store.staff, recentDays) : store.staff;
-  const all = roster.filter(e => S.matchesStaffGroup(e, group));
+  const all = roster.filter(e => S.matchesStaffGroup(e, tab));
   const label = {
     All: 'All Staff',
     Nurse: 'Nurse',
     Trainee: 'Trainee Nurse',
     PCA: 'PCA'
-  }[group];
+  }[tab];
   const apprData = useStaffAppraisals();
   const A_ = window.UNICO_APPRAISAL;
   const apprOn = !!(apprData && A_ && A_.standing);
@@ -23253,11 +23261,11 @@ function ManageStaff({
     const now = new Date();
     const m = {};
     store.staff.forEach(e => {
-      if (!S.matchesStaffGroup(e, group)) return;
+      if (!S.matchesStaffGroup(e, tab)) return;
       m[e.id] = A_.standing(e, by[String(e.emp_id || e.id)] || [], now);
     });
     return m;
-  }, [apprOn, apprData, store.staff, group]);
+  }, [apprOn, apprData, store.staff, tab]);
   const stOf = e => standing ? standing[e.id] : null;
   const active = all.filter(e => e.is_active && !e.former);
   const base = all.filter(e => showInactive || e.is_active && !e.former);
@@ -23379,15 +23387,6 @@ function ManageStaff({
     style: {
       flex: 1
     }
-  }), !recentDays && React.createElement(RoleSwitch, {
-    role: group,
-    setRoute: setRoute,
-    views: {
-      All: 'staffAll',
-      Nurse: 'nurses',
-      Trainee: 'trainees',
-      PCA: 'pca'
-    }
   }), recentDays > 0 && store.refresh && React.createElement("button", {
     className: "btn sm",
     disabled: store.refreshing,
@@ -23403,20 +23402,77 @@ function ManageStaff({
     },
     onClick: () => setRoute({
       view: 'staffForm',
-      role,
-      designation: group === 'Trainee' ? 'Trainee Nurse' : ''
+      role: tabRole,
+      designation: tab === 'Trainee' ? 'Trainee Nurse' : ''
     })
   }, React.createElement(Ic, {
     d: I.plus,
     s: 15
-  }), "Add ", recentDays ? 'Staff' : group === 'Trainee' ? 'Trainee Nurse' : role), React.createElement("span", {
+  }), "Add ", recentDays ? 'Staff' : tab === 'Trainee' ? 'Trainee Nurse' : tab === 'All' ? 'Staff' : tabRole), React.createElement("span", {
     className: "num",
     style: {
       fontSize: 12.5,
       color: 'var(--muted)',
       fontWeight: 600
     }
-  }, active.length, " employee(s)")), recentDays > 0 && store.refreshError && React.createElement("div", {
+  }, active.length, " employee(s)")), !recentDays && (() => {
+    const counts = S.staffCounts(store.staff);
+    return React.createElement("div", {
+      role: "tablist",
+      style: {
+        display: 'flex',
+        gap: 4,
+        borderBottom: '1px solid var(--line)',
+        flexWrap: 'wrap'
+      }
+    }, [['All', 'All Staff', '#0090ca', IC_USERS], ['Nurse', 'Nurses', '#0090ca', I.steth], ['PCA', 'PCA', '#6a52d4', I.user], ['Trainee', 'Trainee Nurses', '#0090ca', IC_CAP]].map(([v, l, c, ic]) => {
+      const on = tab === v;
+      return React.createElement("button", {
+        key: v,
+        role: "tab",
+        "aria-selected": on,
+        onClick: () => setTab(v),
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 7,
+          padding: '9px 16px',
+          marginBottom: -1,
+          border: 0,
+          borderBottom: '2.5px solid ' + (on ? c : 'transparent'),
+          background: 'transparent',
+          cursor: 'pointer',
+          fontFamily: 'inherit',
+          fontSize: 13.5,
+          fontWeight: on ? 700 : 600,
+          color: on ? c : 'var(--muted)'
+        }
+      }, React.createElement("span", {
+        style: {
+          width: 26,
+          height: 26,
+          borderRadius: 7,
+          display: 'grid',
+          placeItems: 'center',
+          background: on ? c + '1a' : 'var(--panel-2)'
+        }
+      }, React.createElement(Ic, {
+        d: ic,
+        s: 15,
+        c: on ? c : 'currentColor'
+      })), l, React.createElement("span", {
+        className: "num",
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          padding: '1px 7px',
+          borderRadius: 10,
+          background: on ? c + '1a' : 'var(--panel-2)',
+          color: on ? c : 'var(--faint)'
+        }
+      }, counts[v] || 0));
+    }));
+  })(), recentDays > 0 && store.refreshError && React.createElement("div", {
     role: "alert",
     className: "card",
     style: {
