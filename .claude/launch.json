@@ -1,0 +1,28 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "start",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "start"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "nclex-preview",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8765",
+        "--bind",
+        "127.0.0.1",
+        "--directory",
+        "C:\\Users\\Nasif Ahammed\\AppData\\Local\\Temp\\claude\\C--xampp-htdocs-uniconurse\\596f33a2-766b-415e-a6e9-24fa475f8b7c\\scratchpad\\preview"
+      ],
+      "port": 8765
+    }
+  ]
+}
