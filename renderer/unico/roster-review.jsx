@@ -107,7 +107,7 @@ function RiPreview({ row, year, month, staff, onBack, onDecide, busy, setRoute }
   }).catch(() => setErr('Could not reach the server.')), [dept, year, month]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
 
-  const view = useMemo(() => (doc ? K.rowsFrom(doc, staff, dept) : { rows: [], grid: {} }), [doc, staff, dept]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const view = useMemo(() => (doc ? K.rowsFrom(doc, staff, dept, undefined, extra.signers && extra.signers.incharge && extra.signers.incharge.name) : { rows: [], grid: {} }), [doc, staff, dept, extra]);   // eslint-disable-line react-hooks/exhaustive-deps
   const ev = useMemo(() => (doc ? K.findingsOf(view.grid, view.rows, year, month, doc.rules) : null), [doc, view, year, month]);   // eslint-disable-line react-hooks/exhaustive-deps
   const stats = useMemo(() => {
     const days = R.daysIn(year, month);

@@ -15,7 +15,7 @@
  * Published as window.RosterStaffView.
  */
 
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 const Ic = window.Ic, I = window.I;
 const R = window.UNICO_ROSTER;
 const MK = window.MK;
@@ -43,6 +43,16 @@ function RosterStaffView({ staffId: sid0, setRoute }) {
   const [sel, setSel] = useState(sid0 ? String(sid0) : '');
   const [q, setQ] = useState('');
   const [pickOpen, setPickOpen] = useState(false);
+  const pickRef = useRef(null);
+  const [pickBox, setPickBox] = useState(null);   // where the results list floats (the card clips anything inside it)
+  useEffect(() => {
+    if (!pickOpen) return undefined;
+    const place = () => { const el = pickRef.current; if (el) { const r = el.getBoundingClientRect(); setPickBox({ left: r.left, top: r.bottom + 4, width: Math.max(r.width, 300) }); } };
+    place();
+    window.addEventListener('resize', place); window.addEventListener('scroll', place, true);
+    return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); };
+  }, [pickOpen]);
+  const pickOne = (e) => { setSel(String(e.id)); setPickOpen(false); setQ(''); if (pickRef.current) pickRef.current.blur(); };
   const range = rsMonthsBack(24);
   const [from, setFrom] = useState(rsMonthKey(...range[5]));
   const [to, setTo] = useState(rsMonthKey(...range[0]));
@@ -140,18 +150,26 @@ function RosterStaffView({ staffId: sid0, setRoute }) {
             <div className="sub">One person's shifts across months and units</div>
           </div>
           <div style={{ position: 'relative', minWidth: 260 }}>
-            <input value={pickOpen ? q : (person ? person.name + (person.emp_id ? ' · ' + person.emp_id : '') : q)}
+            <input ref={pickRef} value={pickOpen ? q : (person ? person.name + (person.emp_id ? ' · ' + person.emp_id : '') : q)}
               onFocus={() => { setPickOpen(true); setQ(''); }} onBlur={() => setTimeout(() => setPickOpen(false), 150)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && matches.length) { e.preventDefault(); pickOne(matches[0]); } if (e.key === 'Escape') { setPickOpen(false); e.currentTarget.blur(); } }}
               onChange={(e) => setQ(e.target.value)} placeholder="Find a nurse or PCA — name, emp no, unit…"
               style={{ width: '100%', boxSizing: 'border-box', padding: '8px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', fontFamily: 'inherit', fontSize: 12.5 }} />
-            {pickOpen && (
-              <div style={{ position: 'absolute', left: 0, right: 0, top: '100%', marginTop: 4, background: '#fff', border: '1px solid rgba(125,145,180,.3)', borderRadius: 10, boxShadow: '0 16px 40px rgba(16,32,46,.18)', zIndex: 50, maxHeight: 320, overflow: 'auto' }}>
-                {!matches.length && <div className="sub" style={{ padding: 12 }}>No one matches.</div>}
+            {pickOpen && pickBox && K.portal(
+              <div style={{ position: 'fixed', left: pickBox.left, top: pickBox.top, width: pickBox.width, background: '#fff', border: '1px solid rgba(125,145,180,.3)', borderRadius: 10, boxShadow: '0 16px 40px rgba(16,32,46,.18)', zIndex: 9500, maxHeight: 340, overflow: 'auto' }}>
+                {!matches.length && (
+                  <div style={{ padding: '12px 14px', fontSize: 12, color: '#6c7a8c', lineHeight: 1.5 }}>
+                    {staff.length ? <>No one matches “{q.trim()}”. Search by name, employee number or unit.</> : 'No staff are on the units you can roster.'}
+                  </div>
+                )}
                 {matches.map((e) => (
-                  <div key={e.id} onMouseDown={() => { setSel(String(e.id)); setPickOpen(false); setQ(''); }}
-                    style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid rgba(125,145,180,.1)' }}>
-                    <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{e.name}</div>
-                    <div style={{ fontSize: 10.5, color: '#8a97a8' }}>{[e.emp_id, e.designation, e.current_department].filter(Boolean).join(' · ')}</div>
+                  <div key={e.id} onMouseDown={(ev) => { ev.preventDefault(); pickOne(e); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '7px 12px', cursor: 'pointer', borderBottom: '1px solid rgba(125,145,180,.1)' }}>
+                    <MK.Av name={e.name} emp={e} empId={e.emp_id} size={26} />
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{e.name}</div>
+                      <div style={{ fontSize: 10.5, color: '#8a97a8' }}>{[e.emp_id, e.designation, e.current_department].filter(Boolean).join(' · ')}</div>
+                    </div>
                   </div>
                 ))}
               </div>

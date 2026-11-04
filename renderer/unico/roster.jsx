@@ -40,7 +40,35 @@ const rosCan = (a) => { try { return window.unicoCan ? window.unicoCan('roster',
 const rosKey = (e) => 'S' + String(e.id);
 // One staff row, as every roster screen draws it. `photo` is the face on the avatar: the grid
 // passes the ROW to MK.Av, because the row key ('S'+id) is not what the photo lookup is keyed on.
-const rosRowOf = (e) => ({ empId: rosKey(e), empIdShown: e.emp_id || '', name: e.name, desig: e.designation, photo: (MK && MK.photoUrlOf && MK.photoUrlOf(e)) || '' });
+/* Seniority, the way a ward lists its roster: the unit's own In-charge (Duty Roster → Setup)
+   first, then by designation, then by name. Order of the tests matters ("Assistant Nurse
+   Manager" before "Nurse Manager", "Senior Staff Nurse" before "Staff Nurse"). */
+const ROS_RANK = [
+  [/chief|\bcns\b|nursing services/i, 0],
+  [/assistant\s*nurse\s*manager|asst\.?\s*nurse\s*manager/i, 2],
+  [/manager/i, 1],
+  [/in\s*-?\s*charge|charge\s*nurse/i, 3],
+  [/team\s*leader/i, 4],
+  [/supervisor|instructor|infection/i, 5],
+  [/senior\s*staff\s*nurse/i, 6],
+  [/trainee|intern/i, 8],
+  [/patient\s*care|\bpca\b|assistant/i, 9],
+  [/nurse/i, 7],
+];
+const rosRankOf = (desig) => { const s = String(desig || ''); for (let i = 0; i < ROS_RANK.length; i++) if (ROS_RANK[i][0].test(s)) return ROS_RANK[i][1]; return 10; };
+/* Patient Care Assistants are rostered on the same sheet but are NOT nurses: they get their
+   own section (grid and print) and never count toward the nurse cover rules. A staff record
+   says so in `role`; older records only in the designation. */
+const rosIsPca = (e) => !!e && (String(e.role || '').toUpperCase() === 'PCA' || /patient\s*care|\bpca\b/i.test(String(e.designation || e.desig || '')));
+// Nurses first, then PCAs — the order inside each group is kept (stable).
+const rosByGroup = (list) => list.filter((r) => !r.pca).concat(list.filter((r) => r.pca));
+const rosNameKey = (n) => String(n || '').toLowerCase().replace(/^(md\.?|mst\.?|mrs\.?|mr\.?)\s+/, '').replace(/[^a-z]/g, '');
+const rosSeniorSort = (list, inchargeName) => {
+  const ic = rosNameKey(inchargeName);
+  const key = (r) => (ic && rosNameKey(r.name) === ic ? -1 : (r.offRegister ? 99 : rosRankOf(r.desig)));
+  return list.slice().sort((a, b) => (key(a) - key(b)) || String(a.name).localeCompare(String(b.name)));
+};
+const rosRowOf = (e) => ({ empId: rosKey(e), empIdShown: e.emp_id || '', name: e.name, desig: e.designation, pca: rosIsPca(e), photo: (MK && MK.photoUrlOf && MK.photoUrlOf(e)) || '' });
 
 /* Rosters saved before rows were keyed on the staff id hold their grid under employee
    NUMBERS. Remap those on load so an existing sheet still opens. */
@@ -161,12 +189,16 @@ function rosInjectCss() {
    the rules view read, and the flat violation lists per category. */
 function rosEval(grid, rows, days, year, month, cfg, en, custom) {
   const N = rows.length;
+  // Cover (how many are on each shift, closed days) counts NURSES: a PCA on night is not a
+  // nurse on night. Personal rules below still run on everyone. A unit with no nurse on the
+  // sheet (PCA-only) counts its PCAs, rather than reporting every day empty.
+  const CI = (() => { const a = []; for (let i = 0; i < N; i++) if (!rows[i].pca) a.push(i); return a.length ? a : rows.map((_, i) => i); })();
   const code = (i, d) => (grid[rows[i].empId] || {})[d] || '';
   const bOf = (c) => R.bucketOf(c) || '';
-  const dayBucketCount = (d, b) => { let n = 0; for (let i = 0; i < N; i++) if (bOf(code(i, d)) === b) n++; return n; };
+  const dayBucketCount = (d, b) => { let n = 0; for (const i of CI) if (bOf(code(i, d)) === b) n++; return n; };
   const dayMetric = (d, m) => {
-    if (m === 'onDuty') { let n = 0; for (let i = 0; i < N; i++) { const b = bOf(code(i, d)); if (b && b !== 'O') n++; } return n; }
-    if (m === 'onLeave') { let n = 0; for (let i = 0; i < N; i++) if (ROS_LEAVE_CODES.indexOf(code(i, d)) >= 0) n++; return n; }
+    if (m === 'onDuty') { let n = 0; for (const i of CI) { const b = bOf(code(i, d)); if (b && b !== 'O') n++; } return n; }
+    if (m === 'onLeave') { let n = 0; for (const i of CI) if (ROS_LEAVE_CODES.indexOf(code(i, d)) >= 0) n++; return n; }
     return dayBucketCount(d, { general: 'G', morning: 'M', evening: 'E', night: 'N' }[m] || 'M');
   };
   const staffMetric = (i, m) => {
@@ -187,8 +219,8 @@ function rosEval(grid, rows, days, year, month, cfg, en, custom) {
   const closedDays = {};
   for (let d = 1; d <= days; d++) {
     let written = 0, on = 0;
-    for (let i = 0; i < N; i++) { const b = bOf(code(i, d)); if (b) { written++; if (b !== 'O') on++; } }
-    if (N > 0 && written === N && on === 0) closedDays[d] = true;
+    for (const i of CI) { const b = bOf(code(i, d)); if (b) { written++; if (b !== 'O') on++; } }
+    if (CI.length > 0 && written === CI.length && on === 0) closedDays[d] = true;
   }
   const viol = { ratio: [], min: [], nm: [], nights: [], off: [], senior: [], leave: [], friday: [] };
   for (let d = 1; d <= days; d++) {
@@ -196,7 +228,7 @@ function rosEval(grid, rows, days, year, month, cfg, en, custom) {
       if (en.min !== false) [['M', cfg.minM], ['E', cfg.minE], ['N', cfg.minN]].forEach(([b, mn]) => { const n = dayBucketCount(d, b); if (n < mn) viol.min.push('Day ' + d + ' ' + b + ' has ' + n); });
       // Senior-on-nights flags a night SOMEONE is holding without a senior — a day
       // with no night shift at all is the minimum-staff rule's business, not this one's.
-      if (en.senior !== false) { let night = 0, sen = false; for (let i = 0; i < N; i++) { if (bOf(code(i, d)) === 'N') { night++; if (/Senior|Team|Charge/.test(rows[i].desig || '')) sen = true; } } if (night && !sen) viol.senior.push('Day ' + d + ' night'); }
+      if (en.senior !== false) { let night = 0, sen = false; for (const i of CI) { if (bOf(code(i, d)) === 'N') { night++; if (/Senior|Team|Charge/.test(rows[i].desig || '')) sen = true; } } if (night && !sen) viol.senior.push('Day ' + d + ' night'); }
       if (en.ratio !== false) { const on = dayMetric(d, 'onDuty'); if (on < cfg.minOnDuty) viol.ratio.push('Day ' + d + ' only ' + on + ' on duty'); }
     }
     if (en.leave !== false) { const away = []; for (let i = 0; i < N; i++) if (ROS_LEAVE_CODES.indexOf(code(i, d)) >= 0) away.push(rows[i].name); if (away.length > cfg.maxLeavePerDay) viol.leave.push('Day ' + d + ': ' + away.join(', ')); }
@@ -431,7 +463,7 @@ const rosFindingsOf = (grid, rows, year, month, rules) => {
 
 /* The rows a stored sheet shows outside the editor (review preview, versions).
    Order as saved; people no longer on the register keep the name stored with the sheet. */
-const rosRowsFrom = (doc, staff, dept, withRegister) => {
+const rosRowsFrom = (doc, staff, dept, withRegister, inchargeName) => {
   const all = {};
   (staff || []).forEach((e) => { all[rosKey(e)] = e; });
   const reg = withRegister === false ? [] : (staff || [])
@@ -450,7 +482,9 @@ const rosRowsFrom = (doc, staff, dept, withRegister) => {
   ((doc && doc.order) || []).forEach((id) => { if (grid[id] || reg.some((r) => r.empId === id)) add(id); });
   Object.keys(grid).forEach(add);
   reg.forEach((r) => add(r.empId));
-  return { rows: out, grid };
+  // A sequence someone arranged by hand is kept as saved; otherwise seniority.
+  const manual = !!(doc && doc.rules && doc.rules.orderManual);
+  return { rows: rosByGroup(manual ? out : rosSeniorSort(out, inchargeName)), grid };
 };
 
 function RosStatusChip({ st, stage, big }) {
@@ -676,11 +710,15 @@ function RosSheetTable({ rows, grid, year, month, maxHeight }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => {
+          {rows.map((r, ri) => {
             const row = g[r.empId] || {};
             const t = R.totalsFor(row, days);
+            const hasPca = rows.some((x) => x.pca);
+            const head = hasPca && (ri === 0 || !!rows[ri - 1].pca !== !!r.pca);
             return (
-              <tr key={r.empId}>
+              <React.Fragment key={r.empId}>
+              {head && <tr><td colSpan={days + 7} style={{ position: 'sticky', left: 0, padding: '6px 10px', fontSize: 9.5, fontWeight: 800, letterSpacing: .6, textTransform: 'uppercase', color: r.pca ? '#5b45c4' : '#0072a3', background: r.pca ? 'rgba(106,82,212,.08)' : 'rgba(0,144,202,.08)' }}>{r.pca ? 'Patient care assistants · ' + rows.filter((x) => x.pca).length : 'Nursing staff · ' + rows.filter((x) => !x.pca).length}</td></tr>}
+              <tr>
                 <td style={{ position: 'sticky', left: 0, background: '#fff', padding: '4px 10px', borderBottom: '1px solid rgba(125,145,180,.12)', fontSize: 11.5, whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', zIndex: 1 }}>
                   <div style={{ fontWeight: 600, color: '#16202e', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</div>
                   <div style={{ fontSize: 9.5, color: '#8a97a8' }}>{[r.empIdShown, r.desig].filter(Boolean).join(' · ') || ' '}</div>
@@ -693,6 +731,7 @@ function RosSheetTable({ rows, grid, year, month, maxHeight }) {
                 {['G', 'M', 'E', 'N', 'O'].map((b) => <td key={b} style={{ ...td, color: '#3c4858' }}>{t[b] || ''}</td>)}
                 <td style={{ ...td, color: '#16202e' }}>{t.hours || ''}</td>
               </tr>
+              </React.Fragment>
             );
           })}
         </tbody>
@@ -1114,6 +1153,11 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const [view, setView] = useState(initialView || 'month');
   const [grid, setGrid] = useState({});
   const [order, setOrder] = useState([]);
+  // true once someone arranged the rows by hand (drag / move); saved as rules.orderManual.
+  // Until then the sheet lists by seniority, so a new or old sheet puts the In-charge first.
+  const [orderManual, setOrderManual] = useState(false);
+  const [rowDrag, setRowDrag] = useState(null);   // { id, over, after } — drawing only
+  const rowDragId = useRef(null);                  // the row being dragged, read by dragover/drop at once
   const [status, setStatus] = useState('draft');
   const [rev, setRev] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -1169,8 +1213,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
 
   const staff = useMemo(() => (staffStore.staff || [])
     .filter((e) => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept)
-    .map((e) => rosRowOf(e))
-    .sort((a, b) => String(a.name).localeCompare(String(b.name))), [staffStore.staff, dept]);
+    .map((e) => rosRowOf(e)), [staffStore.staff, dept]);
 
   const rows = useMemo(() => {
     const byId = {}; staff.forEach((x) => { byId[x.empId] = x; });
@@ -1188,10 +1231,13 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       else return;
       seen[id] = 1;
     });
-    staff.forEach((x) => { if (!seen[x.empId]) { out.push(x); seen[x.empId] = 1; } });
+    // Newcomers not yet in a hand-made sequence join at their place by seniority, after it.
+    rosSeniorSort(staff.filter((x) => !seen[x.empId]), signers.incharge && signers.incharge.name).forEach((x) => { out.push(x); seen[x.empId] = 1; });
     Object.keys(grid).forEach((id) => { if (!seen[id] && hasCells(id)) { out.push(ghost(id)); seen[id] = 1; } });
-    return out;
-  }, [staff, order, grid, storedNames]);
+    return rosByGroup(orderManual ? out : rosSeniorSort(out, signers.incharge && signers.incharge.name));
+  }, [staff, order, grid, storedNames, orderManual, signers]);
+  const pcaN = rows.filter((r) => r.pca).length;
+  const nurseN = rows.length - pcaN;
 
   // The unit switcher offers only units this account is assigned — picking one it is
   // not would open an editor whose every save comes back 403.
@@ -1221,6 +1267,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       const d = r.roster;                       // null = never drafted, a real empty month
       setGrid(rosMigrateGrid(d && d.grid, staff));
       setOrder((d && d.order) || []);
+      setOrderManual(!!(d && d.rules && d.rules.orderManual));
       setStoredNames((d && d.names) || {});
       setStatus((d && d.status) || 'draft');
       setRev((d && d.revision) || 0);
@@ -1306,7 +1353,30 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     });
   };
 
+  // Arrange the rows by hand. The new sequence is saved with the sheet and used by every
+  // view, the print and the review screens.
+  const moveRow = (id, toIdx) => {
+    if (!canEdit) { editBlocked(); return; }
+    const byId = {}; rows.forEach((r) => { byId[r.empId] = r; });
+    const ids = rows.map((r) => r.empId).filter((x) => x !== id);
+    const i = Math.max(0, Math.min(ids.length, toIdx));
+    ids.splice(i, 0, id);
+    // A nurse never lands among the PCAs or the other way round: each stays in its section.
+    setOrder(rosByGroup(ids.map((k) => byId[k]).filter(Boolean)).map((r) => r.empId)); setOrderManual(true); setDirty(true);
+  };
+  const sortBySeniority = () => {
+    if (!canEdit) { editBlocked(); return; }
+    setOrder(rosSeniorSort(rows, signers.incharge && signers.incharge.name).map((r) => r.empId)); setOrderManual(false); setDirty(true);
+    rosToast('Rows sorted by seniority — In-charge and Team Leader first.');
+  };
   const rowTool = (empId, v) => {
+    if (v === 'up' || v === 'down' || v === 'top') {
+      const at = rows.findIndex((r) => r.empId === empId);
+      // "Top" = top of their own section (nurses, or PCAs).
+      const first = rows.findIndex((r) => !!r.pca === !!(rows[at] && rows[at].pca));
+      moveRow(empId, v === 'top' ? Math.max(0, first) : v === 'up' ? at - 1 : at + 1);
+      return;
+    }
     if (!canEdit || !v) { if (v) editBlocked(); return; }
     const pat = ROS_PATTERNS.find((p) => p[0] === v);
     push();
@@ -1388,7 +1458,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       // saved since, instead of this whole grid erasing their cells.
       baseRevision: rev,
       rules: {
-        cfg, off: en, custom,
+        cfg, off: en, custom, orderManual,
         // legacy mirror — roster-review.jsx and the print sheet read these keys
         minMorning: { on: en.min !== false, value: cfg.minM, label: 'Minimum staff on morning duty', unit: 'per day' },
         minEvening: { on: en.min !== false, value: cfg.minE, label: 'Minimum staff on evening duty', unit: 'per day' },
@@ -1434,7 +1504,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => { saveTimer.current = null; save(null, true); }, 1600);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [grid, cfg, en, custom, dirty, retryTick]);   // eslint-disable-line
+  }, [grid, cfg, en, custom, order, orderManual, dirty, retryTick]);   // eslint-disable-line
 
   // Leaving the sheet — another month or unit remounts it, or the person opens another
   // module — must not drop edits still waiting for the 1.6 s autosave. The refs carry
@@ -1499,11 +1569,11 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     return known;
   }, [grid, rows, days]);
 
-  const onDutyOf = (d) => { let on = 0; rows.forEach((x) => { const b = R.bucketOf(cellCode(x.empId, d)); if (b && b !== 'O') on++; }); return on; };
+  const onDutyOf = (d, pca) => { let on = 0; rows.forEach((x) => { if (!!x.pca !== !!pca) return; const b = R.bucketOf(cellCode(x.empId, d)); if (b && b !== 'O') on++; }); return on; };
 
   /* ---- cell interactions, as designed ---- */
   const cellDown = (empId, d) => (evn) => {
-    if (!canEdit) return;
+    if (!canEdit) { if (brush) { evn.preventDefault(); editBlocked(); } return; }
     if (brush) { evn.preventDefault(); push(); setPainting(true); setCells((g) => writeCell(g, empId, d, brush)); return; }
     evn.preventDefault();
     setDrag({ empId, d }); setDragOver(null);
@@ -1573,7 +1643,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const brushPill = (code) => {
     const on = brush === code, col = rosBColor(R.bucketOf(code));
     return (
-      <button key={code} onClick={() => setBrush(brush === code ? '' : code)} title={code + ((R.BY_CODE[code] || {}).label ? ' — ' + R.BY_CODE[code].label : '')}
+      <button key={code} onClick={() => { if (!canEdit) { editBlocked(); return; } setBrush(brush === code ? '' : code); }} title={code + ((R.BY_CODE[code] || {}).label ? ' — ' + R.BY_CODE[code].label : '')}
         style={{ fontFamily: ROS_MONO, fontSize: 10.5, fontWeight: 700, padding: '5px 12px', borderRadius: 9, cursor: 'pointer', border: '1px solid ' + (on ? col : col + '40'), color: on ? '#fff' : col, background: on ? 'linear-gradient(135deg,' + col + ',' + col + 'cc)' : col + '14', boxShadow: on ? '0 6px 16px ' + col + '66, inset 0 1px 0 rgba(255,255,255,.3)' : 'none', transform: on ? 'translateY(-1px)' : 'none', transition: 'all .18s' }}>{code}</button>
     );
   };
@@ -1637,6 +1707,12 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
         );
       })()}
       {stNorm === 'returned' && <RosReturnedBanner meta={meta} />}
+      {!canEdit && !loadError && !conflict && ROS_EDITABLE.indexOf(stNorm) >= 0 && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', background: 'rgba(125,145,180,.1)', border: '1px solid rgba(125,145,180,.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#3c4858' }}>
+          <Ic d={I.lock || 'M5 11h14v10H5zM8 11V7a4 4 0 018 0v4'} s={15} />
+          <span><b>View only.</b> Your account can open this roster but not change it, so the brushes and cells are locked. To prepare it, an administrator gives you <b>Duty Roster — Edit and Add</b> for {dept} (Access Control → Manage → Module access).</span>
+        </div>
+      )}
       {decider.modal}
       {panel === 'history' && (
         <RosDrawer title="History" sub={dept + ' · ' + monthLabel} onClose={() => setPanel(null)}>
@@ -1648,7 +1724,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       {/* KPI strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12, marginBottom: 14 }}>
         {[
-          { lbl: 'Staff rostered', val: String(rows.length), icd: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z', bg: 'rgba(0,144,202,.1)', c: '#0090ca' },
+          { lbl: pcaN ? 'Staff · ' + nurseN + ' nurses · ' + pcaN + ' PCAs' : 'Staff rostered', val: String(rows.length), icd: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z', bg: 'rgba(0,144,202,.1)', c: '#0090ca' },
           { lbl: 'Shifts assigned', val: String(kpiVals.shifts), icd: 'M3 5h18v16H3zM3 9h18', bg: 'rgba(58,181,167,.14)', c: '#2b9488' },
           { lbl: 'Total hours', val: String(kpiVals.hours), icd: 'M12 8v4l3 3M12 2a10 10 0 100 20 10 10 0 000-20z', bg: 'rgba(106,82,212,.12)', c: '#5b45c4' },
           { lbl: 'Leave days', val: String(kpiVals.leave), icd: 'M8 2v4M16 2v4M3 8h18M5 8v13h14V8', bg: 'rgba(224,138,30,.14)', c: '#b5670a' },
@@ -1727,6 +1803,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                 })}
               </div>
             </div>
+            <button onClick={sortBySeniority} title="In-charge first, then Team Leader, Senior Staff Nurse, Staff Nurse, PCA — drag a row's ⋮⋮ handle to set your own order" style={toolBtnStyle}><Ic d="M3 6h13M3 12h9M3 18h5M17 8V20M14 17l3 3 3-3" s={12} sw={2} />{orderManual ? 'Sort by seniority' : 'By seniority ✓'}</button>
             <button onClick={copyWeek} title="Copy the previous week into this one" style={toolBtnStyle}><Ic d="M8 4h10v12M4 8h10v12H4z" s={12} sw={2} />Repeat last week</button>
             <button onClick={fillBlanks} title="Fill every empty cell with OFF" style={toolBtnStyle}><Ic d="M4 12l5 5L20 6" s={12} sw={2} />Fill blanks OFF</button>
             <button onClick={undo} title="Undo last change" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid ' + (history.current.length ? 'rgba(0,144,202,.32)' : 'rgba(125,145,180,.24)'), background: history.current.length ? 'rgba(0,144,202,.1)' : 'rgba(255,255,255,.5)', color: history.current.length ? '#0072a3' : '#b6c0cc', padding: '6px 12px', borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: history.current.length ? 'pointer' : 'default', fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0 }}><Ic d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3" s={12} sw={2.2} />Undo</button>
@@ -1780,12 +1857,26 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                 <tbody>
                   {rows.map((x, si) => {
                     const rowG = grid[x.empId] || {};
+                    // Section heading before the first nurse and the first PCA (only when the unit has PCAs).
+                    const head = pcaN && (si === 0 || !!rows[si - 1].pca !== !!x.pca)
+                      ? <tr key={'h-' + (x.pca ? 'p' : 'n')}><td colSpan={99} style={{ position: 'sticky', left: 0, padding: '7px 12px', fontSize: 10, fontWeight: 800, letterSpacing: .7, textTransform: 'uppercase', color: x.pca ? '#5b45c4' : '#0072a3', background: x.pca ? 'linear-gradient(90deg,rgba(106,82,212,.12),rgba(106,82,212,.03))' : 'linear-gradient(90deg,rgba(0,144,202,.12),rgba(0,144,202,.03))', borderTop: si ? '2px solid rgba(106,82,212,.3)' : 'none', borderBottom: '1px solid rgba(125,145,180,.2)' }}>{x.pca ? 'Patient care assistants · ' + pcaN : 'Nursing staff · ' + nurseN}</td></tr>
+                      : null;
                     const counts = { G: 0, M: 0, E: 0, N: 0, O: 0 }; let hrs = 0;
                     for (let d = 1; d <= days; d++) { const c = rowG[d]; const b = R.bucketOf(c); if (b) counts[b]++; hrs += R.hoursOf(c); }
                     return (
-                      <tr key={x.empId} className="ros-trow" style={{ background: si % 2 ? 'rgba(244,249,254,.5)' : 'transparent', transition: 'background .15s' }}>
-                        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'rgba(250,252,255,.98)', padding: '4px 9px', borderBottom: '1px solid rgba(125,145,180,.14)', borderRight: '1px solid rgba(125,145,180,.2)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <React.Fragment key={x.empId}>
+                      {head}
+                      <tr className="ros-trow"
+                        onDragOver={(e) => { const id = rowDragId.current; if (!id || id === x.empId) return; e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); const after = e.clientY > r.top + r.height / 2; if (!rowDrag || rowDrag.over !== x.empId || rowDrag.after !== after) setRowDrag({ id, over: x.empId, after }); }}
+                        onDrop={(e) => { e.preventDefault(); const id = rowDragId.current; rowDragId.current = null; setRowDrag(null); if (!id || id === x.empId) return; const r = e.currentTarget.getBoundingClientRect(); const after = e.clientY > r.top + r.height / 2; const ids = rows.map((k) => k.empId).filter((k) => k !== id); moveRow(id, ids.indexOf(x.empId) + (after ? 1 : 0)); }}
+                        style={{ background: rowDrag && rowDrag.id === x.empId ? 'rgba(0,144,202,.08)' : si % 2 ? 'rgba(244,249,254,.5)' : 'transparent', transition: 'background .15s',
+                          boxShadow: rowDrag && rowDrag.over === x.empId ? (rowDrag.after ? 'inset 0 -3px 0 #0090ca' : 'inset 0 3px 0 #0090ca') : 'none' }}>
+                        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'rgba(250,252,255,.98)', padding: '4px 9px 4px 4px', borderBottom: '1px solid rgba(125,145,180,.14)', borderRight: '1px solid rgba(125,145,180,.2)' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span draggable={canEdit} title={canEdit ? 'Drag to move this person up or down' : ''}
+                              onDragStart={(e) => { if (!canEdit) { e.preventDefault(); return; } try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', x.empId); } catch (er) { /* old browser */ } rowDragId.current = x.empId; setRowDrag({ id: x.empId, over: null, after: false }); }}
+                              onDragEnd={() => { rowDragId.current = null; setRowDrag(null); }}
+                              style={{ cursor: canEdit ? 'grab' : 'default', color: canEdit ? '#9aa6b4' : '#d6dce4', fontSize: 12, lineHeight: 1, letterSpacing: -2, padding: '6px 2px', userSelect: 'none', flexShrink: 0 }}>⋮⋮</span>
                             <MK.Av name={x.name} emp={x} empId={x.empIdShown} size={28} radius={rosAvRadius(28)} />
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap' }}>{x.name}</div>
@@ -1794,6 +1885,11 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                             <select value="" title="Row tools" onChange={(e) => { const v = e.target.value; e.target.value = ''; rowTool(x.empId, v); }}
                               style={{ width: 26, height: 24, flexShrink: 0, boxSizing: 'border-box', padding: '0 2px', borderRadius: 7, border: '1px solid rgba(125,145,180,.28)', background: 'rgba(255,255,255,.7)', fontFamily: 'inherit', fontSize: 10, color: '#6c7a8c', cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none', textAlign: 'center', textAlignLast: 'center' }}>
                               <option value="">⋯</option>
+                              <optgroup label="Position">
+                                <option value="top">Move to top</option>
+                                <option value="up">Move up</option>
+                                <option value="down">Move down</option>
+                              </optgroup>
                               {ROS_PATTERNS.map((p) => <option key={p[0]} value={p[0]}>{p[1]}</option>)}
                               <option value="blanks">Fill blanks OFF</option>
                               <option value="clear">Clear row</option>
@@ -1816,6 +1912,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                         ))}
                         <td style={{ position: 'sticky', right: 0, zIndex: 1, width: 44, minWidth: 44, padding: '3px 6px', textAlign: 'right', fontFamily: ROS_MONO, fontSize: 10.5, fontWeight: 800, color: hrs > 200 ? '#a92c42' : '#16202e', borderBottom: '1px solid rgba(125,145,180,.14)', background: 'rgba(247,250,254,.98)', whiteSpace: 'nowrap' }}>{hrs}</td>
                       </tr>
+                      </React.Fragment>
                     );
                   })}
 
@@ -1846,15 +1943,25 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                     );
                   })}
                   <tr style={{ background: 'linear-gradient(90deg,rgba(13,28,50,.06),rgba(13,28,50,.03))' }}>
-                    <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'rgba(238,243,250,.98)', padding: '8px 10px', fontSize: 9.5, fontWeight: 800, letterSpacing: .5, textTransform: 'uppercase', color: '#7d8ea8', borderRight: '1px solid rgba(125,145,180,.2)' }}>On duty / day</td>
+                    <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'rgba(238,243,250,.98)', padding: '8px 10px', fontSize: 9.5, fontWeight: 800, letterSpacing: .5, textTransform: 'uppercase', color: '#7d8ea8', borderRight: '1px solid rgba(125,145,180,.2)' }}>{pcaN ? 'Nurses on duty / day' : 'On duty / day'}</td>
                     {Array.from({ length: days }, (_, k) => k + 1).map((d) => {
-                      const on = onDutyOf(d);
+                      const on = onDutyOf(d, false);
                       const closed = !!ev.closedDays[d];
                       const c = closed ? '#8b98ab' : on >= 5 ? '#157a43' : on >= 4 ? '#0072a3' : on >= 3 ? '#b5670a' : '#a92c42';
                       return <td key={d} title={closed ? 'Unit off day — everyone rostered off' : on + ' on duty on day ' + d} style={{ padding: '7px 3px', textAlign: 'center', fontFamily: ROS_MONO, fontSize: 11, fontWeight: 800, color: c, background: c + '1f' }}>{closed ? 'off' : on}</td>;
                     })}
                     <td colSpan={6} style={{ position: 'sticky', right: 0, zIndex: 2, width: 174, minWidth: 174, padding: '5px 6px', fontSize: 9, color: '#9aa6b4', textAlign: 'right', background: 'rgba(238,243,250,.98)', borderLeft: '1px solid rgba(125,145,180,.25)' }}>low = red</td>
                   </tr>
+                  {pcaN > 0 && (
+                    <tr style={{ background: 'rgba(106,82,212,.04)' }}>
+                      <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'rgba(243,240,252,.98)', padding: '8px 10px', fontSize: 9.5, fontWeight: 800, letterSpacing: .5, textTransform: 'uppercase', color: '#5b45c4', borderRight: '1px solid rgba(125,145,180,.2)' }}>PCAs on duty / day</td>
+                      {Array.from({ length: days }, (_, k) => k + 1).map((d) => {
+                        const on = onDutyOf(d, true);
+                        return <td key={d} title={on + ' PCA on duty on day ' + d} style={{ padding: '7px 3px', textAlign: 'center', fontFamily: ROS_MONO, fontSize: 11, fontWeight: 800, color: on ? '#5b45c4' : '#c4ccd6', borderBottom: '1px solid rgba(125,145,180,.14)' }}>{on}</td>;
+                      })}
+                      <td colSpan={6} style={{ position: 'sticky', right: 0, zIndex: 2, width: 174, minWidth: 174, padding: '5px 6px', fontSize: 9, color: '#9aa6b4', textAlign: 'right', background: 'rgba(243,240,252,.98)', borderLeft: '1px solid rgba(125,145,180,.2)' }}>not counted as nurses</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             )}
@@ -2846,7 +2953,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
 const rosEsc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const rosDate = (t) => (t ? new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
 
-function rosPrintHtml({ dept, year, month, doc, rows, grid, signers, colour, summary, legend, printedBy }) {
+function rosPrintHtml({ dept, year, month, doc, rows, grid, signers, colour, summary, legend, pcaNewPage, printedBy }) {
   const days = R.daysIn(year, month);
   const ds = Array.from({ length: days }, (_, i) => i + 1);
   const st = rosStatusNorm(doc ? doc.status : null);
@@ -2862,78 +2969,110 @@ function rosPrintHtml({ dept, year, month, doc, rows, grid, signers, colour, sum
     ['Checked by', (fwd && doc && doc.checkedBy) || (sg.manager && sg.manager.name) || '', 'Nurse Manager', fwd ? rosDate(fwd.at) : (sent && sent.action === 'send_cns' ? 'sent directly to CNS' : '')],
     ['Approved by', (ok && doc && doc.approvedBy) || (sg.cns && sg.cns.name) || '', 'Chief of Nursing Services', ok ? rosDate(ok.at) : ''],
   ];
-  const mark = st === 'approved' ? '' : st === 'none' ? 'NOT PREPARED' : st === 'pending_manager' ? 'AWAITING MANAGER CHECK' : st === 'pending_cns' ? 'AWAITING CNS APPROVAL' : st === 'returned' ? 'RETURNED FOR CORRECTION' : 'DRAFT — NOT APPROVED';
-  const tint = (code) => {
+  const pill = (code) => {
     if (!code) return '';
     const b = R.bucketOf(code);
-    if (!colour) return b === 'O' ? 'background:#f1f3f6' : '';
-    const c = rosBColor(b);
-    return 'background:' + c + '1f;color:' + c;
+    if (!colour) return '<span class="k' + (b === 'O' ? ' ko' : '') + '">' + rosEsc(code) + '</span>';
+    const c = b === 'O' ? '#6b7a8d' : rosBColor(b);
+    return '<span class="k" style="background:' + c + (b === 'O' ? '14' : '1c') + ';color:' + c + '">' + rosEsc(code) + '</span>';
   };
   const fri = (d) => new Date(year, month, d).getDay() === 5;
   const head1 = ds.map((d) => '<th class="d' + (fri(d) ? ' fr' : '') + '">' + d + '</th>').join('');
   const head2 = ds.map((d) => '<th class="w' + (fri(d) ? ' fr' : '') + '">' + rosEsc(String(rosDow(year, month, d)).slice(0, 2)) + '</th>').join('');
-  const body = rows.map((r, i) => {
-    const row = (grid && grid[r.empId]) || {};
-    const t = R.totalsFor(row, days);
-    const cells = ds.map((d) => { const c = row[d] || ''; return '<td class="c' + (fri(d) ? ' fr' : '') + '" style="' + tint(c) + '">' + rosEsc(c) + '</td>'; }).join('');
-    return '<tr><td class="n">' + (i + 1) + '</td><td class="e">' + rosEsc(r.empIdShown || '') + '</td>'
-      + '<td class="nm"><b>' + rosEsc(r.name) + '</b><span>' + rosEsc(r.desig || '') + '</span></td>' + cells
-      + ['G', 'M', 'E', 'N', 'O'].map((b) => '<td class="t">' + (t[b] || '') + '</td>').join('')
-      + '<td class="t h">' + (t.hours || '') + '</td></tr>';
-  }).join('');
-  const ids = rows.map((r) => r.empId);
   const sumRow = (label, fn) => '<tr class="sum"><td colspan="3" class="sl">' + label + '</td>'
     + ds.map((d) => { const v = fn(d); return '<td class="c' + (fri(d) ? ' fr' : '') + '">' + (v || '') + '</td>'; }).join('') + '<td colspan="6"></td></tr>';
-  const cov = {};
-  ds.forEach((d) => { cov[d] = R.coverageFor(grid || {}, ids, d); });
-  const leaveOn = (d) => ids.filter((id) => R.isLeave(((grid || {})[id] || {})[d])).length;
-  const sums = !summary ? '' : sumRow('General on duty', (d) => cov[d].G) + sumRow('Morning on duty', (d) => cov[d].M)
-    + sumRow('Evening on duty', (d) => cov[d].E) + sumRow('Night on duty', (d) => cov[d].N) + sumRow('On leave', leaveOn);
-  const legendHtml = !legend ? '' : '<div class="lg">' + R.BUCKETS.concat([{ id: 'O', label: 'Leave / off', color: '#8b98ab' }])
+  // One table per group — nurses, then PCAs — each with its own S/N and its own daily cover.
+  const tableFor = (list, title, cls) => {
+    const body = list.map((r, i) => {
+      const row = (grid && grid[r.empId]) || {};
+      const t = R.totalsFor(row, days);
+      const cells = ds.map((d) => '<td class="c' + (fri(d) ? ' fr' : '') + '">' + pill(row[d] || '') + '</td>').join('');
+      return '<tr class="r"><td class="n">' + (i + 1) + '</td><td class="e">' + rosEsc(r.empIdShown || '') + '</td>'
+        + '<td class="nm"><b>' + rosEsc(r.name) + '</b>' + (r.desig ? '<span> · ' + rosEsc(r.desig) + '</span>' : '') + '</td>' + cells
+        + ['G', 'M', 'E', 'N', 'O'].map((b) => '<td class="t">' + (t[b] || '') + '</td>').join('')
+        + '<td class="t h">' + (t.hours || '') + '</td></tr>';
+    }).join('');
+    const ids = list.map((r) => r.empId);
+    const cov = {};
+    ds.forEach((d) => { cov[d] = R.coverageFor(grid || {}, ids, d); });
+    const leaveOn = (d) => ids.filter((id) => R.isLeave(((grid || {})[id] || {})[d])).length;
+    // Only the cover rows that have something in them — a unit with no General duty or no
+    // leave this month does not print an empty line for it.
+    const some = (fn) => ds.some((d) => fn(d) > 0);
+    const sums = !summary ? '' : [['General on duty', (d) => cov[d].G], ['Morning on duty', (d) => cov[d].M], ['Evening on duty', (d) => cov[d].E],
+      ['Night on duty', (d) => cov[d].N], ['On leave', leaveOn]].filter(([, fn]) => some(fn)).map(([l, fn]) => sumRow(l, fn)).join('');
+    return '<div class="grp' + (cls ? ' ' + cls : '') + '">' + (title ? '<div class="gt"><span>' + rosEsc(title) + '</span></div>' : '')
+      + '<table><colgroup><col class="n"><col class="e"><col class="nm">' + ds.map(() => '<col class="d">').join('') + '<col class="t"><col class="t"><col class="t"><col class="t"><col class="t"><col class="h"></colgroup>'
+      + '<thead><tr><th rowspan="2">S/N</th><th rowspan="2">Emp ID</th><th rowspan="2" style="text-align:left;padding-left:4px">Name · Designation</th>' + head1
+      + '<th rowspan="2">G</th><th rowspan="2">M</th><th rowspan="2">E</th><th rowspan="2">N</th><th rowspan="2">O</th><th rowspan="2">Hrs</th></tr><tr>' + head2 + '</tr></thead>'
+      + '<tbody>' + (body || '<tr><td colspan="' + (days + 9) + '" style="padding:14px;color:#7b8796">No staff on this roster.</td></tr>') + sums + '</tbody></table></div>';
+  };
+  const nurses = rows.filter((r) => !r.pca), pcas = rows.filter((r) => r.pca);
+  const tables = pcas.length
+    ? tableFor(nurses, 'Nursing staff · ' + nurses.length, 'gn') + tableFor(pcas, 'Patient care assistants · ' + pcas.length, 'gp' + (pcaNewPage ? ' np' : ''))
+    : tableFor(rows, '', '');
+  // The legend explains the codes on THIS sheet only — a unit that works M4 / E4 / N2 does
+  // not need the hospital's whole catalogue printed under its roster.
+  const used = new Set();
+  rows.forEach((r) => { const row = (grid && grid[r.empId]) || {}; Object.keys(row).forEach((d) => { if (row[d]) used.add(String(row[d])); }); });
+  const groups = R.BUCKETS.concat([{ id: 'O', label: 'Leave / off', color: '#8b98ab' }])
     .filter((b, i, a) => a.findIndex((x) => x.id === b.id) === i)
-    .map((b) => {
-      const codes = R.SHIFTS.filter((s) => s.bucket === b.id);
-      if (!codes.length) return '';
-      return '<div class="lgb"><b style="color:' + (colour ? rosBColor(b.id) : '#16202e') + '">' + rosEsc(b.label) + '</b>'
-        + codes.map((s) => '<span><i>' + rosEsc(s.code) + '</i> ' + rosEsc(s.label) + '</span>').join('') + '</div>';
-    }).join('') + '</div>';
+    .map((b) => ({ b, codes: R.SHIFTS.filter((s) => s.bucket === b.id && used.has(s.code)) }))
+    .filter((g) => g.codes.length);
+  const unknown = [...used].filter((c) => !R.BY_CODE[c]);
+  const legendHtml = !legend ? '' : (!used.size ? '<div class="lgx"><div class="lgh">Shift legend</div><div class="lgn">No shifts entered yet.</div></div>'
+    : '<div class="lgx"><div class="lgh">Shift legend</div><div class="lg">' + groups.map((g) => '<div class="lgb"><b style="color:' + (colour ? rosBColor(g.b.id) : '#16202e') + '">' + rosEsc(g.b.label) + '</b>'
+        + g.codes.map((s) => '<span><i>' + rosEsc(s.code) + '</i> ' + rosEsc(s.label) + '</span>').join('') + '</div>').join('')
+      + (unknown.length ? '<div class="lgb"><b>Other</b>' + unknown.map((c) => '<span><i>' + rosEsc(c) + '</i></span>').join('') + '</div>' : '')
+      + '</div></div>');
   const at = new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+  const d2 = (d) => String(d).padStart(2, '0') + ' ' + R.MONTHS[month].slice(0, 3) + ' ' + year;
+  const period = d2(1) + ' – ' + d2(days);
+  const NAVY = '#0d3a5c';
   const css = '@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
-    + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff;position:relative}@media print{body{padding:0}}'
-    + '.lh{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding-bottom:6px;border-bottom:1px solid #d9e2ec}.lh img{height:38px}'
-    + '.lh .tt{text-align:right}.lh .kind{font-size:7pt;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#0072a3}.lh h1{margin:2px 0 0;font-size:14pt;color:#0d1b2e}'
-    + '.bar{height:3px;background:linear-gradient(90deg,#0072a3,#27a8db 55%,#3ab5a7);margin-bottom:7px}'
-    + '.info{display:flex;flex-wrap:wrap;gap:4px 22px;margin:0 0 6px;font-size:8.5pt}.info b{font-weight:700}.st{display:inline-block;padding:0 7px;border-radius:9px;font-size:7.5pt;font-weight:700;border:1px solid currentColor}'
-    + 'table{border-collapse:collapse;width:100%;table-layout:fixed}thead{display:table-header-group}tr{page-break-inside:avoid}'
-    + 'th{background:#0d3a5c;color:#fff;font-weight:700;border:1px solid #0d3a5c;padding:2px 0;font-size:7pt}th.w{font-weight:500;font-size:6.2pt;background:#1d4f76}th.fr{background:#2a6a99}'
-    + 'td{border:1px solid #c9d3de;text-align:center;padding:0;height:15px}td.c{font-size:6.8pt;font-weight:700}td.fr{box-shadow:inset 0 0 0 9999px rgba(13,58,92,.05)}'
-    + 'td.n{width:6mm;color:#5b6878}td.e{font-size:6.6pt;color:#3c4858}td.nm{text-align:left;padding:1px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{display:block;font-size:7.4pt;overflow:hidden;text-overflow:ellipsis}td.nm span{display:block;font-size:6pt;color:#6c7a8c}'
-    + 'td.t{font-size:7pt;background:#f4f7fa}td.h{font-weight:700}col.n{width:6mm}col.e{width:12mm}col.nm{width:40mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}'
-    + 'tr.sum td{background:#eef4f9;font-size:6.8pt;font-weight:700;color:#0d3a5c;height:12px}tr.sum td.sl{text-align:right;padding-right:5px;font-weight:600}'
-    + '.lg{display:grid;grid-template-columns:repeat(5,1fr);gap:2px 12px;margin-top:5px;font-size:6.4pt;color:#3c4858;page-break-inside:avoid}.lgb b{display:block;font-size:7pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.5px}.lgb span{display:inline-block;margin-right:7px;white-space:nowrap}.lgb i{font-style:normal;font-weight:700;color:#16202e}'
-    + '.nb{margin-top:6px;font-size:7pt;color:#3c4858}.rm{margin-top:4px;font-size:7.5pt;border-bottom:1px dotted #9aa6b4;height:14px}'
-    + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:16px;font-size:8pt;page-break-inside:avoid}.signs div{border-top:1px solid #16202e;padding-top:3px}'
-    + '.signs span{display:block;font-size:6.6pt;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7b8796}.signs b{display:block;font-size:9pt}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}'
-    + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}.cr{margin-top:3px;text-align:center;font-size:6px;color:#a3adba}'
-    + '.wm{position:fixed;top:42%;left:0;right:0;text-align:center;font-size:54pt;font-weight:800;color:rgba(210,58,82,.10);transform:rotate(-14deg);pointer-events:none;letter-spacing:4px;z-index:0}';
-  const stColour = st === 'approved' ? '#157a43' : st === 'returned' ? '#b4232f' : st === 'none' ? '#7d8ea8' : '#b5670a';
-  const html = (mark ? '<div class="wm">' + rosEsc(mark) + '</div>' : '')
-    + '<header class="lh"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"><div class="tt"><div class="kind">Nursing Services · Duty Roster</div><h1>Duty Roster — ' + rosEsc(dept) + '</h1></div></header><div class="bar"></div>'
-    + '<div class="info"><span>Month: <b>' + rosEsc(R.MONTHS[month] + ' ' + year) + '</b></span><span>Department: <b>' + rosEsc(dept) + '</b></span>'
-    + '<span>Staff: <b>' + rows.length + '</b></span><span>Revision: <b>' + (doc ? (doc.revision || 1) : '—') + '</b></span>'
-    + '<span>Status: <span class="st" style="color:' + stColour + '">' + rosEsc(ROS_STATUS[st].label) + '</span></span>'
-    + (ok ? '<span>Approved on: <b>' + rosEsc(rosDate(ok.at)) + '</b></span>' : '') + '</div>'
-    + '<table><colgroup><col class="n"><col class="e"><col class="nm">' + ds.map(() => '<col class="d">').join('') + '<col class="t"><col class="t"><col class="t"><col class="t"><col class="t"><col class="h"></colgroup>'
-    + '<thead><tr><th rowspan="2">S/N</th><th rowspan="2">Emp ID</th><th rowspan="2" style="text-align:left;padding-left:4px">Name · Designation</th>' + head1
-    + '<th rowspan="2">G</th><th rowspan="2">M</th><th rowspan="2">E</th><th rowspan="2">N</th><th rowspan="2">O</th><th rowspan="2">Hrs</th></tr><tr>' + head2 + '</tr></thead>'
-    + '<tbody>' + (body || '<tr><td colspan="' + (days + 9) + '" style="padding:14px;color:#7b8796">No staff on this roster.</td></tr>') + sums + '</tbody></table>'
-    + legendHtml
-    + '<div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>'
-    + '<div class="rm">Remarks:</div>'
-    + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + (when ? ' · ' + rosEsc(when) : '') + '</em></div>').join('') + '</div>'
-    + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (st === 'approved' ? 'Approved roster — final.' : 'Not approved — may still change.') + '</span></div>'
-    + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div>';
+    + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff}@media print{body{padding:0}}'
+    // letterhead: logo | DUTY ROSTER + month + period | department
+    + '.lh{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding-bottom:5px}.lh img{height:36px}'
+    + '.lh .mid{text-align:center}.lh .mid h1{margin:0;font-size:16pt;font-weight:800;letter-spacing:5px;color:' + NAVY + '}'
+    + '.lh .mid .mo{font-size:10.5pt;font-weight:700;color:#0072a3;margin-top:1px}.lh .mid .pd{font-size:7.6pt;color:#5b6878;letter-spacing:.4px}'
+    + '.lh .rt{text-align:right}.lh .rt .kind{font-size:6.8pt;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;color:#7b8796}.lh .rt .dp{font-size:14pt;font-weight:800;color:#0d1b2e;margin-top:1px}.lh .rt .sf{font-size:7.4pt;color:#5b6878;font-weight:600}'
+    + '.bar{height:3px;border-radius:2px;background:linear-gradient(90deg,#0072a3,#27a8db 55%,#3ab5a7);margin-bottom:7px}'
+    + '.info{display:flex;gap:8px;margin:0 0 7px}.info div{border:1px solid #d9e2ec;border-radius:6px;padding:3px 10px;background:#f7fafc}'
+    + '.info span{display:block;font-size:6pt;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#7b8796}.info b{font-size:8.6pt;color:#0d1b2e}.info i{font-style:normal;font-size:7.4pt;color:#5b6878;font-weight:600}'
+    // section tags
+    + '.gt{display:flex;align-items:center;gap:8px;margin:5px 0 3px}.gt span{display:inline-block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#fff;background:#0072a3;border-radius:10px;padding:2px 10px}'
+    + '.gt:after{content:"";flex:1;height:1px;background:#d9e2ec}.gp .gt span{background:#5b45c4}.grp.np{page-break-before:always}'
+    // the table
+    + 'table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;border:1px solid #c9d3de;border-radius:5px;overflow:hidden}thead{display:table-header-group}tr{page-break-inside:avoid}'
+    + 'th{background:' + NAVY + ';color:#fff;font-weight:700;padding:3px 0;font-size:7pt;border-right:1px solid rgba(255,255,255,.12)}th.w{font-weight:500;font-size:6.2pt;background:#1d4f76;padding:1px 0 2px}th.fr{background:#2a6a99}'
+    + '.gp th{background:#3b2f7a}.gp th.w{background:#4d3f94}.gp th.fr{background:#5f50aa}'
+    + 'td{border-right:1px solid #e3e9f0;border-bottom:1px solid #e3e9f0;text-align:center;padding:0;height:14px}tr.r:nth-child(even) td{background:#f7fafc}'
+    + 'td.c{padding:1px}td.fr{background:#eef4fa!important}'
+    + '.k{display:inline-block;min-width:88%;border-radius:3px;padding:0;font-size:6.7pt;font-weight:800;letter-spacing:.1px}.k.ko{color:#6b7a8d}'
+    + 'td.n{color:#7b8796;font-size:6.8pt}td.e{font-size:6.6pt;color:#5b6878}td.nm{text-align:left;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{font-size:7.5pt;color:#0d1b2e}td.nm span{font-size:6.2pt;color:#7b8796}'
+    + 'td.t{font-size:7pt;background:#f1f5f9!important;color:#3c4858}td.h{font-weight:800;color:#0d1b2e}col.n{width:6mm}col.e{width:12mm}col.nm{width:52mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}'
+    + 'tr.sum td{background:#eaf2f9!important;font-size:6.6pt;font-weight:700;color:' + NAVY + ';height:12px}tr.sum td.sl{text-align:right;padding-right:6px;font-weight:600;color:#3c5a74}.gp tr.sum td{background:#f0edfa!important;color:#3b2f7a}'
+    // legend, notes, signatures
+    + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lnr .notes{margin-top:0}.lgx{border:1px solid #d9e2ec;border-radius:6px;padding:4px 9px 5px;page-break-inside:avoid}.lgh{font-size:6.4pt;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#7b8796;margin-bottom:2px}.lgn{font-size:7pt;color:#7b8796}'
+    + '.lg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 16px;font-size:6.6pt;color:#3c4858}.lgb b{display:block;font-size:6.8pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.6px}.lgb span{display:inline-block;margin-right:8px;white-space:nowrap}.lgb i{font-style:normal;font-weight:800;color:#0d1b2e}'
+    + '.foot{page-break-inside:avoid;break-inside:avoid}'
+    + '.notes{margin-top:6px;border-radius:6px;background:#f7fafc;border:1px solid #e3e9f0;padding:4px 9px}.nb{font-size:7pt;color:#3c4858}.rm{margin-top:3px;font-size:7.4pt;color:#3c4858;border-bottom:1px dotted #9aa6b4;height:14px}'
+    + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:8px;font-size:8pt;page-break-inside:avoid}.signs>div{border:1px solid #e3e9f0;border-radius:6px;padding:0 10px 6px}'
+    + '.signs .sp{height:32px}.signs .ln{border-top:1px solid #16202e;padding-top:4px}.signs .dt{margin-top:6px;font-size:7.4pt;color:#3c4858}'
+    + '.signs span{display:block;font-size:6.4pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#7b8796}.signs b{display:block;font-size:9pt;color:#0d1b2e}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}'
+    + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}.cr{margin-top:3px;text-align:center;font-size:6px;color:#a3adba}';
+  const html = '<header class="lh"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals">'
+    + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>'
+    + '<div class="rt"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dept) + '</div>'
+    + '<div class="sf">' + rows.length + ' staff' + (pcas.length ? ' · ' + nurses.length + ' nurses · ' + pcas.length + ' PCA' + (pcas.length === 1 ? '' : 's') : '') + '</div></div></header><div class="bar"></div>'
+    + tables
+    // Legend and notes side by side, and kept on the same page as the signatures.
+    + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>'
+    + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>'
+    + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><div class="sp"></div><div class="ln"><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + '</em>'
+      + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>'
+    + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>'
+    + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div></div>';
   return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dept + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + css + '</style></head><body>' + html + '</body></html>';
 }
 
@@ -2944,10 +3083,11 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [opt, setOpt] = useState(() => {
-    const d = { colour: true, summary: true, legend: true };
+    const d = { colour: true, summary: true, legend: true, pcaNewPage: false };
     try { return { ...d, ...(JSON.parse(localStorage.getItem(ROS_PRINT_OPT_KEY) || '{}') || {}) }; } catch (e) { return d; }
   });
   const [busy, setBusy] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
   const frame = useRef(null);
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month)
@@ -2960,12 +3100,14 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   }, [dept, year, month]);
   useEffect(() => { try { localStorage.setItem(ROS_PRINT_OPT_KEY, JSON.stringify(opt)); } catch (e) { /* private window */ } }, [opt]);
 
-  const view = useMemo(() => rosRowsFrom(doc, staffStore.staff, dept), [doc, staffStore.staff, dept]);
+  const view = useMemo(() => rosRowsFrom(doc, staffStore.staff, dept, undefined, signers.incharge && signers.incharge.name), [doc, staffStore.staff, dept, signers]);
   const me = (window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username)) || '';
   const html = useMemo(() => rosPrintHtml({ dept, year, month, doc, rows: view.rows, grid: view.grid, signers, ...opt, printedBy: me }),
     [dept, year, month, doc, view, signers, opt, me]);
   // The in-charge who prepares the sheet may print it, as may anyone holding roster Print.
-  const mayPrint = rosCan('print') || !!(can && (can.edit || can.send));
+  const meU = String((window.__UNICO_USER__ && window.__UNICO_USER__.username) || '').toLowerCase();
+  const isSigner = !!meU && ['incharge', 'manager', 'cns'].some((k) => signers[k] && String(signers[k].username || '').toLowerCase() === meU);
+  const mayPrint = rosCan('print') || isSigner || !!(can && (can.edit || can.send || can.forward || can.approve));
 
   const print = () => {
     const w = frame.current && frame.current.contentWindow;
@@ -2974,6 +3116,56 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
     rosApi.post('/api/rosters/print', { kind: 'sheet', target: dept, detail: R.MONTHS[month] + ' ' + year + (doc ? ' · rev ' + (doc.revision || 1) + ' · ' + rosStatusNorm(doc.status) : ' · not prepared') })
       .catch(() => null)
       .then(() => { setBusy(false); try { w.focus(); w.print(); } catch (e) { rosToast('Could not open the print dialog.', 'error'); } });
+  };
+
+  /* A PDF file, straight to Downloads — no print dialog. The preview's own document is drawn at
+     A4-landscape width (so the file looks the same from any screen) and cut into pages at row
+     boundaries, so no person's row is ever split across two pages and the signatures stay whole. */
+  const downloadPdf = async () => {
+    const f = frame.current; const d0 = f && f.contentDocument;
+    if (!d0 || !d0.body) return;
+    setPdfBusy(true);
+    const body = d0.body; const keep = { w: body.style.width, p: body.style.padding };
+    try {
+      if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) await window.unicoLoadPdfLibs();
+      const H = window.html2canvas, J = window.jspdf && window.jspdf.jsPDF;
+      if (!H || !J) throw new Error('The PDF tools did not load.');
+      await rosApi.post('/api/rosters/print', { kind: 'pdf', target: dept, detail: R.MONTHS[month] + ' ' + year }).catch(() => null);
+      const W = 1123;                                   // 297 mm at 96 dpi
+      body.style.width = W + 'px'; body.style.padding = '0';
+      await new Promise((r) => setTimeout(r, 80));
+      const scale = 2;
+      const top0 = body.getBoundingClientRect().top;
+      const marks = Array.prototype.map.call(d0.querySelectorAll('tr, .gt, .lgx, .foot'), (el) => (el.getBoundingClientRect().bottom - top0) * scale);
+      const last = d0.querySelector('.cr') || body.lastElementChild;
+      const contentH = Math.ceil((last ? last.getBoundingClientRect().bottom : body.scrollHeight) - top0 + 6);
+      const canvas = await H(body, { scale, backgroundColor: '#ffffff', useCORS: true, windowWidth: W, width: W, height: contentH });
+      const pdf = new J({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const M = 8, pw = 297 - 2 * M, ph = 210 - 2 * M;
+      const pxPerMm = canvas.width / pw, pageH = ph * pxPerMm;
+      let y = 0, first = true;
+      const endY = Math.min(canvas.height, contentH * scale);
+      while (y < endY - 2) {
+        let cut = Math.min(endY, y + pageH);
+        if (cut < endY) { const fits = marks.filter((m) => m > y + 20 && m <= y + pageH); if (fits.length) cut = Math.max.apply(null, fits); }
+        const h = Math.ceil(cut - y);
+        const slice = document.createElement('canvas'); slice.width = canvas.width; slice.height = h;
+        const g = slice.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, slice.width, h);
+        g.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+        if (!first) pdf.addPage();
+        first = false;
+        pdf.addImage(slice.toDataURL('image/jpeg', 0.95), 'JPEG', M, M, pw, h / pxPerMm);
+        y = cut;
+      }
+      const safe = (s) => String(s || '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      pdf.save('Duty-Roster_' + safe(dept) + '_' + R.MONTHS[month] + '-' + year + '.pdf');
+      rosToast('PDF downloaded.');
+    } catch (e) {
+      rosToast((e && e.message ? e.message + ' ' : '') + 'Use Print and choose “Save as PDF” instead.', 'error');
+    } finally {
+      body.style.width = keep.w; body.style.padding = keep.p;
+      setPdfBusy(false);
+    }
   };
 
   if (loading) return <div style={{ display: 'grid', placeItems: 'center', height: '40vh', color: 'var(--muted,#8aa0b8)' }}>Loading…</div>;
@@ -2990,15 +3182,19 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
           <button className="btn" onClick={() => setRoute({ view: 'rosterGrid', dept, year, month })}>‹ Back to the grid</button>
           <div style={{ minWidth: 180 }}>
             <div style={{ fontWeight: 700, fontSize: 13.5, color: '#16202e' }}>Print roster — {dept}, {R.MONTHS[month]} {year}</div>
-            <div className="sub" style={{ fontSize: 11 }}>A4 landscape · letterhead · signatures{st !== 'approved' ? ' · watermarked until approved' : ''}</div>
+            <div className="sub" style={{ fontSize: 11 }}>A4 landscape · letterhead · only the shift codes this roster uses · signatures</div>
           </div>
           <RosStatusChip st={doc ? doc.status : null} />
           <div style={{ flex: 1 }} />
           {tog('colour', 'Colour codes')}
           {tog('summary', 'Daily cover rows')}
           {tog('legend', 'Shift legend')}
+          {view.rows.some((r) => r.pca) && tog('pcaNewPage', 'PCAs on a new page')}
           {mayPrint
-            ? <button className="btn pri" disabled={busy} onClick={print}>{busy ? 'Preparing…' : 'Print / Save as PDF'}</button>
+            ? <React.Fragment>
+                <button className="btn" disabled={pdfBusy} onClick={downloadPdf} title="Download this roster as a PDF file">{pdfBusy ? 'Preparing PDF…' : 'Download PDF'}</button>
+                <button className="btn pri" disabled={busy} onClick={print}>{busy ? 'Preparing…' : 'Print'}</button>
+              </React.Fragment>
             : <span className="sub" style={{ fontSize: 11 }}>Printing needs Duty Roster print access.</span>}
         </div>
       </div>
