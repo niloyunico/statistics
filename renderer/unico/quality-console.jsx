@@ -1012,7 +1012,8 @@ function QCIndEdit({ dep, ind, mk, mlabel, Q, isNew, onClose }){
           {isRate ? (
             <>
               <div><label style={lbl}>{ind.numLabel || 'Numerator'}</label><input type="number" step="any" value={num} onChange={e => setNum(e.target.value)} style={inp} /></div>
-              <div><label style={lbl}>{ind.denLabel || 'Denominator'}</label><input type="number" step="any" value={den} onChange={e => setDen(e.target.value)} style={inp} /></div>
+              <div><label style={lbl}>{ind.denLabel || 'Denominator'}</label><input type="number" step="any" value={den} onChange={e => setDen(e.target.value)} style={inp} />
+                {window.UnicoDeviceDaysHint && dep && React.createElement(window.UnicoDeviceDaysHint, { deptId: dep.deptId || (window.DEPTMAP && dep.key ? window.DEPTMAP.idFromQk(dep.key) : null), month: mk, indicatorName: ind.name, onUse: (v) => setDen(String(v)) })}</div>
               <div style={{ paddingBottom: 7, fontFamily: MONO, fontSize: 13, fontWeight: 700, color: P.ink }}>= {preview}</div>
             </>
           ) : (

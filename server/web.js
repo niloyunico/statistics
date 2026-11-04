@@ -387,7 +387,8 @@ async function serveIndex(req, res) {
         photo: scopeUser.photo || null, email: scopeUser.email || null,
         phone: scopeUser.phone || null, designation: scopeUser.designation || null, title: scopeUser.title || null,
         workDepartment: scopeUser.workDepartment || null,
-        myDepartments: Array.isArray(scopeUser.myDepartments) ? scopeUser.myDepartments : [] }
+        myDepartments: Array.isArray(scopeUser.myDepartments) ? scopeUser.myDepartments : [],
+        deviceDepartments: Array.isArray(scopeUser.deviceDepartments) ? scopeUser.deviceDepartments : [] }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
   // Canonical quality-formula master: the DB catalogue expanded to the
@@ -1064,6 +1065,10 @@ require('./duty-roster').mount(app, {
 // My Department: a department's figures, approved roster and basic staff list for the
 // departments an administrator picked per person (module 'mydept'; print is its own grant).
 require('./my-department').mount(app, { requireApi: [session.requireApi] });
+
+// Device Days: the daily Record of Device Insertion Days, sent per department and reviewed
+// (module 'devdays'; each route checks the module and the person's deviceDepartments itself).
+require('./device-days').mount(app, { requireApi: [session.requireApi] });
 
 // Medicine module: the Bangladesh drug index (21.7k brands / 1.7k generic monographs)
 // and the prescriptions written from it. Prescriptions carry patient names, UHIDs and

@@ -1888,6 +1888,8 @@ const USER_MODS=[
   ['medicine','Medicine & Rx','Clinical',''],
   // Read-only: View and Print only. Which departments is set per person below the grid.
   ['mydept','My Department','Clinical','one department, read-only · departments set below'],
+  // Record of Device Insertion Days. Which departments is set per person below the grid.
+  ['devdays','Device Days','Clinical','Add = enter & send · Edit = review & correct · departments set below'],
   ['datacol','Data Collection','Data',''],
   ['reports','Reports','Data',''],
   ['staff','Staff Management','Administer',''],
@@ -1914,6 +1916,8 @@ const PERM_ACTS=[['view','View'],['edit','Edit'],['add','Add'],['delete','Delete
 const PERM_ORDER=['view','edit','add','delete','print'];
 // My Department is read-only: it can be opened and printed, nothing else (server MYDEPT_ACTIONS).
 const MYDEPT_ACTS=['view','print'];
+// What each action means in Device Days (shown on the buttons' tooltips).
+const DEVDAYS_TIPS={view:'See the daily sheet and the summary',edit:'Review: approve or return sent days, and correct them',add:'Enter the daily figures and send them for review',delete:'Remove a day’s figures (kept in history)',print:'Print the sheet and the summary — every printout is logged'};
 const PERM_LEVEL_ORDER=['view','edit','add','delete'];
 function levelToActions(lv){ const i=['none','view','edit','add','delete'].indexOf(lv); return i<=0?[]:PERM_LEVEL_ORDER.slice(0,i); }
 function asActions(v){ if(Array.isArray(v)) return PERM_ORDER.filter(a=>v.indexOf(a)>=0); return levelToActions(v||'none'); }
@@ -2211,6 +2215,10 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     return hit?[hit.id]:[];
   };
   const toggleMyDept=(id)=>setMyDepts(ds=>ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds,id]);
+  // Device Days: which departments they enter / review there ('*' = every department).
+  const [devDepts,setDevDepts]=useState(editing&&Array.isArray(initial.deviceDepartments)?initial.deviceDepartments.slice():[]);
+  const [devDeptQ,setDevDeptQ]=useState('');
+  const toggleDevDept=(id)=>setDevDepts(ds=>id==='*'?(ds.indexOf('*')>=0?[]:['*']):(ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds.filter(x=>x!=='*'),id]));
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=!isPortalAcct&&accessType==='full';
   const isColl=isPortalAcct;
@@ -2306,21 +2314,23 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     // Access Control lists every account — none of those is a harmless "view".
     // Those modules are LEFT as they are (not cleared): clearing Data Submission on Save also wiped
     // the person's departments / areas and switched off their Indicator Access record.
-    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol','mydept'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
+    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol','mydept','devdays'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
   // Start from what another person holds. Copies the ticks only; their scope stays theirs.
   const copyAccess=(uname)=>{
     const src=(allUsers||[]).find(x=>x.username===uname); setCopyFrom(uname); if(!src) return;
     // My Department is never copied: it is granted to a person by hand, for their own departments.
-    if(src.role==='Administrator'){ setPerms(cur=>({...FULL_PERMS(),mydept:asActions(cur.mydept)})); setSubMenus({}); return; }
+    if(src.role==='Administrator'){ setPerms(cur=>({...FULL_PERMS(),mydept:asActions(cur.mydept),devdays:asActions(cur.devdays)})); setSubMenus({}); return; }
     setSubMenus(src.subMenus&&typeof src.subMenus==='object'&&!Array.isArray(src.subMenus)?{...src.subMenus}:{});
     const p={...NONE_PERMS(),...(src.perms||{})};
-    setPerms(cur=>USER_MODS.reduce((m,[k])=>(m[k]=k==='mydept'?asActions(cur.mydept):asActions(p[k]),m),{}));
+    // Device Days likewise: it goes with the departments picked for this person.
+    setPerms(cur=>USER_MODS.reduce((m,[k])=>(m[k]=(k==='mydept'||k==='devdays')?asActions(cur[k]):asActions(p[k]),m),{}));
   };
   // Toggle one action for a module (independent). Granting edit/add/delete auto-adds view.
   // Data Submission exists to SEND: ticking it on from nothing grants view+edit+add, or the person
   // saw every form and each Submit was refused (sending = Add, fixing own = Edit). Untick to narrow.
   const toggleAct=(mid,act)=>{ if(mid==='mydept'&&MYDEPT_ACTS.indexOf(act)<0) return;
     if(mid==='mydept'&&!asActions(perms.mydept).length&&!myDepts.length) setMyDepts(myDeptGuess());
+    if(mid==='devdays'&&!asActions(perms.devdays).length&&!devDepts.length) setDevDepts(myDeptGuess());
     setPerms(p=>{ const cur=asActions(p[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
     if(mid==='datasubmit'&&!cur.length&&act==='view') next=['view','edit','add'];
     if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); };
@@ -2344,6 +2354,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     // new grant (or more departments, or Print) is confirmed against exactly what they will see.
     const mdActs=(!isAdmin&&!isColl)?asActions(perms.mydept):[];
     if(mdActs.length&&!myDepts.length){ setSec('access'); return setErr('My Department: pick at least one department, or set it back to None.'); }
+    if(!isAdmin&&!isColl&&asActions(perms.devdays).length&&!devDepts.length){ setSec('access'); return setErr('Device Days: pick at least one department (or All departments), or set it back to None.'); }
     if(mdActs.length){
       const was=editing?asActions(initial.perms&&initial.perms.mydept):[];
       const wasDepts=(editing&&Array.isArray(initial.myDepartments))?initial.myDepartments:[];
@@ -2408,6 +2419,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
         // anything else used to clear it (staffId:null) whenever the scope was not "self" or
         // the record was missing from this administrator's own staff list.
         payload.myDepartments=asActions(perms.mydept).length?myDepts:[];
+        payload.deviceDepartments=asActions(perms.devdays).length?devDepts:[];
         if(staffLinkDirty){ payload.staffId=staffId!==''?Number(staffId):null; const rec=allStaff.find(x=>String(x.id)===String(staffId)); payload.staffEmpId=(rec&&rec.emp_id)?rec.emp_id:''; }
       }
       // Sent only for the one role the toggle is shown for, so no other kind of account is
@@ -2628,7 +2640,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                   <div style={{display:'flex',gap:6,flexShrink:0,flexWrap:'wrap'}}>
                     <button onClick={()=>clearMod(id)} style={{padding:'5px 12px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(none?'var(--muted)':'var(--line)'),background:none?'var(--panel-2)':'#fff',color:none?'var(--ink)':'var(--muted)'}}>None</button>
                     {PERM_ACTS.filter(([v])=>id!=='mydept'||MYDEPT_ACTS.indexOf(v)>=0).map(([v,l])=>{ const on=acts.indexOf(v)>=0; const c=lvlColor[v]; return (
-                      <button key={v} onClick={()=>toggleAct(id,v)} title={v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':v==='delete'?'Can delete':'Can print / save as PDF — take the record out of the system on paper'}
+                      <button key={v} onClick={()=>toggleAct(id,v)} title={id==='devdays'?DEVDAYS_TIPS[v]:v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':v==='delete'?'Can delete':'Can print / save as PDF — take the record out of the system on paper'}
                         style={{display:'inline-flex',alignItems:'center',gap:6,padding:'5px 11px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?c:'var(--line)'),background:on?c:'#fff',color:on?'#fff':'var(--ink-2)'}}>
                         <span style={{width:13,height:13,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'#fff':'var(--line)'),background:on?'rgba(255,255,255,.25)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
                         {l}
@@ -2679,6 +2691,28 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                   );})}
                 </div>
                 {!myDepts.length&&<div style={{fontSize:10.5,color:'var(--rose)',marginTop:6}}>Pick at least one department, or set My Department back to None.</div>}
+              </div>
+              ); })()}
+            {asActions(perms.devdays).length>0&&(()=>{
+              const needle=devDeptQ.trim().toLowerCase();
+              const all=devDepts.indexOf('*')>=0;
+              const acts=asActions(perms.devdays);
+              const list=allDepts.slice().sort((a,b)=>(devDepts.indexOf(b.id)>=0)-(devDepts.indexOf(a.id)>=0)||String(a.name).localeCompare(String(b.name)))
+                .filter(d=>!needle||(String(d.name)+' '+d.id).toLowerCase().indexOf(needle)>=0);
+              const chip=(on)=>({padding:'5px 11px',borderRadius:16,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff',color:on?'#fff':'var(--ink-2)'});
+              const does=[acts.indexOf('add')>=0&&'send for',acts.indexOf('edit')>=0&&'review',acts.indexOf('add')<0&&acts.indexOf('edit')<0&&'view'].filter(Boolean).join(' and ');
+              return (
+              <div style={{borderTop:'1px solid var(--line-2)',paddingTop:14,marginTop:14}}>
+                <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Device Days <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>{'· which departments they '+does}</span></div>
+                <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Only departments switched on in Device Days {'→'} Settings appear in their sheet. "All departments" also covers departments added later.</div>
+                <input value={devDeptQ} onChange={e=>setDevDeptQ(e.target.value)} placeholder="Search department…" style={{padding:'6px 9px',border:'1px solid var(--line)',borderRadius:7,fontSize:12,fontFamily:'inherit',marginBottom:8,width:'100%',maxWidth:260}}/>
+                <div style={{display:'flex',flexWrap:'wrap',gap:6,maxHeight:170,overflow:'auto'}}>
+                  <button type="button" onClick={()=>toggleDevDept('*')} style={Object.assign(chip(all),{borderStyle:'dashed'})}>All departments</button>
+                  {!all&&list.map(d=>{ const on=devDepts.indexOf(d.id)>=0; return (
+                    <button key={d.id} type="button" onClick={()=>toggleDevDept(d.id)} style={chip(on)}>{d.name}</button>
+                  );})}
+                </div>
+                {!devDepts.length&&<div style={{fontSize:10.5,color:'var(--rose)',marginTop:6}}>Pick at least one department, or set Device Days back to None.</div>}
               </div>
               ); })()}
           </div>

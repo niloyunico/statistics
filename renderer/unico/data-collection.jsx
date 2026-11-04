@@ -1941,6 +1941,8 @@
           style={inp(denLockedForCollector ? { background: 'var(--panel-2)', color: 'var(--ink-2)', cursor: 'not-allowed' } : need(isRate && !typedQ(den)))}
           value={den} onChange={(e) => { if (!denLockedForCollector) setDen(e.target.value); }}
           placeholder={denLockedForCollector ? 'Set by administrator' : (isRate ? ('Total ' + denLabel.toLowerCase() + ' this month') : 'Optional — total base (blank = count)')} />
+        {/* CLABSI / CAUTI / VAP-type indicators: the department's approved device days (Device Days module). */}
+        {!denLockedForCollector && !hospitalWide && window.UnicoDeviceDaysHint && React.createElement(window.UnicoDeviceDaysHint, { deptId: dcAreaDeptId(area), month, indicatorName: curInd && curInd.name, onUse: (v) => setDen(String(v)) })}
       </DqField>
     );
 

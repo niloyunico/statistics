@@ -39,7 +39,9 @@ const { getUsers } = require('./db');
 // are modules a normal account is given, not separate kinds of account.
 // 'mydept' (My Department): one department's figures, roster and basic staff list, read-only,
 // for the departments an administrator picks per person (users.myDepartments). Never a default.
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept'];
+// 'devdays' (Device Days): the daily Record of Device Insertion Days, sent and reviewed for the
+// departments an administrator picks per person (users.deviceDepartments, '*' = all). Never a default.
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays'];
 
 // Escalating legacy level strings. The newer model stores an ARRAY of independently
 // granted actions (e.g. ['view','delete'] = delete without add); both are supported,
@@ -270,6 +272,8 @@ async function forRequest(req) {
     subMenus: cleanSubMenus(u.subMenus),
     // My Department: the departments this person may view there (meaningful with 'mydept').
     myDepartments: Array.isArray(u.myDepartments) ? u.myDepartments.map(String) : [],
+    // Device Days: the departments this person sends / reviews there ('*' = every department).
+    deviceDepartments: Array.isArray(u.deviceDepartments) ? u.deviceDepartments.map(String) : [],
   };
 }
 
@@ -510,6 +514,16 @@ function myDeptIds(access) {
   if (access.unrestricted) return null;
   if (!can(access, 'mydept', 'view')) return [];
   return Array.isArray(access.myDepartments) ? access.myDepartments.map(String) : [];
+}
+
+/* The departments this account works with in Device Days: null = every department (an
+   administrator, or '*' picked), else the picked ones — none at all without the module. */
+function deviceDeptIds(access) {
+  if (!access) return [];
+  if (access.unrestricted) return null;
+  if (!can(access, 'devdays', 'view')) return []; // any granted action implies view
+  const list = Array.isArray(access.deviceDepartments) ? access.deviceDepartments.map(String) : [];
+  return list.indexOf('*') >= 0 ? null : list;
 }
 
 // Can this access perform `action` on module `mid`? Mirrors unicoCan() in ui.jsx.
@@ -965,7 +979,7 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent, rawBase) {
 }
 
 module.exports = {
-  PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster, MYDEPT_STAFF_FIELDS, myDeptIds,
+  PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster, MYDEPT_STAFF_FIELDS, myDeptIds, deviceDeptIds,
   LEGACY_SUBMIT_ROLES, submitsData, dataScoped, isUnitLead, phoneRoleOf, CONSOLE_MODULES,
   SUBMIT_KINDS, cleanSubmitKinds, maySubmitKind,
   DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen, hhScreenOn, cleanSubMenus,

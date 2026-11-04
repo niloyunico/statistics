@@ -66,6 +66,7 @@ const MANIFEST = [
   { file: 'quality-guide.js', jsx: false, chunk: 'qualityguide' },
   { file: 'quality-corrections.js', jsx: false },
   { file: 'quality-corrections-apply.js', jsx: false }, // DB master overrides the static one (must run after corrections, before store)
+  { file: 'device-days-core.js', jsx: false }, // window.UNICO_DD — the one Device Days due/missed rule (also require()d by the server)
   { file: 'hh-pool.js', jsx: false },          // window.UNICO_HH — the one hand-hygiene pooling rule (also require()d by the server)
   { file: 'quality-store.js', jsx: false },
   { file: 'appraisal-spec.js', jsx: false },   // Form HR-NUR-PA-01 as data (window.UNICO_APPRAISAL)
@@ -96,6 +97,7 @@ const MANIFEST = [
   { file: 'auth-login.jsx', jsx: true },
   { file: 'search.jsx', jsx: true },
   { file: 'data-collection.jsx', jsx: true, chunk: 'datacollection' },
+  { file: 'device-days.jsx', jsx: true, chunk: 'devdays' },      // window.DeviceDaysView — Record of Device Insertion Days (module 'devdays')
   { file: 'supervisor.jsx', jsx: true, chunk: 'supervisor' },
   { file: 'supervisor-h360.jsx', jsx: true, chunk: 'supervisor' },   // H360 patients + H360 log sheet (window.SupH360View)
   { file: 'user-admin.jsx', jsx: true, chunk: 'reports' },
@@ -179,7 +181,7 @@ const CHUNK_DEPS = {
 // Background preload order: what a signed-in admin is likeliest to open first. Portal
 // accounts reorder this at runtime (data collection is their whole app).
 const PRELOAD_ORDER = ['datacollection', 'qualityguide', 'quality', 'reports',
-  'staffprofile', 'roster', 'performance', 'supervisor', 'medicine', 'manpower'];
+  'staffprofile', 'roster', 'performance', 'supervisor', 'medicine', 'manpower', 'devdays'];
 
 /* What a file publishes to the global scope: `window.X = …` and
    `Object.assign(window, { X, Y })`. Used to place PLACEHOLDERS for chunk-owned

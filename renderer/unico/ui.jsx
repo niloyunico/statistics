@@ -65,6 +65,9 @@ const UNICO_MODULES = [
   // My Department: one department's figures, approved roster and basic staff list, read-only,
   // for the departments an administrator picked for the person. Never a default.
   { id:'mydept',  label:'My Department',      short:'My Dept',    icon:I.layers,home:'myDept' },
+  // Device Days: the daily Record of Device Insertion Days, sent per department and reviewed
+  // (departments set per person: deviceDepartments). Never a default.
+  { id:'devdays', label:'Device Days',        short:'Devices',    icon:I.activity,home:'devDaysEntry' },
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
@@ -82,6 +85,7 @@ const UNICO_MODULE_VIEWS = {
   roster: ['rosterHome','rosterGrid','rosterReview','rosterPrint','rosterFullReview','manpower'],
   datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory','dsHandHygiene'],
   mydept: ['myDept'],
+  devdays:['devDaysEntry','devDaysReview','devDaysSummary','devDaysSettings'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
 /* Data Submission's screens — each its own route and its own sidebar sub-item, and each
@@ -137,7 +141,7 @@ function unicoModuleOf(view){
    they are never gated here. `modules` null/absent = unrestricted (legacy accounts
    keep full access until an admin assigns modules). ---- */
 // 'staffapp' is grantable too, but it is the phone app only — it has no screen in here.
-const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp','mydept'];
+const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp','mydept','devdays'];
 // The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
 // hub, so it is gated under 'users' rather than 'stats'.
 function unicoAccessModuleOf(view){
@@ -210,12 +214,13 @@ let unicoSubMenusMemo=null;
 function unicoSubMenus(){
   if(unicoSubMenusMemo) return unicoSubMenusMemo;
   const out={};
-  const SAMPLE={ stats:'departments', quality:'quality', supervisor:'supHome', medicine:'medHome', staff:'staffHome', datacol:'dcReview', reports:'reports' };
+  const SAMPLE={ stats:'departments', quality:'quality', supervisor:'supHome', medicine:'medHome', staff:'staffHome', datacol:'dcReview', reports:'reports', devdays:'devDaysEntry' };
   Object.keys(SAMPLE).forEach(m=>{
     unicoWorkspaceSubAll(SAMPLE[m]).forEach(s=>{
       // Performance / Attrition / Duty Roster ride in Staff Management's list but are whole
       // modules with their own rows in Access Control, so they are not sub-menus of 'staff'.
       if((s.mod||unicoModuleOf(s.view))!==m) return;
+      if(s.adminOnly) return;   // an administrator's own screen: nothing to grant
       (out[m]=out[m]||[]).push([s.view, s.label, s.match||[s.view]]);
     });
   });
@@ -248,7 +253,7 @@ function unicoFirstAllowedHome(){
   // 'home' is not in this list on purpose: it is ungated, so unicoCanAccessView()
   // never sends anyone here looking for a fallback. This list answers a different
   // question — which WORKSPACE to open when a restricted account needs one.
-  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings'],['mydept','myDept']];
+  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings'],['mydept','myDept'],['devdays','devDaysEntry']];
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return unicoModuleLanding(homes[i][0], homes[i][1]); }
   return null;
 }
@@ -421,6 +426,8 @@ const UNICO_WS = [
     { id:'departments', label:'Departments',     icon:I.layers, home:'departments', on:v=>unicoModuleOf(v)==='stats'&&['dashboard','settings','profile','home'].indexOf(v)<0 },
     { id:'quality',     label:'Quality',         icon:I.heart,  home:'quality',     on:v=>unicoModuleOf(v)==='quality', badge:true },
     { id:'supervisor',  label:'Supervisor Reports', icon:I.doc,  home:'supHome',     on:v=>unicoModuleOf(v)==='supervisor', badge:'sup' },
+    // Badge: missed / returned days to send (senders) + days waiting for review (reviewers).
+    { id:'devdays',     label:'Device Days',     icon:I.activity,home:'devDaysEntry', on:v=>unicoModuleOf(v)==='devdays', badge:'dd' },
     // Drug index (21.7k Bangladeshi brands / 1.7k generic monographs) + prescriptions.
     { id:'medicine',    label:'Medicine & Rx',   icon:I.syringe,home:'medHome',     on:v=>unicoModuleOf(v)==='medicine', tag:'NEW' },
   ]},
@@ -550,6 +557,13 @@ function unicoWorkspaceSubAll(view){
        Shift Reports  the report: the list, the editor (which imports from H360), the patient board, print
        H360 Scan      reading H360: start a collection, watch it run, the login
        H360 Patients  what the last scan read: the patients of every nurse station, the IPD Admission list, OPD */
+  // DEVICE DAYS — Settings (tracked departments, frequency) is the administrator's alone.
+  if(mod==='devdays') return [
+    { label:'Daily Sheet',  view:'devDaysEntry' },
+    { label:'Review',       view:'devDaysReview' },
+    { label:'Summary',      view:'devDaysSummary' },
+    ...(unicoUserPerms()===null ? [{ label:'Settings', view:'devDaysSettings', adminOnly:true }] : []),
+  ];
   if(mod==='supervisor') return [
     { label:'Dashboard',     view:'supHome' },
     { label:'Shift Reports', view:'supHistory', match:['supHistory','supNew','supBoard','supReport'] },
@@ -702,6 +716,9 @@ function Sidebar({route, setRoute, collapsed, depts}){
   // Data Submission: this person's missing count, published by the top-bar bell.
   const [dsBadge,setDsBadge]=React.useState(()=>window.__UNICO_DS_MISSING__||0);
   React.useEffect(()=>{ const h=(e)=>setDsBadge((e&&e.detail)||0); window.addEventListener('unico:ds-missing',h); return ()=>window.removeEventListener('unico:ds-missing',h); },[]);
+  // Device Days: missed + returned days to send, and days waiting for review (unicoUseDevDaysAlerts).
+  const ddAlerts = unicoUseDevDaysAlerts(unicoCanAccessModule('devdays'));
+  const ddBadge = ddAlerts ? (ddAlerts.total||0)+(ddAlerts.pendingReview||0) : 0;
   // Data Collection: submissions waiting for approval, published by the top bar (unicoUsePending).
   const [dcBadge,setDcBadge]=React.useState(()=>window.__UNICO_DC_PENDING__||0);
   React.useEffect(()=>{ const h=(e)=>setDcBadge((e&&e.detail)||0); window.addEventListener('unico:dc-pending',h); return ()=>window.removeEventListener('unico:dc-pending',h); },[]);
@@ -744,7 +761,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
             {g.sec && <div className="sb-sec">{g.sec}</div>}
             {items.map(it=>{
               const active = it.on(view);
-              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
+              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='dd' ? ddBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
               const badge = badgeN>0 ? badgeN : null;
               const auto = !!AUTO_OPEN[it.id];
               const itSub = auto && folded[it.id] ? [] : subFor(it, active);
@@ -878,6 +895,45 @@ function PeriodPill({period, setPeriod, depts=[]}){
    on returning to it, and after any data refresh (an approval fires one). Publishes the count
    for the menu badges (unico:dc-pending), and a submission that arrives while the app is open
    raises a toast, so a new one is noticed without opening Review & History. */
+/* Device Days: what needs attention — missed / returned days in this person's departments
+   and (reviewers) days waiting. Polled every 60 s and on focus; published as
+   window.__UNICO_DD_ALERTS__ + 'unico:dd-alerts' so the Device Days screens share one answer.
+   Once a day, on the first answer with missed days, a notice names them. */
+function unicoUseDevDaysAlerts(enabled){
+  const [a,setA]=React.useState(()=>window.__UNICO_DD_ALERTS__||null);
+  React.useEffect(()=>{
+    if(!enabled) return;
+    let live=true;
+    const run=()=>{
+      if(document.visibilityState==='hidden') return;
+      fetch('/api/device-days/missing',{credentials:'same-origin',cache:'no-store'})
+        .then(r=>r.ok?r.json():null).then(j=>{
+          if(!live||!j||!j.ok) return;
+          setA(j);
+          try{ window.__UNICO_DD_ALERTS__=j; window.dispatchEvent(new CustomEvent('unico:dd-alerts',{detail:j})); }catch(e){}
+          const DD=window.UNICO_DD; if(!DD||!window.UI||!window.UI.toast) return;
+          const key='unico_dd_notice_'+DD.hospitalNow().date;
+          let shown=false; try{ shown=!!sessionStorage.getItem(key)||!!localStorage.getItem(key); }catch(e){}
+          if(shown) return;
+          const parts=(j.departments||[]).filter(d=>d.missing.length||d.returned.length).slice(0,3)
+            .map(d=>{ const n=(d.missedPeriods||d.missing).length, unit=d.frequency==='weekly'?'week':d.frequency==='monthly'?'month':'day';
+              return d.name+': '+(n?n+' '+unit+(n>1?'s':'')+' missed':'')+(n&&d.returned.length?', ':'')+(d.returned.length?d.returned.length+' returned':''); });
+          if(j.total>0&&parts.length) window.UI.toast('Device days — '+parts.join(' · '),'warn');
+          else if(j.pendingReview>0) window.UI.toast('Device days — '+j.pendingReview+' day(s) waiting for your review','info');
+          else return;
+          try{ localStorage.setItem(key,'1'); }catch(e){ try{ sessionStorage.setItem(key,'1'); }catch(_){} }
+        }).catch(()=>{});
+    };
+    run();
+    const t=setInterval(run,60000);
+    const vis=()=>{ if(document.visibilityState==='visible') run(); };
+    window.addEventListener('unico:dd-refresh',run);
+    window.addEventListener('unico:data-refreshed',run);
+    document.addEventListener('visibilitychange',vis);
+    return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:dd-refresh',run); window.removeEventListener('unico:data-refreshed',run); document.removeEventListener('visibilitychange',vis); };
+  },[enabled]);
+  return enabled?a:null;
+}
 function unicoUsePending(enabled){
   const [pend,setPend]=React.useState(null);           // { count, items } once known
   React.useEffect(()=>{

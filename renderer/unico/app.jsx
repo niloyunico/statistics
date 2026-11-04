@@ -141,6 +141,7 @@ function App(){
     const s=String(v||'');
     if(s==='qualityDeptManage') return null;                 // the unified manager lives in core
     if(s.indexOf('quality')===0||s==='reportsQuality'||s==='gallery') return 'quality';
+    if(s.indexOf('devDays')===0) return 'devdays';
     if(s.indexOf('dc')===0||s.indexOf('ds')===0) return 'datacollection';
     if(s==='reports'||s==='settings'||s==='users') return 'reports';      // Settings + Access Control live in the reports chunk
     if(s==='staffProfile'||s==='staffForm'||s==='perfStaff') return 'staffprofile';
@@ -220,6 +221,11 @@ function App(){
     // Gated by the 'mydept' module (unicoCanAccessView); the server checks it again.
     crumbs=['UNICO','My Department'];
     body= (typeof MyDepartment!=='undefined') ? <MyDepartment/> : null;
+  } else if(route.view && route.view.indexOf('devDays')===0){
+    // Device Days (module 'devdays'; window.DeviceDaysView, chunk 'devdays'); the server checks it again.
+    const DD_TITLE={devDaysEntry:'Daily Sheet',devDaysReview:'Review',devDaysSummary:'Summary',devDaysSettings:'Settings'};
+    crumbs=['UNICO','Device Days',DD_TITLE[route.view]||'Daily Sheet'];
+    body= (typeof DeviceDaysView!=='undefined') ? <DeviceDaysView view={route.view} dept={route.dept} month={route.month} setRoute={setRoute}/> : null;
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
     body=<Settings depts={depts} store={store} setRoute={setRoute}/>;

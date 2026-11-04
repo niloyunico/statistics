@@ -61,7 +61,7 @@ const mirrorFailed = (e) => { try { console.error('[users] responsible mirror fa
 // cleanPerms() dropped the key. Kept in step with access.ACCESS_MODULES.
 // 'datasubmit' + 'staffapp': submitting data for chosen departments and signing in to the
 // phone staff app are MODULES on a normal account now, not portal roles (access.js).
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept'];
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays'];
 // My Department is read-only: it can be opened and printed, nothing else.
 const MYDEPT_ACTIONS = ['view', 'print'];
 // Does a perms map grant Data Submission? Such an account carries a data-collection scope
@@ -253,7 +253,7 @@ const cleanRosterScope = access.cleanRosterScope;
 
 // Changing any of these must invalidate every token the account already holds —
 // otherwise a revoked permission stays live for the rest of the 12h token TTL.
-const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'unitLead', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen', 'myDepartments'];
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'unitLead', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen', 'myDepartments', 'deviceDepartments'];
 // Compare only what actually CHANGED. The update object always carries a few scope
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
@@ -366,6 +366,7 @@ function safe(u) {
     // Which sub-menus of each module they see (absent module = all of them).
     subMenus: access.cleanSubMenus(u.subMenus),
     myDepartments: cleanMyDepts(u.myDepartments),
+    deviceDepartments: cleanMyDepts(u.deviceDepartments),
     // Which tier of the hierarchy this account sits at (see BUILTIN_TIERS). A ceiling,
     // not a grant: `perms` above is what the server enforces. null = a row written before
     // the hierarchy existed; readers resolve it to the widest console tier.
@@ -809,6 +810,8 @@ function mount(app, opts) {
         subMenus: role === 'User' ? access.cleanSubMenus(b.subMenus) : null,
         // My Department: which departments they may view there (with the 'mydept' module).
         myDepartments: role === 'Administrator' ? [] : cleanMyDepts(b.myDepartments),
+        // Device Days: which departments they send / review there ('*' = all).
+        deviceDepartments: role === 'Administrator' ? [] : cleanMyDepts(b.deviceDepartments),
         passwordHash: await auth.hash(password),
         // Bumped whenever access changes; every issued token carries the value it was
         // signed with, so raising it signs the account out everywhere.
@@ -824,6 +827,8 @@ function mount(app, opts) {
       activity.log(req, 'user_created', { target: username, detail: 'role: ' + role + ' · level: ' + level });
       { const p = (doc.perms || {}).mydept;
         if (Array.isArray(p) && p.length) activity.log(req, 'mydept_access', { target: username, detail: 'My Department: ' + p.join('+') + ' · ' + ((doc.myDepartments || []).join(', ') || 'no departments') }); }
+      { const p = (doc.perms || {}).devdays;
+        if (Array.isArray(p) && p.length) activity.log(req, 'devdays_access', { target: username, detail: 'Device Days: ' + p.join('+') + ' · ' + ((doc.deviceDepartments || []).join(', ') || 'no departments') }); }
       if (plan) {
         try { await dc().applyResponsibleSync(plan, doc, scope); }
         catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(doc) }); }
@@ -919,6 +924,7 @@ function mount(app, opts) {
         if (b.dsScreens !== undefined) set.dsScreens = access.cleanDsScreens(b.dsScreens);
         if (b.subMenus !== undefined) set.subMenus = role === 'User' ? access.cleanSubMenus(b.subMenus) : null;
         if (b.myDepartments !== undefined) set.myDepartments = cleanMyDepts(b.myDepartments);
+        if (b.deviceDepartments !== undefined) set.deviceDepartments = cleanMyDepts(b.deviceDepartments);
       }
 
       // Per-module access levels. Only the 'User' role carries a perms map; Administrators
@@ -963,6 +969,8 @@ function mount(app, opts) {
       // My Department hands over a unit's figures and staff list: name what was granted.
       const myDeptOf = (x) => { const p = (x.perms || {}).mydept; return (Array.isArray(p) ? p.join('+') : (p && p !== 'none' ? 'view' : 'none')) + ' · ' + ((x.myDepartments || []).join(', ') || 'no departments'); };
       if (myDeptOf(after) !== myDeptOf(u)) activity.log(req, 'mydept_access', { target: username, detail: 'My Department: ' + myDeptOf(u) + ' → ' + myDeptOf(after) });
+      const devDaysOf = (x) => { const p = (x.perms || {}).devdays; return (Array.isArray(p) ? p.join('+') : (p && p !== 'none' ? p : 'none')) + ' · ' + ((x.deviceDepartments || []).join(', ') || 'no departments'); };
+      if (devDaysOf(after) !== devDaysOf(u)) activity.log(req, 'devdays_access', { target: username, detail: 'Device Days: ' + devDaysOf(u) + ' → ' + devDaysOf(after) });
       if (plan && plan.responsibleId) {
         try { await dc().applyResponsibleSync(plan, after, scope); }
         catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(after) }); }
