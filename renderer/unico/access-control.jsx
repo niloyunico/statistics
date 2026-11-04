@@ -107,6 +107,19 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
   const t=acAccessType(u);
   const isMe=me&&u.username===me;
   const lastAdmin=u.role==='Administrator'&&u.active!==false&&admins<=1;
+  // Which departments they hold in the duty roster chain (Duty Roster → Setup). The setup is an
+  // administrator's, so it is read for them only; re-read after every save of this person.
+  const [rcfg,setRcfg]=React.useState(null);
+  React.useEffect(()=>{ const me2=window.__UNICO_USER__; if(me2&&me2.role!=='Administrator') return undefined; let live=true;   // no user = open local mode
+    fetch('/api/rosters/config',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{ if(live&&j&&j.ok) setRcfg(j); }).catch(()=>{});
+    return ()=>{ live=false; }; },[u.username,u.updatedAt]);
+  const rosterHeld=(()=>{
+    if(!rcfg) return '';
+    if(rcfg.cns&&rcfg.cns.username===u.username) return 'CNS · every department';
+    const slot=u.rosterRole==='manager'?'manager':u.rosterRole==='incharge'?'incharge':null;
+    const ds=(rcfg.depts||[]).filter(d=>slot&&d[slot]&&d[slot].username===u.username).map(d=>d.name);
+    return ds.length?ds.slice(0,4).join(', ')+(ds.length>4?' +'+(ds.length-4):''):'';
+  })();
   const Editor=window.UserModal;
   const run=async(key,fn,msg)=>{ setBusy(key); try{ await fn(); K.uToast(msg); reload(); }catch(e){ K.uToast(e.message||'Failed','error'); } finally{ setBusy(''); } };
   const signOut=()=>run('out',()=>K.usersApi('POST','/api/users/'+encodeURIComponent(u.username)+'/signout'),'Signed out of every device');
@@ -169,7 +182,7 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
               {row('Created',acDate(u.createdAt))}
               {row('Last changed',acDate(u.updatedAt))}
               {t!=='portal'&&row('Report sign-off',({prepare:'Prepares',check:'Checks',approve:'Approves'})[u.signoff]||'Takes no part')}
-              {t!=='portal'&&row('Duty roster role',({incharge:'In-charge · prepares',manager:'Manager · checks',cns:'CNS · approves'})[u.rosterRole]||'None')}
+              {row('Duty roster role',(({incharge:'In-charge · prepares',manager:'Manager · checks',cns:'CNS · approves'})[u.rosterRole]||'None')+(rosterHeld&&u.rosterRole!=='cns'?' — '+rosterHeld:''))}
             </div>
           </div></div>
 

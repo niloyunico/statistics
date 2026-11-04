@@ -529,7 +529,12 @@ function mount(app, opts) {
         if (!p || p.is_active === false || p.former) continue;
         const dept = p.current_department || 'Unassigned';
         if (!(allowed(dept) || await reviewVisible(req, cfg, index, dept))) continue;
-        const o = {}; ROSTER_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) o[k] = p[k]; }); out.push(o);
+        const o = {}; ROSTER_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) o[k] = p[k]; });
+        // The face on the roster row — the URL only, never the storage id behind it.
+        const ph = p.photo || p.photo_url;
+        const url = ph ? (typeof ph === 'string' ? ph : (ph.url || '')) : '';
+        if (url) o.photo = url;
+        out.push(o);
       }
       res.json({ ok: true, staff: out });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the unit staff.' }); }
@@ -716,9 +721,17 @@ function mount(app, opts) {
         const users = await require('./db').getUsers();
         if (users && typeof users.find === 'function') list = await users.find({ active: { $ne: false } }, { projection: { username: 1, name: 1, title: 1, role: 1, rosterRole: 1, rosterScope: 1, rosterDepartments: 1 } }).toArray();
       } catch (e) { list = []; }
+      // A portal login can only be an In-charge (it has no review inbox); a Manager / CNS
+      // place saved on one before that rule is not offered.
+      const PORTAL = require('./access').PORTAL_ROLES || [];
+      const roleOf = (u) => {
+        if (u.role === 'Administrator') return 'admin';
+        const r = W.cleanRosterRole(u.rosterRole);
+        return PORTAL.indexOf(u.role) >= 0 && r !== 'incharge' ? '' : r;
+      };
       const out = list
-        .filter((u) => u.role === 'Administrator' || W.cleanRosterRole(u.rosterRole))
-        .map((u) => ({ username: u.username, name: u.name || u.username, title: u.title || '', rosterRole: u.role === 'Administrator' ? 'admin' : W.cleanRosterRole(u.rosterRole), rosterScope: u.rosterScope || null, rosterDepartments: Array.isArray(u.rosterDepartments) ? u.rosterDepartments : [] }))
+        .filter((u) => roleOf(u))
+        .map((u) => ({ username: u.username, name: u.name || u.username, title: u.title || '', rosterRole: roleOf(u), rosterScope: u.rosterScope || null, rosterDepartments: Array.isArray(u.rosterDepartments) ? u.rosterDepartments : [] }))
         .sort((x, y) => String(x.name).localeCompare(String(y.name)));
       res.json({ ok: true, reviewers: out });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the reviewers.' }); }

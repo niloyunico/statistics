@@ -38,6 +38,9 @@ const rosCan = (a) => { try { return window.unicoCan ? window.unicoCan('roster',
    NOT the employee number: two pairs of serving staff share one, and 39 people have
    none at all. The staff record's own id is unique; the employee number is display. */
 const rosKey = (e) => 'S' + String(e.id);
+// One staff row, as every roster screen draws it. `photo` is the face on the avatar: the grid
+// passes the ROW to MK.Av, because the row key ('S'+id) is not what the photo lookup is keyed on.
+const rosRowOf = (e) => ({ empId: rosKey(e), empIdShown: e.emp_id || '', name: e.name, desig: e.designation, photo: (MK && MK.photoUrlOf && MK.photoUrlOf(e)) || '' });
 
 /* Rosters saved before rows were keyed on the staff id hold their grid under employee
    NUMBERS. Remap those on load so an existing sheet still opens. */
@@ -433,7 +436,7 @@ const rosRowsFrom = (doc, staff, dept, withRegister) => {
   (staff || []).forEach((e) => { all[rosKey(e)] = e; });
   const reg = withRegister === false ? [] : (staff || [])
     .filter((e) => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept)
-    .map((e) => ({ empId: rosKey(e), empIdShown: e.emp_id || '', name: e.name, desig: e.designation }));
+    .map((e) => rosRowOf(e));
   const known = Object.keys(all).map((k) => ({ empId: k, empIdShown: all[k].emp_id || '' }));
   const grid = rosMigrateGrid(doc && doc.grid, known);
   const names = (doc && doc.names) || {};
@@ -441,7 +444,7 @@ const rosRowsFrom = (doc, staff, dept, withRegister) => {
   const add = (id) => {
     if (!id || seen[id]) return; seen[id] = 1;
     const e = all[id];
-    out.push(e ? { empId: id, empIdShown: e.emp_id || '', name: e.name, desig: e.designation }
+    out.push(e ? rosRowOf(e)
       : { empId: id, empIdShown: '', name: names[id] || id, desig: '' });
   };
   ((doc && doc.order) || []).forEach((id) => { if (grid[id] || reg.some((r) => r.empId === id)) add(id); });
@@ -1166,7 +1169,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
 
   const staff = useMemo(() => (staffStore.staff || [])
     .filter((e) => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept)
-    .map((e) => ({ empId: rosKey(e), empIdShown: e.emp_id || '', name: e.name, desig: e.designation }))
+    .map((e) => rosRowOf(e))
     .sort((a, b) => String(a.name).localeCompare(String(b.name))), [staffStore.staff, dept]);
 
   const rows = useMemo(() => {
@@ -1783,7 +1786,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                       <tr key={x.empId} className="ros-trow" style={{ background: si % 2 ? 'rgba(244,249,254,.5)' : 'transparent', transition: 'background .15s' }}>
                         <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'rgba(250,252,255,.98)', padding: '4px 9px', borderBottom: '1px solid rgba(125,145,180,.14)', borderRight: '1px solid rgba(125,145,180,.2)' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <MK.Av name={x.name} empId={x.empId} size={28} radius={rosAvRadius(28)} />
+                            <MK.Av name={x.name} emp={x} empId={x.empIdShown} size={28} radius={rosAvRadius(28)} />
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap' }}>{x.name}</div>
                               <div style={{ fontSize: 9.5, color: '#9aa6b4', whiteSpace: 'nowrap' }}><span style={{ fontFamily: ROS_MONO }}>{x.empIdShown || '—'}</span> · {x.desig || '—'}</div>
@@ -1950,7 +1953,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                         {people.map((p) => (
                           <div key={p.x.empId} style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'rgba(255,255,255,.6)', border: '1px solid rgba(255,255,255,.9)', borderRadius: 10, padding: '7px 10px' }}>
-                            <MK.Av name={p.x.name} empId={p.x.empId} size={30} radius={rosAvRadius(30)} />
+                            <MK.Av name={p.x.name} emp={p.x} empId={p.x.empIdShown} size={30} radius={rosAvRadius(30)} />
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.x.name}</div>
                               <div style={{ fontSize: 10, color: '#9aa6b4' }}>{p.x.desig || '—'}</div>
@@ -1982,7 +1985,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
             return (
               <div key={x.empId} style={{ background: 'linear-gradient(152deg,rgba(255,255,255,.78),rgba(236,247,255,.48))', backdropFilter: 'blur(24px) saturate(1.7)', WebkitBackdropFilter: 'blur(24px) saturate(1.7)', border: '1px solid rgba(255,255,255,.92)', borderRadius: 15, boxShadow: '0 12px 36px rgba(31,59,90,.12),inset 0 1px 0 rgba(255,255,255,.95)', padding: '13px 16px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-                  <MK.Av name={x.name} empId={x.empId} size={34} radius={rosAvRadius(34)} />
+                  <MK.Av name={x.name} emp={x} empId={x.empIdShown} size={34} radius={rosAvRadius(34)} />
                   <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: '#16202e' }}>{x.name}</div>
                     <div style={{ fontSize: 10.5, color: '#9aa6b4' }}><span style={{ fontFamily: ROS_MONO }}>{x.empIdShown || '—'}</span> · {x.desig || '—'}</div>
@@ -2083,7 +2086,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                         <tr key={x.empId}>
                           <td style={{ padding: '2px 8px 2px 2px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                              <MK.Av name={x.name} empId={x.empId} size={22} radius={rosAvRadius(22)} />
+                              <MK.Av name={x.name} emp={x} empId={x.empIdShown} size={22} radius={rosAvRadius(22)} />
                               <span style={{ fontSize: 11, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{x.name}</span>
                             </div>
                           </td>
@@ -2344,7 +2347,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                   {L3.map((n) => (
                     <React.Fragment key={n.p.x.empId}>
                       <div style={{ position: 'absolute', left: (X[3] + 16) + 'px', top: (n.y - 15) + 'px', display: 'flex', alignItems: 'center', gap: 9, padding: '5px 12px', borderRadius: 10, background: 'rgba(255,255,255,.72)', border: '1px solid ' + selColor + '2e', boxShadow: '0 3px 10px rgba(31,59,90,.07)', whiteSpace: 'nowrap' }}>
-                        <MK.Av name={n.p.x.name} empId={n.p.x.empId} size={22} radius={rosAvRadius(22)} />
+                        <MK.Av name={n.p.x.name} emp={n.p.x} empId={n.p.x.empIdShown} size={22} radius={rosAvRadius(22)} />
                         <span style={{ fontSize: 12.5, fontWeight: 700, color: '#16202e' }}>{n.p.x.name}</span>
                         <span style={{ fontFamily: ROS_MONO, fontSize: 10, color: '#0072a3' }}>{n.p.x.empIdShown ? 'ID ' + n.p.x.empIdShown : 'no Emp-ID'}</span>
                         <span style={{ fontFamily: ROS_MONO, fontSize: 10.5, fontWeight: 700, color: '#fff', background: selColor, padding: '2px 8px', borderRadius: 7 }}>{n.p.c}</span>
@@ -2795,7 +2798,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
                         {people.map((p) => (
                           <div key={p.x.empId} style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'rgba(255,255,255,.85)', border: '1px solid rgba(125,145,180,.2)', borderRadius: 10, padding: '7px 10px', boxShadow: '0 2px 6px rgba(31,59,90,.05)' }}>
-                            <MK.Av name={p.x.name} empId={p.x.empId} size={28} radius={rosAvRadius(28)} />
+                            <MK.Av name={p.x.name} emp={p.x} empId={p.x.empIdShown} size={28} radius={rosAvRadius(28)} />
                             <div style={{ minWidth: 0, flex: 1 }}>
                               <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.x.name}</div>
                               <div style={{ fontSize: 10, color: '#9aa6b4' }}>{p.x.desig || '—'}</div>
@@ -2830,102 +2833,178 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   );
 }
 
-/* ================= 3. PRINT ================= */
-function RosterPrint({ staffStore, dept, year, month, setRoute }) {
+/* ================= 3. PRINT =================
+   The roster as it goes on the ward notice board and into the file: hospital letterhead,
+   A4 landscape, one row per person with every day's code, the per-person totals, a
+   per-day cover summary, the shift legend and the three signatures with the date each
+   step happened. A sheet that is not approved carries a watermark saying so, so a draft
+   on a wall can never pass for the published roster.
+
+   The page is built as one self-contained HTML document (rosPrintHtml) and shown in an
+   iframe: what is previewed is exactly what prints, and printing needs no pop-up window.
+   Every print is logged on the server first (POST /api/rosters/print). */
+const rosEsc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const rosDate = (t) => (t ? new Date(t).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+
+function rosPrintHtml({ dept, year, month, doc, rows, grid, signers, colour, summary, legend, printedBy }) {
   const days = R.daysIn(year, month);
+  const ds = Array.from({ length: days }, (_, i) => i + 1);
+  const st = rosStatusNorm(doc ? doc.status : null);
+  const hist = (doc && doc.history) || [];
+  const lastOf = (acts) => { for (let i = hist.length - 1; i >= 0; i--) if (acts.indexOf(hist[i].action) >= 0) return hist[i]; return null; };
+  const inChain = st === 'pending_manager' || st === 'pending_cns' || st === 'approved';
+  const sent = inChain ? lastOf(['send_manager', 'send_cns']) : null;
+  const fwd = inChain ? lastOf(['forward']) : null;
+  const ok = st === 'approved' ? lastOf(['approve']) : null;
+  const sg = signers || {};
+  const signs = [
+    ['Prepared by', (doc && doc.preparedBy) || (sg.incharge && sg.incharge.name) || '', 'In-charge, ' + dept, sent ? rosDate(sent.at) : ''],
+    ['Checked by', (fwd && doc && doc.checkedBy) || (sg.manager && sg.manager.name) || '', 'Nurse Manager', fwd ? rosDate(fwd.at) : (sent && sent.action === 'send_cns' ? 'sent directly to CNS' : '')],
+    ['Approved by', (ok && doc && doc.approvedBy) || (sg.cns && sg.cns.name) || '', 'Chief of Nursing Services', ok ? rosDate(ok.at) : ''],
+  ];
+  const mark = st === 'approved' ? '' : st === 'none' ? 'NOT PREPARED' : st === 'pending_manager' ? 'AWAITING MANAGER CHECK' : st === 'pending_cns' ? 'AWAITING CNS APPROVAL' : st === 'returned' ? 'RETURNED FOR CORRECTION' : 'DRAFT — NOT APPROVED';
+  const tint = (code) => {
+    if (!code) return '';
+    const b = R.bucketOf(code);
+    if (!colour) return b === 'O' ? 'background:#f1f3f6' : '';
+    const c = rosBColor(b);
+    return 'background:' + c + '1f;color:' + c;
+  };
+  const fri = (d) => new Date(year, month, d).getDay() === 5;
+  const head1 = ds.map((d) => '<th class="d' + (fri(d) ? ' fr' : '') + '">' + d + '</th>').join('');
+  const head2 = ds.map((d) => '<th class="w' + (fri(d) ? ' fr' : '') + '">' + rosEsc(String(rosDow(year, month, d)).slice(0, 2)) + '</th>').join('');
+  const body = rows.map((r, i) => {
+    const row = (grid && grid[r.empId]) || {};
+    const t = R.totalsFor(row, days);
+    const cells = ds.map((d) => { const c = row[d] || ''; return '<td class="c' + (fri(d) ? ' fr' : '') + '" style="' + tint(c) + '">' + rosEsc(c) + '</td>'; }).join('');
+    return '<tr><td class="n">' + (i + 1) + '</td><td class="e">' + rosEsc(r.empIdShown || '') + '</td>'
+      + '<td class="nm"><b>' + rosEsc(r.name) + '</b><span>' + rosEsc(r.desig || '') + '</span></td>' + cells
+      + ['G', 'M', 'E', 'N', 'O'].map((b) => '<td class="t">' + (t[b] || '') + '</td>').join('')
+      + '<td class="t h">' + (t.hours || '') + '</td></tr>';
+  }).join('');
+  const ids = rows.map((r) => r.empId);
+  const sumRow = (label, fn) => '<tr class="sum"><td colspan="3" class="sl">' + label + '</td>'
+    + ds.map((d) => { const v = fn(d); return '<td class="c' + (fri(d) ? ' fr' : '') + '">' + (v || '') + '</td>'; }).join('') + '<td colspan="6"></td></tr>';
+  const cov = {};
+  ds.forEach((d) => { cov[d] = R.coverageFor(grid || {}, ids, d); });
+  const leaveOn = (d) => ids.filter((id) => R.isLeave(((grid || {})[id] || {})[d])).length;
+  const sums = !summary ? '' : sumRow('General on duty', (d) => cov[d].G) + sumRow('Morning on duty', (d) => cov[d].M)
+    + sumRow('Evening on duty', (d) => cov[d].E) + sumRow('Night on duty', (d) => cov[d].N) + sumRow('On leave', leaveOn);
+  const legendHtml = !legend ? '' : '<div class="lg">' + R.BUCKETS.concat([{ id: 'O', label: 'Leave / off', color: '#8b98ab' }])
+    .filter((b, i, a) => a.findIndex((x) => x.id === b.id) === i)
+    .map((b) => {
+      const codes = R.SHIFTS.filter((s) => s.bucket === b.id);
+      if (!codes.length) return '';
+      return '<div class="lgb"><b style="color:' + (colour ? rosBColor(b.id) : '#16202e') + '">' + rosEsc(b.label) + '</b>'
+        + codes.map((s) => '<span><i>' + rosEsc(s.code) + '</i> ' + rosEsc(s.label) + '</span>').join('') + '</div>';
+    }).join('') + '</div>';
+  const at = new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+  const css = '@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff;position:relative}@media print{body{padding:0}}'
+    + '.lh{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;padding-bottom:6px;border-bottom:1px solid #d9e2ec}.lh img{height:38px}'
+    + '.lh .tt{text-align:right}.lh .kind{font-size:7pt;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#0072a3}.lh h1{margin:2px 0 0;font-size:14pt;color:#0d1b2e}'
+    + '.bar{height:3px;background:linear-gradient(90deg,#0072a3,#27a8db 55%,#3ab5a7);margin-bottom:7px}'
+    + '.info{display:flex;flex-wrap:wrap;gap:4px 22px;margin:0 0 6px;font-size:8.5pt}.info b{font-weight:700}.st{display:inline-block;padding:0 7px;border-radius:9px;font-size:7.5pt;font-weight:700;border:1px solid currentColor}'
+    + 'table{border-collapse:collapse;width:100%;table-layout:fixed}thead{display:table-header-group}tr{page-break-inside:avoid}'
+    + 'th{background:#0d3a5c;color:#fff;font-weight:700;border:1px solid #0d3a5c;padding:2px 0;font-size:7pt}th.w{font-weight:500;font-size:6.2pt;background:#1d4f76}th.fr{background:#2a6a99}'
+    + 'td{border:1px solid #c9d3de;text-align:center;padding:0;height:15px}td.c{font-size:6.8pt;font-weight:700}td.fr{box-shadow:inset 0 0 0 9999px rgba(13,58,92,.05)}'
+    + 'td.n{width:6mm;color:#5b6878}td.e{font-size:6.6pt;color:#3c4858}td.nm{text-align:left;padding:1px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{display:block;font-size:7.4pt;overflow:hidden;text-overflow:ellipsis}td.nm span{display:block;font-size:6pt;color:#6c7a8c}'
+    + 'td.t{font-size:7pt;background:#f4f7fa}td.h{font-weight:700}col.n{width:6mm}col.e{width:12mm}col.nm{width:40mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}'
+    + 'tr.sum td{background:#eef4f9;font-size:6.8pt;font-weight:700;color:#0d3a5c;height:12px}tr.sum td.sl{text-align:right;padding-right:5px;font-weight:600}'
+    + '.lg{display:grid;grid-template-columns:repeat(5,1fr);gap:2px 12px;margin-top:5px;font-size:6.4pt;color:#3c4858;page-break-inside:avoid}.lgb b{display:block;font-size:7pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.5px}.lgb span{display:inline-block;margin-right:7px;white-space:nowrap}.lgb i{font-style:normal;font-weight:700;color:#16202e}'
+    + '.nb{margin-top:6px;font-size:7pt;color:#3c4858}.rm{margin-top:4px;font-size:7.5pt;border-bottom:1px dotted #9aa6b4;height:14px}'
+    + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:26px;margin-top:16px;font-size:8pt;page-break-inside:avoid}.signs div{border-top:1px solid #16202e;padding-top:3px}'
+    + '.signs span{display:block;font-size:6.6pt;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#7b8796}.signs b{display:block;font-size:9pt}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}'
+    + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}.cr{margin-top:3px;text-align:center;font-size:6px;color:#a3adba}'
+    + '.wm{position:fixed;top:42%;left:0;right:0;text-align:center;font-size:54pt;font-weight:800;color:rgba(210,58,82,.10);transform:rotate(-14deg);pointer-events:none;letter-spacing:4px;z-index:0}';
+  const stColour = st === 'approved' ? '#157a43' : st === 'returned' ? '#b4232f' : st === 'none' ? '#7d8ea8' : '#b5670a';
+  const html = (mark ? '<div class="wm">' + rosEsc(mark) + '</div>' : '')
+    + '<header class="lh"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"><div class="tt"><div class="kind">Nursing Services · Duty Roster</div><h1>Duty Roster — ' + rosEsc(dept) + '</h1></div></header><div class="bar"></div>'
+    + '<div class="info"><span>Month: <b>' + rosEsc(R.MONTHS[month] + ' ' + year) + '</b></span><span>Department: <b>' + rosEsc(dept) + '</b></span>'
+    + '<span>Staff: <b>' + rows.length + '</b></span><span>Revision: <b>' + (doc ? (doc.revision || 1) : '—') + '</b></span>'
+    + '<span>Status: <span class="st" style="color:' + stColour + '">' + rosEsc(ROS_STATUS[st].label) + '</span></span>'
+    + (ok ? '<span>Approved on: <b>' + rosEsc(rosDate(ok.at)) + '</b></span>' : '') + '</div>'
+    + '<table><colgroup><col class="n"><col class="e"><col class="nm">' + ds.map(() => '<col class="d">').join('') + '<col class="t"><col class="t"><col class="t"><col class="t"><col class="t"><col class="h"></colgroup>'
+    + '<thead><tr><th rowspan="2">S/N</th><th rowspan="2">Emp ID</th><th rowspan="2" style="text-align:left;padding-left:4px">Name · Designation</th>' + head1
+    + '<th rowspan="2">G</th><th rowspan="2">M</th><th rowspan="2">E</th><th rowspan="2">N</th><th rowspan="2">O</th><th rowspan="2">Hrs</th></tr><tr>' + head2 + '</tr></thead>'
+    + '<tbody>' + (body || '<tr><td colspan="' + (days + 9) + '" style="padding:14px;color:#7b8796">No staff on this roster.</td></tr>') + sums + '</tbody></table>'
+    + legendHtml
+    + '<div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>'
+    + '<div class="rm">Remarks:</div>'
+    + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + (when ? ' · ' + rosEsc(when) : '') + '</em></div>').join('') + '</div>'
+    + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (st === 'approved' ? 'Approved roster — final.' : 'Not approved — may still change.') + '</span></div>'
+    + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div>';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dept + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + css + '</style></head><body>' + html + '</body></html>';
+}
+
+const ROS_PRINT_OPT_KEY = 'unico_roster_print_opts_v1';
+function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const [doc, setDoc] = useState(null);
   const [signers, setSigners] = useState({});
+  const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [opt, setOpt] = useState(() => {
+    const d = { colour: true, summary: true, legend: true };
+    try { return { ...d, ...(JSON.parse(localStorage.getItem(ROS_PRINT_OPT_KEY) || '{}') || {}) }; } catch (e) { return d; }
+  });
+  const [busy, setBusy] = useState(false);
+  const frame = useRef(null);
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month)
-      .then((r) => { setDoc(r && r.ok ? r.roster : null); setSigners((r && r.ok && r.signers) || {}); setLoading(false); }).catch(() => setLoading(false));
+      .then((r) => {
+        setDoc(r && r.ok ? r.roster : null);
+        setSigners((r && r.ok && r.signers) || {});
+        setCan((r && r.ok && ((r.roster && r.roster.can) || r.can)) || null);
+        setLoading(false);
+      }).catch(() => setLoading(false));
   }, [dept, year, month]);
+  useEffect(() => { try { localStorage.setItem(ROS_PRINT_OPT_KEY, JSON.stringify(opt)); } catch (e) { /* private window */ } }, [opt]);
 
-  const staff = useMemo(() => (staffStore.staff || [])
-    .filter((e) => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept)
-    .map((e) => ({ empId: rosKey(e), empIdShown: e.emp_id || '', name: e.name, desig: e.designation })), [staffStore.staff, dept]);
+  const view = useMemo(() => rosRowsFrom(doc, staffStore.staff, dept), [doc, staffStore.staff, dept]);
+  const me = (window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username)) || '';
+  const html = useMemo(() => rosPrintHtml({ dept, year, month, doc, rows: view.rows, grid: view.grid, signers, ...opt, printedBy: me }),
+    [dept, year, month, doc, view, signers, opt, me]);
+  // The in-charge who prepares the sheet may print it, as may anyone holding roster Print.
+  const mayPrint = rosCan('print') || !!(can && (can.edit || can.send));
 
-  const order = (doc && doc.order) || [];
-  const rows = useMemo(() => {
-    if (!order.length) return staff;
-    const by = {}; staff.forEach((s) => { by[s.empId] = s; });
-    const out = []; const seen = {};
-    order.forEach((id) => { if (by[id] && !seen[id]) { out.push(by[id]); seen[id] = 1; } });
-    staff.forEach((s) => { if (!seen[s.empId]) out.push(s); });
-    return out;
-  }, [staff, order]);
+  const print = () => {
+    const w = frame.current && frame.current.contentWindow;
+    if (!w) return;
+    setBusy(true);
+    rosApi.post('/api/rosters/print', { kind: 'sheet', target: dept, detail: R.MONTHS[month] + ' ' + year + (doc ? ' · rev ' + (doc.revision || 1) + ' · ' + rosStatusNorm(doc.status) : ' · not prepared') })
+      .catch(() => null)
+      .then(() => { setBusy(false); try { w.focus(); w.print(); } catch (e) { rosToast('Could not open the print dialog.', 'error'); } });
+  };
 
   if (loading) return <div style={{ display: 'grid', placeItems: 'center', height: '40vh', color: 'var(--muted,#8aa0b8)' }}>Loading…</div>;
-  const grid = rosMigrateGrid(doc && doc.grid, staff);
-  // unicoSig has load(), not get() — the old call always printed empty boxes.
-  const sig = (window.unicoSig && window.unicoSig.load && window.unicoSig.load()) || {};
-  const nm = (k) => (signers[k] && signers[k].name) || '';
-  const cell = { border: '1px solid #333', padding: '2px 3px', fontSize: 8.6, textAlign: 'center' };
-
+  const st = rosStatusNorm(doc ? doc.status : null);
+  const tog = (k, label) => (
+    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#3c4858', cursor: 'pointer' }}>
+      <input type="checkbox" checked={!!opt[k]} onChange={(e) => setOpt((o) => ({ ...o, [k]: e.target.checked }))} />{label}
+    </label>
+  );
   return (
-    <div>
-      <div className="card" style={{ marginBottom: 12 }}>
-        <div className="card-b" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div className="card">
+        <div className="card-b" style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
           <button className="btn" onClick={() => setRoute({ view: 'rosterGrid', dept, year, month })}>‹ Back to the grid</button>
+          <div style={{ minWidth: 180 }}>
+            <div style={{ fontWeight: 700, fontSize: 13.5, color: '#16202e' }}>Print roster — {dept}, {R.MONTHS[month]} {year}</div>
+            <div className="sub" style={{ fontSize: 11 }}>A4 landscape · letterhead · signatures{st !== 'approved' ? ' · watermarked until approved' : ''}</div>
+          </div>
+          <RosStatusChip st={doc ? doc.status : null} />
           <div style={{ flex: 1 }} />
-          <span className="sub">1:1 with the roster workbook</span>
-          {rosCan('print') && <button className="btn pri" onClick={() => window.print()}>Print / Save as PDF</button>}
+          {tog('colour', 'Colour codes')}
+          {tog('summary', 'Daily cover rows')}
+          {tog('legend', 'Shift legend')}
+          {mayPrint
+            ? <button className="btn pri" disabled={busy} onClick={print}>{busy ? 'Preparing…' : 'Print / Save as PDF'}</button>
+            : <span className="sub" style={{ fontSize: 11 }}>Printing needs Duty Roster print access.</span>}
         </div>
       </div>
-
-      <div id="pdf-root" style={{ background: '#fff', color: '#111', padding: '16px 18px', borderRadius: 8, overflow: 'auto' }}>
-        <div style={{ textAlign: 'center', marginBottom: 8 }}>
-          <div style={{ fontSize: 14, fontWeight: 700 }}>Duty Roster For {dept}</div>
-          <div style={{ fontSize: 11 }}>{R.MONTHS[month]} {year}{doc ? ' · revision ' + (doc.revision || 1) + ' · ' + ROS_STATUS[rosStatusNorm(doc.status)].label : ' · not yet drafted'}</div>
-        </div>
-
-        <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-          <thead>
-            <tr>
-              <th style={{ ...cell, background: '#eef2f7', width: 22 }}>S/N</th>
-              <th style={{ ...cell, background: '#eef2f7', width: 52 }}>EMP-ID</th>
-              <th style={{ ...cell, background: '#eef2f7', textAlign: 'left', minWidth: 120 }}>Staff Name</th>
-              <th style={{ ...cell, background: '#eef2f7', textAlign: 'left', minWidth: 84 }}>Designation</th>
-              {Array.from({ length: days }, (_, i) => i + 1).map((d) => {
-                const dt = new Date(year, month, d);
-                return <th key={d} style={{ ...cell, background: dt.getDay() === 5 ? '#e6ebf2' : '#eef2f7', width: 15 }}>{d}</th>;
-              })}
-              {['G', 'M', 'E', 'N', 'O'].map((b) => <th key={b} style={{ ...cell, background: '#eef2f7', width: 16 }}>{b}</th>)}
-              <th style={{ ...cell, background: '#eef2f7', width: 26 }}>Hours</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((s, i) => {
-              const row = grid[s.empId] || {};
-              const t = R.totalsFor(row, days);
-              return (
-                <tr key={s.empId}>
-                  <td style={cell}>{i + 1}</td>
-                  <td style={cell}>{s.empIdShown || '—'}</td>
-                  <td style={{ ...cell, textAlign: 'left' }}>{s.name}</td>
-                  <td style={{ ...cell, textAlign: 'left' }}>{s.desig || ''}</td>
-                  {Array.from({ length: days }, (_, k) => k + 1).map((d) => <td key={d} style={cell}>{row[d] || ''}</td>)}
-                  {['G', 'M', 'E', 'N', 'O'].map((b) => <td key={b} style={cell}>{t[b] || ''}</td>)}
-                  <td style={{ ...cell, fontWeight: 700 }}>{t.hours || ''}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
-        <div style={{ marginTop: 10, fontSize: 8.6 }}>
-          <b>NB:</b> Do not make changes without permission from the authorised person.
-        </div>
-        <div style={{ marginTop: 8, fontSize: 8.4 }}><ShiftLegend compact /></div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 24, marginTop: 34, fontSize: 10 }}>
-          {[['Prepared By', (doc && doc.preparedBy) || nm('incharge') || sig.prepared], ['Checked By', (doc && doc.checkedBy) || nm('manager') || sig.reviewed], ['Approved By', (doc && doc.approvedBy) || nm('cns') || sig.approved]].map(([l, n]) => (
-            <div key={l} style={{ borderTop: '1px solid #333', paddingTop: 4 }}>
-              <div style={{ fontWeight: 700 }}>{l}</div>
-              <div>{n || ''}</div>
-            </div>
-          ))}
-        </div>
+      <div style={{ background: 'rgba(125,145,180,.12)', borderRadius: 12, padding: 14, overflow: 'auto' }}>
+        <iframe ref={frame} title="Roster print preview" srcDoc={html}
+          style={{ display: 'block', margin: '0 auto', width: '100%', maxWidth: 1180, height: '78vh', border: 0, background: '#fff', borderRadius: 6, boxShadow: '0 10px 30px rgba(16,32,46,.18)' }} />
       </div>
     </div>
   );

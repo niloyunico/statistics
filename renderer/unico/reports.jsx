@@ -2128,6 +2128,25 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   // Their place in the Duty Roster review chain: an In-charge prepares and sends, a Manager
   // checks and forwards, the CNS approves. Which units they hold is Duty Roster → Setup.
   const [rosterRole,setRosterRole]=useState(editing&&typeof initial.rosterRole==='string'?initial.rosterRole:'');
+  // WHICH departments they hold in that chain, ticked right here — one Manager usually checks
+  // several units. It is the same assignment Duty Roster → Setup edits row by row (one
+  // In-charge and one Manager per department), loaded from it and written back to it after the
+  // account is saved. The setup route is an administrator's, so only an administrator sees the list.
+  const viewerAdmin=(()=>{ const me=typeof window!=='undefined'?window.__UNICO_USER__:null; return !me||me.role==='Administrator'; })();   // no user = open local mode
+  const [rcfg,setRcfg]=useState(null);          // GET /api/rosters/config
+  const [rosSel,setRosSel]=useState(null);      // department ids for the current slot (null = not loaded)
+  const [rosQ,setRosQ]=useState('');
+  const [rosViewAdded,setRosViewAdded]=useState(false);
+  const rosSlot=rosterRole==='manager'?'manager':rosterRole==='incharge'?'incharge':null;
+  const acctName=String(editing?initial.username:username||'').trim().toLowerCase();
+  const heldIn=(cfg,slot)=>((cfg&&cfg.depts)||[]).filter(d=>d[slot]&&d[slot].username===acctName).map(d=>d.id);
+  React.useEffect(()=>{ if(!viewerAdmin) return undefined; let live=true;
+    fetch('/api/rosters/config',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{ if(live&&j&&j.ok) setRcfg(j); }).catch(()=>{});
+    return ()=>{ live=false; }; },[]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The ticks follow the role: switching Manager <-> In-charge shows what they hold in that slot.
+  React.useEffect(()=>{ if(rcfg) setRosSel(rosSlot?heldIn(rcfg,rosSlot):[]); },[rcfg,rosSlot]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // "Own profile only": no module at all + linked to their staff record = Home and My Profile.
+  const [ownOnly,setOwnOnly]=useState(false);
   const [copyFrom,setCopyFrom]=useState('');
   // The editor is split into sections (tabs) instead of one long form; Save covers all of them.
   const [sec,setSec]=useState('account');
@@ -2207,6 +2226,21 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   },[]);
   const allStaff=React.useMemo(()=>{ const s=window.STAFF_SEED||window.__UNICO_STAFF__||[]; return Array.isArray(s)?s.slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||''))):[]; },[]);
   const toggleDept=(id)=>setStaffDepts(ds=>ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds,id]);
+  /* Link to the staff record BY EMPLOYEE ID. Numbers are not unique (a few are shared, many
+     are blank), so a number picks a person only when exactly one current record has it;
+     otherwise the admin picks from the people who share it, or by name. Writes the same
+     staffId the scope tab's picker does, so one payload line saves either. */
+  const empNorm=v=>String(v==null?'':v).trim().toLowerCase();
+  const curStaff=(x)=>x&&!x.former&&x.is_active!==false;
+  const [empQ,setEmpQ]=useState(()=>{ const r=allStaff.find(x=>String(x.id)===String(staffId)); return r?String(r.emp_id||''):(editing&&initial.staffEmpId?String(initial.staffEmpId):''); });
+  const empHits=React.useMemo(()=>{ const q=empNorm(empQ); return q?allStaff.filter(x=>curStaff(x)&&empNorm(x.emp_id)===q):[]; },[empQ,allStaff]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const typeEmp=(v)=>{
+    setEmpQ(v); setStaffLinkDirty(true);
+    const q=empNorm(v); const hits=q?allStaff.filter(x=>curStaff(x)&&empNorm(x.emp_id)===q):[];
+    setStaffId(hits.length===1?hits[0].id:(hits.some(h=>String(h.id)===String(staffId))?staffId:''));
+  };
+  const linkStaff=(id)=>{ setStaffId(id); setStaffLinkDirty(true); const r=allStaff.find(x=>String(x.id)===String(id)); if(r) setEmpQ(String(r.emp_id||'')); else if(id==='') setEmpQ(''); };
+  const linkedRec=allStaff.find(x=>String(x.id)===String(staffId))||null;
   // First grant of My Department: start from the department they already work in — their Data
   // Submission departments, else the staff-scope departments, else their linked staff record's.
   const myDeptGuess=()=>{
@@ -2311,8 +2345,10 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     if(t==='full') keptPerms.current=perms;                       // remember the ticks
     else if(accessType==='full') setPerms(keptPerms.current&&initial.role!=='Administrator'?keptPerms.current:NONE_PERMS());   // back down: restore them
     setAccessType(t); };
-  const quickSet=(kind)=>{ setCopyFrom('');
+  const quickSet=(kind)=>{ setCopyFrom(''); setOwnOnly(kind==='own');
     if(kind==='none'){ setPerms(NONE_PERMS()); setSubMenus({}); }
+    // Their own profile and nothing else: no module, own record only, no roster role.
+    else if(kind==='own'){ setPerms(NONE_PERMS()); setSubMenus({}); setStaffScope('self'); setRosterRole(''); }
     // Console modules only: Data Submission needs a scope, the staff app is a phone login and
     // Access Control lists every account — none of those is a harmless "view".
     // Those modules are LEFT as they are (not cleared): clearing Data Submission on Save also wiped
@@ -2338,6 +2374,28 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     if(mid==='datasubmit'&&!cur.length&&act==='view') next=['view','edit','add'];
     if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); };
   const clearMod=(mid)=>{ setPerms(p=>({...p,[mid]:[]})); };
+  // A Manager or the CNS opens the review inbox, which needs Duty Roster view: grant it with
+  // the role instead of leaving a role that does nothing.
+  const pickRosterRole=(v)=>{ setRosterRole(v);
+    if((v==='manager'||v==='cns')&&!isAdmin&&!isColl&&asActions(perms.roster).indexOf('view')<0){
+      setPerms(p=>({...p,roster:PERM_ORDER.filter(a=>asActions(p.roster).concat('view').indexOf(a)>=0)})); setRosViewAdded(true); }
+  };
+  // What saving changes in Duty Roster → Setup: only the slots that move, so the rest of the
+  // hospital's assignment is untouched. null = nothing to send.
+  const rosCfgPlan=()=>{
+    if(!viewerAdmin||!rcfg||rosSel==null||isAdmin||!acctName) return null;
+    const body={depts:{}}; let n=0; const lost=[];
+    const nm=id=>((rcfg.depts||[]).find(d=>d.id===id)||{}).name||id;
+    ['incharge','manager'].forEach(slot=>{
+      const held=heldIn(rcfg,slot), want=slot===rosSlot?rosSel:[];
+      held.filter(id=>want.indexOf(id)<0).forEach(id=>{ (body.depts[id]=body.depts[id]||{})[slot]=null; n++; lost.push((slot==='manager'?'Manager':'In-charge')+' of '+nm(id)); });
+      want.filter(id=>held.indexOf(id)<0).forEach(id=>{ (body.depts[id]=body.depts[id]||{})[slot]={username:acctName}; n++; });
+    });
+    const wasCns=!!(rcfg.cns&&rcfg.cns.username===acctName);
+    if(rosterRole==='cns'&&!wasCns){ body.cns={username:acctName}; n++; }
+    if(rosterRole!=='cns'&&wasCns){ body.cns=null; n++; lost.push('the CNS'); }
+    return n?{body,lost}:null;
+  };
 
   const save=async()=>{
     setErr('');
@@ -2353,6 +2411,14 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     if(submits&&!dsScreens.length) return setErr('Data Submission: tick at least one screen they can open.');
     const noSubs=(!isAdmin&&!isColl)?USER_MODS.find(([k])=>SUBS[k]&&asActions(perms[k]).length&&Array.isArray(subMenus[k])&&!subMenus[k].length):null;
     if(noSubs){ setSec('access'); return setErr(noSubs[1]+': tick at least one sub-menu, or set it to None.'); }
+    const noModules=USER_MODS.every(([k])=>!asActions(perms[k]).length);
+    if(ownOnly&&noModules&&!isAdmin&&!isColl&&String(staffId)===''){ setSec('account'); return setErr('Own profile only: enter their Employee ID (Account tab) so My Profile can show their record.'); }
+    const rosPlan=rosCfgPlan();
+    if(rosPlan&&rosPlan.lost.length){
+      const ok=await window.UI.confirm({ title:'Change their duty roster places?', confirmLabel:'Save',
+        message:(name.trim()||username)+' will no longer be '+rosPlan.lost.slice(0,6).join(', ')+(rosPlan.lost.length>6?' and '+(rosPlan.lost.length-6)+' more':'')+'. Those departments are left without one until someone else is picked.' });
+      if(!ok) return;
+    }
     // My Department hands over a unit's figures and staff list: departments are required, and a
     // new grant (or more departments, or Print) is confirmed against exactly what they will see.
     const mdActs=(!isAdmin&&!isColl)?asActions(perms.mydept):[];
@@ -2389,7 +2455,10 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
       // an unrelated field never freezes the sign-off it still reads from its old tier.
       if(!isColl&&signoffSet) payload.signoff=signoff||'';
       // Only when it changed, so saving an unrelated field never rewrites it.
-      if(!isColl&&!isAdmin&&(!editing||rosterRole!==(initial.rosterRole||''))) payload.rosterRole=rosterRole||'';
+      // A portal login may only be an In-charge (the server holds the same rule).
+      if(!isAdmin&&(!editing||rosterRole!==(initial.rosterRole||''))) payload.rosterRole=isColl?(rosterRole==='incharge'?'incharge':''):(rosterRole||'');
+      // The staff record link, for a portal login too (the console branch below sends its own).
+      if(isColl&&staffLinkDirty){ payload.staffId=staffId!==''?Number(staffId):null; payload.staffEmpId=(linkedRec&&linkedRec.emp_id)?linkedRec.emp_id:''; }
       // Send `role` only when the admin actually changed it: an account the form cannot
       // represent must never be silently re-roled by an unrelated edit.
       if(!editing||backendRole!==(initial.role||'User')) payload.role=backendRole;
@@ -2436,9 +2505,106 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
       } else {
         await usersApi('POST','/api/users',{username:String(username).trim().toLowerCase(),password,...payload});
       }
+      // Then their departments in the roster chain (Duty Roster → Setup). The account is already
+      // saved; if this part fails it says so instead of undoing the account.
+      if(rosPlan){
+        try{
+          const r=await fetch('/api/rosters/config',{method:'PUT',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify(rosPlan.body)});
+          const j=await r.json().catch(()=>null);
+          if(!j||!j.ok) throw new Error((j&&j.error)||'the roster setup was not saved');
+          try{ if(window.UNICO_ROSTER_KIT&&window.UNICO_ROSTER_KIT.loadConfig) window.UNICO_ROSTER_KIT.loadConfig(true); window.dispatchEvent(new Event('unico:ros-refresh')); }catch(e){}
+        }catch(e){ uToast((editing?'User updated':'User created')+', but their roster departments were not saved: '+(e.message||'error'),'error'); onSaved(); return; }
+      }
       uToast(editing?'User updated':'User created'); onSaved();
     }catch(e){ setErr(e.message||'Could not save.'); }
     finally{ setBusy(false); }
+  };
+
+  // ---- Account tab: the staff record this login belongs to, by Employee ID ----
+  const staffBlock=()=>(
+    <div>
+      <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:6}}>Staff record <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· which staff member this login is — My Profile shows their record</span></div>
+      <div style={{display:'grid',gridTemplateColumns:'minmax(140px,200px) 1fr',gap:10,alignItems:'start'}}>
+        <div className="field" style={{margin:0}}><input value={empQ} onChange={e=>typeEmp(e.target.value)} placeholder="Employee ID, e.g. N-007" aria-label="Employee ID"/></div>
+        <div style={{fontSize:11.5,lineHeight:1.55,paddingTop:7}}>
+          {linkedRec ? (
+            <span style={{color:'#157a43',fontWeight:600}}>✓ {linkedRec.name}{linkedRec.designation?' · '+linkedRec.designation:''}{linkedRec.current_department?' · '+linkedRec.current_department:''}
+              {' '}<button type="button" onClick={()=>linkStaff('')} style={{border:0,background:'none',color:'var(--muted)',textDecoration:'underline',cursor:'pointer',font:'inherit',fontSize:11,padding:0,marginLeft:6}}>Unlink</button></span>
+          ) : empHits.length>1 ? (
+            <span style={{color:'#8a5a00'}}>This number belongs to {empHits.length} people — pick the right one:{' '}
+              <select value="" onChange={e=>linkStaff(e.target.value)} style={{padding:'3px 6px',borderRadius:6,border:'1px solid var(--line)',fontFamily:'inherit',fontSize:11.5}}>
+                <option value="">Choose…</option>{empHits.map(x=><option key={x.id} value={x.id}>{x.name}{x.current_department?' · '+x.current_department:''}</option>)}
+              </select></span>
+          ) : empQ.trim() ? (
+            <span style={{color:'#b5670a'}}>No current staff member has this Employee ID. Check the number, or pick them by name below.</span>
+          ) : (
+            <span style={{color:'var(--muted)'}}>Not linked. Type their Employee ID, or pick them by name below.</span>
+          )}
+        </div>
+      </div>
+      {!linkedRec&&<select value="" onChange={e=>linkStaff(e.target.value)} aria-label="Pick the staff member by name"
+        style={{marginTop:6,width:'100%',maxWidth:420,padding:'6px 9px',border:'1px solid var(--line)',borderRadius:7,fontSize:12,fontFamily:'inherit',background:'#fff'}}>
+        <option value="">…or pick by name</option>
+        {allStaff.filter(curStaff).map(x=><option key={x.id} value={x.id}>{x.name}{x.emp_id?' · '+x.emp_id:''}{x.current_department?' · '+x.current_department:''}</option>)}
+      </select>}
+    </div>
+  );
+  // ---- Account tab: their place in the duty roster chain, and which departments ----
+  const rosterRoleBlock=(portal)=>{
+    const opts=portal?[['','None'],['incharge','In-charge · prepares']]:[['','None'],['incharge','In-charge · prepares'],['manager','Manager · checks'],['cns','CNS · approves']];
+    const list=(rcfg&&rcfg.depts)||[];
+    const needle=rosQ.trim().toLowerCase();
+    const shown=list.filter(d=>!needle||String(d.name).toLowerCase().indexOf(needle)>=0);
+    const sel=rosSel||[];
+    const tog=(id)=>setRosSel(s=>(s||[]).indexOf(id)>=0?(s||[]).filter(x=>x!==id):[...(s||[]),id]);
+    const otherCns=rcfg&&rcfg.cns&&rcfg.cns.username!==acctName?rcfg.cns:null;
+    return (
+      <div>
+        <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:6}}>Duty roster role <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· their place in the roster review chain</span></div>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          {opts.map(([v,l])=>{ const on=rosterRole===v||(portal&&v===''&&rosterRole!=='incharge'); return (
+            <button key={v||'none'} type="button" onClick={()=>pickRosterRole(v)}
+              style={{font:'inherit',cursor:'pointer',padding:'5px 12px',borderRadius:16,fontSize:12,fontWeight:600,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>{l}</button>
+          );})}
+        </div>
+        <div style={{fontSize:10.5,color:'var(--muted)',marginTop:6,lineHeight:1.6}}>
+          {rosterRole==='manager'?'They check the rosters of the departments ticked below, and forward each one to the CNS or return it with a note.'
+            :rosterRole==='cns'?'They give the final approval for every department.'
+            :rosterRole==='incharge'?'They prepare and send the rosters of the departments ticked below; their name fills “Prepared by”.'
+            :'Takes no part in the roster review.'}
+          {portal&&' To make this person a Manager or the CNS, convert the account first.'}
+        </div>
+        {rosViewAdded&&<div style={{fontSize:11,color:'#157a43',marginTop:4}}>Duty Roster view was added on Module access — they need it to open the review inbox.</div>}
+        {rosterRole==='cns'&&viewerAdmin&&rcfg&&(
+          <div style={{fontSize:11.5,marginTop:8,color:otherCns?'#8a5a00':'#157a43'}}>{otherCns?'Saving makes them the CNS in place of '+otherCns.name+'.':'They will be the CNS for every department.'}</div>
+        )}
+        {rosSlot&&!viewerAdmin&&<div style={{fontSize:11,color:'var(--muted)',marginTop:8}}>An administrator assigns their departments (Duty Roster → Setup).</div>}
+        {rosSlot&&viewerAdmin&&(
+          <div style={{marginTop:10,border:'1px solid var(--line)',borderRadius:10,overflow:'hidden'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',background:'var(--blue-50)',borderBottom:'1px solid var(--line)',flexWrap:'wrap'}}>
+              <b style={{fontSize:12,color:'var(--ink)'}}>{rosSlot==='manager'?'Departments they check':'Departments they prepare'}</b>
+              <span style={{fontSize:10.5,fontWeight:700,color:'var(--blue-700)',background:'#fff',border:'1px solid var(--blue-100)',borderRadius:10,padding:'1px 8px'}}>{sel.length} department{sel.length===1?'':'s'}</span>
+              <span style={{flex:1}}/>
+              <input value={rosQ} onChange={e=>setRosQ(e.target.value)} placeholder="Find…" style={{padding:'4px 8px',border:'1px solid var(--line)',borderRadius:6,fontSize:11.5,fontFamily:'inherit',width:130}}/>
+              <button type="button" className="btn sm" onClick={()=>setRosSel(s=>[...new Set([...(s||[]),...shown.map(d=>d.id)])])}>Select all</button>
+              <button type="button" className="btn sm" onClick={()=>setRosSel([])}>Clear</button>
+            </div>
+            {!rcfg ? <div style={{padding:12,fontSize:11.5,color:'var(--muted)'}}>Loading departments…</div> : (
+              <div style={{maxHeight:220,overflow:'auto',display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))'}}>
+                {shown.map(d=>{ const on=sel.indexOf(d.id)>=0; const holder=d[rosSlot]; const other=holder&&holder.username!==acctName?holder:null; return (
+                  <label key={d.id} style={{display:'flex',alignItems:'flex-start',gap:7,padding:'6px 10px',cursor:'pointer',fontSize:12,borderBottom:'1px solid var(--line)',background:on?'var(--blue-50)':'#fff'}}>
+                    <input type="checkbox" checked={on} onChange={()=>tog(d.id)} style={{marginTop:2}}/>
+                    <span style={{minWidth:0}}><span style={{display:'block',fontWeight:600,color:'var(--ink)'}}>{d.name}</span>
+                      {other&&<span style={{display:'block',fontSize:10.5,color:on?'#b5670a':'var(--muted)'}}>{on?'replaces '+other.name:'now: '+other.name}</span>}</span>
+                  </label>
+                );})}
+                {!shown.length&&<div style={{padding:12,fontSize:11.5,color:'var(--muted)'}}>No departments{needle?' match':''}.</div>}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   // Print is violet, not another shade of the write colours: it is a different kind of
@@ -2571,13 +2737,16 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
             <div className="field"><label>Email <span style={{fontWeight:400,color:'var(--muted)'}}>· optional</span></label><input value={email} onChange={e=>setEmail(e.target.value)} placeholder="name@unicohospitals.com"/></div>
             <div className="field"><label>{editing?'Reset password':'Password'} {editing&&<span style={{fontWeight:400,color:'var(--muted)'}}>· blank = keep</span>}</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters"/></div>
           </div>
+          {!isAdmin&&staffBlock()}
           </React.Fragment>)}
-          {isPortalAcct ? (curSec==='account'&&(
+          {isPortalAcct ? (curSec==='account'&&(<React.Fragment>
             <div style={{fontSize:12.5,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'12px 14px',display:'flex',gap:9,alignItems:'flex-start'}}>
               <Ic d={I.user} s={16} c="var(--blue)" style={{flexShrink:0,marginTop:1}}/>
               <span style={{flex:1}}><b>{PORTAL_ROLE_LABEL[portalRole]} — old portal login.</b> Portal accounts are being retired: convert this one to a normal account and its role becomes a module ({portalRole==='nurse'||portalRole==='pca'?'Staff app':'Data Submission'+(portalRole==='incharge'?', runs a unit':'')}), keeping its departments and indicators. Nothing is saved until you press Save.</span>
               {mayUsers('edit')&&<button type="button" className="btn pri sm" onClick={convert} style={{flexShrink:0}}>Convert</button>}
             </div>
+            {(portalRole==='incharge'||portalRole==='collector')&&rosterRoleBlock(true)}
+          </React.Fragment>
           )) : (
           <div style={{display:'flex',flexDirection:'column',gap:12}}>
             {curSec==='access'&&<div>
@@ -2603,22 +2772,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                 {!signoffSet&&<span style={{fontSize:10.5,color:'#8a5a00'}}>Carried over from the old hierarchy — pick one to set it on this person.</span>}
               </div>
             </div>}
-            {curSec==='account'&&!isColl&&!isAdmin&&<div>
-              <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:6}}>Duty roster role <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· their place in the roster review chain</span></div>
-              <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-                {[['','None'],['incharge','In-charge · prepares'],['manager','Manager · checks'],['cns','CNS · approves']].map(([v,l])=>{ const on=rosterRole===v; return (
-                  <button key={v||'none'} type="button" onClick={()=>setRosterRole(v)}
-                    style={{font:'inherit',cursor:'pointer',padding:'5px 12px',borderRadius:16,fontSize:12,fontWeight:600,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>{l}</button>
-                );})}
-              </div>
-              <div style={{fontSize:10.5,color:'var(--muted)',marginTop:6,lineHeight:1.6}}>
-                {rosterRole==='manager'?'They get a Review inbox for the units they check, and forward each roster to the CNS or return it with a note.'
-                  :rosterRole==='cns'?'They get the Review inbox for every unit and give the final approval. Pick them as the CNS under Duty Roster → Setup.'
-                  :rosterRole==='incharge'?'They can be picked as a unit’s In-charge under Duty Roster → Setup, and their name fills “Prepared by”.'
-                  :'Takes no part in the roster review. Which units a person prepares or checks is set under Duty Roster → Setup.'}
-                {' '}They still need Duty Roster access (view) for their units.
-              </div>
-            </div>}
+            {curSec==='account'&&!isColl&&!isAdmin&&rosterRoleBlock(false)}
           </div>
           )}
           {curSec==='account'&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
@@ -2643,12 +2797,19 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
               <span style={{fontSize:10,fontWeight:700,color:'var(--faint)',textTransform:'uppercase',letterSpacing:.5}}>Quick set</span>
               <button type="button" className="btn sm" onClick={()=>quickSet('none')}>Clear all</button>
               <button type="button" className="btn sm" onClick={()=>quickSet('view')}>View only everywhere</button>
+              <button type="button" className="btn sm" onClick={()=>quickSet('own')} title="No modules: Home and My Profile only — their own record, no performance">Own profile only</button>
               <select value={copyFrom} onChange={e=>copyAccess(e.target.value)} aria-label="Copy access from another person"
                 style={{padding:'5px 8px',border:'1px solid var(--line)',borderRadius:7,fontSize:12,fontFamily:'inherit',background:'#fff',maxWidth:220}}>
                 <option value="">Copy from a person…</option>
                 {(allUsers||[]).filter(x=>x.username!==(editing?initial.username:'')&&!PORTAL_ROLE_LABEL[x.role]).map(x=><option key={x.username} value={x.username}>{x.name||x.username}</option>)}
               </select>
             </div>
+            {ownOnly&&USER_MODS.every(([k])=>!asActions(perms[k]).length)&&(
+              <div style={{fontSize:12,color:'var(--ink-2)',background:'var(--blue-50)',border:'1px solid var(--blue-100)',borderRadius:9,padding:'10px 12px',marginBottom:10,lineHeight:1.55}}>
+                <b>Own profile only.</b> They see <b>Home</b> and <b>My Profile</b> — their own register details, today's shift, their password. No performance, no other staff, no other module.
+                {linkedRec?<> Linked to <b>{linkedRec.name}</b>.</>:<span style={{color:'#b5670a'}}> Enter their Employee ID on the Account tab before saving.</span>}
+              </div>
+            )}
             <div style={{display:'flex',flexDirection:'column',gap:8}}>
               {modsGrouped(USER_MODS).map(([grp,ms])=>(
               <React.Fragment key={grp}>
@@ -2796,7 +2957,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
             {staffScope==='self'&&(
               <div className="field">
                 <label>Which staff member is this login?</label>
-                <select value={staffId===null?'':String(staffId)} onChange={e=>{ setStaffId(e.target.value); setStaffLinkDirty(true); }}>
+                <select value={staffId===null?'':String(staffId)} onChange={e=>linkStaff(e.target.value)}>
                   <option value="">— not linked —</option>
                   {allStaff.map(x=><option key={x.id} value={x.id}>{x.name}{x.emp_id?' · '+x.emp_id:''}{x.current_department?' · '+x.current_department:''}</option>)}
                 </select>

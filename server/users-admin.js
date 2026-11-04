@@ -37,6 +37,13 @@ const ROLES = ['Administrator', 'incharge', 'collector', 'nurse', 'pca', 'User']
    and enforced the same way — an in-charge created without them would be an account
    with a ward's screens and nobody's scope. */
 const ROLES_PORTAL = access.PORTAL_ROLES;   // one list app-wide, so a new portal role cannot drift
+// A portal login runs the in-charge portal, not the console: it can prepare a unit's roster
+// (In-charge) but has no review inbox, so it can never be a roster Manager or the CNS.
+const rosterRoleFor = (role, v) => {
+  if (role === 'Administrator') return '';
+  const r = cleanRosterRole(v);
+  return ROLES_PORTAL.indexOf(role) >= 0 && r !== 'incharge' ? '' : r;
+};
 // The data-collection scope derive + the `responsibles` mirror live in data-collection.js, so the
 // user dialog and the Indicator Access matrix share ONE write rule. Required lazily: that module
 // is large and only needed when a portal account is saved.
@@ -803,7 +810,7 @@ function mount(app, opts) {
         rosterScope: role === 'Administrator' ? 'all' : (cleanRosterScope(b.rosterScope) || (rosterHeld ? 'all' : null)),
         rosterDepartments: cleanList(b.rosterDepartments),
         rosterEdit: role === 'Administrator' ? true : b.rosterEdit === true,
-        rosterRole: role === 'Administrator' ? '' : cleanRosterRole(b.rosterRole),
+        rosterRole: rosterRoleFor(role, b.rosterRole),
         unitLead: role === 'User' && b.unitLead === true,
         enterDen: role === 'User' && b.enterDen === true,
         // Staff app holders: the phone feature set they get.
@@ -923,7 +930,9 @@ function mount(app, opts) {
         if (b.rosterScope !== undefined) set.rosterScope = cleanRosterScope(b.rosterScope) || 'all';
         if (b.rosterDepartments !== undefined) set.rosterDepartments = cleanList(b.rosterDepartments);
         if (b.rosterEdit !== undefined) set.rosterEdit = b.rosterEdit === true;
-        if (b.rosterRole !== undefined) set.rosterRole = cleanRosterRole(b.rosterRole);
+        if (b.rosterRole !== undefined) set.rosterRole = rosterRoleFor(role, b.rosterRole);
+        // Moved INTO a portal role with a Manager / CNS place it cannot hold: drop the place.
+        else if (set.role && ROLES_PORTAL.indexOf(set.role) >= 0 && rosterRoleFor(set.role, u.rosterRole) !== cleanRosterRole(u.rosterRole)) set.rosterRole = '';
         if (b.unitLead !== undefined) set.unitLead = role === 'User' && b.unitLead === true;
         if (b.enterDen !== undefined) set.enterDen = role === 'User' && b.enterDen === true;
         if (b.appRole !== undefined) set.appRole = b.appRole === 'pca' ? 'pca' : 'nurse';

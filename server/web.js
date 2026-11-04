@@ -868,7 +868,9 @@ app.get('/api/me/staff', session.requireApi, async (req, res) => {
     // number only counts when the name agrees, so a mixed-up number never shows a colleague.
     const acct = Object.assign({ username: a.username, name: a.name, staffId: a.staffId, staffEmpId: a.staffEmpId }, doc || {});
     if (!acct.staffEmpId && doc) acct.staffEmpId = doc.empId || doc.emp_id || '';
-    const rec = require('./account-staff').staffOfAccount(acct, roster);
+    const AS = require('./account-staff');
+    // Internal notes / remarks only for someone who may edit the register (this route is ungated).
+    const rec = AS.ownRecordFor(AS.staffOfAccount(acct, roster), !!(a.unrestricted || access.can(a, 'staff', 'edit')));
     res.json({ ok: true, staff: rec || null });
   } catch (e) { res.status(500).json({ ok: false, error: 'Could not load your staff record.' }); }
 });

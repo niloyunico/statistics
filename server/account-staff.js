@@ -70,4 +70,15 @@ function staffOfAccount(acct, list) {
   return null;
 }
 
-module.exports = { staffOfAccount, nameAgrees, nameClose };
+/* The record as the PERSON gets it back (/api/me/staff, which every signed-in account may
+   call). The nursing office's internal notes and remarks are about the person, not for them:
+   only someone who may edit the register receives them. Never mutates the stored record. */
+const INTERNAL_FIELDS = ['notes', 'remarks'];
+function ownRecordFor(rec, mayEditRegister) {
+  if (!rec || mayEditRegister) return rec || null;
+  const out = Object.assign({}, rec);
+  INTERNAL_FIELDS.forEach((k) => { delete out[k]; });
+  return out;
+}
+
+module.exports = { staffOfAccount, nameAgrees, nameClose, ownRecordFor, INTERNAL_FIELDS };

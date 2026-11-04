@@ -271,7 +271,8 @@ async function forRequest(req) {
     // is governed by the `roster` module permission, not by this flag.
     rosterEdit: u.rosterEdit === true,
     // Duty Roster review chain: '' | incharge | manager | cns (see cleanRosterRole).
-    rosterRole: cleanRosterRole(u.rosterRole),
+    // A portal login has no review inbox: it can only ever be a unit's In-charge.
+    rosterRole: (PORTAL_ROLES.indexOf(u.role) >= 0 && cleanRosterRole(u.rosterRole) !== 'incharge') ? '' : cleanRosterRole(u.rosterRole),
     // Data Submission extras, set per person: runs a unit (its staff list, staff requests,
     // unit dashboard). Meaningful only alongside the 'datasubmit' module.
     unitLead: u.unitLead === true,

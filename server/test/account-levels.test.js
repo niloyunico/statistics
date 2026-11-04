@@ -378,5 +378,23 @@ const FULL = { stats: ['view', 'edit', 'add', 'delete'], quality: ['view'], staf
     d = colOf('users').docs.find((x) => x.username === 'mithila');
     assert.ok(d.sessionEpoch > ep, 'a role change DOES revoke the session'); }
 
+  /* Duty roster role: a portal login may only be an In-charge (no review inbox); a console
+     account keeps Manager / CNS; an Administrator holds none. */
+  reset();
+  { colOf('users').docs.push({ username: 'ward.ic', role: 'incharge', active: true, name: 'Ward IC', departments: ['micu'] });
+    let r = await patch('ward.ic', { rosterRole: 'manager' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(user('ward.ic').rosterRole, '', 'a portal login cannot be a Manager');
+    r = await patch('ward.ic', { rosterRole: 'incharge' });
+    assert.equal(user('ward.ic').rosterRole, 'incharge', 'a portal login can be a unit In-charge');
+    await patch('ward.ic', { rosterRole: 'cns' });
+    assert.equal(user('ward.ic').rosterRole, '', 'nor the CNS');
+    await create({ username: 'mgr', name: 'Mgr', perms: { roster: ['view'] }, rosterRole: 'manager' });
+    assert.equal(user('mgr').rosterRole, 'manager', 'a console account keeps Manager');
+    await patch('mgr', { role: 'incharge' });
+    assert.equal(user('mgr').rosterRole, '', 'moved into a portal role: the Manager place goes');
+    await create({ username: 'cns1', name: 'CNS', role: 'Administrator', rosterRole: 'cns' });
+    assert.equal(user('cns1').rosterRole, '', 'an Administrator holds no roster role'); }
+
   console.log('account-levels tests: all passed');
 })().catch((e) => { console.error(e); process.exit(1); });
