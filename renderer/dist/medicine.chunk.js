@@ -1965,6 +1965,5615 @@
 })();
 })();
 ;
+/* ===== dose-library.js ===== */
+/* UNICO — the built-in dose library (Medicine & Rx → Dose Calculator).
+
+   WHAT THIS IS: a curated starting list of standard ICU infusion concentrations, usual
+   dose ranges, emergency weight-based doses and common paediatric doses, taken from the
+   widely published references named on each entry (ICU infusion guidelines, AHA PALS /
+   ACLS 2020, BNF for Children, product labels). It is NOT pulled from the monographs —
+   those state a machine-readable rate for only ~1 drug in 10 (see medicine.jsx).
+
+   WHAT IT IS NOT: hospital protocol. Every entry shows "Not yet reviewed" in the
+   calculator until an administrator / pharmacist checks it against local protocol and
+   signs it off (server/medicines.js → doseLibrary). Hospital edits are stored as
+   overrides on top of this file, so a change here re-flags a reviewed entry as
+   "Changed since review" (dose-math.js → mergeLibrary hashes the content).
+
+   Ranges: `soft` = usual range (outside it the calculator warns), `hard` = the ceiling
+   above which it refuses to print a label. `start` / `step` = usual starting dose and
+   titration step. Units are spelled out in `unit`; concentrations are amount + unit in
+   ml. Shared with the server and the tests via require(). */
+(function (root) {
+  const ICU = 'Standard adult ICU infusion references (UKCPA / ICS critical care infusion guides, SCCM sedation guideline)';
+  const PALS = 'AHA PALS / ACLS 2020, APLS 7th ed.';
+  const BNFC = 'BNF for Children 2024–25; WHO Pocket Book of Hospital Care for Children';
+
+  // ---- ICU infusions ----------------------------------------------------------------
+  const INFUSIONS = [
+    // Vasopressors & inotropes
+    { id: 'inf-noradrenaline', name: 'Noradrenaline (norepinephrine)', group: 'Vasopressors & inotropes', unit: 'mcg/kg/min',
+      conc: [{ label: 'Single strength', amount: 4, unit: 'mg', ml: 50 }, { label: 'Double strength', amount: 8, unit: 'mg', ml: 50 }, { label: 'Quad strength', amount: 16, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 4, unit: 'mg', ml: 4, label: '4 mg / 4 mL ampoule' }, diluent: 'D5W or NS',
+      soft: [0.01, 1], hard: 3, start: 0.05, step: 0.02, highAlert: true,
+      notes: 'Central line preferred. Titrate to MAP target (usually ≥ 65 mmHg). Never flush the line — it boluses the drug.', source: ICU },
+    { id: 'inf-adrenaline', name: 'Adrenaline (epinephrine)', group: 'Vasopressors & inotropes', unit: 'mcg/kg/min',
+      conc: [{ label: 'Standard', amount: 4, unit: 'mg', ml: 50 }, { label: 'Dilute', amount: 2, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 1, unit: 'mg', ml: 1, label: '1 mg / 1 mL (1:1000) ampoule' }, diluent: 'D5W or NS',
+      soft: [0.01, 0.5], hard: 2, start: 0.02, step: 0.01, highAlert: true,
+      notes: 'Watch lactate and glucose (β2 effect raises both). Central line preferred.', source: ICU },
+    { id: 'inf-dopamine', name: 'Dopamine', group: 'Vasopressors & inotropes', unit: 'mcg/kg/min',
+      conc: [{ label: 'Standard', amount: 200, unit: 'mg', ml: 50 }, { label: 'Concentrated', amount: 400, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 200, unit: 'mg', ml: 5, label: '200 mg / 5 mL ampoule' }, diluent: 'D5W or NS',
+      soft: [2, 20], hard: 30, start: 5, step: 2.5, highAlert: true,
+      notes: 'Arrhythmogenic; noradrenaline is preferred first-line in septic shock. Extravasation: phentolamine.', source: ICU },
+    { id: 'inf-dobutamine', name: 'Dobutamine', group: 'Vasopressors & inotropes', unit: 'mcg/kg/min',
+      conc: [{ label: 'Standard', amount: 250, unit: 'mg', ml: 50 }, { label: 'Concentrated', amount: 500, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 250, unit: 'mg', ml: 20, label: '250 mg / 20 mL vial' }, diluent: 'D5W or NS',
+      soft: [2, 20], hard: 40, start: 2.5, step: 2.5, highAlert: true,
+      notes: 'Inotrope — can cause hypotension and tachyarrhythmia. Usually combined with a vasopressor in shock.', source: ICU },
+    { id: 'inf-vasopressin', name: 'Vasopressin', group: 'Vasopressors & inotropes', unit: 'units/min',
+      conc: [{ label: 'Standard', amount: 20, unit: 'units', ml: 100 }, { label: 'Syringe', amount: 20, unit: 'units', ml: 50 }],
+      ampoule: { amount: 20, unit: 'units', ml: 1, label: '20 units / 1 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [0.01, 0.04], hard: 0.07, start: 0.03, step: 0.01, highAlert: true,
+      notes: 'Not weight-based. Usually a fixed 0.03 units/min added to noradrenaline; not titrated like a catecholamine.', source: ICU },
+    { id: 'inf-phenylephrine', name: 'Phenylephrine', group: 'Vasopressors & inotropes', unit: 'mcg/min',
+      conc: [{ label: 'Standard', amount: 10, unit: 'mg', ml: 100 }, { label: 'Syringe', amount: 10, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 10, unit: 'mg', ml: 1, label: '10 mg / 1 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [10, 200], hard: 400, start: 20, step: 10, highAlert: true,
+      notes: 'Pure α-agonist — reflex bradycardia. Peripheral use acceptable short-term.', source: ICU },
+    { id: 'inf-milrinone', name: 'Milrinone', group: 'Vasopressors & inotropes', unit: 'mcg/kg/min',
+      conc: [{ label: 'Standard', amount: 10, unit: 'mg', ml: 50 }, { label: 'Bag', amount: 20, unit: 'mg', ml: 100 }],
+      ampoule: { amount: 10, unit: 'mg', ml: 10, label: '10 mg / 10 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [0.125, 0.75], hard: 1, start: 0.375, step: 0.125, highAlert: true,
+      notes: 'Reduce in renal impairment. Vasodilates — expect a fall in BP. Loading dose often omitted.', source: ICU },
+    { id: 'inf-isoprenaline', name: 'Isoprenaline (isoproterenol)', group: 'Vasopressors & inotropes', unit: 'mcg/min',
+      conc: [{ label: 'Standard', amount: 1, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 0.2, unit: 'mg', ml: 1, label: '0.2 mg / 1 mL ampoule' }, diluent: 'D5W',
+      soft: [0.5, 10], hard: 20, start: 1, step: 0.5, highAlert: true,
+      notes: 'Bridge for symptomatic bradycardia / heart block until pacing.', source: ICU },
+
+    // Vasodilators & antiarrhythmics
+    { id: 'inf-gtn', name: 'Glyceryl trinitrate (GTN)', group: 'Vasodilators & antiarrhythmics', unit: 'mcg/min',
+      conc: [{ label: 'Standard', amount: 50, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 50, unit: 'mg', ml: 10, label: '50 mg / 10 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [5, 200], hard: 400, start: 10, step: 10,
+      notes: 'Use non-PVC / polyethylene lines (PVC absorbs GTN). Tolerance after 24 h. Headache is common.', source: ICU },
+    { id: 'inf-nitroprusside', name: 'Sodium nitroprusside', group: 'Vasodilators & antiarrhythmics', unit: 'mcg/kg/min',
+      conc: [{ label: 'Standard', amount: 50, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 50, unit: 'mg', ml: 2, label: '50 mg vial (reconstitute to 2 mL)' }, diluent: 'D5W only',
+      soft: [0.3, 3], hard: 10, start: 0.3, step: 0.3, highAlert: true,
+      notes: 'Protect from light. Doses above 2 mcg/kg/min risk cyanide toxicity — 10 mcg/kg/min for no more than 10 minutes. Arterial line required.', source: ICU },
+    { id: 'inf-labetalol', name: 'Labetalol', group: 'Vasodilators & antiarrhythmics', unit: 'mg/h',
+      conc: [{ label: 'Undiluted', amount: 100, unit: 'mg', ml: 20 }, { label: 'Diluted', amount: 100, unit: 'mg', ml: 100 }],
+      ampoule: { amount: 100, unit: 'mg', ml: 20, label: '100 mg / 20 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [30, 120], hard: 180, start: 30, step: 15,
+      notes: 'Avoid in asthma, heart block, acute heart failure. Pre-eclampsia: follow the obstetric protocol.', source: ICU },
+    { id: 'inf-esmolol', name: 'Esmolol', group: 'Vasodilators & antiarrhythmics', unit: 'mcg/kg/min',
+      conc: [{ label: 'Bag', amount: 2500, unit: 'mg', ml: 250 }, { label: 'Syringe', amount: 500, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 100, unit: 'mg', ml: 10, label: '100 mg / 10 mL vial' }, diluent: 'NS or D5W',
+      soft: [50, 200], hard: 300, start: 50, step: 50,
+      notes: 'Ultra-short acting β-blocker. Loading 500 mcg/kg over 1 min often given first.', source: ICU },
+    { id: 'inf-amiodarone', name: 'Amiodarone', group: 'Vasodilators & antiarrhythmics', unit: 'mg/h',
+      conc: [{ label: 'Peripheral bag', amount: 900, unit: 'mg', ml: 500 }, { label: 'Central syringe', amount: 300, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 150, unit: 'mg', ml: 3, label: '150 mg / 3 mL ampoule' }, diluent: 'D5W ONLY',
+      soft: [30, 60], hard: 92, start: 60, step: 30, weight: 'none',
+      notes: '1 mg/min (60 mg/h) for 6 h, then 0.5 mg/min (30 mg/h) for 18 h. Max 2.2 g in 24 h. D5W only; filter; central if > 2 mg/mL.', source: ICU },
+    { id: 'inf-diltiazem', name: 'Diltiazem', group: 'Vasodilators & antiarrhythmics', unit: 'mg/h',
+      conc: [{ label: 'Standard', amount: 125, unit: 'mg', ml: 125 }],
+      ampoule: { amount: 25, unit: 'mg', ml: 5, label: '25 mg / 5 mL vial' }, diluent: 'NS or D5W',
+      soft: [5, 15], hard: 20, start: 10, step: 2.5,
+      notes: 'Rate control in AF. Avoid in decompensated heart failure and WPW.', source: ICU },
+    { id: 'inf-lidocaine', name: 'Lidocaine (antiarrhythmic)', group: 'Vasodilators & antiarrhythmics', unit: 'mg/min',
+      conc: [{ label: 'Standard', amount: 1000, unit: 'mg', ml: 250 }, { label: 'Syringe', amount: 500, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 100, unit: 'mg', ml: 5, label: '2% — 100 mg / 5 mL' }, diluent: 'D5W or NS',
+      soft: [1, 4], hard: 4, start: 1, step: 1,
+      notes: 'Reduce in heart failure and liver disease; toxicity = perioral numbness, confusion, seizures.', source: ICU },
+    { id: 'inf-nimodipine', name: 'Nimodipine', group: 'Vasodilators & antiarrhythmics', unit: 'mg/h',
+      conc: [{ label: 'Undiluted', amount: 10, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 10, unit: 'mg', ml: 50, label: '10 mg / 50 mL vial' }, diluent: 'Run with a co-infusion (NS)',
+      soft: [0.5, 2], hard: 2, start: 1, step: 0.5, weight: 'none',
+      notes: 'Subarachnoid haemorrhage. Start 1 mg/h, 2 mg/h after 2 h if BP stable. Protect from light; non-PVC line.', source: ICU },
+
+    // Sedation & analgesia
+    { id: 'inf-midazolam', name: 'Midazolam', group: 'Sedation & analgesia', unit: 'mg/kg/h',
+      conc: [{ label: 'Standard', amount: 50, unit: 'mg', ml: 50 }, { label: 'Concentrated', amount: 100, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 15, unit: 'mg', ml: 3, label: '15 mg / 3 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [0.02, 0.1], hard: 0.2, start: 0.02, step: 0.01, highAlert: true,
+      notes: 'Accumulates in renal / hepatic failure and obesity — consider ideal body weight. Daily sedation hold.', source: ICU },
+    { id: 'inf-propofol', name: 'Propofol 1%', group: 'Sedation & analgesia', unit: 'mg/kg/h',
+      conc: [{ label: '1% undiluted', amount: 500, unit: 'mg', ml: 50 }, { label: '2% undiluted', amount: 1000, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 200, unit: 'mg', ml: 20, label: '1% — 200 mg / 20 mL ampoule' }, diluent: 'Undiluted',
+      soft: [0.3, 3], hard: 4, start: 1, step: 0.5, highAlert: true,
+      notes: 'Above 4 mg/kg/h risks propofol infusion syndrome. Change syringe and line every 12 h. Counts as fat calories (1.1 kcal/mL).', source: ICU },
+    { id: 'inf-fentanyl', name: 'Fentanyl', group: 'Sedation & analgesia', unit: 'mcg/kg/h',
+      conc: [{ label: 'Standard', amount: 500, unit: 'mcg', ml: 50 }, { label: 'Concentrated', amount: 1000, unit: 'mcg', ml: 50 }],
+      ampoule: { amount: 100, unit: 'mcg', ml: 2, label: '100 mcg / 2 mL ampoule' }, diluent: 'NS',
+      soft: [0.5, 3], hard: 10, start: 1, step: 0.5, highAlert: true,
+      notes: 'Opioid. Accumulates with prolonged infusion. Naloxone at the bedside.', source: ICU },
+    { id: 'inf-morphine', name: 'Morphine', group: 'Sedation & analgesia', unit: 'mg/h',
+      conc: [{ label: 'Standard', amount: 50, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 10, unit: 'mg', ml: 1, label: '10 mg / 1 mL ampoule' }, diluent: 'NS',
+      soft: [1, 10], hard: 30, start: 2, step: 1, weight: 'none', highAlert: true,
+      notes: 'Active metabolites accumulate in renal failure — prefer fentanyl. Monitor RR and sedation score.', source: ICU },
+    { id: 'inf-dexmedetomidine', name: 'Dexmedetomidine', group: 'Sedation & analgesia', unit: 'mcg/kg/h',
+      conc: [{ label: 'Standard', amount: 200, unit: 'mcg', ml: 50 }, { label: 'Bag', amount: 400, unit: 'mcg', ml: 100 }],
+      ampoule: { amount: 200, unit: 'mcg', ml: 2, label: '200 mcg / 2 mL vial' }, diluent: 'NS',
+      soft: [0.2, 0.7], hard: 1.5, start: 0.4, step: 0.1,
+      notes: 'Bradycardia and hypotension; loading dose usually omitted in ICU. Light sedation without respiratory depression.', source: ICU },
+    { id: 'inf-ketamine', name: 'Ketamine', group: 'Sedation & analgesia', unit: 'mg/kg/h',
+      conc: [{ label: 'Standard', amount: 500, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 500, unit: 'mg', ml: 10, label: '500 mg / 10 mL vial' }, diluent: 'NS or D5W',
+      soft: [0.1, 1], hard: 3, start: 0.2, step: 0.1,
+      notes: 'Analgesic doses 0.1–0.3 mg/kg/h; sedation up to 1–2 mg/kg/h. Emergence reactions; raises BP/HR.', source: ICU },
+
+    // Neuromuscular blockers
+    { id: 'inf-atracurium', name: 'Atracurium', group: 'Neuromuscular blockers', unit: 'mg/kg/h',
+      conc: [{ label: 'Undiluted', amount: 500, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 50, unit: 'mg', ml: 5, label: '50 mg / 5 mL ampoule' }, diluent: 'Undiluted or NS',
+      soft: [0.3, 0.6], hard: 1.2, start: 0.5, step: 0.1, weight: 'ideal', highAlert: true,
+      notes: 'PARALYTIC — patient must be sedated and ventilated. Hofmann elimination (safe in renal/hepatic failure). Train-of-four monitoring.', source: ICU },
+    { id: 'inf-cisatracurium', name: 'Cisatracurium', group: 'Neuromuscular blockers', unit: 'mcg/kg/min',
+      conc: [{ label: 'Undiluted', amount: 100, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 10, unit: 'mg', ml: 5, label: '10 mg / 5 mL ampoule' }, diluent: 'Undiluted or NS',
+      soft: [1, 3], hard: 10, start: 1.5, step: 0.5, weight: 'ideal', highAlert: true,
+      notes: 'PARALYTIC — sedate and ventilate first. ARDS regimen (ACURASYS) uses 37.5 mg/h fixed. Train-of-four monitoring.', source: ICU },
+    { id: 'inf-vecuronium', name: 'Vecuronium', group: 'Neuromuscular blockers', unit: 'mcg/kg/min',
+      conc: [{ label: 'Standard', amount: 50, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 10, unit: 'mg', ml: 10, label: '10 mg vial (reconstitute to 10 mL)' }, diluent: 'NS or D5W',
+      soft: [0.8, 1.7], hard: 2, start: 1, step: 0.2, weight: 'ideal', highAlert: true,
+      notes: 'PARALYTIC — sedate and ventilate first. Accumulates in renal/hepatic failure.', source: ICU },
+    { id: 'inf-rocuronium', name: 'Rocuronium', group: 'Neuromuscular blockers', unit: 'mcg/kg/min',
+      conc: [{ label: 'Undiluted', amount: 500, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 50, unit: 'mg', ml: 5, label: '50 mg / 5 mL vial' }, diluent: 'Undiluted or NS',
+      soft: [8, 12], hard: 16, start: 10, step: 1, weight: 'ideal', highAlert: true,
+      notes: 'PARALYTIC — sedate and ventilate first. Reversal: sugammadex.', source: ICU },
+
+    // Endocrine, anticoagulation, renal
+    { id: 'inf-insulin-vrii', name: 'Insulin (variable-rate, VRII)', group: 'Insulin, heparin & others', unit: 'units/h',
+      conc: [{ label: 'Standard', amount: 50, unit: 'units', ml: 50 }],
+      ampoule: { amount: 1000, unit: 'units', ml: 10, label: 'Soluble insulin 100 units/mL, 10 mL vial' }, diluent: 'NS',
+      soft: [0.5, 10], hard: 20, start: 2, step: 0.5, weight: 'none', highAlert: true,
+      notes: 'Rate from the hospital sliding scale against hourly CBG. Run with a glucose-containing fluid. Draw insulin with an INSULIN syringe only.', source: ICU },
+    { id: 'inf-insulin-dka', name: 'Insulin (DKA fixed-rate)', group: 'Insulin, heparin & others', unit: 'units/kg/h',
+      conc: [{ label: 'Standard', amount: 50, unit: 'units', ml: 50 }],
+      ampoule: { amount: 1000, unit: 'units', ml: 10, label: 'Soluble insulin 100 units/mL, 10 mL vial' }, diluent: 'NS',
+      soft: [0.05, 0.14], hard: 0.2, start: 0.1, step: 0.05, highAlert: true,
+      notes: 'DKA: 0.1 units/kg/h (max ~15 units/h). Add D10 when glucose < 14 mmol/L. Watch potassium.', source: 'JBDS DKA guideline 2023; ADA hyperglycaemic crises consensus 2024' },
+    { id: 'inf-heparin', name: 'Heparin (unfractionated)', group: 'Insulin, heparin & others', unit: 'units/kg/h',
+      conc: [{ label: 'Syringe', amount: 25000, unit: 'units', ml: 50 }, { label: 'Bag', amount: 25000, unit: 'units', ml: 500 }],
+      ampoule: { amount: 25000, unit: 'units', ml: 5, label: '25,000 units / 5 mL vial' }, diluent: 'NS',
+      soft: [12, 18], hard: 30, start: 18, step: 2, highAlert: true,
+      notes: 'VTE: 80 units/kg bolus, 18 units/kg/h. ACS: 60 units/kg (max 4000), 12 units/kg/h (max 1000 units/h). Titrate to aPTT per nomogram.', source: 'Raschke weight-based heparin nomogram; ACC/AHA ACS guideline' },
+    { id: 'inf-furosemide', name: 'Furosemide', group: 'Insulin, heparin & others', unit: 'mg/h',
+      conc: [{ label: 'Undiluted', amount: 250, unit: 'mg', ml: 25 }, { label: 'Diluted', amount: 100, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 20, unit: 'mg', ml: 2, label: '20 mg / 2 mL ampoule' }, diluent: 'NS',
+      soft: [5, 20], hard: 40, start: 5, step: 5, weight: 'none',
+      notes: 'Ototoxic above 4 mg/min. Monitor urine output, K⁺, Mg²⁺, creatinine.', source: ICU },
+    { id: 'inf-octreotide', name: 'Octreotide', group: 'Insulin, heparin & others', unit: 'mcg/h',
+      conc: [{ label: 'Standard', amount: 500, unit: 'mcg', ml: 50 }],
+      ampoule: { amount: 100, unit: 'mcg', ml: 1, label: '100 mcg / 1 mL ampoule' }, diluent: 'NS',
+      soft: [25, 50], hard: 100, start: 50, step: 25, weight: 'none',
+      notes: 'Variceal bleed: 50 mcg bolus then 50 mcg/h for 2–5 days.', source: 'Baveno VII consensus' },
+    { id: 'inf-pantoprazole', name: 'Pantoprazole', group: 'Insulin, heparin & others', unit: 'mg/h',
+      conc: [{ label: 'Standard', amount: 80, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 40, unit: 'mg', ml: 10, label: '40 mg vial (reconstitute to 10 mL)' }, diluent: 'NS',
+      soft: [8, 8], hard: 10, start: 8, step: 1, weight: 'none',
+      notes: 'High-risk peptic ulcer bleed after endoscopy: 80 mg bolus, 8 mg/h for 72 h (intermittent high-dose is an accepted alternative).', source: 'ACG upper GI bleeding guideline 2021' },
+    { id: 'inf-magnesium', name: 'Magnesium sulphate', group: 'Insulin, heparin & others', unit: 'g/h',
+      conc: [{ label: 'Syringe', amount: 5, unit: 'g', ml: 50 }, { label: 'Bag', amount: 20, unit: 'g', ml: 500 }],
+      ampoule: { amount: 2.5, unit: 'g', ml: 5, label: '50% — 2.5 g / 5 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [0.5, 2], hard: 3, start: 1, step: 0.5, weight: 'none', highAlert: true,
+      notes: 'Eclampsia: 4 g load over 5–15 min, then 1 g/h for 24 h. Check patellar reflex, RR > 12, urine > 25 mL/h. Antidote: calcium gluconate 10% 10 mL.', source: 'WHO / RCOG eclampsia (Zuspan) regimen' },
+    { id: 'inf-potassium', name: 'Potassium chloride', group: 'Insulin, heparin & others', unit: 'mmol/h',
+      conc: [{ label: 'Peripheral bag', amount: 40, unit: 'mmol', ml: 1000 }, { label: 'Central syringe', amount: 20, unit: 'mmol', ml: 50 }],
+      ampoule: { amount: 20, unit: 'mmol', ml: 10, label: '15% KCl — 20 mmol / 10 mL' }, diluent: 'NS',
+      soft: [5, 10], hard: 20, start: 10, step: 5, weight: 'none', highAlert: true,
+      notes: 'NEVER as an IV push. Peripheral ≤ 10 mmol/h and ≤ 40 mmol/L; > 10 mmol/h only via central line with ECG monitoring.', source: 'ISMP high-alert medication list; NPSA potassium alert' },
+    { id: 'inf-aminophylline', name: 'Aminophylline', group: 'Insulin, heparin & others', unit: 'mg/kg/h',
+      conc: [{ label: 'Bag', amount: 500, unit: 'mg', ml: 500 }],
+      ampoule: { amount: 250, unit: 'mg', ml: 10, label: '250 mg / 10 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [0.3, 0.7], hard: 0.9, start: 0.5, step: 0.1, weight: 'ideal',
+      notes: 'Narrow therapeutic range — check theophylline level at 24 h. Skip the loading dose if already on oral theophylline.', source: 'BTS/SIGN asthma guideline' },
+    { id: 'inf-salbutamol', name: 'Salbutamol IV', group: 'Insulin, heparin & others', unit: 'mcg/min',
+      conc: [{ label: 'Standard', amount: 5, unit: 'mg', ml: 50 }],
+      ampoule: { amount: 5, unit: 'mg', ml: 5, label: '5 mg / 5 mL ampoule' }, diluent: 'NS or D5W',
+      soft: [3, 20], hard: 25, start: 5, step: 2,
+      notes: 'Tachycardia, hypokalaemia and lactic acidosis. Check K⁺.', source: 'BTS/SIGN asthma guideline' },
+    { id: 'inf-tranexamic', name: 'Tranexamic acid (maintenance)', group: 'Insulin, heparin & others', unit: 'mg/h',
+      conc: [{ label: 'Bag', amount: 1000, unit: 'mg', ml: 100 }],
+      ampoule: { amount: 500, unit: 'mg', ml: 5, label: '500 mg / 5 mL ampoule' }, diluent: 'NS',
+      soft: [125, 125], hard: 150, start: 125, step: 25, weight: 'none',
+      notes: 'Trauma (CRASH-2): 1 g over 10 min within 3 h of injury, then 1 g over 8 h (125 mg/h).', source: 'CRASH-2 trial regimen' },
+    { id: 'inf-oxytocin', name: 'Oxytocin', group: 'Insulin, heparin & others', unit: 'milliunits/min',
+      conc: [{ label: 'Standard', amount: 10, unit: 'units', ml: 500 }, { label: 'Syringe', amount: 10, unit: 'units', ml: 50 }],
+      ampoule: { amount: 10, unit: 'units', ml: 1, label: '10 units / 1 mL ampoule' }, diluent: 'NS',
+      soft: [1, 20], hard: 32, start: 2, step: 2, weight: 'none', highAlert: true,
+      notes: 'Induction / augmentation: increase every 30 min per the obstetric protocol. Stop for > 5 contractions in 10 min or fetal distress.', source: 'WHO / NICE intrapartum care' },
+  ];
+
+  // ---- Emergency drug sheet (weight-based, one dose each) ----------------------------
+  // dose = per-kg dose (number or [lo, hi]); unit = dose unit; max = single-dose ceiling;
+  // adult = the dose used for an adult patient; mgPerMl = strength of the prepared form.
+  const EMERGENCY = [
+    { id: 'em-adrenaline-arrest', name: 'Adrenaline — cardiac arrest', group: 'Cardiac arrest', dose: 0.01, unit: 'mg', max: 1, adult: 1, perMl: 0.1, prep: '1:10,000 (1 mg in 10 mL)', route: 'IV / IO', notes: 'Every 3–5 min. Adults: 1 mg of 1:10,000 = 10 mL.', source: PALS },
+    { id: 'em-amiodarone', name: 'Amiodarone — VF / pulseless VT', group: 'Cardiac arrest', dose: 5, unit: 'mg', max: 300, adult: 300, perMl: 50, prep: '150 mg / 3 mL', route: 'IV / IO', notes: 'After the 3rd shock. Adult 2nd dose 150 mg; child may repeat 5 mg/kg up to twice.', source: PALS },
+    { id: 'em-lidocaine', name: 'Lidocaine — VF / pVT (alternative)', group: 'Cardiac arrest', dose: 1, unit: 'mg', max: 100, adult: 100, perMl: 20, prep: '2% (20 mg/mL)', route: 'IV / IO', notes: 'If amiodarone unavailable.', source: PALS },
+    { id: 'em-calcium-chloride', name: 'Calcium chloride 10%', group: 'Cardiac arrest', dose: 20, unit: 'mg', max: 1000, adult: 1000, perMl: 100, prep: '10% (100 mg/mL)', route: 'IV (central preferred)', notes: 'Hyperkalaemia, hypocalcaemia, CCB overdose. Not routine in arrest.', source: PALS },
+    { id: 'em-calcium-gluconate', name: 'Calcium gluconate 10%', group: 'Cardiac arrest', dose: 60, unit: 'mg', max: 3000, adult: 3000, perMl: 100, prep: '10% (100 mg/mL)', route: 'IV', notes: 'Peripheral-safe alternative to chloride (≈ ⅓ the calcium per mL).', source: PALS },
+    { id: 'em-bicarbonate', name: 'Sodium bicarbonate 8.4%', group: 'Cardiac arrest', dose: 1, unit: 'mmol', max: 50, adult: 50, perMl: 1, prep: '8.4% (1 mmol/mL)', route: 'IV', notes: 'Hyperkalaemia, TCA overdose. Infants < 1 month: use 4.2%.', source: PALS },
+    { id: 'em-dextrose', name: 'Dextrose 10% — hypoglycaemia', group: 'Cardiac arrest', dose: 0.5, unit: 'g', max: 25, adult: 25, perMl: 0.1, prep: 'D10 (0.1 g/mL)', route: 'IV / IO', notes: '5 mL/kg of D10. Recheck glucose after 15 min.', source: PALS },
+    { id: 'em-atropine', name: 'Atropine — bradycardia', group: 'Cardiac arrest', dose: 0.02, unit: 'mg', min: 0.1, max: 0.5, adult: 1, perMl: 0.6, prep: '0.6 mg / 1 mL', route: 'IV / IO', notes: 'Child max single dose 0.5 mg; adult 1 mg every 3–5 min to 3 mg.', source: PALS },
+    { id: 'em-adenosine-1', name: 'Adenosine — SVT 1st dose', group: 'Cardiac arrest', dose: 0.1, unit: 'mg', max: 6, adult: 6, perMl: 3, prep: '6 mg / 2 mL', route: 'Rapid IV + flush', notes: 'Fast push close to the heart with a 10–20 mL flush. Record ECG.', source: PALS },
+    { id: 'em-adenosine-2', name: 'Adenosine — SVT 2nd dose', group: 'Cardiac arrest', dose: 0.2, unit: 'mg', max: 12, adult: 12, perMl: 3, prep: '6 mg / 2 mL', route: 'Rapid IV + flush', notes: '', source: PALS },
+    { id: 'em-naloxone', name: 'Naloxone — opioid reversal', group: 'Cardiac arrest', dose: 0.1, unit: 'mg', max: 2, adult: 0.4, perMl: 0.4, prep: '0.4 mg / 1 mL', route: 'IV / IM / IO', notes: 'Adults: 0.4 mg, repeat every 2–3 min. Lower titrated doses if opioid-dependent.', source: PALS },
+    { id: 'em-adrenaline-im', name: 'Adrenaline — anaphylaxis IM', group: 'Anaphylaxis & shock', dose: 0.01, unit: 'mg', max: 0.5, adult: 0.5, perMl: 1, prep: '1:1000 (1 mg/mL)', route: 'IM (thigh)', notes: 'Repeat after 5 min if no improvement.', source: 'Resuscitation Council UK anaphylaxis 2021' },
+    { id: 'em-hydrocortisone', name: 'Hydrocortisone', group: 'Anaphylaxis & shock', dose: 2, unit: 'mg', max: 100, adult: 100, perMl: 50, prep: '100 mg / 2 mL', route: 'IV / IM', notes: 'Adrenal crisis: 100 mg adult, then 50 mg 6-hourly.', source: PALS },
+    { id: 'em-fluid', name: 'Fluid bolus (NS / RL)', group: 'Anaphylaxis & shock', dose: [10, 20], unit: 'mL', max: 1000, adult: 500, perMl: null, prep: 'Crystalloid', route: 'IV / IO', notes: 'Reassess after every bolus. 10 mL/kg in cardiac disease, DKA, malnutrition.', source: PALS },
+    { id: 'em-magnesium', name: 'Magnesium — torsades / severe asthma', group: 'Anaphylaxis & shock', dose: [25, 50], unit: 'mg', max: 2000, adult: 2000, perMl: 500, prep: '50% (500 mg/mL) — dilute', route: 'IV over 20 min', notes: 'Torsades: push in arrest. Dilute to ≤ 20% for a child.', source: PALS },
+
+    { id: 'em-ketamine', name: 'Ketamine — induction', group: 'Intubation (RSI)', dose: [1, 2], unit: 'mg', perMl: 50, prep: '50 mg/mL', route: 'IV', notes: 'Haemodynamically stable choice in shock.', source: PALS },
+    { id: 'em-etomidate', name: 'Etomidate — induction', group: 'Intubation (RSI)', dose: 0.3, unit: 'mg', max: 20, perMl: 2, prep: '2 mg/mL', route: 'IV', notes: 'Adrenal suppression; avoid in sepsis if alternatives exist.', source: PALS },
+    { id: 'em-propofol', name: 'Propofol — induction', group: 'Intubation (RSI)', dose: [1, 2.5], unit: 'mg', perMl: 10, prep: '1% (10 mg/mL)', route: 'IV', notes: 'Reduce dose in shock / elderly — causes hypotension.', source: PALS },
+    { id: 'em-fentanyl', name: 'Fentanyl — pre-treatment', group: 'Intubation (RSI)', dose: [1, 3], unit: 'mcg', max: 200, perMl: 50, prep: '50 mcg/mL', route: 'IV', notes: 'Give slowly; chest-wall rigidity with fast high doses.', source: PALS },
+    { id: 'em-midazolam-sed', name: 'Midazolam — sedation', group: 'Intubation (RSI)', dose: 0.1, unit: 'mg', max: 5, perMl: 5, prep: '5 mg/mL', route: 'IV', notes: '', source: PALS },
+    { id: 'em-rocuronium', name: 'Rocuronium — paralysis', group: 'Intubation (RSI)', dose: [1, 1.2], unit: 'mg', perMl: 10, prep: '10 mg/mL', route: 'IV', notes: 'PARALYTIC. Reversal: sugammadex 16 mg/kg.', source: PALS },
+    { id: 'em-suxamethonium', name: 'Suxamethonium — paralysis', group: 'Intubation (RSI)', dose: 1.5, unit: 'mg', max: 150, perMl: 50, prep: '50 mg/mL', route: 'IV', notes: 'Infants 2 mg/kg. Avoid in hyperkalaemia, burns > 48 h, crush, neuromuscular disease.', source: PALS },
+
+    { id: 'em-midazolam-seiz', name: 'Midazolam — seizure', group: 'Seizure', dose: 0.15, unit: 'mg', max: 10, adult: 10, perMl: 5, prep: '5 mg/mL', route: 'IV / IM / buccal (0.3 mg/kg)', notes: 'May repeat once after 5 min.', source: 'APLS status epilepticus; ESETT' },
+    { id: 'em-diazepam', name: 'Diazepam — seizure', group: 'Seizure', dose: 0.3, unit: 'mg', max: 10, adult: 10, perMl: 5, prep: '5 mg/mL', route: 'IV (rectal 0.5 mg/kg)', notes: 'Respiratory depression — bag-valve-mask ready.', source: 'APLS status epilepticus' },
+    { id: 'em-lorazepam', name: 'Lorazepam — seizure', group: 'Seizure', dose: 0.1, unit: 'mg', max: 4, adult: 4, perMl: 2, prep: '2 mg/mL', route: 'IV', notes: '', source: 'APLS status epilepticus' },
+    { id: 'em-levetiracetam', name: 'Levetiracetam — loading', group: 'Seizure', dose: 60, unit: 'mg', max: 4500, adult: 4500, perMl: 100, prep: '500 mg / 5 mL', route: 'IV over 10 min', notes: '2nd-line for established status epilepticus.', source: 'ESETT trial; APLS' },
+    { id: 'em-phenytoin', name: 'Phenytoin — loading', group: 'Seizure', dose: 20, unit: 'mg', max: 2000, adult: 2000, perMl: 50, prep: '250 mg / 5 mL', route: 'IV ≤ 1 mg/kg/min (max 50 mg/min)', notes: 'ECG + BP monitoring. NS only; filter.', source: 'APLS status epilepticus' },
+    { id: 'em-phenobarbital', name: 'Phenobarbital — loading', group: 'Seizure', dose: 20, unit: 'mg', max: 1000, adult: 1000, perMl: 200, prep: '200 mg/mL', route: 'IV over 20 min', notes: 'Respiratory depression; neonatal first-line.', source: 'APLS status epilepticus' },
+  ];
+
+  // Electrical therapy: J/kg, capped at the adult energy.
+  const ELECTRICAL = [
+    { id: 'el-defib-1', name: 'Defibrillation — 1st shock', jPerKg: 2, adult: 200, notes: 'Biphasic adult 120–200 J (manufacturer); 360 J monophasic.' },
+    { id: 'el-defib-2', name: 'Defibrillation — later shocks', jPerKg: 4, max: 10, adult: 200, notes: 'May escalate to 10 J/kg, not above the adult dose.' },
+    { id: 'el-cardio-1', name: 'Synchronised cardioversion — 1st', jPerKg: [0.5, 1], adult: 120, notes: 'Narrow regular SVT/flutter adult: 50–100 J.' },
+    { id: 'el-cardio-2', name: 'Synchronised cardioversion — later', jPerKg: 2, adult: 200, notes: '' },
+  ];
+
+  // ---- Paediatric weight-based doses ------------------------------------------------
+  // mode 'dose' = mg/kg per dose; 'day' = mg/kg per DAY divided into `perDay` doses.
+  // dose = [lo, hi] mg/kg (lo === hi for a single figure); maxDose / maxDay in mg.
+  const PAEDIATRIC = [
+    { id: 'pd-paracetamol', name: 'Paracetamol', group: 'Analgesic / antipyretic', mode: 'dose', dose: [10, 15], perDay: 4, maxDose: 1000, maxDayPerKg: 75, maxDay: 4000,
+      strengths: [{ label: 'Suspension 120 mg/5 mL', mg: 120, ml: 5 }, { label: 'Drops 80 mg/mL', mg: 80, ml: 1 }, { label: 'Tablet 500 mg', mg: 500, form: 'tab' }, { label: 'IV 10 mg/mL', mg: 10, ml: 1 }],
+      notes: 'Every 4–6 h, max 4 doses in 24 h. Neonates: 60 mg/kg/day max.', source: BNFC },
+    { id: 'pd-ibuprofen', name: 'Ibuprofen', group: 'Analgesic / antipyretic', mode: 'dose', dose: [5, 10], perDay: 3, maxDose: 400, maxDayPerKg: 30, maxDay: 1200,
+      strengths: [{ label: 'Suspension 100 mg/5 mL', mg: 100, ml: 5 }, { label: 'Tablet 200 mg', mg: 200, form: 'tab' }, { label: 'Tablet 400 mg', mg: 400, form: 'tab' }],
+      notes: 'Not under 3 months or < 5 kg. Avoid in dehydration, dengue, renal impairment.', source: BNFC },
+    { id: 'pd-amoxicillin', name: 'Amoxicillin', group: 'Antibiotics (oral)', mode: 'day', dose: [25, 50], perDay: 3, maxDose: 1000, maxDay: 3000,
+      strengths: [{ label: 'Suspension 125 mg/5 mL', mg: 125, ml: 5 }, { label: 'Suspension 250 mg/5 mL', mg: 250, ml: 5 }, { label: 'Drops 125 mg/1.25 mL', mg: 100, ml: 1 }, { label: 'Capsule 250 mg', mg: 250, form: 'cap' }, { label: 'Capsule 500 mg', mg: 500, form: 'cap' }],
+      notes: 'Divided 8-hourly. Severe infection up to 90 mg/kg/day (see high-dose).', source: BNFC },
+    { id: 'pd-amoxicillin-hd', name: 'Amoxicillin (high dose)', group: 'Antibiotics (oral)', mode: 'day', dose: [80, 90], perDay: 2, maxDose: 2000, maxDay: 4000,
+      strengths: [{ label: 'Suspension 250 mg/5 mL', mg: 250, ml: 5 }, { label: 'Capsule 500 mg', mg: 500, form: 'cap' }],
+      notes: 'Pneumonia / acute otitis media (WHO, AAP). Divided 12-hourly.', source: BNFC },
+    { id: 'pd-coamoxiclav', name: 'Co-amoxiclav (amoxicillin part)', group: 'Antibiotics (oral)', mode: 'day', dose: [25, 45], perDay: 2, maxDose: 875, maxDay: 1750,
+      strengths: [{ label: '228.5 mg/5 mL (200 mg amox)', mg: 200, ml: 5 }, { label: '457 mg/5 mL (400 mg amox)', mg: 400, ml: 5 }, { label: '156.25 mg/5 mL (125 mg amox)', mg: 125, ml: 5 }],
+      notes: 'Dose by the AMOXICILLIN component. 12-hourly with the 7:1 suspensions.', source: BNFC },
+    { id: 'pd-azithromycin', name: 'Azithromycin', group: 'Antibiotics (oral)', mode: 'dose', dose: [10, 10], perDay: 1, maxDose: 500,
+      strengths: [{ label: 'Suspension 200 mg/5 mL', mg: 200, ml: 5 }, { label: 'Tablet 250 mg', mg: 250, form: 'tab' }, { label: 'Tablet 500 mg', mg: 500, form: 'tab' }],
+      notes: 'Once daily for 3 days (or 10 mg/kg day 1, then 5 mg/kg days 2–5). Enteric fever: 20 mg/kg (max 1 g) for 7 days.', source: BNFC },
+    { id: 'pd-cefixime', name: 'Cefixime', group: 'Antibiotics (oral)', mode: 'day', dose: [8, 8], perDay: 2, maxDay: 400,
+      strengths: [{ label: 'Suspension 100 mg/5 mL', mg: 100, ml: 5 }, { label: 'Capsule 200 mg', mg: 200, form: 'cap' }],
+      notes: 'Once daily or divided 12-hourly. Enteric fever: 20 mg/kg/day.', source: BNFC },
+    { id: 'pd-cefuroxime', name: 'Cefuroxime axetil', group: 'Antibiotics (oral)', mode: 'dose', dose: [10, 15], perDay: 2, maxDose: 500,
+      strengths: [{ label: 'Suspension 125 mg/5 mL', mg: 125, ml: 5 }, { label: 'Tablet 250 mg', mg: 250, form: 'tab' }, { label: 'Tablet 500 mg', mg: 500, form: 'tab' }],
+      notes: '12-hourly with food.', source: BNFC },
+    { id: 'pd-cephalexin', name: 'Cephalexin', group: 'Antibiotics (oral)', mode: 'day', dose: [25, 50], perDay: 3, maxDose: 1000, maxDay: 4000,
+      strengths: [{ label: 'Suspension 125 mg/5 mL', mg: 125, ml: 5 }, { label: 'Suspension 250 mg/5 mL', mg: 250, ml: 5 }, { label: 'Capsule 250 mg', mg: 250, form: 'cap' }, { label: 'Capsule 500 mg', mg: 500, form: 'cap' }],
+      notes: 'Divided 8-hourly (or 6-hourly in severe infection).', source: BNFC },
+    { id: 'pd-metronidazole', name: 'Metronidazole', group: 'Antibiotics (oral)', mode: 'dose', dose: [7.5, 7.5], perDay: 3, maxDose: 500,
+      strengths: [{ label: 'Suspension 200 mg/5 mL', mg: 200, ml: 5 }, { label: 'Tablet 400 mg', mg: 400, form: 'tab' }, { label: 'IV 500 mg/100 mL', mg: 5, ml: 1 }],
+      notes: '8-hourly. Amoebiasis: 10 mg/kg/dose.', source: BNFC },
+
+    { id: 'pd-ceftriaxone', name: 'Ceftriaxone IV', group: 'Antibiotics (IV)', mode: 'day', dose: [50, 80], perDay: 1, maxDose: 2000, maxDay: 4000,
+      strengths: [{ label: '1 g vial in 10 mL (100 mg/mL)', mg: 100, ml: 1 }, { label: '500 mg vial in 5 mL (100 mg/mL)', mg: 100, ml: 1 }],
+      notes: 'Meningitis: 100 mg/kg/day (max 4 g). Not with calcium-containing fluids in neonates.', source: BNFC },
+    { id: 'pd-ampicillin', name: 'Ampicillin IV', group: 'Antibiotics (IV)', mode: 'dose', dose: [50, 50], perDay: 4, maxDose: 2000,
+      strengths: [{ label: '500 mg vial in 5 mL (100 mg/mL)', mg: 100, ml: 1 }],
+      notes: '6-hourly. Neonates: by postnatal age per neonatal formulary.', source: BNFC },
+    { id: 'pd-gentamicin', name: 'Gentamicin IV', group: 'Antibiotics (IV)', mode: 'dose', dose: [5, 7], perDay: 1, maxDose: 560,
+      strengths: [{ label: '80 mg/2 mL (40 mg/mL)', mg: 40, ml: 1 }, { label: '20 mg/2 mL (10 mg/mL) paediatric', mg: 10, ml: 1 }],
+      notes: 'Once daily; check trough level and renal function. Neonates per postnatal age.', source: BNFC },
+    { id: 'pd-vancomycin', name: 'Vancomycin IV', group: 'Antibiotics (IV)', mode: 'dose', dose: [15, 15], perDay: 4, maxDose: 1000,
+      strengths: [{ label: '500 mg vial in 10 mL (50 mg/mL)', mg: 50, ml: 1 }],
+      notes: '6-hourly over ≥ 60 min (red-man). Level-guided dosing.', source: BNFC },
+
+    { id: 'pd-ondansetron', name: 'Ondansetron', group: 'Other', mode: 'dose', dose: [0.15, 0.15], perDay: 3, maxDose: 4,
+      strengths: [{ label: 'Syrup 4 mg/5 mL', mg: 4, ml: 5 }, { label: 'Injection 2 mg/mL', mg: 2, ml: 1 }, { label: 'Tablet 4 mg', mg: 4, form: 'tab' }],
+      notes: 'Gastroenteritis: single dose. QT prolongation.', source: BNFC },
+    { id: 'pd-prednisolone', name: 'Prednisolone', group: 'Other', mode: 'day', dose: [1, 2], perDay: 1, maxDay: 40,
+      strengths: [{ label: 'Oral solution 5 mg/5 mL', mg: 5, ml: 5 }, { label: 'Tablet 5 mg', mg: 5, form: 'tab' }],
+      notes: 'Asthma: 1–2 mg/kg once daily for 3 days (max 40 mg). Nephrotic: 60 mg/m² — use BSA.', source: BNFC },
+    { id: 'pd-salbutamol', name: 'Salbutamol syrup', group: 'Other', mode: 'dose', dose: [0.1, 0.15], perDay: 3, maxDose: 4,
+      strengths: [{ label: 'Syrup 2 mg/5 mL', mg: 2, ml: 5 }],
+      notes: 'Inhaled route preferred. 8-hourly.', source: BNFC },
+    { id: 'pd-dexamethasone', name: 'Dexamethasone (croup)', group: 'Other', mode: 'dose', dose: [0.15, 0.6], perDay: 1, maxDose: 10,
+      strengths: [{ label: 'Injection 4 mg/mL', mg: 4, ml: 1 }, { label: 'Tablet 0.5 mg', mg: 0.5, form: 'tab' }],
+      notes: 'Croup: single dose 0.15 mg/kg (mild) to 0.6 mg/kg (severe).', source: BNFC },
+  ];
+
+  // Clinical-calculator cards (ids only — the maths and inputs live in dose-math.js / dose-calc.jsx).
+  const CALCS = ['body', 'renal', 'fluids', 'drip', 'sodium', 'freewater', 'electrolytes', 'parkland', 'convert'];
+
+  const API = { VERSION: '2026-11-04', INFUSIONS: INFUSIONS, EMERGENCY: EMERGENCY, ELECTRICAL: ELECTRICAL, PAEDIATRIC: PAEDIATRIC, CALCS: CALCS };
+  if (typeof module !== 'undefined' && module.exports) module.exports = API;
+  if (root) root.UNICO_DOSE_LIB = API;
+})(typeof window !== 'undefined' ? window : null);
+
+;
+/* ===== dose-math.js ===== */
+/* UNICO — the ONE dose-calculation engine (Medicine & Rx → Dose Calculator).
+   Pure arithmetic, no React and no DOM, so the calculator, the server (review hashes)
+   and server/test/dose-math.test.js all run exactly the same code.
+
+   Units: amounts are converted through a base per family — mass in mcg, activity in
+   units, substance in mmol, volume in mL. A dose unit is "<amount>[/kg]/<min|h>" (e.g.
+   mcg/kg/min, units/h, g/h). A concentration is { amount, unit, ml }.
+
+   Every function returns null (never NaN / Infinity) when an input is missing, so the
+   UI can show "—" rather than a wrong number. */
+(function (root) {
+  const MASS = { g: 1e6, mg: 1e3, mcg: 1, ng: 1e-3 };
+  const ACT = { units: 1, milliunits: 1e-3 };
+  const SUB = { mmol: 1, mEq: 1 };
+  const VOL = { L: 1000, mL: 1 };
+
+  const fin = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : null);
+  const pos = (v) => { const n = typeof v === 'number' ? v : parseFloat(v); return Number.isFinite(n) && n > 0 ? n : null; };
+  const numv = (v) => { const n = typeof v === 'number' ? v : parseFloat(v); return Number.isFinite(n) ? n : null; };
+  const round = (n, dp) => { if (fin(n) == null) return null; const p = Math.pow(10, dp == null ? 2 : dp); return Math.round(n * p) / p; };
+
+  function family(u) {
+    if (MASS[u] != null) return ['mass', MASS[u]];
+    if (ACT[u] != null) return ['act', ACT[u]];
+    if (SUB[u] != null) return ['sub', SUB[u]];
+    if (VOL[u] != null) return ['vol', VOL[u]];
+    return null;
+  }
+  // Factor that turns an amount in `from` into `to`, or null when the families differ.
+  function factor(from, to) {
+    const a = family(from), b = family(to);
+    if (!a || !b || a[0] !== b[0]) return null;
+    return a[1] / b[1];
+  }
+  function convert(value, from, to) { const f = factor(from, to); const v = numv(value); return f == null || v == null ? null : v * f; }
+
+  // "mcg/kg/min" → { amount:'mcg', perKg:true, perMin:true }
+  function parseUnit(u) {
+    const parts = String(u || '').split('/');
+    return { amount: parts[0], perKg: parts.indexOf('kg') > 0, perMin: parts[parts.length - 1] === 'min', timed: parts.length > 1 && /^(min|h)$/.test(parts[parts.length - 1]) };
+  }
+
+  // Amount of drug per mL of the prepared solution, expressed in `inUnit`.
+  function concPerMl(conc, inUnit) {
+    if (!conc) return null;
+    const amt = pos(conc.amount), ml = pos(conc.ml);
+    if (amt == null || ml == null) return null;
+    const f = factor(conc.unit, inUnit || conc.unit);
+    return f == null ? null : (amt * f) / ml;
+  }
+
+  // dose (in doseUnit) → mL/h.
+  function rateFromDose(o) {
+    const u = parseUnit(o.unit), dose = numv(o.dose);
+    if (dose == null || dose < 0) return null;
+    const w = u.perKg ? pos(o.weight) : 1;
+    if (w == null) return null;
+    const c = concPerMl(o.conc, u.amount);
+    if (c == null) return null;
+    const perHour = dose * w * (u.perMin ? 60 : 1);
+    return perHour / c;
+  }
+  // mL/h → dose (in doseUnit).
+  function doseFromRate(o) {
+    const u = parseUnit(o.unit), rate = numv(o.rate);
+    if (rate == null || rate < 0) return null;
+    const w = u.perKg ? pos(o.weight) : 1;
+    if (w == null) return null;
+    const c = concPerMl(o.conc, u.amount);
+    if (c == null) return null;
+    return (rate * c) / (w * (u.perMin ? 60 : 1));
+  }
+
+  // Pumps step in 0.1 mL/h (0.01 below 1 mL/h on most syringe drivers).
+  function roundToPump(rate) {
+    const r = numv(rate);
+    if (r == null) return null;
+    return r < 1 ? Math.round(r * 100) / 100 : Math.round(r * 10) / 10;
+  }
+
+  // 'ok' | 'low' | 'high' | 'hard'  (hard = above the ceiling; never printable)
+  function checkLimits(entry, dose) {
+    const d = numv(dose);
+    if (d == null || !entry) return null;
+    const soft = entry.soft || [], hard = numv(entry.hard);
+    if (hard != null && d > hard + 1e-9) return 'hard';
+    if (numv(soft[1]) != null && d > soft[1] + 1e-9) return 'high';
+    if (numv(soft[0]) != null && d < soft[0] - 1e-9) return 'low';
+    return 'ok';
+  }
+
+  // Bedside titration chart: dose steps from the low end to the ceiling, with mL/h.
+  function titrationTable(entry, conc, weight, rows) {
+    if (!entry) return [];
+    const lo = numv((entry.soft || [])[0]), top = numv(entry.hard) || numv((entry.soft || [])[1]);
+    const step = pos(entry.step);
+    if (lo == null || top == null || step == null) return [];
+    const out = [];
+    const max = rows || 14;
+    // Start at the first step at/below the usual minimum so the start dose is on the chart.
+    let d = Math.max(step, Math.floor(lo / step) * step);
+    if (lo < step) d = lo;
+    for (let i = 0; i < 60 && out.length < max && d <= top + 1e-9; i++) {
+      const rate = rateFromDose({ dose: d, unit: entry.unit, weight: weight, conc: conc });
+      out.push({ dose: round(d, 4), rate: rate == null ? null : roundToPump(rate), level: checkLimits(entry, d) });
+      d = (i === 0 && lo < step) ? step : d + step;
+    }
+    return out;
+  }
+
+  // 24-h totals of a running infusion.
+  function dailyTotals(entry, conc, rate) {
+    const r = pos(rate);
+    if (r == null || !conc) return null;
+    const perMl = concPerMl(conc, conc.unit);
+    return { ml: r * 24, amount: perMl == null ? null : perMl * r * 24, unit: conc.unit };
+  }
+
+  // How to make the solution from the stock ampoule.
+  function prepPlan(conc, amp) {
+    if (!conc || !amp) return null;
+    const need = convert(conc.amount, conc.unit, amp.unit);
+    const per = pos(amp.amount), ampMl = pos(amp.ml), vol = pos(conc.ml);
+    if (need == null || per == null || ampMl == null || vol == null) return null;
+    const ampoules = need / per;
+    const drawMl = ampoules * ampMl;
+    const diluentMl = vol - drawMl;
+    return {
+      ampoules: round(ampoules, 2), open: Math.ceil(ampoules - 1e-9), drawMl: round(drawMl, 2),
+      diluentMl: round(Math.max(0, diluentMl), 1), undiluted: Math.abs(diluentMl) < 0.05, impossible: diluentMl < -0.05,
+    };
+  }
+
+  // Simulated pump: what has gone in after `elapsedH` hours at `rate` mL/h of a `volume` mL syringe/bag.
+  function pumpState(o) {
+    const rate = numv(o.rate) || 0, vol = pos(o.volume), h = Math.max(0, numv(o.elapsedH) || 0);
+    if (vol == null) return null;
+    const infused = Math.min(vol, rate * h);
+    const left = vol - infused;
+    const hoursLeft = rate > 0 ? left / rate : null;
+    return { infused: infused, left: left, fraction: left / vol, hoursLeft: hoursLeft, empty: left <= 1e-9, nearEmpty: left / vol < 0.1 };
+  }
+
+  // Gravity drip: drops/min from volume, minutes and the giving-set drop factor.
+  function dripRate(volumeMl, minutes, dropFactor) {
+    const v = pos(volumeMl), m = pos(minutes), f = pos(dropFactor);
+    if (v == null || m == null || f == null) return null;
+    return { dropsPerMin: (v * f) / m, mlPerHour: (v / m) * 60 };
+  }
+  function dripsFromRate(mlPerHour, dropFactor) {
+    const r = pos(mlPerHour), f = pos(dropFactor);
+    return r == null || f == null ? null : (r * f) / 60;
+  }
+
+  /* ---- body size ---- */
+  function ibw(heightCm, sex) {
+    const h = pos(heightCm);
+    if (h == null) return null;
+    const v = (sex === 'F' ? 45.5 : 50) + 0.9055 * (h - 152.4);   // Devine: 2.3 kg per inch over 5 ft
+    return v > 0 ? v : null;
+  }
+  function adjBw(weight, ibwKg) {
+    const w = pos(weight), i = pos(ibwKg);
+    if (w == null || i == null) return null;
+    return w > i ? i + 0.4 * (w - i) : w;
+  }
+  function bmi(weight, heightCm) { const w = pos(weight), h = pos(heightCm); return w == null || h == null ? null : w / Math.pow(h / 100, 2); }
+  function bsaMosteller(weight, heightCm) { const w = pos(weight), h = pos(heightCm); return w == null || h == null ? null : Math.sqrt((w * h) / 3600); }
+  // APLS weight estimate from age in years (1–12).
+  function weightFromAge(age) {
+    const a = numv(age);
+    if (a == null || a < 0) return null;
+    if (a < 1) return round(Math.max(3.5, (a * 12 + 9) / 2), 1);   // (months + 9) / 2
+    if (a <= 5) return 2 * a + 8;
+    if (a <= 12) return 3 * a + 7;
+    return null;
+  }
+
+  /* ---- renal ---- */
+  const scrMgDl = (scr, unit) => { const s = pos(scr); return s == null ? null : (unit === 'umol' ? s / 88.4 : s); };
+  function crclCockcroftGault(o) {
+    const age = pos(o.age), w = pos(o.weight), s = scrMgDl(o.scr, o.scrUnit);
+    if (age == null || w == null || s == null) return null;
+    return ((140 - age) * w * (o.sex === 'F' ? 0.85 : 1)) / (72 * s);
+  }
+  // CKD-EPI 2021 (race-free), mL/min/1.73 m².
+  function egfrCkdEpi2021(o) {
+    const age = pos(o.age), s = scrMgDl(o.scr, o.scrUnit);
+    if (age == null || s == null) return null;
+    const F = o.sex === 'F', k = F ? 0.7 : 0.9, a = F ? -0.241 : -0.302;
+    return 142 * Math.pow(Math.min(s / k, 1), a) * Math.pow(Math.max(s / k, 1), -1.2) * Math.pow(0.9938, age) * (F ? 1.012 : 1);
+  }
+  // Bedside Schwartz (children), mL/min/1.73 m².
+  function schwartzBedside(heightCm, scr, scrUnit) { const h = pos(heightCm), s = scrMgDl(scr, scrUnit); return h == null || s == null ? null : (0.413 * h) / s; }
+
+  /* ---- fluids ---- */
+  // Holliday–Segar 4-2-1 (mL/h) and 100/50/20 (mL/day).
+  function maintenance421(weight) {
+    const w = pos(weight);
+    if (w == null) return null;
+    const perH = w <= 10 ? 4 * w : w <= 20 ? 40 + 2 * (w - 10) : 60 + (w - 20);
+    const perDay = w <= 10 ? 100 * w : w <= 20 ? 1000 + 50 * (w - 10) : 1500 + 20 * (w - 20);
+    return { mlPerHour: perH, mlPerDay: perDay };
+  }
+  // Parkland: 4 mL × kg × %TBSA in 24 h, half in the first 8 h from the time of the burn.
+  function parkland(weight, tbsa) {
+    const w = pos(weight), t = pos(tbsa);
+    if (w == null || t == null) return null;
+    const total = 4 * w * Math.min(100, t);
+    return { total: total, first8: total / 2, first8PerHour: total / 16, next16PerHour: total / 32 };
+  }
+
+  /* ---- sodium & water ---- */
+  // Total body water fraction: child 0.6, adult man 0.6, woman 0.5, elderly man 0.5, elderly woman 0.45.
+  function tbwFraction(sex, age) {
+    const a = numv(age);
+    if (a != null && a < 18) return 0.6;
+    const old = a != null && a >= 65;
+    if (sex === 'F') return old ? 0.45 : 0.5;
+    return old ? 0.5 : 0.6;
+  }
+  function tbw(weight, sex, age) { const w = pos(weight); return w == null ? null : w * tbwFraction(sex, age); }
+  function sodiumDeficit(o) {
+    const t = tbw(o.weight, o.sex, o.age), cur = pos(o.na), target = pos(o.target);
+    return t == null || cur == null || target == null ? null : t * (target - cur);
+  }
+  const FLUID_NA = { 'NS 0.9%': 154, '3% saline': 513, "Ringer's lactate": 130, '0.45% saline': 77, 'DNS (D5 + 0.9%)': 154, 'D5W': 0 };
+  // Adrogué–Madias: change in serum Na from 1 L of the infusate.
+  function adrogueMadias(o) {
+    const t = tbw(o.weight, o.sex, o.age), na = pos(o.na);
+    const inNa = numv(o.infusateNa), inK = numv(o.infusateK) || 0;
+    if (t == null || na == null || inNa == null) return null;
+    const perL = (inNa + inK - na) / (t + 1);
+    const target = numv(o.targetChange);
+    return { perLitre: perL, litresForTarget: target != null && perL !== 0 ? Math.abs(target / perL) : null };
+  }
+  function freeWaterDeficit(o) {
+    const t = tbw(o.weight, o.sex, o.age), na = pos(o.na);
+    return t == null || na == null ? null : t * (na / 140 - 1);
+  }
+  // Hillier: + 2.4 mmol/L per 100 mg/dL glucose above 100.
+  function correctedSodium(na, glucose, glucoseUnit) {
+    const n = pos(na), g = pos(glucose);
+    if (n == null || g == null) return null;
+    const mg = glucoseUnit === 'mmol' ? g * 18 : g;
+    return n + 0.024 * (mg - 100);
+  }
+  // Calcium corrected for albumin (mg/dL with g/dL albumin, or mmol/L with g/L).
+  function correctedCalcium(ca, alb, unit) {
+    const c = pos(ca), a = pos(alb);
+    if (c == null || a == null) return null;
+    return unit === 'mmol' ? c + 0.02 * (40 - a) : c + 0.8 * (4 - a);
+  }
+  function anionGap(na, cl, hco3, albGdl) {
+    const n = pos(na), c = pos(cl), h = pos(hco3);
+    if (n == null || c == null || h == null) return null;
+    const ag = n - (c + h);
+    const a = pos(albGdl);
+    return { gap: ag, corrected: a == null ? null : ag + 2.5 * (4 - a) };
+  }
+  function meanArterial(sbp, dbp) { const s = pos(sbp), d = pos(dbp); return s == null || d == null ? null : (s + 2 * d) / 3; }
+
+  /* ---- unit converter ---- */
+  // kind: 'mass' (value, from, to) | 'ratio' (1:N → mg/mL) | 'percent' (% → mg/mL) | 'mmol' (mg ↔ mmol with mw & valence)
+  function convertUnits(o) {
+    const v = numv(o.value);
+    if (v == null) return null;
+    if (o.kind === 'ratio') return v > 0 ? 1000 / v : null;           // 1:1000 → 1 mg/mL
+    if (o.kind === 'percent') return v * 10;                          // 1% → 10 mg/mL
+    if (o.kind === 'mg2mmol') { const mw = pos(o.mw); return mw == null ? null : v / mw; }
+    if (o.kind === 'mmol2meq') return v * (pos(o.valence) || 1);
+    return convert(v, o.from, o.to);
+  }
+
+  /* ---- emergency sheet ---- */
+  function isAdult(weight, age) {
+    const a = numv(age), w = pos(weight);
+    if (a != null) return a >= 16;
+    return w != null && w >= 50;
+  }
+  function emergencyDose(entry, weight, age) {
+    const w = pos(weight);
+    if (!entry || w == null) return null;
+    const adult = isAdult(weight, age);
+    const range = Array.isArray(entry.dose) ? entry.dose : [entry.dose, entry.dose];
+    let lo = range[0] * w, hi = range[1] * w, capped = false, usedAdult = false;
+    if (adult && entry.adult != null && !Array.isArray(entry.dose)) { lo = hi = entry.adult; usedAdult = true; }
+    if (entry.min != null && !usedAdult) { if (lo < entry.min) lo = entry.min; if (hi < entry.min) hi = entry.min; }
+    // The adult dose IS the adult dose — the paediatric single-dose ceiling (atropine 0.5 mg) does not apply to it.
+    if (entry.max != null && !usedAdult) { if (hi > entry.max) { hi = entry.max; capped = true; } if (lo > entry.max) { lo = entry.max; capped = true; } }
+    const ml = entry.perMl ? [lo / entry.perMl, hi / entry.perMl] : (entry.unit === 'mL' ? [lo, hi] : null);
+    return { lo: lo, hi: hi, unit: entry.unit, ml: ml, capped: capped, adult: usedAdult, single: Math.abs(hi - lo) < 1e-9 };
+  }
+  function electricalDose(entry, weight, age) {
+    const w = pos(weight);
+    if (!entry || w == null) return null;
+    const r = Array.isArray(entry.jPerKg) ? entry.jPerKg : [entry.jPerKg, entry.jPerKg];
+    if (isAdult(weight, age)) return { lo: entry.adult, hi: entry.adult, adult: true, capped: false };
+    const cap = Math.min(entry.adult, entry.max ? entry.max * w : Infinity);
+    const lo = Math.min(cap, r[0] * w), hi = Math.min(cap, r[1] * w);
+    return { lo: lo, hi: hi, adult: false, capped: r[1] * w > cap };
+  }
+  // ETT: uncuffed age/4 + 4, cuffed age/4 + 3.5, oral depth age/2 + 12 (APLS), for 1–12 y.
+  function airway(age) {
+    const a = numv(age);
+    if (a == null) return null;
+    if (a < 1) return { cuffed: 3.5, uncuffed: 3.5, depth: null, note: 'Infant: 3.0–3.5 cuffed (term), 3.5–4.0 uncuffed.' };
+    if (a > 12) return { cuffed: null, uncuffed: null, depth: null, note: 'Adult: women 7.0–7.5, men 7.5–8.5; oral depth ≈ 21 / 23 cm at the teeth.' };
+    // Round DOWN to the half size (a smaller tube passes); have ±0.5 ready.
+    const half = (x) => Math.floor(x * 2 + 1e-9) / 2;
+    return { cuffed: half(a / 4 + 3.5), uncuffed: half(a / 4 + 4), depth: round(a / 2 + 12, 1), note: 'Have the half size above and below ready.' };
+  }
+  function emergencySheet(lib, weight, age) {
+    const em = (lib && lib.EMERGENCY) || [], el = (lib && lib.ELECTRICAL) || [];
+    return {
+      drugs: em.map((e) => ({ entry: e, dose: emergencyDose(e, weight, age) })),
+      electrical: el.map((e) => ({ entry: e, dose: electricalDose(e, weight, age) })),
+      airway: airway(age),
+      fluid: maintenance421(weight),
+    };
+  }
+
+  /* ---- paediatric ---- */
+  // mgPerKg: the chosen figure inside entry.dose ([lo, hi]); defaults to the top of the range.
+  function paedDose(entry, weight, strength, mgPerKg) {
+    const w = pos(weight);
+    if (!entry || w == null) return null;
+    const range = entry.dose || [];
+    const pick = numv(mgPerKg) != null ? numv(mgPerKg) : range[1];
+    const perDay = Math.max(1, entry.perDay || 1);
+    let dose = entry.mode === 'day' ? (pick * w) / perDay : pick * w;
+    let capped = null;
+    if (entry.maxDose != null && dose > entry.maxDose) { dose = entry.maxDose; capped = 'dose'; }
+    let day = dose * perDay;
+    const dayCap = Math.min(entry.maxDay != null ? entry.maxDay : Infinity, entry.maxDayPerKg != null ? entry.maxDayPerKg * w : Infinity);
+    if (day > dayCap + 1e-9) { day = dayCap; dose = dayCap / perDay; capped = 'day'; }
+    let volume = null, units = null;
+    if (strength && strength.form) units = dose / strength.mg;                   // tablets / capsules
+    else if (strength && pos(strength.mg) && pos(strength.ml)) volume = (dose / strength.mg) * strength.ml;
+    return { dose: dose, day: day, perDay: perDay, mgPerKg: pick, volume: volume, units: units, capped: capped, outOfRange: pick < range[0] - 1e-9 || pick > range[1] + 1e-9 };
+  }
+
+  /* ---- library merge, hashing, ordering ---- */
+  // FNV-1a over a stable JSON of the clinical content (never ids, review or ordering).
+  function stableJson(v) {
+    if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+    if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+    return JSON.stringify(v == null ? null : v);
+  }
+  const META = { id: 1, kind: 1, review: 1, reviewed: 1, builtIn: 1, custom: 1, disabled: 1, updatedAt: 1, updatedBy: 1, overridden: 1 };
+  function contentHash(entry) {
+    const c = {};
+    Object.keys(entry || {}).forEach((k) => { if (!META[k]) c[k] = entry[k]; });
+    const s = stableJson(c);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return ('0000000' + h.toString(16)).slice(-8);
+  }
+  const KIND_LIST = { infusion: 'INFUSIONS', emergency: 'EMERGENCY', paed: 'PAEDIATRIC' };
+  // overrides: [{ id, kind, builtIn, disabled, data, review:{by, at, hash} }]
+  function mergeLibrary(lib, overrides) {
+    const byId = {};
+    (overrides || []).forEach((o) => { if (o && o.id && o.id.charAt(0) !== '_') byId[o.id] = o; });
+    const out = {};
+    Object.keys(KIND_LIST).forEach((kind) => {
+      const list = ((lib && lib[KIND_LIST[kind]]) || []).map((b) => {
+        const o = byId[b.id];
+        const e = Object.assign({}, b, o && o.data ? o.data : {}, { id: b.id, kind: kind, builtIn: true, overridden: !!(o && o.data && Object.keys(o.data).length), disabled: !!(o && o.disabled) });
+        return withReview(e, o);
+      });
+      Object.keys(byId).forEach((id) => {
+        const o = byId[id];
+        if (o.kind !== kind || o.builtIn || list.some((x) => x.id === id) || !o.data) return;
+        list.push(withReview(Object.assign({}, o.data, { id: id, kind: kind, builtIn: false, custom: true, disabled: !!o.disabled }), o));
+      });
+      out[kind] = list;
+    });
+    return out;
+  }
+  function withReview(e, o) {
+    const r = o && o.review;
+    const hash = contentHash(e);
+    e.reviewed = !r || !r.hash ? { state: 'none' } : { state: r.hash === hash ? 'ok' : 'stale', by: r.by, at: r.at };
+    return e;
+  }
+  // Items in the saved order; anything new goes to the end (in its own order), unknown ids are ignored.
+  function applyOrder(items, order, key) {
+    const get = key || ((x) => x.id);
+    if (!Array.isArray(order) || !order.length) return items.slice();
+    const pos = {};
+    order.forEach((id, i) => { if (pos[id] == null) pos[id] = i; });
+    return items.map((x, i) => ({ x: x, i: i, p: pos[get(x)] })).sort((a, b) => {
+      if (a.p != null && b.p != null) return a.p - b.p;
+      if (a.p != null) return -1;
+      if (b.p != null) return 1;
+      return a.i - b.i;
+    }).map((r) => r.x);
+  }
+  function moveItem(list, from, to) {
+    const a = list.slice();
+    if (from < 0 || from >= a.length || to < 0 || to >= a.length || from === to) return a;
+    const it = a.splice(from, 1)[0];
+    a.splice(to, 0, it);
+    return a;
+  }
+
+  // Human formatting: 2.625 → "2.63", 1250 → "1,250", 0.0125 → "0.0125".
+  function fmt(n, dp) {
+    if (fin(n) == null) return '—';
+    const a = Math.abs(n);
+    const d = dp != null ? dp : a >= 100 ? 0 : a >= 10 ? 1 : a >= 1 ? 2 : a >= 0.1 ? 3 : 4;
+    // Trailing zeros are trimmed only AFTER a decimal point — "160" must never become "16".
+    let s = (Math.round(n * Math.pow(10, d)) / Math.pow(10, d)).toFixed(d);
+    if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
+    return s.indexOf('.') < 0 && Math.abs(n) >= 1000 ? Number(s).toLocaleString('en-US') : s;
+  }
+
+  const API = {
+    MASS: MASS, ACT: ACT, FLUID_NA: FLUID_NA, round: round, fmt: fmt, factor: factor, convert: convert, parseUnit: parseUnit,
+    concPerMl: concPerMl, rateFromDose: rateFromDose, doseFromRate: doseFromRate, roundToPump: roundToPump, checkLimits: checkLimits,
+    titrationTable: titrationTable, dailyTotals: dailyTotals, prepPlan: prepPlan, pumpState: pumpState, dripRate: dripRate, dripsFromRate: dripsFromRate,
+    ibw: ibw, adjBw: adjBw, bmi: bmi, bsaMosteller: bsaMosteller, weightFromAge: weightFromAge,
+    crclCockcroftGault: crclCockcroftGault, egfrCkdEpi2021: egfrCkdEpi2021, schwartzBedside: schwartzBedside,
+    maintenance421: maintenance421, parkland: parkland, tbwFraction: tbwFraction, tbw: tbw, sodiumDeficit: sodiumDeficit,
+    adrogueMadias: adrogueMadias, freeWaterDeficit: freeWaterDeficit, correctedSodium: correctedSodium, correctedCalcium: correctedCalcium,
+    anionGap: anionGap, meanArterial: meanArterial, convertUnits: convertUnits,
+    isAdult: isAdult, emergencyDose: emergencyDose, electricalDose: electricalDose, airway: airway, emergencySheet: emergencySheet,
+    paedDose: paedDose, contentHash: contentHash, mergeLibrary: mergeLibrary, applyOrder: applyOrder, moveItem: moveItem,
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = API;
+  if (root) root.UNICO_DOSE = API;
+})(typeof window !== 'undefined' ? window : null);
+
+;
+/* ===== dose-pumps.jsx ===== */
+(function(){
+(function () {
+  const {
+    useState,
+    useEffect,
+    useRef,
+    useCallback
+  } = React;
+  const D = () => window.UNICO_DOSE;
+  const reduceMotion = () => {
+    try {
+      return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch (e) {
+      return false;
+    }
+  };
+  const fmtH = h => {
+    if (h == null || !Number.isFinite(h)) return '—';
+    if (h > 99) return '> 99 h';
+    const m = Math.round(h * 60);
+    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  };
+  const clockAt = h => {
+    if (h == null || !Number.isFinite(h) || h > 72) return '';
+    const d = new Date(Date.now() + h * 3600e3);
+    return d.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit'
+    }) + (d.getDate() !== new Date().getDate() ? ' (tomorrow)' : '');
+  };
+  const f1 = n => n == null || !Number.isFinite(n) ? '—' : (Math.round(n * 10) / 10).toFixed(n < 10 ? 1 : n < 100 ? 1 : 0);
+  let audioCtx = null;
+  function beep() {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator(),
+        g = audioCtx.createGain();
+      o.type = 'square';
+      o.frequency.value = 880;
+      g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.08, audioCtx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.18);
+      o.connect(g);
+      g.connect(audioCtx.destination);
+      o.start();
+      o.stop(audioCtx.currentTime + 0.2);
+    } catch (e) {}
+  }
+  function usePumpSim({
+    rate,
+    volume,
+    locked,
+    bolusRate
+  }) {
+    const [run, setRun] = useState(false);
+    const [infused, setInfused] = useState(0);
+    const [speed, setSpeed] = useState(60);
+    const [bolusLeft, setBolusLeft] = useState(0);
+    const ref = useRef({
+      rate,
+      volume,
+      speed,
+      bolusLeft,
+      infused: 0
+    });
+    ref.current.rate = rate;
+    ref.current.volume = volume;
+    ref.current.speed = speed;
+    useEffect(() => {
+      if (locked && run) setRun(false);
+    }, [locked, run]);
+    useEffect(() => {
+      if (!run) return undefined;
+      let raf = 0,
+        timer = 0,
+        last = performance.now(),
+        alive = true;
+      const slow = reduceMotion();
+      const tick = now => {
+        if (!alive) return;
+        const dtH = Math.min(0.25, (now - last) / 3600e3) * ref.current.speed;
+        last = now;
+        if (!document.hidden) {
+          const r = ref.current;
+          let add = (Number(r.rate) || 0) * dtH;
+          let bl = r.bolusLeft;
+          if (bl > 0) {
+            const b = Math.min(bl, (bolusRate || 300) * dtH);
+            add += b;
+            bl -= b;
+            r.bolusLeft = bl;
+            setBolusLeft(bl);
+          }
+          const next = Math.min(r.volume || 0, r.infused + add);
+          r.infused = next;
+          setInfused(next);
+          if (next >= (r.volume || 0) - 1e-9) {
+            setRun(false);
+            return;
+          }
+        }
+        if (slow) timer = setTimeout(() => tick(performance.now()), 1000);else raf = requestAnimationFrame(tick);
+      };
+      if (slow) timer = setTimeout(() => tick(performance.now()), 1000);else raf = requestAnimationFrame(tick);
+      return () => {
+        alive = false;
+        cancelAnimationFrame(raf);
+        clearTimeout(timer);
+      };
+    }, [run, bolusRate]);
+    const stop = useCallback(() => {
+      setRun(false);
+      ref.current.infused = 0;
+      ref.current.bolusLeft = 0;
+      setInfused(0);
+      setBolusLeft(0);
+    }, []);
+    const bolus = useCallback(ml => {
+      ref.current.bolusLeft += ml;
+      setBolusLeft(ref.current.bolusLeft);
+    }, []);
+    const left = Math.max(0, (volume || 0) - infused);
+    const hoursLeft = rate > 0 ? left / rate : null;
+    return {
+      run,
+      setRun,
+      infused,
+      left,
+      frac: volume ? left / volume : 0,
+      hoursLeft,
+      speed,
+      setSpeed,
+      stop,
+      bolus,
+      bolusing: bolusLeft > 0,
+      empty: volume > 0 && left <= 1e-6,
+      nearEmpty: volume > 0 && left / volume < 0.1
+    };
+  }
+  function useAlarmBeep(on, alarm) {
+    useEffect(() => {
+      if (!on || !alarm) return undefined;
+      beep();
+      const t = setInterval(beep, 1300);
+      return () => clearInterval(t);
+    }, [on, alarm]);
+  }
+  function RateKnob({
+    value,
+    onChange,
+    step,
+    max,
+    disabled,
+    color
+  }) {
+    const drag = useRef(null);
+    const v = Number(value) || 0;
+    const angle = -135 + Math.min(1, v / (max || 100)) * 270;
+    const set = n => {
+      if (!disabled) onChange(Math.max(0, Math.round(n / step) * step));
+    };
+    return React.createElement("div", {
+      role: "slider",
+      tabIndex: disabled ? -1 : 0,
+      "aria-label": "Pump rate (mL/h)",
+      "aria-valuenow": v,
+      "aria-valuemin": 0,
+      "aria-valuemax": max,
+      className: 'dc-knob' + (disabled ? ' is-off' : ''),
+      onKeyDown: e => {
+        if (e.key === 'ArrowUp' || e.key === 'ArrowRight') {
+          e.preventDefault();
+          set(v + step);
+        }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowLeft') {
+          e.preventDefault();
+          set(v - step);
+        }
+      },
+      onWheel: e => {
+        e.preventDefault();
+        set(v + (e.deltaY < 0 ? step : -step));
+      },
+      onPointerDown: e => {
+        if (disabled) return;
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = {
+          y: e.clientY,
+          v
+        };
+      },
+      onPointerMove: e => {
+        if (!drag.current) return;
+        const dy = drag.current.y - e.clientY;
+        set(drag.current.v + Math.round(dy / 4) * step);
+      },
+      onPointerUp: () => {
+        drag.current = null;
+      },
+      onPointerCancel: () => {
+        drag.current = null;
+      },
+      title: "Drag up/down, scroll, or use the arrow keys"
+    }, React.createElement("svg", {
+      viewBox: "0 0 64 64",
+      width: "60",
+      height: "60"
+    }, React.createElement("defs", null, React.createElement("radialGradient", {
+      id: "knobG",
+      cx: "35%",
+      cy: "30%",
+      r: "75%"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "#ffffff"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "#c9d3df"
+    }))), React.createElement("circle", {
+      cx: "32",
+      cy: "32",
+      r: "29",
+      fill: "none",
+      stroke: "rgba(125,145,180,.25)",
+      strokeWidth: "3",
+      strokeDasharray: "137 46",
+      transform: "rotate(135 32 32)"
+    }), React.createElement("circle", {
+      cx: "32",
+      cy: "32",
+      r: "29",
+      fill: "none",
+      stroke: color || '#0090ca',
+      strokeWidth: "3",
+      strokeLinecap: "round",
+      strokeDasharray: Math.min(1, v / (max || 100)) * 137 + ' 999',
+      transform: "rotate(135 32 32)",
+      style: {
+        transition: 'stroke-dasharray .2s'
+      }
+    }), React.createElement("circle", {
+      cx: "32",
+      cy: "32",
+      r: "22",
+      fill: "url(#knobG)",
+      stroke: "rgba(31,59,90,.18)"
+    }), [...Array(12)].map((_, i) => React.createElement("line", {
+      key: i,
+      x1: "32",
+      y1: "12.5",
+      x2: "32",
+      y2: "15",
+      stroke: "rgba(31,59,90,.25)",
+      strokeWidth: "1.2",
+      transform: 'rotate(' + i * 30 + ' 32 32)'
+    })), React.createElement("g", {
+      style: {
+        transform: 'rotate(' + angle + 'deg)',
+        transformOrigin: '32px 32px',
+        transition: 'transform .18s cubic-bezier(.3,1.5,.5,1)'
+      }
+    }, React.createElement("line", {
+      x1: "32",
+      y1: "32",
+      x2: "32",
+      y2: "15",
+      stroke: color || '#0090ca',
+      strokeWidth: "3.2",
+      strokeLinecap: "round"
+    })), React.createElement("circle", {
+      cx: "32",
+      cy: "32",
+      r: "3.2",
+      fill: "#16202e"
+    })));
+  }
+  function Controls({
+    sim,
+    rate,
+    onRate,
+    step,
+    locked,
+    beepOn,
+    setBeep,
+    onBolus,
+    bolusMl,
+    maxRate,
+    color,
+    kind
+  }) {
+    const r = Number(rate) || 0;
+    const set = n => onRate(Math.max(0, D().roundToPump(n)));
+    return React.createElement("div", {
+      className: "dc-pump-ctl"
+    }, React.createElement("div", {
+      className: "dc-pump-btns"
+    }, React.createElement("button", {
+      className: 'dc-pbtn ' + (sim.run ? 'is-pause' : 'is-run'),
+      disabled: locked || !(r > 0) || sim.empty,
+      onClick: () => sim.setRun(!sim.run),
+      title: locked ? 'Locked — the dose is over the hard limit' : ''
+    }, sim.run ? React.createElement(React.Fragment, null, React.createElement("svg", {
+      viewBox: "0 0 24 24",
+      width: "13",
+      height: "13"
+    }, React.createElement("rect", {
+      x: "6",
+      y: "5",
+      width: "4",
+      height: "14",
+      rx: "1",
+      fill: "currentColor"
+    }), React.createElement("rect", {
+      x: "14",
+      y: "5",
+      width: "4",
+      height: "14",
+      rx: "1",
+      fill: "currentColor"
+    })), " Pause") : React.createElement(React.Fragment, null, React.createElement("svg", {
+      viewBox: "0 0 24 24",
+      width: "13",
+      height: "13"
+    }, React.createElement("path", {
+      d: "M7 5l12 7-12 7z",
+      fill: "currentColor"
+    })), " ", sim.infused > 0 ? 'Resume' : 'Start')), React.createElement("button", {
+      className: "dc-pbtn",
+      onClick: sim.stop,
+      title: "Stop and reset the volume counter"
+    }, React.createElement("svg", {
+      viewBox: "0 0 24 24",
+      width: "12",
+      height: "12"
+    }, React.createElement("rect", {
+      x: "6",
+      y: "6",
+      width: "12",
+      height: "12",
+      rx: "1.5",
+      fill: "currentColor"
+    })), " Stop"), kind === 'syringe' && bolusMl ? React.createElement("button", {
+      className: "dc-pbtn",
+      disabled: !sim.run || locked,
+      onClick: () => onBolus && onBolus(),
+      title: 'Give a ' + bolusMl + ' mL bolus (simulated)'
+    }, "Bolus ", bolusMl, " mL") : null), React.createElement("div", {
+      className: "dc-pump-rate"
+    }, React.createElement("button", {
+      className: "dc-step",
+      "aria-label": "Lower rate",
+      onClick: () => set(r - step)
+    }, "\u25BC"), React.createElement(RateKnob, {
+      value: r,
+      onChange: set,
+      step: step,
+      max: maxRate,
+      color: color
+    }), React.createElement("button", {
+      className: "dc-step",
+      "aria-label": "Raise rate",
+      onClick: () => set(r + step)
+    }, "\u25B2")), React.createElement("div", {
+      className: "dc-pump-opts"
+    }, React.createElement("label", {
+      title: "Speed up the simulation only \u2014 the rate shown is real"
+    }, React.createElement("span", null, "Time-lapse"), React.createElement("select", {
+      value: sim.speed,
+      onChange: e => sim.setSpeed(Number(e.target.value))
+    }, React.createElement("option", {
+      value: 1
+    }, "\xD71 real time"), React.createElement("option", {
+      value: 60
+    }, "\xD760 (1 min = 1 h)"), React.createElement("option", {
+      value: 600
+    }, "\xD7600"))), React.createElement("label", {
+      className: "dc-check"
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: beepOn,
+      onChange: e => setBeep(e.target.checked)
+    }), " Alarm sound")));
+  }
+  const LEVEL_TEXT = {
+    hard: 'OVER HARD LIMIT',
+    high: 'HIGH DOSE',
+    low: 'LOW DOSE'
+  };
+  function alarmOf(level, sim, emptyText) {
+    if (level === 'hard') return {
+      text: LEVEL_TEXT.hard + ' — LOCKED',
+      tone: 'red'
+    };
+    if (sim.empty) return {
+      text: emptyText,
+      tone: 'red'
+    };
+    if (sim.nearEmpty && sim.infused > 0) return {
+      text: 'NEAR EMPTY',
+      tone: 'amber'
+    };
+    if (level === 'high' || level === 'low') return {
+      text: LEVEL_TEXT[level],
+      tone: 'amber'
+    };
+    return null;
+  }
+  const LCD = {
+    ok: '#6ff2d2',
+    amber: '#ffc861',
+    red: '#ff7b8c'
+  };
+  function SyringePump({
+    drug,
+    color,
+    rate,
+    volume,
+    doseText,
+    level,
+    onRate,
+    step,
+    bolusMl,
+    maxRate
+  }) {
+    const vol = Number(volume) > 0 ? Number(volume) : 50;
+    const locked = level === 'hard';
+    const sim = usePumpSim({
+      rate: Number(rate) || 0,
+      volume: vol,
+      locked,
+      bolusRate: 600
+    });
+    const [beepOn, setBeep] = useState(false);
+    const alarm = alarmOf(level, sim, 'SYRINGE EMPTY');
+    useAlarmBeep(beepOn, alarm && (sim.run || locked || sim.empty) ? alarm.text : null);
+    const tone = alarm ? LCD[alarm.tone] : LCD.ok;
+    const X0 = 176,
+      X1 = 428,
+      travel = X1 - X0;
+    const head = X0 + (1 - sim.frac) * travel;
+    const flowDur = sim.run ? Math.max(0.25, 2.6 / Math.log2(2 + (Number(rate) || 0) * sim.speed / 6)) : 0;
+    const liquid = color || '#27a8db';
+    const ticks = [];
+    for (let i = 0; i <= 10; i++) ticks.push(i);
+    return React.createElement("div", {
+      className: 'dc-pump' + (alarm ? ' is-alarm-' + alarm.tone : '') + (sim.run ? ' is-running' : '')
+    }, React.createElement("svg", {
+      viewBox: "0 0 560 236",
+      className: "dc-pump-svg",
+      role: "img",
+      "aria-label": 'Syringe pump at ' + f1(rate) + ' mL per hour'
+    }, React.createElement("defs", null, React.createElement("linearGradient", {
+      id: "spBody",
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "#ffffff"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "#dfe6ee"
+    })), React.createElement("linearGradient", {
+      id: "spRail",
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "#eef2f7"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "#c7d1dc"
+    })), React.createElement("linearGradient", {
+      id: "spGlass",
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "rgba(255,255,255,.95)"
+    }), React.createElement("stop", {
+      offset: ".5",
+      stopColor: "rgba(225,238,248,.55)"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "rgba(190,210,228,.7)"
+    })), React.createElement("linearGradient", {
+      id: "spLiquid",
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: liquid,
+      stopOpacity: ".55"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: liquid,
+      stopOpacity: ".9"
+    })), React.createElement("linearGradient", {
+      id: "spLcd",
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "#0d2633"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "#06141c"
+    })), React.createElement("filter", {
+      id: "spShadow",
+      x: "-10%",
+      y: "-10%",
+      width: "120%",
+      height: "140%"
+    }, React.createElement("feDropShadow", {
+      dx: "0",
+      dy: "6",
+      stdDeviation: "7",
+      floodColor: "#1f3b5a",
+      floodOpacity: ".18"
+    })), React.createElement("filter", {
+      id: "spGlow"
+    }, React.createElement("feGaussianBlur", {
+      stdDeviation: "1.4",
+      result: "b"
+    }), React.createElement("feMerge", null, React.createElement("feMergeNode", {
+      in: "b"
+    }), React.createElement("feMergeNode", {
+      in: "SourceGraphic"
+    })))), React.createElement("rect", {
+      x: "10",
+      y: "70",
+      width: "540",
+      height: "152",
+      rx: "20",
+      fill: "url(#spBody)",
+      stroke: "rgba(31,59,90,.14)",
+      filter: "url(#spShadow)"
+    }), React.createElement("rect", {
+      x: "22",
+      y: "58",
+      width: "516",
+      height: "22",
+      rx: "9",
+      fill: "url(#spRail)",
+      stroke: "rgba(31,59,90,.12)"
+    }), React.createElement("rect", {
+      x: "420",
+      y: "14",
+      width: "26",
+      height: "52",
+      rx: "5",
+      fill: "#cfd8e3",
+      stroke: "rgba(31,59,90,.2)"
+    }), React.createElement("rect", {
+      x: X0 - 4,
+      y: "22",
+      width: travel + 8,
+      height: "36",
+      rx: "6",
+      fill: "url(#spGlass)",
+      stroke: "rgba(31,59,90,.35)",
+      strokeWidth: "1.2"
+    }), React.createElement("rect", {
+      x: head,
+      y: "25",
+      width: Math.max(0, X1 - head),
+      height: "30",
+      rx: "3",
+      fill: "url(#spLiquid)"
+    }), ticks.map(i => {
+      const x = X0 + i / 10 * travel;
+      return React.createElement("g", {
+        key: i
+      }, React.createElement("line", {
+        x1: x,
+        y1: "22",
+        x2: x,
+        y2: i % 2 ? 29 : 33,
+        stroke: "rgba(31,59,90,.45)",
+        strokeWidth: "1"
+      }), i % 2 === 0 ? React.createElement("text", {
+        x: x,
+        y: "42",
+        fontSize: "7.5",
+        textAnchor: "middle",
+        fill: "rgba(31,59,90,.55)",
+        fontFamily: "IBM Plex Mono,monospace"
+      }, Math.round(vol - i / 10 * vol)) : null);
+    }), React.createElement("rect", {
+      x: X0 - 10,
+      y: "16",
+      width: "6",
+      height: "48",
+      rx: "2",
+      fill: "#b9c4d1"
+    }), React.createElement("rect", {
+      x: head - 6,
+      y: "24",
+      width: "7",
+      height: "32",
+      rx: "2",
+      fill: "#2d3a4a"
+    }), React.createElement("rect", {
+      x: head - 118,
+      y: "36",
+      width: "112",
+      height: "8",
+      rx: "2",
+      fill: "#d7dee7",
+      stroke: "rgba(31,59,90,.25)"
+    }), React.createElement("g", null, React.createElement("rect", {
+      x: head - 150,
+      y: "10",
+      width: "34",
+      height: "62",
+      rx: "7",
+      fill: "#7f8fa3"
+    }), React.createElement("rect", {
+      x: head - 146,
+      y: "14",
+      width: "26",
+      height: "54",
+      rx: "5",
+      fill: "#93a3b7"
+    }), React.createElement("circle", {
+      cx: head - 133,
+      cy: "41",
+      r: "5",
+      fill: "#5b6b80"
+    })), React.createElement("rect", {
+      x: X1 + 4,
+      y: "35",
+      width: "18",
+      height: "10",
+      rx: "2",
+      fill: "#d4dde7",
+      stroke: "rgba(31,59,90,.3)"
+    }), React.createElement("path", {
+      d: 'M ' + (X1 + 22) + ' 40 C 500 40, 520 40, 528 60 S 548 96, 556 96',
+      fill: "none",
+      stroke: "rgba(31,59,90,.25)",
+      strokeWidth: "5",
+      strokeLinecap: "round"
+    }), React.createElement("path", {
+      d: 'M ' + (X1 + 22) + ' 40 C 500 40, 520 40, 528 60 S 548 96, 556 96',
+      fill: "none",
+      stroke: liquid,
+      strokeWidth: "2.6",
+      strokeLinecap: "round",
+      strokeDasharray: "7 5",
+      className: sim.run ? 'dc-flow' : '',
+      style: sim.run ? {
+        animationDuration: flowDur + 's'
+      } : {
+        opacity: .45
+      }
+    }), React.createElement("text", {
+      x: "30",
+      y: "106",
+      fontSize: "14",
+      fontWeight: "800",
+      fill: "#16202e",
+      letterSpacing: "1"
+    }, "UNICO"), React.createElement("text", {
+      x: "30",
+      y: "121",
+      fontSize: "9.5",
+      fill: "#6c7a8c",
+      letterSpacing: "1.2"
+    }, "SYRINGE PUMP \xB7 SP-50"), React.createElement("g", {
+      transform: "translate(30 138)"
+    }, React.createElement("circle", {
+      cx: "6",
+      cy: "6",
+      r: "5",
+      fill: sim.run && !alarm ? '#25c06b' : '#9fd8b8',
+      className: sim.run && !alarm ? 'dc-blink' : ''
+    }), React.createElement("text", {
+      x: "16",
+      y: "9",
+      fontSize: "10",
+      fill: "#6c7a8c"
+    }, "RUN"), React.createElement("circle", {
+      cx: "60",
+      cy: "6",
+      r: "5",
+      fill: alarm ? alarm.tone === 'red' ? '#ff4d64' : '#ffb020' : '#f0d9a8',
+      className: alarm ? 'dc-blink-fast' : ''
+    }), React.createElement("text", {
+      x: "70",
+      y: "9",
+      fontSize: "10",
+      fill: "#6c7a8c"
+    }, "ALARM"), React.createElement("circle", {
+      cx: "130",
+      cy: "6",
+      r: "5",
+      fill: sim.bolusing ? '#3aa0ff' : '#bcd3ea'
+    }), React.createElement("text", {
+      x: "140",
+      y: "9",
+      fontSize: "10",
+      fill: "#6c7a8c"
+    }, "BOLUS")), React.createElement("text", {
+      x: "30",
+      y: "178",
+      fontSize: "10.5",
+      fill: "#6c7a8c"
+    }, "Syringe"), React.createElement("text", {
+      x: "30",
+      y: "195",
+      fontSize: "14",
+      fontWeight: "700",
+      fill: "#16202e",
+      fontFamily: "IBM Plex Mono,monospace"
+    }, f1(vol), " mL"), React.createElement("text", {
+      x: "130",
+      y: "178",
+      fontSize: "10.5",
+      fill: "#6c7a8c"
+    }, "Speed"), React.createElement("text", {
+      x: "130",
+      y: "195",
+      fontSize: "14",
+      fontWeight: "700",
+      fill: "#16202e",
+      fontFamily: "IBM Plex Mono,monospace"
+    }, "\xD7", sim.speed), React.createElement("rect", {
+      x: "246",
+      y: "88",
+      width: "290",
+      height: "122",
+      rx: "12",
+      fill: "url(#spLcd)",
+      stroke: "#031018",
+      strokeWidth: "2"
+    }), React.createElement("g", {
+      filter: "url(#spGlow)",
+      fontFamily: "IBM Plex Mono,monospace"
+    }, React.createElement("text", {
+      x: "260",
+      y: "108",
+      fontSize: "12.5",
+      fill: tone,
+      opacity: ".85"
+    }, String(drug || 'No drug selected').slice(0, 32)), React.createElement("text", {
+      x: "260",
+      y: "146",
+      fontSize: "36",
+      fontWeight: "700",
+      fill: tone
+    }, f1(rate), React.createElement("tspan", {
+      fontSize: "15",
+      dx: "6"
+    }, "mL/h")), React.createElement("text", {
+      x: "260",
+      y: "167",
+      fontSize: "13",
+      fill: tone,
+      opacity: ".9"
+    }, doseText || ''), React.createElement("text", {
+      x: "260",
+      y: "186",
+      fontSize: "11.5",
+      fill: tone,
+      opacity: ".78"
+    }, "VOL ", f1(sim.infused), "/", f1(vol), " mL  LEFT ", fmtH(sim.hoursLeft)), React.createElement("text", {
+      x: "260",
+      y: "202",
+      fontSize: "11.5",
+      fontWeight: "700",
+      fill: alarm ? LCD[alarm.tone] : tone,
+      className: alarm ? 'dc-blink-fast' : ''
+    }, alarm ? '⚠ ' + alarm.text : sim.run ? sim.bolusing ? '▶ BOLUS' : '▶ INFUSING' : sim.infused > 0 ? '❚❚ PAUSED' : '■ READY'))), React.createElement("div", {
+      className: "dc-pump-foot"
+    }, React.createElement("span", null, "Syringe empties at ", React.createElement("b", null, clockAt(sim.hoursLeft) || '—'), " ", React.createElement("i", null, "(", fmtH(sim.hoursLeft), " at this rate)"))), React.createElement(Controls, {
+      sim: sim,
+      rate: rate,
+      onRate: onRate,
+      step: step || 0.1,
+      locked: locked,
+      beepOn: beepOn,
+      setBeep: setBeep,
+      onBolus: () => sim.bolus(bolusMl),
+      bolusMl: bolusMl,
+      maxRate: maxRate,
+      color: liquid,
+      kind: "syringe"
+    }));
+  }
+  function InfusionPump({
+    fluid,
+    color,
+    rate,
+    volume,
+    dropFactor,
+    doseText,
+    level,
+    onRate,
+    step,
+    maxRate
+  }) {
+    const vol = Number(volume) > 0 ? Number(volume) : 500;
+    const locked = level === 'hard';
+    const sim = usePumpSim({
+      rate: Number(rate) || 0,
+      volume: vol,
+      locked
+    });
+    const [beepOn, setBeep] = useState(false);
+    const alarm = alarmOf(level, sim, 'INFUSION COMPLETE');
+    useAlarmBeep(beepOn, alarm && (sim.run || locked || sim.empty) ? alarm.text : null);
+    const tone = alarm ? LCD[alarm.tone] : LCD.ok;
+    const liquid = color || '#7cc6ec';
+    const df = Number(dropFactor) || 20;
+    const dpm = D().dripsFromRate(Number(rate) || 0, df) || 0;
+    const dropDur = dpm > 0 ? Math.max(0.18, 60 / (dpm * Math.min(sim.speed, 30))) : 0;
+    const rollDur = (Number(rate) || 0) > 0 ? Math.max(0.35, 30 / Math.sqrt((Number(rate) || 1) * Math.min(sim.speed, 60))) : 0;
+    const fillTop = 26 + (1 - sim.frac) * 84;
+    return React.createElement("div", {
+      className: 'dc-pump' + (alarm ? ' is-alarm-' + alarm.tone : '') + (sim.run ? ' is-running' : '')
+    }, React.createElement("svg", {
+      viewBox: "0 0 560 292",
+      className: "dc-pump-svg",
+      role: "img",
+      "aria-label": 'Infusion pump at ' + f1(rate) + ' mL per hour'
+    }, React.createElement("defs", null, React.createElement("linearGradient", {
+      id: "ipBody",
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "#ffffff"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "#dde5ee"
+    })), React.createElement("linearGradient", {
+      id: "ipLcd",
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "#0d2633"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "#06141c"
+    })), React.createElement("linearGradient", {
+      id: "ipBag",
+      x1: "0",
+      y1: "0",
+      x2: "1",
+      y2: "0"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "rgba(255,255,255,.9)"
+    }), React.createElement("stop", {
+      offset: ".6",
+      stopColor: "rgba(226,238,248,.55)"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "rgba(196,214,230,.7)"
+    })), React.createElement("clipPath", {
+      id: "ipBagClip"
+    }, React.createElement("path", {
+      d: "M48 22 Q48 14 56 14 L132 14 Q140 14 140 22 L140 104 Q140 118 126 122 L62 122 Q48 118 48 104 Z"
+    })), React.createElement("filter", {
+      id: "ipShadow",
+      x: "-10%",
+      y: "-10%",
+      width: "120%",
+      height: "140%"
+    }, React.createElement("feDropShadow", {
+      dx: "0",
+      dy: "6",
+      stdDeviation: "7",
+      floodColor: "#1f3b5a",
+      floodOpacity: ".18"
+    })), React.createElement("filter", {
+      id: "ipGlow"
+    }, React.createElement("feGaussianBlur", {
+      stdDeviation: "1.4",
+      result: "b"
+    }), React.createElement("feMerge", null, React.createElement("feMergeNode", {
+      in: "b"
+    }), React.createElement("feMergeNode", {
+      in: "SourceGraphic"
+    })))), React.createElement("line", {
+      x1: "94",
+      y1: "0",
+      x2: "94",
+      y2: "12",
+      stroke: "#9aa6b4",
+      strokeWidth: "3"
+    }), React.createElement("path", {
+      d: "M48 22 Q48 14 56 14 L132 14 Q140 14 140 22 L140 104 Q140 118 126 122 L62 122 Q48 118 48 104 Z",
+      fill: "url(#ipBag)",
+      stroke: "rgba(31,59,90,.35)",
+      strokeWidth: "1.2"
+    }), React.createElement("g", {
+      clipPath: "url(#ipBagClip)"
+    }, React.createElement("rect", {
+      x: "44",
+      y: fillTop,
+      width: "100",
+      height: 130 - fillTop,
+      fill: liquid,
+      opacity: ".55",
+      style: {
+        transition: 'y .3s linear'
+      }
+    }), React.createElement("path", {
+      d: 'M44 ' + fillTop + ' q 12 -3 25 0 t 25 0 t 25 0 t 25 0',
+      fill: "none",
+      stroke: liquid,
+      strokeWidth: "1.5",
+      className: sim.run ? 'dc-wave' : ''
+    })), React.createElement("text", {
+      x: "94",
+      y: "58",
+      fontSize: "10",
+      textAnchor: "middle",
+      fontWeight: "700",
+      fill: "#16202e"
+    }, String(fluid || 'IV fluid').slice(0, 16)), React.createElement("text", {
+      x: "94",
+      y: "72",
+      fontSize: "9",
+      textAnchor: "middle",
+      fill: "#3c4858",
+      fontFamily: "IBM Plex Mono,monospace"
+    }, f1(sim.left), " mL"), React.createElement("rect", {
+      x: "88",
+      y: "122",
+      width: "12",
+      height: "10",
+      fill: "#cfd8e3"
+    }), React.createElement("rect", {
+      x: "80",
+      y: "132",
+      width: "28",
+      height: "50",
+      rx: "7",
+      fill: "rgba(235,244,252,.75)",
+      stroke: "rgba(31,59,90,.35)"
+    }), React.createElement("rect", {
+      x: "82",
+      y: "166",
+      width: "24",
+      height: "14",
+      rx: "4",
+      fill: liquid,
+      opacity: ".5"
+    }), sim.run && dropDur ? React.createElement("circle", {
+      cx: "94",
+      cy: "138",
+      r: "3.2",
+      fill: liquid,
+      className: "dc-drop",
+      style: {
+        animationDuration: dropDur + 's'
+      }
+    }) : React.createElement("circle", {
+      cx: "94",
+      cy: "138",
+      r: "3",
+      fill: liquid,
+      opacity: ".6"
+    }), React.createElement("path", {
+      d: "M94 182 L94 214 Q94 232 112 232 L196 232",
+      fill: "none",
+      stroke: "rgba(31,59,90,.25)",
+      strokeWidth: "5",
+      strokeLinecap: "round"
+    }), React.createElement("path", {
+      d: "M94 182 L94 214 Q94 232 112 232 L196 232",
+      fill: "none",
+      stroke: liquid,
+      strokeWidth: "2.4",
+      strokeDasharray: "7 5",
+      className: sim.run ? 'dc-flow' : '',
+      style: sim.run ? {
+        animationDuration: Math.max(0.3, rollDur / 2) + 's'
+      } : {
+        opacity: .45
+      }
+    }), React.createElement("rect", {
+      x: "176",
+      y: "34",
+      width: "374",
+      height: "246",
+      rx: "22",
+      fill: "url(#ipBody)",
+      stroke: "rgba(31,59,90,.14)",
+      filter: "url(#ipShadow)"
+    }), React.createElement("rect", {
+      x: "196",
+      y: "56",
+      width: "70",
+      height: "204",
+      rx: "12",
+      fill: "#eef2f7",
+      stroke: "rgba(31,59,90,.15)"
+    }), React.createElement("path", {
+      d: "M231 60 L231 256",
+      stroke: "rgba(31,59,90,.25)",
+      strokeWidth: "5"
+    }), React.createElement("path", {
+      d: "M231 60 L231 256",
+      stroke: liquid,
+      strokeWidth: "2.4",
+      strokeDasharray: "7 5",
+      className: sim.run ? 'dc-flow' : '',
+      style: sim.run ? {
+        animationDuration: Math.max(0.3, rollDur / 2) + 's'
+      } : {
+        opacity: .45
+      }
+    }), React.createElement("g", {
+      className: sim.run && rollDur ? 'dc-spin' : '',
+      style: sim.run && rollDur ? {
+        animationDuration: rollDur + 's',
+        transformOrigin: '231px 158px'
+      } : {
+        transformOrigin: '231px 158px'
+      }
+    }, React.createElement("circle", {
+      cx: "231",
+      cy: "158",
+      r: "26",
+      fill: "#d6dee8",
+      stroke: "rgba(31,59,90,.25)"
+    }), [0, 90, 180, 270].map(a => React.createElement("circle", {
+      key: a,
+      cx: 231 + 18 * Math.cos(a * Math.PI / 180),
+      cy: 158 + 18 * Math.sin(a * Math.PI / 180),
+      r: "6.5",
+      fill: "#8b9bb0",
+      stroke: "#6c7a8c"
+    })), React.createElement("circle", {
+      cx: "231",
+      cy: "158",
+      r: "5",
+      fill: "#5b6b80"
+    })), React.createElement("text", {
+      x: "231",
+      y: "250",
+      fontSize: "7.5",
+      textAnchor: "middle",
+      fill: "#6c7a8c"
+    }, "\u25BC TO PATIENT"), React.createElement("text", {
+      x: "286",
+      y: "68",
+      fontSize: "14",
+      fontWeight: "800",
+      fill: "#16202e",
+      letterSpacing: "1"
+    }, "UNICO"), React.createElement("text", {
+      x: "286",
+      y: "82",
+      fontSize: "9.5",
+      fill: "#6c7a8c",
+      letterSpacing: "1.4"
+    }, "VOLUMETRIC PUMP \xB7 VP-1"), React.createElement("rect", {
+      x: "286",
+      y: "90",
+      width: "248",
+      height: "122",
+      rx: "12",
+      fill: "url(#ipLcd)",
+      stroke: "#031018",
+      strokeWidth: "2"
+    }), React.createElement("g", {
+      filter: "url(#ipGlow)",
+      fontFamily: "IBM Plex Mono,monospace"
+    }, React.createElement("text", {
+      x: "300",
+      y: "130",
+      fontSize: "34",
+      fontWeight: "700",
+      fill: tone
+    }, f1(rate), React.createElement("tspan", {
+      fontSize: "15",
+      dx: "6"
+    }, "mL/h")), React.createElement("text", {
+      x: "300",
+      y: "150",
+      fontSize: "12.5",
+      fill: tone,
+      opacity: ".9"
+    }, doseText || f1(dpm) + ' drops/min  (' + df + ' gtt/mL)'), React.createElement("text", {
+      x: "300",
+      y: "169",
+      fontSize: "11",
+      fill: tone,
+      opacity: ".78"
+    }, "VTBI ", f1(vol), "  INFUSED ", f1(sim.infused), " mL"), React.createElement("text", {
+      x: "300",
+      y: "184",
+      fontSize: "11",
+      fill: tone,
+      opacity: ".78"
+    }, "TIME LEFT ", fmtH(sim.hoursLeft)), React.createElement("text", {
+      x: "300",
+      y: "203",
+      fontSize: "11",
+      fontWeight: "700",
+      fill: alarm ? LCD[alarm.tone] : tone,
+      className: alarm ? 'dc-blink-fast' : ''
+    }, alarm ? '⚠ ' + alarm.text : sim.run ? '▶ INFUSING' : sim.infused > 0 ? '❚❚ PAUSED' : '■ READY')), React.createElement("g", {
+      transform: "translate(300 230)"
+    }, React.createElement("circle", {
+      cx: "6",
+      cy: "6",
+      r: "5",
+      fill: sim.run && !alarm ? '#25c06b' : '#9fd8b8',
+      className: sim.run && !alarm ? 'dc-blink' : ''
+    }), React.createElement("text", {
+      x: "16",
+      y: "9",
+      fontSize: "10",
+      fill: "#6c7a8c"
+    }, "RUN"), React.createElement("circle", {
+      cx: "62",
+      cy: "6",
+      r: "5",
+      fill: alarm ? alarm.tone === 'red' ? '#ff4d64' : '#ffb020' : '#f0d9a8',
+      className: alarm ? 'dc-blink-fast' : ''
+    }), React.createElement("text", {
+      x: "72",
+      y: "9",
+      fontSize: "10",
+      fill: "#6c7a8c"
+    }, "ALARM"), React.createElement("text", {
+      x: "130",
+      y: "9",
+      fontSize: "8.5",
+      fill: "#6c7a8c"
+    }, f1(dpm), " gtt/min"))), React.createElement("div", {
+      className: "dc-pump-foot"
+    }, React.createElement("span", null, "Bag finishes at ", React.createElement("b", null, clockAt(sim.hoursLeft) || '—'), " ", React.createElement("i", null, "(", fmtH(sim.hoursLeft), " at this rate)"))), React.createElement(Controls, {
+      sim: sim,
+      rate: rate,
+      onRate: onRate,
+      step: step || 1,
+      locked: locked,
+      beepOn: beepOn,
+      setBeep: setBeep,
+      maxRate: maxRate,
+      color: liquid,
+      kind: "volumetric"
+    }));
+  }
+  window.DosePumps = {
+    SyringePump,
+    InfusionPump,
+    RateKnob
+  };
+})();
+})();
+;
+/* ===== dose-calc.jsx ===== */
+(function(){
+function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
+(function () {
+  const {
+    useState,
+    useEffect,
+    useMemo,
+    useRef,
+    useLayoutEffect,
+    useCallback
+  } = React;
+  const MK = window.MK;
+  const D = window.UNICO_DOSE;
+  const LIB = window.UNICO_DOSE_LIB;
+  const fmt = (n, dp) => D.fmt(n, dp);
+  const api = {
+    get: u => fetch(u, {
+      headers: {
+        accept: 'application/json'
+      }
+    }).then(r => r.json()),
+    send: (m, u, b) => fetch(u, {
+      method: m,
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(b || {})
+    }).then(r => r.json())
+  };
+  const toast = (m, t) => {
+    try {
+      window.UI && window.UI.toast && window.UI.toast(m, t || 'success');
+    } catch (e) {}
+  };
+  const isAdmin = () => {
+    try {
+      const u = window.__UNICO_USER__;
+      return !u || u.role === 'Administrator';
+    } catch (e) {
+      return true;
+    }
+  };
+  const userName = () => {
+    try {
+      const u = window.__UNICO_USER__;
+      return u && (u.name || u.username) || '';
+    } catch (e) {
+      return '';
+    }
+  };
+  const reduceMotion = () => {
+    try {
+      return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch (e) {
+      return false;
+    }
+  };
+  const escH = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;'
+  })[c]);
+  const PREFS_KEY = 'dosecalc_prefs_v1',
+    PATIENT_KEY = 'dosecalc_patient_v1';
+  const readJson = (store, k, d) => {
+    try {
+      const v = JSON.parse(store.getItem(k) || 'null');
+      return v && typeof v === 'object' ? v : d;
+    } catch (e) {
+      return d;
+    }
+  };
+  const writeJson = (store, k, v) => {
+    try {
+      store.setItem(k, JSON.stringify(v));
+    } catch (e) {}
+  };
+  const TABS = [{
+    id: 'infusion',
+    label: 'ICU infusions',
+    icon: 'M7 3h10M9 3v4l-4 9a3 3 0 0 0 3 4h8a3 3 0 0 0 3-4l-4-9V3'
+  }, {
+    id: 'emergency',
+    label: 'Emergency sheet',
+    icon: 'M12 21s-7-4.5-9.5-9A5.5 5.5 0 0 1 12 6a5.5 5.5 0 0 1 9.5 6c-2.5 4.5-9.5 9-9.5 9zM8 12h2l1-2 2 4 1-2h2'
+  }, {
+    id: 'paed',
+    label: 'Paediatric',
+    icon: 'M12 7a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM8 22v-7l-2-4 6-2 6 2-2 4v7'
+  }, {
+    id: 'calcs',
+    label: 'Clinical calculators',
+    icon: 'M5 3h14v18H5zM8 7h8M8 11h2M12 11h2M8 15h2M12 15h2M16 11v4'
+  }];
+  const GROUP_COLOR = {
+    'Vasopressors & inotropes': '#e5484d',
+    'Vasodilators & antiarrhythmics': '#f08c2e',
+    'Sedation & analgesia': '#7c5cff',
+    'Neuromuscular blockers': '#e0479e',
+    'Insulin, heparin & others': '#d39b00',
+    'Cardiac arrest': '#e5484d',
+    'Anaphylaxis & shock': '#f08c2e',
+    'Intubation (RSI)': '#7c5cff',
+    'Seizure': '#0090ca',
+    'Analgesic / antipyretic': '#0090ca',
+    'Antibiotics (oral)': '#1f9d57',
+    'Antibiotics (IV)': '#2b8f83',
+    'Other': '#6a52d4'
+  };
+  const colorOf = g => GROUP_COLOR[g] || '#27a8db';
+  const BOLUS_GROUPS = {
+    'Sedation & analgesia': 1
+  };
+  const UNIT_CHOICES = ['mcg/kg/min', 'mcg/kg/h', 'mg/kg/h', 'mcg/min', 'mcg/h', 'mg/min', 'mg/h', 'g/h', 'units/kg/h', 'units/h', 'units/min', 'milliunits/min', 'mmol/h'];
+  const AMOUNT_UNITS = ['mg', 'mcg', 'g', 'units', 'mmol'];
+  const Svg = ({
+    d,
+    s,
+    sw
+  }) => React.createElement("svg", {
+    viewBox: "0 0 24 24",
+    width: s || 15,
+    height: s || 15,
+    fill: "none",
+    stroke: "currentColor",
+    strokeWidth: sw || 1.9,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+    "aria-hidden": "true"
+  }, React.createElement("path", {
+    d: d
+  }));
+  const IC = {
+    grip: 'M9 5h.01M15 5h.01M9 12h.01M15 12h.01M9 19h.01M15 19h.01',
+    star: 'M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z',
+    print: 'M6 9V3h12v6M6 18H4v-6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v6h-2M7 14h10v7H7z',
+    move: 'M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3',
+    book: 'M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2zM4 19V5M8 7h7',
+    shield: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z',
+    clock: 'M12 7v5l3 2M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
+    check: 'M5 12l5 5 9-10',
+    alert: 'M12 9v4M12 17h.01M10.3 3.9L2 18a2 2 0 0 0 1.7 3h16.6A2 2 0 0 0 22 18L13.7 3.9a2 2 0 0 0-3.4 0z',
+    search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-5-5',
+    up: 'M6 15l6-6 6 6',
+    down: 'M6 9l6 6 6-6',
+    plus: 'M12 5v14M5 12h14',
+    x: 'M6 6l12 12M18 6L6 18',
+    flask: 'M9 3h6M10 3v6L4.5 18.5A2 2 0 0 0 6.3 21h11.4a2 2 0 0 0 1.8-2.5L14 9V3',
+    reset: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
+    save: 'M5 3h11l3 3v15H5zM8 3v5h8M8 21v-7h8v7'
+  };
+  function useTween(target, ms) {
+    const [v, setV] = useState(target);
+    const from = useRef(target);
+    useEffect(() => {
+      if (target == null || !Number.isFinite(target)) {
+        setV(target);
+        from.current = target;
+        return undefined;
+      }
+      if (reduceMotion() || from.current == null || !Number.isFinite(from.current)) {
+        setV(target);
+        from.current = target;
+        return undefined;
+      }
+      const a = from.current,
+        t0 = performance.now(),
+        dur = ms || 380;
+      let raf = 0;
+      const step = now => {
+        const k = Math.min(1, (now - t0) / dur),
+          e = 1 - Math.pow(1 - k, 3);
+        const x = a + (target - a) * e;
+        setV(x);
+        from.current = x;
+        if (k < 1) raf = requestAnimationFrame(step);
+      };
+      raf = requestAnimationFrame(step);
+      return () => cancelAnimationFrame(raf);
+    }, [target]);
+    return v;
+  }
+  const Tween = ({
+    value,
+    dp
+  }) => {
+    const v = useTween(value);
+    return React.createElement(React.Fragment, null, fmt(v == null ? null : v, dp));
+  };
+  function ReviewChip({
+    e,
+    compact
+  }) {
+    const r = e && e.reviewed || {
+      state: 'none'
+    };
+    const when = r.at ? new Date(r.at).toLocaleDateString([], {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric'
+    }) : '';
+    if (r.state === 'ok') return React.createElement("span", {
+      className: "dc-chip is-green",
+      title: 'Reviewed by ' + (r.by || '?') + ' on ' + when
+    }, React.createElement(Svg, {
+      d: IC.shield,
+      s: 11
+    }), compact ? 'Reviewed' : 'Reviewed by ' + (r.by || '?') + ' · ' + when);
+    if (r.state === 'stale') return React.createElement("span", {
+      className: "dc-chip is-red",
+      title: 'Edited after ' + (r.by || '?') + ' reviewed it on ' + when
+    }, React.createElement(Svg, {
+      d: IC.alert,
+      s: 11
+    }), "Changed since review");
+    return React.createElement("span", {
+      className: "dc-chip is-amber",
+      title: "Built-in default from published references \u2014 not yet checked against this hospital's protocol"
+    }, React.createElement(Svg, {
+      d: IC.alert,
+      s: 11
+    }), compact ? 'Not reviewed' : 'Not yet reviewed by pharmacy');
+  }
+  const HighAlert = () => React.createElement("span", {
+    className: "dc-chip is-red-solid",
+    title: "ISMP high-alert medication \u2014 independent two-person check"
+  }, "HIGH-ALERT");
+  function Field({
+    label,
+    children,
+    hint,
+    wide
+  }) {
+    return React.createElement("label", {
+      className: 'dc-field' + (wide ? ' is-wide' : '')
+    }, React.createElement("span", {
+      className: "dc-flabel"
+    }, label), children, hint ? React.createElement("span", {
+      className: "dc-fhint"
+    }, hint) : null);
+  }
+  const NumIn = ({
+    value,
+    onChange,
+    placeholder,
+    step,
+    min,
+    style,
+    autoFocus,
+    ariaLabel
+  }) => React.createElement("input", {
+    className: "inp dc-num",
+    inputMode: "decimal",
+    type: "number",
+    step: step || 'any',
+    min: min != null ? min : 0,
+    value: value,
+    placeholder: placeholder,
+    onChange: e => onChange(e.target.value),
+    style: style,
+    autoFocus: autoFocus,
+    "aria-label": ariaLabel
+  });
+  function Seg({
+    value,
+    options,
+    onChange,
+    small
+  }) {
+    return React.createElement("div", {
+      className: 'dc-seg' + (small ? ' is-small' : ''),
+      role: "radiogroup"
+    }, options.map(o => React.createElement("button", {
+      key: o.v,
+      role: "radio",
+      "aria-checked": value === o.v,
+      className: value === o.v ? 'is-on' : '',
+      onClick: () => onChange(o.v),
+      title: o.title || ''
+    }, o.l)));
+  }
+  function useFlip(ref, sig) {
+    const prev = useRef({});
+    useLayoutEffect(() => {
+      const el = ref.current;
+      if (!el) return;
+      const kids = Array.from(el.querySelectorAll(':scope > [data-flip]'));
+      const next = {};
+      kids.forEach(k => {
+        next[k.getAttribute('data-flip')] = k.getBoundingClientRect();
+      });
+      if (!reduceMotion()) {
+        kids.forEach(k => {
+          const key = k.getAttribute('data-flip'),
+            a = prev.current[key],
+            b = next[key];
+          if (!a || !b) return;
+          const dx = a.left - b.left,
+            dy = a.top - b.top;
+          if (!dx && !dy) return;
+          k.style.transition = 'none';
+          k.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+          requestAnimationFrame(() => {
+            k.style.transition = 'transform .24s cubic-bezier(.2,.8,.2,1)';
+            k.style.transform = '';
+          });
+        });
+      }
+      prev.current = next;
+    }, [sig]);
+  }
+  function Sortable({
+    items,
+    getKey,
+    onMove,
+    enabled,
+    render,
+    className,
+    axis,
+    style
+  }) {
+    const ref = useRef(null);
+    const [dragKey, setDragKey] = useState(null);
+    const keys = items.map(getKey);
+    useFlip(ref, keys.join('|'));
+    const startDrag = (e, key) => {
+      if (!enabled) return;
+      e.preventDefault();
+      setDragKey(key);
+      const onMoveP = ev => {
+        const el = ref.current;
+        if (!el) return;
+        const kids = Array.from(el.querySelectorAll(':scope > [data-flip]'));
+        const cur = kids.findIndex(k => k.getAttribute('data-flip') === key);
+        if (cur < 0) return;
+        const p = axis === 'x' ? ev.clientX : ev.clientY;
+        let target = cur;
+        kids.forEach((k, i) => {
+          const r = k.getBoundingClientRect();
+          const mid = axis === 'x' ? r.left + r.width / 2 : r.top + r.height / 2;
+          if (i < cur && p < mid) target = Math.min(target, i);
+          if (i > cur && p > mid) target = Math.max(target, i);
+        });
+        if (target !== cur) onMove(cur, target);
+      };
+      const end = () => {
+        setDragKey(null);
+        window.removeEventListener('pointermove', onMoveP);
+        window.removeEventListener('pointerup', end);
+        window.removeEventListener('pointercancel', end);
+      };
+      window.addEventListener('pointermove', onMoveP);
+      window.addEventListener('pointerup', end);
+      window.addEventListener('pointercancel', end);
+    };
+    return React.createElement("div", {
+      ref: ref,
+      className: className,
+      style: style
+    }, items.map((it, i) => {
+      const key = getKey(it);
+      const handle = enabled ? React.createElement("span", {
+        className: "dc-handle",
+        onClick: e => e.stopPropagation()
+      }, React.createElement("button", {
+        className: "dc-grip",
+        "aria-label": "Drag to reorder",
+        onPointerDown: e => startDrag(e, key)
+      }, React.createElement(Svg, {
+        d: IC.grip,
+        s: 14,
+        sw: 3
+      })), React.createElement("button", {
+        className: "dc-mv",
+        "aria-label": "Move up",
+        disabled: i === 0,
+        onClick: () => onMove(i, i - 1)
+      }, React.createElement(Svg, {
+        d: axis === 'x' ? 'M15 6l-6 6 6 6' : IC.up,
+        s: 11,
+        sw: 2.4
+      })), React.createElement("button", {
+        className: "dc-mv",
+        "aria-label": "Move down",
+        disabled: i === items.length - 1,
+        onClick: () => onMove(i, i + 1)
+      }, React.createElement(Svg, {
+        d: axis === 'x' ? 'M9 6l6 6-6 6' : IC.down,
+        s: 11,
+        sw: 2.4
+      }))) : null;
+      return React.createElement("div", {
+        key: key,
+        "data-flip": key,
+        className: 'dc-sort-item' + (dragKey === key ? ' is-dragging' : '')
+      }, render(it, handle, i));
+    }));
+  }
+  function DoseGauge({
+    entry,
+    dose,
+    unit
+  }) {
+    const soft = entry && entry.soft || [0, 0],
+      hard = entry && entry.hard;
+    const top = (hard || soft[1] || 1) * 1.25;
+    const W = 240,
+      H = 136,
+      cx = 120,
+      cy = 118,
+      R = 92;
+    const ang = v => Math.PI + Math.max(0, Math.min(1, v / top)) * Math.PI;
+    const pt = (v, r) => [cx + (r || R) * Math.cos(ang(v)), cy + (r || R) * Math.sin(ang(v))];
+    const arc = (a, b) => {
+      const p = pt(a),
+        q = pt(b);
+      return 'M' + p[0] + ' ' + p[1] + ' A' + R + ' ' + R + ' 0 0 1 ' + q[0] + ' ' + q[1];
+    };
+    const segs = [[0, soft[0], '#8fb7d6'], [soft[0], soft[1], '#1f9d57'], [soft[1], hard || soft[1], '#e08a1e'], [hard || soft[1], top, '#d23a52']].filter(s => s[1] > s[0]);
+    const v = Number(dose);
+    const has = Number.isFinite(v);
+    const deg = has ? Math.max(0, Math.min(1, v / top)) * 180 - 90 : -90;
+    const level = has ? D.checkLimits(entry, v) : null;
+    return React.createElement("div", {
+      className: "dc-gauge"
+    }, React.createElement("svg", {
+      viewBox: '0 0 ' + W + ' ' + H,
+      width: "100%",
+      style: {
+        maxWidth: 260
+      },
+      role: "img",
+      "aria-label": "Dose against the usual range"
+    }, React.createElement("path", {
+      d: arc(0, top),
+      stroke: "rgba(125,145,180,.16)",
+      strokeWidth: "16",
+      fill: "none",
+      strokeLinecap: "round"
+    }), segs.map((s, i) => React.createElement("path", {
+      key: i,
+      d: arc(s[0], s[1]),
+      stroke: s[2],
+      strokeWidth: "14",
+      fill: "none",
+      opacity: ".88"
+    })), [soft[0], soft[1], hard].filter(x => x != null && x > 0).map((x, i) => {
+      const p = pt(x, R + 17);
+      return React.createElement("text", {
+        key: i,
+        x: p[0],
+        y: p[1],
+        fontSize: "9",
+        textAnchor: "middle",
+        fill: "#6c7a8c",
+        fontFamily: "IBM Plex Mono,monospace"
+      }, fmt(x));
+    }), React.createElement("g", {
+      style: {
+        transform: 'rotate(' + deg + 'deg)',
+        transformOrigin: cx + 'px ' + cy + 'px',
+        transition: 'transform .7s cubic-bezier(.34,1.56,.64,1)'
+      }
+    }, React.createElement("path", {
+      d: 'M' + (cx - 4) + ' ' + cy + ' L' + cx + ' ' + (cy - R + 8) + ' L' + (cx + 4) + ' ' + cy + ' Z',
+      fill: "#16202e"
+    })), React.createElement("circle", {
+      cx: cx,
+      cy: cy,
+      r: "8",
+      fill: "#16202e"
+    }), React.createElement("circle", {
+      cx: cx,
+      cy: cy,
+      r: "3",
+      fill: "#fff"
+    })), React.createElement("div", {
+      className: 'dc-gauge-cap is-' + (level || 'none')
+    }, level === 'ok' ? 'Within the usual range' : level === 'low' ? 'Below the usual range' : level === 'high' ? 'Above the usual range — check' : level === 'hard' ? 'OVER THE HARD LIMIT' : 'Enter a dose', React.createElement("span", null, "usual ", fmt(soft[0]), "\u2013", fmt(soft[1]), " \xB7 max ", fmt(hard), " ", unit)));
+  }
+  function printHtml(title, body, page) {
+    const f = document.createElement('iframe');
+    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.appendChild(f);
+    const doc = f.contentWindow.document;
+    doc.open();
+    doc.write('<!doctype html><html><head><meta charset="utf-8"><title>' + escH(title) + '</title><style>' + '@page{size:' + (page || 'A4') + ';margin:10mm}body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0}' + '.lbl{border:2px solid #111;border-radius:6px;padding:10px 12px;width:92mm;margin:0 0 8mm;page-break-inside:avoid}' + '.lbl .ha{background:#c8102e;color:#fff;font-weight:700;font-size:11px;padding:2px 6px;display:inline-block;border-radius:3px;letter-spacing:1px}' + '.lbl h1{font-size:19px;margin:6px 0 2px}.lbl .c{font-size:12px}.lbl .big{font-size:26px;font-weight:800;margin:6px 0 0}.lbl .d{font-size:13px}' + '.lbl .row{display:flex;gap:10px;font-size:11px;margin-top:7px}.lbl .row div{flex:1;border-bottom:1px solid #555;padding-top:12px}' + 'table{border-collapse:collapse;width:100%;font-size:11px}th,td{border:1px solid #999;padding:4px 6px;text-align:left;vertical-align:top}th{background:#eef2f6}' + 'h2{font-size:15px;margin:12px 0 4px}.hd{display:flex;justify-content:space-between;border-bottom:2px solid #111;padding-bottom:6px;margin-bottom:8px}' + '.mut{color:#555;font-size:10px}.cap{color:#b00;font-weight:700}' + '</style></head><body>' + body + '</body></html>');
+    doc.close();
+    setTimeout(() => {
+      try {
+        f.contentWindow.focus();
+        f.contentWindow.print();
+      } catch (e) {}
+      setTimeout(() => {
+        try {
+          document.body.removeChild(f);
+        } catch (e) {}
+      }, 1500);
+    }, 250);
+  }
+  function derive(p) {
+    const w = parseFloat(p.weight),
+      h = parseFloat(p.height);
+    const ibw = D.ibw(h, p.sex);
+    const adj = D.adjBw(w, ibw);
+    return {
+      weight: w > 0 ? w : null,
+      ibw,
+      adj,
+      bmi: D.bmi(w, h),
+      bsa: D.bsaMosteller(w, h),
+      crcl: D.crclCockcroftGault({
+        age: p.age,
+        weight: p.basis === 'actual' ? w : adj || w,
+        scr: p.scr,
+        scrUnit: p.scrUnit,
+        sex: p.sex
+      }),
+      egfr: D.egfrCkdEpi2021({
+        age: p.age,
+        scr: p.scr,
+        scrUnit: p.scrUnit,
+        sex: p.sex
+      }),
+      adult: D.isAdult(w, p.age)
+    };
+  }
+  function dosingWeight(p, dv, entry) {
+    if (entry && entry.weight === 'none') return null;
+    if (p.basis === 'ideal' && dv.ibw) return Math.min(dv.ibw, dv.weight || dv.ibw);
+    if (p.basis === 'adjusted' && dv.adj) return dv.adj;
+    return dv.weight;
+  }
+  function PatientBar({
+    p,
+    set,
+    dv
+  }) {
+    const [open, setOpen] = useState(false);
+    const upd = k => v => set(Object.assign({}, p, {
+      [k]: v
+    }));
+    const w = parseFloat(p.weight),
+      a = parseFloat(p.age);
+    const est = !(w > 0) && a >= 0 && a <= 12 ? D.weightFromAge(a) : null;
+    const weird = w > 0 && (w < 0.4 || w > 300);
+    return React.createElement("div", {
+      className: "dc-card dc-patient"
+    }, React.createElement("div", {
+      className: "dc-pt-row"
+    }, React.createElement("div", {
+      className: "dc-pt-title"
+    }, React.createElement("span", {
+      className: "dc-pt-dot"
+    }), "Patient"), React.createElement(Field, {
+      label: "Weight (kg)"
+    }, React.createElement(NumIn, {
+      value: p.weight,
+      onChange: upd('weight'),
+      placeholder: "e.g. 70",
+      ariaLabel: "Weight in kg"
+    })), React.createElement(Field, {
+      label: "Height (cm)"
+    }, React.createElement(NumIn, {
+      value: p.height,
+      onChange: upd('height'),
+      placeholder: "for IBW/BSA"
+    })), React.createElement(Field, {
+      label: "Age (years)"
+    }, React.createElement(NumIn, {
+      value: p.age,
+      onChange: upd('age'),
+      placeholder: "years"
+    })), React.createElement(Field, {
+      label: "Sex"
+    }, React.createElement(Seg, {
+      small: true,
+      value: p.sex,
+      onChange: upd('sex'),
+      options: [{
+        v: 'M',
+        l: 'Male'
+      }, {
+        v: 'F',
+        l: 'Female'
+      }]
+    })), React.createElement(Field, {
+      label: "Creatinine"
+    }, React.createElement("div", {
+      className: "dc-inline"
+    }, React.createElement(NumIn, {
+      value: p.scr,
+      onChange: upd('scr'),
+      placeholder: p.scrUnit === 'umol' ? 'µmol/L' : 'mg/dL',
+      style: {
+        width: 80
+      }
+    }), React.createElement(Seg, {
+      small: true,
+      value: p.scrUnit,
+      onChange: upd('scrUnit'),
+      options: [{
+        v: 'umol',
+        l: 'µmol/L'
+      }, {
+        v: 'mg',
+        l: 'mg/dL'
+      }]
+    }))), React.createElement(Field, {
+      label: "Dose by"
+    }, React.createElement(Seg, {
+      small: true,
+      value: p.basis,
+      onChange: upd('basis'),
+      options: [{
+        v: 'actual',
+        l: 'Actual',
+        title: 'Actual (total) body weight'
+      }, {
+        v: 'ideal',
+        l: 'Ideal',
+        title: 'Ideal body weight (Devine) — needs height'
+      }, {
+        v: 'adjusted',
+        l: 'Adjusted',
+        title: 'IBW + 0.4 × (actual − IBW) — needs height'
+      }]
+    })), React.createElement("button", {
+      className: "dc-link",
+      onClick: () => setOpen(!open)
+    }, open ? 'Hide label details' : 'Label details')), open ? React.createElement("div", {
+      className: "dc-pt-row is-sub"
+    }, React.createElement(Field, {
+      label: "Patient name (labels only)",
+      wide: true
+    }, React.createElement("input", {
+      className: "inp",
+      value: p.name || '',
+      onChange: e => upd('name')(e.target.value),
+      placeholder: "optional"
+    })), React.createElement(Field, {
+      label: "UHID / Bed"
+    }, React.createElement("input", {
+      className: "inp",
+      value: p.uhid || '',
+      onChange: e => upd('uhid')(e.target.value),
+      placeholder: "optional"
+    })), React.createElement("span", {
+      className: "dc-fhint",
+      style: {
+        alignSelf: 'end'
+      }
+    }, "Kept in this browser tab only \u2014 never saved or sent.")) : null, React.createElement("div", {
+      className: "dc-derived"
+    }, est ? React.createElement("button", {
+      className: "dc-pill is-action",
+      onClick: () => upd('weight')(String(est))
+    }, "Use APLS estimate ", est, " kg for age ", a) : null, weird ? React.createElement("span", {
+      className: "dc-pill is-red"
+    }, React.createElement(Svg, {
+      d: IC.alert,
+      s: 12
+    }), " Check the weight \u2014 ", p.weight, " kg") : null, React.createElement("span", {
+      className: "dc-pill"
+    }, React.createElement("b", null, "IBW"), " ", dv.ibw ? fmt(dv.ibw, 1) + ' kg' : '—'), React.createElement("span", {
+      className: "dc-pill"
+    }, React.createElement("b", null, "Adj BW"), " ", dv.adj ? fmt(dv.adj, 1) + ' kg' : '—'), React.createElement("span", {
+      className: "dc-pill"
+    }, React.createElement("b", null, "BMI"), " ", dv.bmi ? fmt(dv.bmi, 1) : '—'), React.createElement("span", {
+      className: "dc-pill"
+    }, React.createElement("b", null, "BSA"), " ", dv.bsa ? fmt(dv.bsa, 2) + ' m²' : '—'), React.createElement("span", {
+      className: "dc-pill",
+      title: "Cockcroft\u2013Gault, using the dosing weight basis"
+    }, React.createElement("b", null, "CrCl"), " ", dv.crcl ? fmt(dv.crcl, 0) + ' mL/min' : '—'), React.createElement("span", {
+      className: "dc-pill",
+      title: "CKD-EPI 2021"
+    }, React.createElement("b", null, "eGFR"), " ", dv.egfr ? fmt(dv.egfr, 0) : '—'), React.createElement("span", {
+      className: 'dc-pill ' + (dv.weight ? dv.adult ? 'is-blue' : 'is-violet' : '')
+    }, dv.weight ? dv.adult ? 'Adult doses' : 'Child doses' : 'No weight yet')));
+  }
+  function MonographPanel({
+    query
+  }) {
+    const [gen, setGen] = useState(null);
+    const [state, setState] = useState('idle');
+    const [q, setQ] = useState('');
+    const load = id => api.get('/api/med/generic/' + id).then(r => {
+      if (r && r.ok) {
+        setGen(r.generic);
+        setState('ok');
+      } else setState('none');
+    }).catch(() => setState('none'));
+    useEffect(() => {
+      const term = String(query || '').replace(/\(.*?\)/g, '').replace(/[—-].*$/, '').split(/\s+/).slice(0, 2).join(' ').trim();
+      if (!term) return;
+      setState('loading');
+      api.get('/api/med/search?kind=generic&limit=5&q=' + encodeURIComponent(term)).then(r => {
+        const g = r && r.generics && r.generics[0];
+        if (g) load(g.id);else {
+          setGen(null);
+          setState('none');
+        }
+      }).catch(() => setState('none'));
+    }, [query]);
+    const Box = window.DrugSearchBox,
+      Mono = window.MedMonograph;
+    return React.createElement("div", {
+      className: "dc-card dc-rise"
+    }, React.createElement("div", {
+      className: "dc-card-h"
+    }, React.createElement(Svg, {
+      d: IC.book
+    }), React.createElement("b", null, "Dosage from the monograph"), React.createElement("span", {
+      className: "dc-sub"
+    }, "for comparison \u2014 the drug index's own text")), React.createElement("div", {
+      className: "dc-card-b"
+    }, Box ? React.createElement(Box, {
+      value: q,
+      onChange: setQ,
+      onPick: p => {
+        const id = p.kind === 'generic' ? p.doc.id : p.doc.genericId;
+        if (id) {
+          setState('loading');
+          load(id);
+        }
+        setQ('');
+      },
+      placeholder: "Look up another drug's dosage section"
+    }) : null, state === 'loading' ? React.createElement("div", {
+      className: "dc-muted",
+      style: {
+        marginTop: 12
+      }
+    }, "Looking it up\u2026") : null, state === 'none' ? React.createElement("div", {
+      className: "dc-muted",
+      style: {
+        marginTop: 12
+      }
+    }, "No monograph found for \u201C", query, "\u201D in the drug index.") : null, gen && state === 'ok' ? React.createElement("div", {
+      style: {
+        marginTop: 12
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 14,
+        fontWeight: 800,
+        color: MK.INK,
+        marginBottom: 6
+      }
+    }, gen.name), gen.monograph && gen.monograph.dosage && Mono ? React.createElement("div", {
+      className: "dc-mono"
+    }, React.createElement(Mono, {
+      html: gen.monograph.dosage
+    })) : React.createElement("div", {
+      className: "dc-muted"
+    }, "No dosage section recorded for this generic.")) : null));
+  }
+  function DrugPicker({
+    kind,
+    list,
+    selected,
+    onPick,
+    order,
+    groupOrder,
+    setOrder,
+    setGroupOrder,
+    arrange,
+    favs,
+    toggleFav,
+    subtitle
+  }) {
+    const [q, setQ] = useState('');
+    const [closed, setClosed] = useState({});
+    const live = list.filter(e => !e.disabled);
+    const ordered = D.applyOrder(live, order);
+    const groups = D.applyOrder(Array.from(new Set(ordered.map(e => e.group || 'Other'))).map(g => ({
+      id: g
+    })), groupOrder).map(g => g.id);
+    const term = q.trim().toLowerCase();
+    const match = e => !term || (e.name + ' ' + (e.group || '')).toLowerCase().indexOf(term) >= 0;
+    const favList = ordered.filter(e => favs.indexOf(e.id) >= 0 && match(e));
+    const moveInGroup = g => (from, to) => {
+      const inG = ordered.filter(e => (e.group || 'Other') === g);
+      const moved = D.moveItem(inG, from, to);
+      let k = 0;
+      const full = ordered.map(e => (e.group || 'Other') === g ? moved[k++] : e);
+      setOrder(full.map(e => e.id));
+    };
+    const Row = (e, handle) => React.createElement("div", {
+      className: 'dc-drug' + (selected === e.id ? ' is-on' : ''),
+      onClick: () => onPick(e.id),
+      role: "button",
+      tabIndex: 0,
+      onKeyDown: ev => {
+        if (ev.key === 'Enter') onPick(e.id);
+      },
+      style: {
+        '--g': colorOf(e.group)
+      }
+    }, handle, React.createElement("span", {
+      className: "dc-drug-bar"
+    }), React.createElement("span", {
+      className: "dc-drug-name"
+    }, e.name, e.custom ? React.createElement("em", null, " \xB7 hospital") : null), React.createElement("span", {
+      className: "dc-drug-meta"
+    }, e.highAlert ? React.createElement("i", {
+      className: "dc-dot is-red",
+      title: "High-alert"
+    }) : null, React.createElement("i", {
+      className: 'dc-dot is-' + (e.reviewed.state === 'ok' ? 'green' : e.reviewed.state === 'stale' ? 'redring' : 'amber'),
+      title: e.reviewed.state === 'ok' ? 'Reviewed' : e.reviewed.state === 'stale' ? 'Changed since review' : 'Not yet reviewed'
+    }), React.createElement("button", {
+      className: 'dc-star' + (favs.indexOf(e.id) >= 0 ? ' is-on' : ''),
+      "aria-label": "Favourite",
+      onClick: ev => {
+        ev.stopPropagation();
+        toggleFav(e.id);
+      }
+    }, React.createElement(Svg, {
+      d: IC.star,
+      s: 13
+    }))));
+    return React.createElement("div", {
+      className: "dc-card dc-picker"
+    }, React.createElement("div", {
+      className: "dc-card-h"
+    }, React.createElement("b", null, subtitle), React.createElement("span", {
+      className: "dc-count"
+    }, live.length)), React.createElement("div", {
+      className: "dc-search"
+    }, React.createElement(Svg, {
+      d: IC.search,
+      s: 14
+    }), React.createElement("input", {
+      value: q,
+      onChange: e => setQ(e.target.value),
+      placeholder: "Search drugs\u2026",
+      "aria-label": "Search drugs"
+    }), q ? React.createElement("button", {
+      onClick: () => setQ(''),
+      "aria-label": "Clear"
+    }, React.createElement(Svg, {
+      d: IC.x,
+      s: 12
+    })) : null), React.createElement("div", {
+      className: "dc-picker-scroll"
+    }, favList.length && !arrange ? React.createElement("div", {
+      className: "dc-group"
+    }, React.createElement("div", {
+      className: "dc-group-h is-fav"
+    }, React.createElement(Svg, {
+      d: IC.star,
+      s: 12
+    }), "Favourites"), favList.map(e => React.createElement("div", {
+      key: 'f' + e.id
+    }, Row(e, null)))) : null, React.createElement(Sortable, {
+      items: groups.map(g => ({
+        id: g
+      })),
+      getKey: g => g.id,
+      enabled: arrange && !term,
+      onMove: (a, b) => setGroupOrder(D.moveItem(groups, a, b)),
+      render: (g, handle) => {
+        const rows = ordered.filter(e => (e.group || 'Other') === g.id && match(e));
+        if (!rows.length) return null;
+        const isClosed = closed[g.id] && !term;
+        return React.createElement("div", {
+          className: "dc-group",
+          style: {
+            '--g': colorOf(g.id)
+          }
+        }, React.createElement("div", {
+          className: "dc-group-h"
+        }, handle, React.createElement("button", {
+          className: "dc-group-t",
+          onClick: () => setClosed(Object.assign({}, closed, {
+            [g.id]: !closed[g.id]
+          })),
+          "aria-expanded": !isClosed
+        }, React.createElement("span", {
+          className: "dc-gdot"
+        }), g.id, React.createElement("span", {
+          className: "dc-count"
+        }, rows.length), React.createElement("span", {
+          className: 'dc-chev' + (isClosed ? '' : ' is-open')
+        }, React.createElement(Svg, {
+          d: IC.down,
+          s: 12
+        })))), isClosed ? null : React.createElement(Sortable, {
+          items: rows,
+          getKey: e => e.id,
+          enabled: arrange && !term,
+          onMove: moveInGroup(g.id),
+          render: (e, h) => Row(e, h)
+        }));
+      }
+    }), !ordered.some(match) ? React.createElement("div", {
+      className: "dc-muted",
+      style: {
+        padding: 16
+      }
+    }, "Nothing matches \u201C", q, "\u201D.") : null));
+  }
+  function InfusionTab({
+    lib,
+    p,
+    dv,
+    prefs,
+    layout,
+    setPref,
+    arrange,
+    restore,
+    onRecent,
+    admin
+  }) {
+    const list = lib.infusion;
+    const firstId = (D.applyOrder(list.filter(e => !e.disabled), (prefs.order || {}).infusion || layout.infusion)[0] || {}).id;
+    const [drugId, setDrugId] = useState(() => restore && restore.drugId || prefs.lastInfusion || firstId);
+    const entry = list.find(e => e.id === drugId && !e.disabled) || list.find(e => e.id === firstId);
+    const [ci, setCi] = useState(0);
+    const [custom, setCustom] = useState({
+      amount: '',
+      unit: 'mg',
+      ml: '50'
+    });
+    const [mode, setMode] = useState('dose');
+    const [doseVal, setDoseVal] = useState(entry ? String(entry.start) : '');
+    const [rateVal, setRateVal] = useState('');
+    const [showMono, setShowMono] = useState(false);
+    const [pumpKey, setPumpKey] = useState(0);
+    const pick = id => {
+      const e = list.find(x => x.id === id);
+      setDrugId(id);
+      setCi(0);
+      setMode('dose');
+      setDoseVal(e ? String(e.start) : '');
+      setRateVal('');
+      setPumpKey(k => k + 1);
+      setPref({
+        lastInfusion: id
+      });
+    };
+    useEffect(() => {
+      if (!restore) return;
+      setDrugId(restore.drugId);
+      setCi(restore.ci || 0);
+      setMode('dose');
+      setDoseVal(String(restore.dose));
+      setPumpKey(k => k + 1);
+      if (restore.custom) setCustom(restore.custom);
+    }, [restore]);
+    if (!entry) return React.createElement("div", {
+      className: "dc-card"
+    }, React.createElement("div", {
+      className: "dc-empty"
+    }, "Every infusion is switched off in the library."));
+    const concs = entry.conc || [];
+    const conc = ci === 'custom' ? {
+      label: 'Custom',
+      amount: parseFloat(custom.amount),
+      unit: custom.unit,
+      ml: parseFloat(custom.ml)
+    } : concs[ci] || concs[0];
+    const u = D.parseUnit(entry.unit);
+    const w = dosingWeight(p, dv, entry);
+    const needW = u.perKg && !(w > 0);
+    const perMlDose = D.concPerMl(conc, u.amount);
+    const dose = mode === 'dose' ? parseFloat(doseVal) : D.doseFromRate({
+      rate: parseFloat(rateVal),
+      unit: entry.unit,
+      weight: w,
+      conc
+    });
+    const rate = mode === 'dose' ? D.rateFromDose({
+      dose: parseFloat(doseVal),
+      unit: entry.unit,
+      weight: w,
+      conc
+    }) : parseFloat(rateVal);
+    const pumpRate = rate != null && Number.isFinite(rate) ? D.roundToPump(rate) : null;
+    const delivered = pumpRate != null ? D.doseFromRate({
+      rate: pumpRate,
+      unit: entry.unit,
+      weight: w,
+      conc
+    }) : null;
+    const level = dose != null && Number.isFinite(dose) ? D.checkLimits(entry, dose) : null;
+    const maxDose = (entry.hard || (entry.soft || [])[1] || 1) * 1.25;
+    const maxRate = D.rateFromDose({
+      dose: maxDose,
+      unit: entry.unit,
+      weight: w || 70,
+      conc
+    }) || 50;
+    const prep = ci === 'custom' ? null : D.prepPlan(conc, entry.ampoule);
+    const totals = pumpRate ? D.dailyTotals(entry, conc, pumpRate) : null;
+    const table = D.titrationTable(entry, conc, w || null, 16);
+    const color = colorOf(entry.group);
+    const isSyringe = !(conc && conc.ml > 60);
+    const ideal = entry.weight === 'ideal' && p.basis === 'actual' && dv.ibw && dv.weight && dv.weight > dv.ibw * 1.2;
+    const onPumpRate = r => {
+      if (mode === 'rate') setRateVal(String(r));else {
+        const d = D.doseFromRate({
+          rate: r,
+          unit: entry.unit,
+          weight: w,
+          conc
+        });
+        if (d != null) setDoseVal(String(D.round(d, 4)));
+      }
+    };
+    const stepDose = dir => {
+      if (mode === 'dose') setDoseVal(String(Math.max(0, D.round((parseFloat(doseVal) || 0) + dir * entry.step, 4))));else setRateVal(String(Math.max(0, D.roundToPump((parseFloat(rateVal) || 0) + dir * (isSyringe ? 0.1 : 1)))));
+    };
+    const concText = conc && conc.amount > 0 ? fmt(conc.amount) + ' ' + conc.unit + ' in ' + fmt(conc.ml) + ' mL = ' + fmt(perMlDose) + ' ' + u.amount + '/mL' : 'Enter a concentration';
+    const doseText = dose != null && Number.isFinite(dose) ? fmt(dose) + ' ' + entry.unit : '';
+    const printLabel = () => {
+      if (level === 'hard') {
+        toast('Over the hard limit — no label printed.', 'error');
+        return;
+      }
+      const when = new Date().toLocaleString([], {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      });
+      const one = '<div class="lbl">' + (entry.highAlert ? '<span class="ha">HIGH-ALERT · TWO-PERSON CHECK</span>' : '') + '<h1>' + escH(entry.name) + '</h1><div class="c">' + escH(concText) + (entry.diluent ? ' · ' + escH(entry.diluent) : '') + '</div>' + '<div class="big">' + fmt(pumpRate) + ' mL/h</div><div class="d">= ' + fmt(delivered) + ' ' + escH(entry.unit) + (u.perKg ? ' @ ' + fmt(w, 1) + ' kg' + (p.basis !== 'actual' ? ' (' + p.basis + ' BW)' : '') : '') + '</div>' + '<div class="c" style="margin-top:6px">Patient: <b>' + escH(p.name || '__________________') + '</b> &nbsp; UHID/Bed: <b>' + escH(p.uhid || '__________') + '</b></div>' + '<div class="row"><div>Prepared by</div><div>Checked by</div></div><div class="row"><div>Date/time: ' + escH(when) + '</div><div>Expires</div></div>' + '<div class="mut" style="margin-top:6px">UNICO dose calculator · ' + escH(entry.reviewed.state === 'ok' ? 'library reviewed by ' + entry.reviewed.by : 'library entry not yet reviewed by pharmacy') + '</div></div>';
+      printHtml('Infusion label — ' + entry.name, one + one, 'A4');
+      onRecent({
+        kind: 'infusion',
+        drugId: entry.id,
+        ci,
+        custom: ci === 'custom' ? custom : null,
+        dose: D.round(dose, 4),
+        weight: p.weight,
+        label: entry.name + ' ' + fmt(dose) + ' ' + entry.unit + ' → ' + fmt(pumpRate) + ' mL/h'
+      });
+    };
+    return React.createElement("div", {
+      className: "dc-inf"
+    }, React.createElement(DrugPicker, {
+      kind: "infusion",
+      list: list,
+      selected: entry.id,
+      onPick: pick,
+      subtitle: "ICU drug library",
+      order: (prefs.order || {}).infusion || layout.infusion,
+      groupOrder: (prefs.groups || {}).infusion || (layout.groups || {}).infusion,
+      setOrder: o => setPref({
+        order: Object.assign({}, prefs.order, {
+          infusion: o
+        })
+      }),
+      setGroupOrder: o => setPref({
+        groups: Object.assign({}, prefs.groups, {
+          infusion: o
+        })
+      }),
+      arrange: arrange,
+      favs: prefs.favs || [],
+      toggleFav: id => setPref({
+        favs: (prefs.favs || []).indexOf(id) >= 0 ? prefs.favs.filter(x => x !== id) : [id].concat(prefs.favs || [])
+      })
+    }), React.createElement("div", {
+      className: "dc-col"
+    }, React.createElement("div", {
+      className: "dc-card dc-rise",
+      key: 'c' + entry.id,
+      style: {
+        '--g': color
+      }
+    }, React.createElement("div", {
+      className: "dc-drug-head"
+    }, React.createElement("span", {
+      className: "dc-drug-swatch"
+    }), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      className: "dc-drug-title"
+    }, entry.name), React.createElement("div", {
+      className: "dc-chips"
+    }, React.createElement("span", {
+      className: "dc-chip"
+    }, entry.group), React.createElement("span", {
+      className: "dc-chip is-mono"
+    }, entry.unit), entry.highAlert ? React.createElement(HighAlert, null) : null, React.createElement(ReviewChip, {
+      e: entry
+    })))), React.createElement("div", {
+      className: "dc-card-b"
+    }, React.createElement("div", {
+      className: "dc-label-row"
+    }, "Concentration"), React.createElement("div", {
+      className: "dc-conc"
+    }, concs.map((c, i) => React.createElement("button", {
+      key: i,
+      className: 'dc-conc-chip' + (ci === i ? ' is-on' : ''),
+      onClick: () => {
+        setCi(i);
+        setPumpKey(k => k + 1);
+      }
+    }, React.createElement("b", null, fmt(c.amount), " ", c.unit, " / ", fmt(c.ml), " mL"), React.createElement("span", null, c.label, " \xB7 ", fmt(D.concPerMl(c, u.amount)), " ", u.amount, "/mL"))), React.createElement("button", {
+      className: 'dc-conc-chip' + (ci === 'custom' ? ' is-on' : ''),
+      onClick: () => {
+        setCi('custom');
+        setPumpKey(k => k + 1);
+      }
+    }, React.createElement("b", null, "Custom"), React.createElement("span", null, "your own mix"))), ci === 'custom' ? React.createElement("div", {
+      className: "dc-inline dc-rise",
+      style: {
+        marginTop: 8
+      }
+    }, React.createElement(NumIn, {
+      value: custom.amount,
+      onChange: v => setCustom(Object.assign({}, custom, {
+        amount: v
+      })),
+      placeholder: "amount",
+      style: {
+        width: 90
+      },
+      autoFocus: true
+    }), React.createElement("select", {
+      className: "inp",
+      value: custom.unit,
+      onChange: e => setCustom(Object.assign({}, custom, {
+        unit: e.target.value
+      }))
+    }, AMOUNT_UNITS.map(x => React.createElement("option", {
+      key: x
+    }, x))), React.createElement("span", {
+      className: "dc-muted"
+    }, "in"), React.createElement(NumIn, {
+      value: custom.ml,
+      onChange: v => setCustom(Object.assign({}, custom, {
+        ml: v
+      })),
+      placeholder: "mL",
+      style: {
+        width: 70
+      }
+    }), React.createElement("span", {
+      className: "dc-muted"
+    }, "mL")) : null, React.createElement("div", {
+      className: "dc-io"
+    }, React.createElement("div", {
+      className: "dc-io-in"
+    }, React.createElement("div", {
+      className: "dc-label-row",
+      style: {
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center'
+      }
+    }, React.createElement("span", null, mode === 'dose' ? 'Dose (' + entry.unit + ')' : 'Pump rate (mL/h)'), React.createElement(Seg, {
+      small: true,
+      value: mode,
+      onChange: m => {
+        if (m === mode) return;
+        if (m === 'rate') setRateVal(pumpRate != null ? String(pumpRate) : '');else setDoseVal(dose != null && Number.isFinite(dose) ? String(D.round(dose, 4)) : '');
+        setMode(m);
+      },
+      options: [{
+        v: 'dose',
+        l: 'Dose → mL/h'
+      }, {
+        v: 'rate',
+        l: 'mL/h → dose'
+      }]
+    })), React.createElement("div", {
+      className: "dc-big-in"
+    }, React.createElement("button", {
+      className: "dc-step-big",
+      onClick: () => stepDose(-1),
+      "aria-label": "Down one step"
+    }, "\u2212"), React.createElement("input", {
+      className: "dc-big-num",
+      type: "number",
+      inputMode: "decimal",
+      step: "any",
+      min: "0",
+      value: mode === 'dose' ? doseVal : rateVal,
+      onChange: e => mode === 'dose' ? setDoseVal(e.target.value) : setRateVal(e.target.value),
+      "aria-label": mode === 'dose' ? 'Dose' : 'Rate'
+    }), React.createElement("button", {
+      className: "dc-step-big",
+      onClick: () => stepDose(1),
+      "aria-label": "Up one step"
+    }, "+")), React.createElement("input", {
+      type: "range",
+      className: "dc-range",
+      min: "0",
+      max: mode === 'dose' ? maxDose : D.round(maxRate, 1),
+      step: mode === 'dose' ? entry.step / 10 : 0.1,
+      value: (mode === 'dose' ? parseFloat(doseVal) : parseFloat(rateVal)) || 0,
+      style: {
+        '--g': color
+      },
+      onChange: e => mode === 'dose' ? setDoseVal(e.target.value) : setRateVal(e.target.value),
+      "aria-label": "Adjust"
+    }), React.createElement("div", {
+      className: "dc-fhint"
+    }, "Titration step ", fmt(entry.step), " ", entry.unit, " \xB7 usual start ", fmt(entry.start))), React.createElement("div", {
+      className: 'dc-result is-' + (level || 'none')
+    }, needW ? React.createElement("div", {
+      className: "dc-need"
+    }, React.createElement(Svg, {
+      d: IC.alert,
+      s: 18
+    }), " Enter the patient's weight \u2014 this is a per-kg dose.") : React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "dc-result-k"
+    }, mode === 'dose' ? 'Set the pump to' : 'This rate delivers'), React.createElement("div", {
+      className: "dc-result-v"
+    }, mode === 'dose' ? React.createElement(React.Fragment, null, React.createElement(Tween, {
+      value: pumpRate
+    }), React.createElement("small", null, " mL/h")) : React.createElement(React.Fragment, null, React.createElement(Tween, {
+      value: dose
+    }), React.createElement("small", null, " ", entry.unit))), mode === 'dose' && rate != null && Math.abs(rate - pumpRate) > 1e-9 ? React.createElement("div", {
+      className: "dc-result-s"
+    }, "exact ", fmt(rate, 3), " mL/h \xB7 at ", fmt(pumpRate), " mL/h the patient gets ", fmt(delivered), " ", entry.unit) : null, u.perKg ? React.createElement("div", {
+      className: "dc-result-s"
+    }, "for ", fmt(w, 1), " kg", p.basis !== 'actual' ? ' (' + p.basis + ' body weight)' : '') : React.createElement("div", {
+      className: "dc-result-s"
+    }, "not weight-based"), level === 'hard' ? React.createElement("div", {
+      className: "dc-banner is-red"
+    }, React.createElement(Svg, {
+      d: IC.alert,
+      s: 14
+    }), " Over the hard limit of ", fmt(entry.hard), " ", entry.unit, ". Label printing and the pump are locked.") : null, level === 'high' ? React.createElement("div", {
+      className: "dc-banner is-amber"
+    }, "Above the usual range (", fmt(entry.soft[1]), " ", entry.unit, "). Confirm with the prescriber.") : null, level === 'low' ? React.createElement("div", {
+      className: "dc-banner is-amber"
+    }, "Below the usual range (", fmt(entry.soft[0]), " ", entry.unit, ").") : null))), ideal ? React.createElement("div", {
+      className: "dc-banner is-blue",
+      style: {
+        marginTop: 10
+      }
+    }, "This drug is usually dosed on ", React.createElement("b", null, "ideal body weight"), " in obesity (", fmt(dv.ibw, 1), " kg). Switch \u201CDose by\u201D to Ideal in the patient bar.") : null, React.createElement("div", {
+      className: "dc-two",
+      style: {
+        marginTop: 14
+      }
+    }, React.createElement(DoseGauge, {
+      entry: entry,
+      dose: dose,
+      unit: entry.unit
+    }), React.createElement("div", {
+      className: "dc-facts"
+    }, React.createElement("div", {
+      className: "dc-fact"
+    }, React.createElement("span", null, "Concentration"), React.createElement("b", null, concText)), prep ? React.createElement("div", {
+      className: "dc-fact"
+    }, React.createElement("span", null, React.createElement(Svg, {
+      d: IC.flask,
+      s: 12
+    }), " Preparation"), React.createElement("b", null, prep.impossible ? 'The ampoules do not fit in this volume — check the concentration.' : 'Open ' + prep.open + ' × ' + (entry.ampoule.label || fmt(entry.ampoule.amount) + ' ' + entry.ampoule.unit) + ', draw ' + fmt(prep.drawMl) + ' mL' + (prep.undiluted ? ' — use undiluted.' : ', add ' + fmt(prep.diluentMl) + ' mL ' + (entry.diluent || 'diluent') + ' to ' + fmt(conc.ml) + ' mL.'))) : null, totals ? React.createElement("div", {
+      className: "dc-fact"
+    }, React.createElement("span", null, "Per 24 h at ", fmt(pumpRate), " mL/h"), React.createElement("b", null, fmt(totals.ml, 0), " mL fluid \xB7 ", fmt(totals.amount), " ", totals.unit, " of drug")) : null, pumpRate ? React.createElement("div", {
+      className: "dc-fact"
+    }, React.createElement("span", null, React.createElement(Svg, {
+      d: IC.clock,
+      s: 12
+    }), " ", isSyringe ? 'Syringe' : 'Bag', " lasts"), React.createElement("b", null, fmt(conc.ml / pumpRate, 1), " h")) : null)), entry.notes ? React.createElement("div", {
+      className: "dc-note"
+    }, entry.notes) : null, React.createElement("div", {
+      className: "dc-src"
+    }, "Source: ", entry.source, entry.custom ? ' · hospital-added' : entry.overridden ? ' · edited by the hospital' : ''), React.createElement("div", {
+      className: "dc-actions"
+    }, React.createElement("button", {
+      style: MK.btnPri,
+      disabled: level === 'hard' || needW || !pumpRate,
+      onClick: printLabel
+    }, React.createElement(Svg, {
+      d: IC.print,
+      s: 14
+    }), " Print syringe label"), React.createElement("button", {
+      style: MK.btnGhost,
+      disabled: needW || !pumpRate,
+      onClick: () => onRecent({
+        kind: 'infusion',
+        drugId: entry.id,
+        ci,
+        custom: ci === 'custom' ? custom : null,
+        dose: D.round(dose, 4),
+        weight: p.weight,
+        label: entry.name + ' ' + fmt(dose) + ' ' + entry.unit + ' → ' + fmt(pumpRate) + ' mL/h'
+      })
+    }, React.createElement(Svg, {
+      d: IC.save,
+      s: 14
+    }), " Save to recent"), React.createElement("button", {
+      style: MK.btnGhost,
+      onClick: () => setShowMono(!showMono)
+    }, React.createElement(Svg, {
+      d: IC.book,
+      s: 14
+    }), " ", showMono ? 'Hide' : 'Show', " monograph")))), table.length ? React.createElement("div", {
+      className: "dc-card dc-rise"
+    }, React.createElement("div", {
+      className: "dc-card-h"
+    }, React.createElement("b", null, "Titration chart"), React.createElement("span", {
+      className: "dc-sub"
+    }, concText, u.perKg ? ' · ' + fmt(w, 1) + ' kg' : '', " \u2014 click a row to set it")), React.createElement("div", {
+      className: "dc-ttable"
+    }, table.map((r, i) => {
+      const cur = dose != null && Math.abs(r.dose - dose) < entry.step / 2;
+      return React.createElement("button", {
+        key: i,
+        className: 'dc-trow is-' + r.level + (cur ? ' is-cur' : ''),
+        onClick: () => {
+          setMode('dose');
+          setDoseVal(String(r.dose));
+        }
+      }, React.createElement("span", null, fmt(r.dose), " ", React.createElement("i", null, entry.unit)), React.createElement("b", null, r.rate == null ? '—' : fmt(r.rate), " ", React.createElement("i", null, "mL/h")));
+    }))) : null, showMono ? React.createElement(MonographPanel, {
+      query: entry.name
+    }) : null), React.createElement("div", {
+      className: "dc-col dc-pump-col"
+    }, React.createElement("div", {
+      className: "dc-card dc-rise"
+    }, React.createElement("div", {
+      className: "dc-card-h"
+    }, React.createElement("b", null, isSyringe ? 'Syringe pump' : 'Volumetric pump'), React.createElement("span", {
+      className: "dc-sub"
+    }, "live simulation")), React.createElement("div", {
+      className: "dc-card-b",
+      style: {
+        paddingTop: 8
+      }
+    }, needW ? React.createElement("div", {
+      className: "dc-empty"
+    }, "Enter a weight to run the pump.") : isSyringe ? React.createElement(window.DosePumps.SyringePump, {
+      key: pumpKey,
+      drug: entry.name,
+      color: color,
+      rate: pumpRate,
+      volume: conc && conc.ml,
+      doseText: doseText ? '= ' + doseText : '',
+      level: level,
+      onRate: onPumpRate,
+      step: 0.1,
+      bolusMl: BOLUS_GROUPS[entry.group] ? 1 : null,
+      maxRate: maxRate
+    }) : React.createElement(window.DosePumps.InfusionPump, {
+      key: pumpKey,
+      fluid: entry.name.split(' ')[0] + ' ' + fmt(conc.amount) + conc.unit,
+      color: color,
+      rate: pumpRate,
+      volume: conc && conc.ml,
+      dropFactor: 20,
+      doseText: doseText ? '= ' + doseText : '',
+      level: level,
+      onRate: onPumpRate,
+      step: 1,
+      maxRate: maxRate
+    }), React.createElement("div", {
+      className: "dc-fhint",
+      style: {
+        marginTop: 8
+      }
+    }, "A simulation to check the set-up \u2014 it does not control any device. Turn the knob or use \u25B2\u25BC and the dose above follows.")))));
+  }
+  function EmergencyTab({
+    lib,
+    p,
+    dv,
+    prefs,
+    layout,
+    setPref,
+    arrange,
+    admin
+  }) {
+    const [q, setQ] = useState('');
+    const w = dv.weight,
+      age = parseFloat(p.age);
+    const live = D.applyOrder(lib.emergency.filter(e => !e.disabled), (prefs.order || {}).emergency || layout.emergency);
+    const groups = D.applyOrder(Array.from(new Set(live.map(e => e.group))).map(g => ({
+      id: g
+    })), (prefs.groups || {}).emergency || (layout.groups || {}).emergency).map(g => g.id);
+    const airway = D.airway(Number.isFinite(age) ? age : null);
+    const fluid = D.maintenance421(w);
+    const term = q.trim().toLowerCase();
+    const doseStr = (d, unit) => !d ? '—' : d.single ? fmt(d.lo) + ' ' + unit : fmt(d.lo) + '–' + fmt(d.hi) + ' ' + unit;
+    const mlStr = d => !d || !d.ml ? '' : Math.abs(d.ml[1] - d.ml[0]) < 1e-9 ? fmt(d.ml[0]) + ' mL' : fmt(d.ml[0]) + '–' + fmt(d.ml[1]) + ' mL';
+    const print = () => {
+      const when = new Date().toLocaleString([], {
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      });
+      let h = '<div class="hd"><div><b style="font-size:17px">Emergency drug sheet</b><div class="mut">UNICO dose calculator · ' + escH(when) + '</div></div>' + '<div style="text-align:right"><b>' + escH(p.name || '') + '</b> ' + escH(p.uhid || '') + '<div>Weight <b>' + fmt(w, 1) + ' kg</b>' + (Number.isFinite(age) ? ' · Age ' + age + ' y' : '') + ' · ' + (dv.adult ? 'Adult doses' : 'Child doses') + '</div></div></div>';
+      groups.forEach(g => {
+        const rows = live.filter(e => e.group === g);
+        h += '<h2>' + escH(g) + '</h2><table><tr><th style="width:30%">Drug</th><th>Dose</th><th>Volume</th><th>Preparation</th><th>Route</th><th style="width:26%">Notes</th></tr>';
+        rows.forEach(e => {
+          const d = D.emergencyDose(e, w, age);
+          h += '<tr><td><b>' + escH(e.name) + '</b><div class="mut">' + (Array.isArray(e.dose) ? fmt(e.dose[0]) + '–' + fmt(e.dose[1]) : fmt(e.dose)) + ' ' + escH(e.unit) + '/kg' + (e.max ? ', max ' + fmt(e.max) : '') + '</div></td><td><b>' + doseStr(d, e.unit) + '</b>' + (d && d.capped ? ' <span class="cap">MAX</span>' : '') + (d && d.adult ? ' <span class="mut">adult</span>' : '') + '</td><td>' + mlStr(d) + '</td><td>' + escH(e.prep) + '</td><td>' + escH(e.route) + '</td><td class="mut">' + escH(e.notes) + '</td></tr>';
+        });
+        h += '</table>';
+      });
+      h += '<h2>Electrical</h2><table><tr><th>Therapy</th><th>Energy</th><th>Notes</th></tr>' + LIB.ELECTRICAL.map(e => {
+        const d = D.electricalDose(e, w, age);
+        return '<tr><td>' + escH(e.name) + '</td><td><b>' + (d ? (Math.abs(d.hi - d.lo) < 1e-9 ? fmt(d.lo, 0) : fmt(d.lo, 0) + '–' + fmt(d.hi, 0)) + ' J' : '—') + '</b></td><td class="mut">' + escH(e.notes) + '</td></tr>';
+      }).join('') + '</table>';
+      if (airway) h += '<h2>Airway & fluids</h2><table><tr><td>ETT cuffed / uncuffed</td><td><b>' + (airway.cuffed || '—') + ' / ' + (airway.uncuffed || '—') + '</b>' + (airway.depth ? ' · oral depth ' + airway.depth + ' cm' : '') + '</td><td class="mut">' + escH(airway.note) + '</td></tr>' + (fluid ? '<tr><td>Maintenance fluid</td><td><b>' + fmt(fluid.mlPerHour) + ' mL/h</b> (' + fmt(fluid.mlPerDay, 0) + ' mL/day)</td><td class="mut">Holliday–Segar 4-2-1</td></tr>' : '') + '</table>';
+      h += '<div style="display:flex;gap:30px;margin-top:16px;font-size:11px"><div style="flex:1;border-top:1px solid #333;padding-top:3px">Calculated by</div><div style="flex:1;border-top:1px solid #333;padding-top:3px">Checked by</div></div>' + '<p class="mut">Calculation aid only — verify against the prescription and hospital protocol. Library entries not reviewed by pharmacy are defaults from ' + escH('AHA PALS / ACLS 2020 and APLS') + '.</p>';
+      printHtml('Emergency drug sheet', h, 'A4');
+    };
+    if (!w) return React.createElement("div", {
+      className: "dc-card dc-rise"
+    }, React.createElement("div", {
+      className: "dc-empty"
+    }, React.createElement("b", null, "Enter a weight"), " in the patient bar (or an age up to 12 for the APLS estimate) and the whole resuscitation sheet is calculated."));
+    return React.createElement("div", {
+      className: "dc-col"
+    }, React.createElement("div", {
+      className: "dc-em-top"
+    }, React.createElement("div", {
+      className: "dc-stat is-big"
+    }, React.createElement("span", null, "Weight"), React.createElement("b", null, fmt(w, 1), " kg"), React.createElement("i", null, dv.adult ? 'adult doses' : 'child doses')), LIB.ELECTRICAL.slice(0, 2).map(e => {
+      const d = D.electricalDose(e, w, age);
+      return React.createElement("div", {
+        key: e.id,
+        className: "dc-stat is-red"
+      }, React.createElement("span", null, e.name.replace('Defibrillation — ', 'Shock — ')), React.createElement("b", null, d ? fmt(d.lo, 0) : '—', " J"), React.createElement("i", null, Array.isArray(e.jPerKg) ? e.jPerKg.join('–') : e.jPerKg, " J/kg", d && d.adult ? ' · adult' : ''));
+    }), React.createElement("div", {
+      className: "dc-stat"
+    }, React.createElement("span", null, "ETT (cuffed)"), React.createElement("b", null, airway && airway.cuffed ? airway.cuffed : '—'), React.createElement("i", null, airway ? airway.depth ? 'oral depth ' + airway.depth + ' cm' : airway.note : 'enter age')), React.createElement("div", {
+      className: "dc-stat"
+    }, React.createElement("span", null, "Maintenance"), React.createElement("b", null, fluid ? fmt(fluid.mlPerHour) : '—', " mL/h"), React.createElement("i", null, "4-2-1 rule")), React.createElement("div", {
+      className: "dc-stat"
+    }, React.createElement("span", null, "Fluid bolus"), React.createElement("b", null, fmt(Math.min(w * 10, 1000), 0), "\u2013", fmt(Math.min(w * 20, 1000), 0), " mL"), React.createElement("i", null, "10\u201320 mL/kg"))), React.createElement("div", {
+      className: "dc-card dc-rise"
+    }, React.createElement("div", {
+      className: "dc-card-h"
+    }, React.createElement("b", null, "Weight-based emergency drugs"), React.createElement("div", {
+      className: "dc-search is-inline"
+    }, React.createElement(Svg, {
+      d: IC.search,
+      s: 14
+    }), React.createElement("input", {
+      value: q,
+      onChange: e => setQ(e.target.value),
+      placeholder: "Filter\u2026"
+    })), React.createElement("button", {
+      style: Object.assign({}, MK.btnPri, {
+        marginLeft: 'auto'
+      }),
+      onClick: print
+    }, React.createElement(Svg, {
+      d: IC.print,
+      s: 14
+    }), " Print A4 sheet")), React.createElement(Sortable, {
+      items: groups.map(g => ({
+        id: g
+      })),
+      getKey: g => g.id,
+      enabled: arrange && !term,
+      onMove: (a, b) => setPref({
+        groups: Object.assign({}, prefs.groups, {
+          emergency: D.moveItem(groups, a, b)
+        })
+      }),
+      render: (g, handle) => {
+        const rows = live.filter(e => e.group === g.id && (!term || e.name.toLowerCase().indexOf(term) >= 0));
+        if (!rows.length) return null;
+        return React.createElement("div", {
+          className: "dc-em-group",
+          style: {
+            '--g': colorOf(g.id)
+          }
+        }, React.createElement("div", {
+          className: "dc-em-gh"
+        }, handle, React.createElement("span", {
+          className: "dc-gdot"
+        }), g.id), React.createElement(Sortable, {
+          items: rows,
+          getKey: e => e.id,
+          enabled: arrange && !term,
+          onMove: (a, b) => {
+            const moved = D.moveItem(rows, a, b);
+            let k = 0;
+            setPref({
+              order: Object.assign({}, prefs.order, {
+                emergency: live.map(e => e.group === g.id ? moved[k++] : e).map(e => e.id)
+              })
+            });
+          },
+          render: (e, h) => {
+            const d = D.emergencyDose(e, w, age);
+            return React.createElement("div", {
+              className: "dc-em-row"
+            }, h, React.createElement("div", {
+              className: "dc-em-name"
+            }, React.createElement("b", null, e.name), React.createElement("span", null, Array.isArray(e.dose) ? fmt(e.dose[0]) + '–' + fmt(e.dose[1]) : fmt(e.dose), " ", e.unit, "/kg", e.max ? ' · max ' + fmt(e.max) + ' ' + e.unit : '')), React.createElement("div", {
+              className: "dc-em-dose"
+            }, React.createElement("b", null, doseStr(d, e.unit)), d && d.capped ? React.createElement("span", {
+              className: "dc-chip is-red"
+            }, "MAX") : null, d && d.adult ? React.createElement("span", {
+              className: "dc-chip is-blue"
+            }, "adult") : null), React.createElement("div", {
+              className: "dc-em-ml"
+            }, mlStr(d) || React.createElement("span", {
+              className: "dc-muted"
+            }, "\u2014"), React.createElement("span", null, e.prep)), React.createElement("div", {
+              className: "dc-em-route"
+            }, e.route), React.createElement("div", {
+              className: "dc-em-note"
+            }, e.notes, React.createElement(ReviewChip, {
+              e: e,
+              compact: true
+            })));
+          }
+        }));
+      }
+    }), React.createElement("div", {
+      className: "dc-card-b",
+      style: {
+        borderTop: '1px solid ' + MK.LINE
+      }
+    }, React.createElement("div", {
+      className: "dc-em-elec"
+    }, LIB.ELECTRICAL.map(e => {
+      const d = D.electricalDose(e, w, age);
+      return React.createElement("div", {
+        key: e.id,
+        className: "dc-fact"
+      }, React.createElement("span", null, e.name), React.createElement("b", null, d ? (Math.abs(d.hi - d.lo) < 1e-9 ? fmt(d.lo, 0) : fmt(d.lo, 0) + '–' + fmt(d.hi, 0)) + ' J' : '—'), React.createElement("i", {
+        className: "dc-muted"
+      }, e.notes));
+    })))));
+  }
+  function OralSyringe({
+    ml,
+    color
+  }) {
+    const v = Number(ml);
+    if (!(v > 0)) return null;
+    if (v > 10) {
+      const frac = Math.min(1, v / 30);
+      return React.createElement("svg", {
+        viewBox: "0 0 120 130",
+        width: "110",
+        className: "dc-oral",
+        role: "img",
+        "aria-label": fmt(v) + ' mL in a medicine cup'
+      }, React.createElement("path", {
+        d: "M20 20 L100 20 L90 120 L30 120 Z",
+        fill: "rgba(235,244,252,.75)",
+        stroke: "rgba(31,59,90,.4)"
+      }), React.createElement("clipPath", {
+        id: "cupClip"
+      }, React.createElement("path", {
+        d: "M20 20 L100 20 L90 120 L30 120 Z"
+      })), React.createElement("rect", {
+        x: "0",
+        y: 120 - frac * 100,
+        width: "120",
+        height: frac * 100,
+        fill: color,
+        opacity: ".6",
+        clipPath: "url(#cupClip)",
+        style: {
+          transition: 'all .6s cubic-bezier(.2,.8,.2,1)'
+        }
+      }), [5, 10, 15, 20, 25, 30].map(m => React.createElement("g", {
+        key: m
+      }, React.createElement("line", {
+        x1: "22",
+        x2: "34",
+        y1: 120 - m / 30 * 100,
+        y2: 120 - m / 30 * 100,
+        stroke: "rgba(31,59,90,.5)"
+      }), React.createElement("text", {
+        x: "38",
+        y: 123 - m / 30 * 100,
+        fontSize: "8",
+        fill: "#3c4858"
+      }, m))));
+    }
+    const X0 = 22,
+      X1 = 182,
+      frac = Math.min(1, v / 10);
+    const head = X0 + frac * (X1 - X0);
+    return React.createElement("svg", {
+      viewBox: "0 0 240 70",
+      width: "100%",
+      style: {
+        maxWidth: 300
+      },
+      className: "dc-oral",
+      role: "img",
+      "aria-label": 'Draw up ' + fmt(v) + ' mL'
+    }, React.createElement("rect", {
+      x: X1,
+      y: "29",
+      width: "22",
+      height: "12",
+      rx: "3",
+      fill: "#e9eef4",
+      stroke: "rgba(31,59,90,.35)"
+    }), React.createElement("rect", {
+      x: X0,
+      y: "18",
+      width: X1 - X0,
+      height: "34",
+      rx: "6",
+      fill: "rgba(235,244,252,.75)",
+      stroke: "rgba(31,59,90,.4)"
+    }), React.createElement("rect", {
+      x: X0 + 2,
+      y: "21",
+      width: Math.max(0, head - X0 - 2),
+      height: "28",
+      rx: "4",
+      fill: color,
+      opacity: ".6",
+      style: {
+        transition: 'width .6s cubic-bezier(.2,.8,.2,1)'
+      }
+    }), [...Array(21)].map((_, i) => {
+      const x = X0 + i / 20 * (X1 - X0);
+      return React.createElement("line", {
+        key: i,
+        x1: x,
+        x2: x,
+        y1: "18",
+        y2: i % 2 ? 24 : 28,
+        stroke: "rgba(31,59,90,.45)"
+      });
+    }), [0, 2, 4, 6, 8, 10].map(m => React.createElement("text", {
+      key: m,
+      x: X0 + m / 10 * (X1 - X0),
+      y: "64",
+      fontSize: "8",
+      textAnchor: "middle",
+      fill: "#3c4858"
+    }, m)), React.createElement("g", {
+      style: {
+        transform: 'translateX(' + (head - X0) + 'px)',
+        transition: 'transform .6s cubic-bezier(.2,.8,.2,1)'
+      }
+    }, React.createElement("rect", {
+      x: X0 - 2,
+      y: "16",
+      width: "6",
+      height: "38",
+      rx: "2",
+      fill: "#2d3a4a"
+    }), React.createElement("rect", {
+      x: "-60",
+      y: "31",
+      width: X0 + 58,
+      height: "8",
+      rx: "2",
+      fill: "#d7dee7",
+      stroke: "rgba(31,59,90,.25)",
+      transform: 'translate(' + 0 + ' 0)'
+    })));
+  }
+  function PaedTab({
+    lib,
+    p,
+    dv,
+    prefs,
+    layout,
+    setPref,
+    arrange
+  }) {
+    const list = lib.paed;
+    const firstId = (D.applyOrder(list.filter(e => !e.disabled), (prefs.order || {}).paed || layout.paed)[0] || {}).id;
+    const [id, setId] = useState(prefs.lastPaed || firstId);
+    const entry = list.find(e => e.id === id && !e.disabled) || list.find(e => e.id === firstId);
+    const [si, setSi] = useState(0);
+    const [perKg, setPerKg] = useState(entry ? String(entry.dose[1]) : '');
+    const [showMono, setShowMono] = useState(false);
+    const pick = x => {
+      const e = list.find(y => y.id === x);
+      setId(x);
+      setSi(0);
+      setPerKg(e ? String(e.dose[1]) : '');
+      setPref({
+        lastPaed: x
+      });
+    };
+    if (!entry) return React.createElement("div", {
+      className: "dc-card"
+    }, React.createElement("div", {
+      className: "dc-empty"
+    }, "Every paediatric drug is switched off in the library."));
+    const w = dv.weight;
+    const strength = entry.strengths[si] || entry.strengths[0];
+    const r = D.paedDose(entry, w, strength, parseFloat(perKg));
+    const color = colorOf(entry.group);
+    const freq = {
+      1: 'once daily',
+      2: '12-hourly (BD)',
+      3: '8-hourly (TDS)',
+      4: '6-hourly (QDS)',
+      6: '4-hourly'
+    }[entry.perDay] || entry.perDay + '× daily';
+    const lo = entry.dose[0],
+      hi = entry.dose[1];
+    return React.createElement("div", {
+      className: "dc-inf is-two"
+    }, React.createElement(DrugPicker, {
+      kind: "paed",
+      list: list,
+      selected: entry.id,
+      onPick: pick,
+      subtitle: "Paediatric drugs",
+      order: (prefs.order || {}).paed || layout.paed,
+      groupOrder: (prefs.groups || {}).paed || (layout.groups || {}).paed,
+      setOrder: o => setPref({
+        order: Object.assign({}, prefs.order, {
+          paed: o
+        })
+      }),
+      setGroupOrder: o => setPref({
+        groups: Object.assign({}, prefs.groups, {
+          paed: o
+        })
+      }),
+      arrange: arrange,
+      favs: prefs.favs || [],
+      toggleFav: x => setPref({
+        favs: (prefs.favs || []).indexOf(x) >= 0 ? prefs.favs.filter(y => y !== x) : [x].concat(prefs.favs || [])
+      })
+    }), React.createElement("div", {
+      className: "dc-col"
+    }, React.createElement("div", {
+      className: "dc-card dc-rise",
+      key: entry.id,
+      style: {
+        '--g': color
+      }
+    }, React.createElement("div", {
+      className: "dc-drug-head"
+    }, React.createElement("span", {
+      className: "dc-drug-swatch"
+    }), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      className: "dc-drug-title"
+    }, entry.name), React.createElement("div", {
+      className: "dc-chips"
+    }, React.createElement("span", {
+      className: "dc-chip"
+    }, entry.group), React.createElement("span", {
+      className: "dc-chip is-mono"
+    }, fmt(lo), hi !== lo ? '–' + fmt(hi) : '', " mg/kg/", entry.mode === 'day' ? 'day' : 'dose'), React.createElement("span", {
+      className: "dc-chip"
+    }, freq), React.createElement(ReviewChip, {
+      e: entry
+    })))), React.createElement("div", {
+      className: "dc-card-b"
+    }, React.createElement("div", {
+      className: "dc-label-row"
+    }, "Strength"), React.createElement("div", {
+      className: "dc-conc"
+    }, entry.strengths.map((s, i) => React.createElement("button", {
+      key: i,
+      className: 'dc-conc-chip' + (si === i ? ' is-on' : ''),
+      onClick: () => setSi(i)
+    }, React.createElement("b", null, s.label), React.createElement("span", null, s.form ? s.form === 'tab' ? 'tablet' : 'capsule' : fmt(s.mg / s.ml) + ' mg/mL')))), React.createElement("div", {
+      className: "dc-io"
+    }, React.createElement("div", {
+      className: "dc-io-in"
+    }, React.createElement("div", {
+      className: "dc-label-row"
+    }, "mg/kg per ", entry.mode === 'day' ? 'day' : 'dose'), React.createElement("div", {
+      className: "dc-big-in"
+    }, React.createElement("button", {
+      className: "dc-step-big",
+      onClick: () => setPerKg(String(Math.max(0, D.round((parseFloat(perKg) || 0) - (hi - lo > 4 ? 1 : 0.5), 2))))
+    }, "\u2212"), React.createElement("input", {
+      className: "dc-big-num",
+      type: "number",
+      step: "any",
+      min: "0",
+      value: perKg,
+      onChange: e => setPerKg(e.target.value),
+      "aria-label": "mg per kg"
+    }), React.createElement("button", {
+      className: "dc-step-big",
+      onClick: () => setPerKg(String(D.round((parseFloat(perKg) || 0) + (hi - lo > 4 ? 1 : 0.5), 2)))
+    }, "+")), hi > lo ? React.createElement("input", {
+      type: "range",
+      className: "dc-range",
+      min: lo,
+      max: hi,
+      step: (hi - lo) / 20,
+      value: parseFloat(perKg) || lo,
+      onChange: e => setPerKg(e.target.value),
+      style: {
+        '--g': color
+      }
+    }) : null, React.createElement("div", {
+      className: "dc-fhint"
+    }, "Range ", fmt(lo), hi !== lo ? '–' + fmt(hi) : '', " mg/kg", entry.maxDose ? ' · max ' + fmt(entry.maxDose) + ' mg/dose' : '', entry.maxDay ? ' · max ' + fmt(entry.maxDay) + ' mg/day' : '', entry.maxDayPerKg ? ' (' + entry.maxDayPerKg + ' mg/kg/day)' : '')), React.createElement("div", {
+      className: 'dc-result is-' + (!r ? 'none' : r.outOfRange ? 'high' : 'ok')
+    }, !w ? React.createElement("div", {
+      className: "dc-need"
+    }, React.createElement(Svg, {
+      d: IC.alert,
+      s: 18
+    }), " Enter the child's weight in the patient bar.") : React.createElement(React.Fragment, null, React.createElement("div", {
+      className: "dc-result-k"
+    }, "Each dose (", freq, ")"), React.createElement("div", {
+      className: "dc-result-v"
+    }, r.volume != null ? React.createElement(React.Fragment, null, React.createElement(Tween, {
+      value: r.volume
+    }), React.createElement("small", null, " mL")) : r.units != null ? React.createElement(React.Fragment, null, React.createElement(Tween, {
+      value: r.units,
+      dp: 2
+    }), React.createElement("small", null, " ", strength.form === 'cap' ? 'capsule(s)' : 'tablet(s)')) : React.createElement(React.Fragment, null, React.createElement(Tween, {
+      value: r.dose
+    }), React.createElement("small", null, " mg"))), React.createElement("div", {
+      className: "dc-result-s"
+    }, React.createElement("b", null, fmt(r.dose), " mg"), " per dose \xB7 ", fmt(r.day), " mg/day for ", fmt(w, 1), " kg"), r.units != null && Math.abs(r.units * 4 - Math.round(r.units * 4)) > 0.05 ? React.createElement("div", {
+      className: "dc-result-s"
+    }, "Not a whole/half/quarter tablet \u2014 a liquid form may be better.") : null, r.capped ? React.createElement("div", {
+      className: "dc-banner is-amber"
+    }, "Capped at the ", r.capped === 'dose' ? 'maximum single dose' : 'maximum daily dose', " \u2014 the mg/kg figure would give more.") : null, r.outOfRange ? React.createElement("div", {
+      className: "dc-banner is-amber"
+    }, fmt(r.mgPerKg), " mg/kg is outside the usual ", fmt(lo), "\u2013", fmt(hi), " mg/kg.") : null))), r && r.volume != null ? React.createElement("div", {
+      className: "dc-oral-wrap"
+    }, React.createElement(OralSyringe, {
+      ml: r.volume,
+      color: color
+    }), React.createElement("span", null, "Draw up ", React.createElement("b", null, fmt(r.volume), " mL"), " of ", strength.label)) : null, entry.notes ? React.createElement("div", {
+      className: "dc-note"
+    }, entry.notes) : null, React.createElement("div", {
+      className: "dc-src"
+    }, "Source: ", entry.source), React.createElement("div", {
+      className: "dc-actions"
+    }, React.createElement("button", {
+      style: MK.btnGhost,
+      onClick: () => setShowMono(!showMono)
+    }, React.createElement(Svg, {
+      d: IC.book,
+      s: 14
+    }), " ", showMono ? 'Hide' : 'Show', " monograph")))), showMono ? React.createElement(MonographPanel, {
+      query: entry.name
+    }) : null));
+  }
+  const CALC_META = {
+    body: 'Body size',
+    renal: 'Renal function',
+    fluids: 'Maintenance fluids',
+    drip: 'IV drip rate & pump',
+    sodium: 'Sodium correction',
+    freewater: 'Free-water deficit',
+    electrolytes: 'Corrections & gaps',
+    parkland: 'Burns — Parkland',
+    convert: 'Unit converter'
+  };
+  function useLocal(init) {
+    const [s, set] = useState(init);
+    return [s, (k, v) => set(o => Object.assign({}, o, {
+      [k]: v
+    }))];
+  }
+  const Out = ({
+    k,
+    v,
+    unit,
+    strong,
+    hint
+  }) => React.createElement("div", {
+    className: 'dc-out' + (strong ? ' is-strong' : '')
+  }, React.createElement("span", null, k), React.createElement("b", null, v == null || typeof v === 'number' && !Number.isFinite(v) ? '—' : typeof v === 'number' ? React.createElement(Tween, {
+    value: v
+  }) : v, unit && v != null ? React.createElement("small", null, " ", unit) : null), hint ? React.createElement("i", null, hint) : null);
+  function CalcCard({
+    id,
+    p,
+    dv,
+    handle
+  }) {
+    const w = dv.weight;
+    const body = (() => {
+      if (id === 'body') return React.createElement(React.Fragment, null, React.createElement("div", {
+        className: "dc-outs"
+      }, React.createElement(Out, {
+        k: "Ideal body weight (Devine)",
+        v: dv.ibw,
+        unit: "kg",
+        strong: true
+      }), React.createElement(Out, {
+        k: "Adjusted body weight",
+        v: dv.adj,
+        unit: "kg",
+        hint: "IBW + 0.4 \xD7 (actual \u2212 IBW)"
+      }), React.createElement(Out, {
+        k: "BMI",
+        v: dv.bmi,
+        unit: "kg/m\xB2",
+        hint: dv.bmi ? dv.bmi < 18.5 ? 'underweight' : dv.bmi < 25 ? 'normal' : dv.bmi < 30 ? 'overweight' : 'obese' : ''
+      }), React.createElement(Out, {
+        k: "BSA (Mosteller)",
+        v: dv.bsa,
+        unit: "m\xB2",
+        hint: "\u221A(height \xD7 weight / 3600)"
+      })), React.createElement("div", {
+        className: "dc-fhint"
+      }, "From the patient bar (weight, height, sex)."));
+      if (id === 'renal') {
+        const sch = D.schwartzBedside(p.height, p.scr, p.scrUnit);
+        const band = v => v == null ? '' : v >= 90 ? 'G1 normal' : v >= 60 ? 'G2 mild' : v >= 45 ? 'G3a' : v >= 30 ? 'G3b' : v >= 15 ? 'G4 severe' : 'G5 kidney failure';
+        return React.createElement(React.Fragment, null, React.createElement("div", {
+          className: "dc-outs"
+        }, React.createElement(Out, {
+          k: "CrCl (Cockcroft\u2013Gault)",
+          v: dv.crcl,
+          unit: "mL/min",
+          strong: true,
+          hint: 'with ' + (p.basis === 'actual' ? 'actual' : 'adjusted') + ' weight — the figure drug labels use'
+        }), React.createElement(Out, {
+          k: "eGFR (CKD-EPI 2021)",
+          v: dv.egfr,
+          unit: "mL/min/1.73m\xB2",
+          hint: band(dv.egfr)
+        }), !dv.adult ? React.createElement(Out, {
+          k: "Bedside Schwartz (child)",
+          v: sch,
+          unit: "mL/min/1.73m\xB2"
+        }) : null), React.createElement("div", {
+          className: "dc-fhint"
+        }, "Needs age, sex, weight and creatinine in the patient bar."));
+      }
+      if (id === 'fluids') {
+        const m = D.maintenance421(w);
+        return React.createElement("div", {
+          className: "dc-outs"
+        }, React.createElement(Out, {
+          k: "Maintenance (4-2-1)",
+          v: m && m.mlPerHour,
+          unit: "mL/h",
+          strong: true
+        }), React.createElement(Out, {
+          k: "Per day (100/50/20)",
+          v: m && m.mlPerDay,
+          unit: "mL/day"
+        }), React.createElement(Out, {
+          k: "Bolus 10 / 20 mL/kg",
+          v: w ? fmt(w * 10, 0) + ' / ' + fmt(w * 20, 0) : null,
+          unit: "mL"
+        }));
+      }
+      return null;
+    })();
+    return React.createElement("div", {
+      className: "dc-card dc-calc dc-rise"
+    }, React.createElement("div", {
+      className: "dc-card-h"
+    }, handle, React.createElement("b", null, CALC_META[id])), React.createElement("div", {
+      className: "dc-card-b"
+    }, body || React.createElement(CalcForm, {
+      id: id,
+      p: p,
+      dv: dv
+    })));
+  }
+  function CalcForm({
+    id,
+    p,
+    dv
+  }) {
+    const w = dv.weight;
+    const [s, set] = useLocal({
+      vol: '1000',
+      hours: '8',
+      minutes: '',
+      df: '20',
+      fluid: 'NS 0.9%',
+      na: '',
+      target: '',
+      glucose: '',
+      gUnit: 'mmol',
+      ca: '',
+      alb: '',
+      caUnit: 'mmol',
+      cl: '',
+      hco3: '',
+      sbp: '',
+      dbp: '',
+      tbsa: '',
+      cv: '1',
+      cfrom: 'mg',
+      cto: 'mcg',
+      ratio: '1000',
+      pct: '1',
+      change: '8'
+    });
+    if (id === 'drip') {
+      const mins = s.minutes ? parseFloat(s.minutes) : parseFloat(s.hours) * 60;
+      const d = D.dripRate(s.vol, mins, s.df);
+      return React.createElement(React.Fragment, null, React.createElement("div", {
+        className: "dc-form"
+      }, React.createElement(Field, {
+        label: "Volume (mL)"
+      }, React.createElement(NumIn, {
+        value: s.vol,
+        onChange: v => set('vol', v)
+      })), React.createElement(Field, {
+        label: "Over (hours)"
+      }, React.createElement(NumIn, {
+        value: s.hours,
+        onChange: v => {
+          set('hours', v);
+          set('minutes', '');
+        }
+      })), React.createElement(Field, {
+        label: "Giving set"
+      }, React.createElement("select", {
+        className: "inp",
+        value: s.df,
+        onChange: e => set('df', e.target.value)
+      }, React.createElement("option", {
+        value: "10"
+      }, "10 gtt/mL (blood)"), React.createElement("option", {
+        value: "15"
+      }, "15 gtt/mL"), React.createElement("option", {
+        value: "20"
+      }, "20 gtt/mL (standard)"), React.createElement("option", {
+        value: "60"
+      }, "60 gtt/mL (micro)"))), React.createElement(Field, {
+        label: "Fluid"
+      }, React.createElement("select", {
+        className: "inp",
+        value: s.fluid,
+        onChange: e => set('fluid', e.target.value)
+      }, Object.keys(D.FLUID_NA).map(f => React.createElement("option", {
+        key: f
+      }, f))))), React.createElement("div", {
+        className: "dc-outs"
+      }, React.createElement(Out, {
+        k: "Drip rate",
+        v: d && d.dropsPerMin,
+        unit: "drops/min",
+        strong: true,
+        hint: d ? '≈ 1 drop every ' + fmt(60 / d.dropsPerMin, 1) + ' s' : ''
+      }), React.createElement(Out, {
+        k: "Pump rate",
+        v: d && d.mlPerHour,
+        unit: "mL/h"
+      })), d ? React.createElement(window.DosePumps.InfusionPump, {
+        fluid: s.fluid,
+        color: "#7cc6ec",
+        rate: D.roundToPump(d.mlPerHour),
+        volume: parseFloat(s.vol),
+        dropFactor: parseFloat(s.df),
+        level: null,
+        step: 1,
+        maxRate: Math.max(500, d.mlPerHour * 2),
+        onRate: r => {
+          if (r > 0) set('minutes', String(D.round(parseFloat(s.vol) / r * 60, 2)));
+        }
+      }) : null);
+    }
+    if (id === 'sodium') {
+      const def = D.sodiumDeficit({
+        weight: w,
+        sex: p.sex,
+        age: p.age,
+        na: s.na,
+        target: s.target
+      });
+      const am = D.adrogueMadias({
+        weight: w,
+        sex: p.sex,
+        age: p.age,
+        na: s.na,
+        infusateNa: D.FLUID_NA[s.fluid],
+        infusateK: 0,
+        targetChange: s.change
+      });
+      return React.createElement(React.Fragment, null, React.createElement("div", {
+        className: "dc-form"
+      }, React.createElement(Field, {
+        label: "Serum Na (mmol/L)"
+      }, React.createElement(NumIn, {
+        value: s.na,
+        onChange: v => set('na', v),
+        placeholder: "e.g. 118"
+      })), React.createElement(Field, {
+        label: "Target Na"
+      }, React.createElement(NumIn, {
+        value: s.target,
+        onChange: v => set('target', v),
+        placeholder: "e.g. 126"
+      })), React.createElement(Field, {
+        label: "Fluid"
+      }, React.createElement("select", {
+        className: "inp",
+        value: s.fluid,
+        onChange: e => set('fluid', e.target.value)
+      }, Object.keys(D.FLUID_NA).map(f => React.createElement("option", {
+        key: f
+      }, f)))), React.createElement(Field, {
+        label: "Rise wanted in 24 h"
+      }, React.createElement(NumIn, {
+        value: s.change,
+        onChange: v => set('change', v)
+      }))), React.createElement("div", {
+        className: "dc-outs"
+      }, React.createElement(Out, {
+        k: "Sodium deficit",
+        v: def,
+        unit: "mmol",
+        strong: true,
+        hint: 'TBW ' + fmt(D.tbw(w, p.sex, p.age), 1) + ' L'
+      }), React.createElement(Out, {
+        k: '1 L of ' + s.fluid + ' changes Na by',
+        v: am && am.perLitre,
+        unit: "mmol/L",
+        hint: "Adrogu\xE9\u2013Madias"
+      }), React.createElement(Out, {
+        k: 'Litres for +' + (s.change || 0) + ' mmol/L',
+        v: am && am.litresForTarget,
+        unit: "L"
+      })), React.createElement("div", {
+        className: "dc-banner is-amber"
+      }, "Chronic hyponatraemia: raise by no more than 8\u201310 mmol/L in 24 h (osmotic demyelination). Recheck Na every 2\u20134 h."));
+    }
+    if (id === 'freewater') {
+      const fw = D.freeWaterDeficit({
+        weight: w,
+        sex: p.sex,
+        age: p.age,
+        na: s.na
+      });
+      return React.createElement(React.Fragment, null, React.createElement("div", {
+        className: "dc-form"
+      }, React.createElement(Field, {
+        label: "Serum Na (mmol/L)"
+      }, React.createElement(NumIn, {
+        value: s.na,
+        onChange: v => set('na', v),
+        placeholder: "e.g. 160"
+      }))), React.createElement("div", {
+        className: "dc-outs"
+      }, React.createElement(Out, {
+        k: "Free-water deficit",
+        v: fw != null && fw > 0 ? fw : fw != null ? 0 : null,
+        unit: "L",
+        strong: true,
+        hint: "TBW \xD7 (Na / 140 \u2212 1)"
+      }), React.createElement(Out, {
+        k: "Replace over 48 h",
+        v: fw > 0 ? fw * 1000 / 48 : null,
+        unit: "mL/h",
+        hint: "plus ongoing losses"
+      })), React.createElement("div", {
+        className: "dc-banner is-amber"
+      }, "Lower Na by no more than 10 mmol/L in 24 h."));
+    }
+    if (id === 'electrolytes') {
+      const cna = D.correctedSodium(s.na, s.glucose, s.gUnit);
+      const cca = D.correctedCalcium(s.ca, s.alb, s.caUnit);
+      const ag = D.anionGap(s.na, s.cl, s.hco3, s.caUnit === 'mmol' ? parseFloat(s.alb) / 10 : s.alb);
+      const map = D.meanArterial(s.sbp, s.dbp);
+      return React.createElement(React.Fragment, null, React.createElement("div", {
+        className: "dc-form"
+      }, React.createElement(Field, {
+        label: "Na"
+      }, React.createElement(NumIn, {
+        value: s.na,
+        onChange: v => set('na', v)
+      })), React.createElement(Field, {
+        label: "Cl"
+      }, React.createElement(NumIn, {
+        value: s.cl,
+        onChange: v => set('cl', v)
+      })), React.createElement(Field, {
+        label: "HCO\u2083"
+      }, React.createElement(NumIn, {
+        value: s.hco3,
+        onChange: v => set('hco3', v)
+      })), React.createElement(Field, {
+        label: "Glucose"
+      }, React.createElement("div", {
+        className: "dc-inline"
+      }, React.createElement(NumIn, {
+        value: s.glucose,
+        onChange: v => set('glucose', v),
+        style: {
+          width: 70
+        }
+      }), React.createElement(Seg, {
+        small: true,
+        value: s.gUnit,
+        onChange: v => set('gUnit', v),
+        options: [{
+          v: 'mmol',
+          l: 'mmol/L'
+        }, {
+          v: 'mg',
+          l: 'mg/dL'
+        }]
+      }))), React.createElement(Field, {
+        label: "Calcium"
+      }, React.createElement(NumIn, {
+        value: s.ca,
+        onChange: v => set('ca', v)
+      })), React.createElement(Field, {
+        label: "Albumin"
+      }, React.createElement("div", {
+        className: "dc-inline"
+      }, React.createElement(NumIn, {
+        value: s.alb,
+        onChange: v => set('alb', v),
+        style: {
+          width: 70
+        }
+      }), React.createElement(Seg, {
+        small: true,
+        value: s.caUnit,
+        onChange: v => set('caUnit', v),
+        options: [{
+          v: 'mmol',
+          l: 'mmol · g/L'
+        }, {
+          v: 'mg',
+          l: 'mg · g/dL'
+        }]
+      }))), React.createElement(Field, {
+        label: "BP (sys / dia)"
+      }, React.createElement("div", {
+        className: "dc-inline"
+      }, React.createElement(NumIn, {
+        value: s.sbp,
+        onChange: v => set('sbp', v),
+        style: {
+          width: 64
+        }
+      }), React.createElement(NumIn, {
+        value: s.dbp,
+        onChange: v => set('dbp', v),
+        style: {
+          width: 64
+        }
+      })))), React.createElement("div", {
+        className: "dc-outs"
+      }, React.createElement(Out, {
+        k: "Na corrected for glucose",
+        v: cna,
+        unit: "mmol/L",
+        hint: "+2.4 per 100 mg/dL"
+      }), React.createElement(Out, {
+        k: "Corrected calcium",
+        v: cca,
+        unit: s.caUnit === 'mmol' ? 'mmol/L' : 'mg/dL'
+      }), React.createElement(Out, {
+        k: "Anion gap",
+        v: ag && ag.gap,
+        unit: "mmol/L",
+        hint: ag && ag.corrected != null ? 'albumin-corrected ' + fmt(ag.corrected, 1) : 'normal 8–12'
+      }), React.createElement(Out, {
+        k: "Mean arterial pressure",
+        v: map,
+        unit: "mmHg"
+      })));
+    }
+    if (id === 'parkland') {
+      const pk = D.parkland(w, s.tbsa);
+      return React.createElement(React.Fragment, null, React.createElement("div", {
+        className: "dc-form"
+      }, React.createElement(Field, {
+        label: "Burn area (% TBSA)"
+      }, React.createElement(NumIn, {
+        value: s.tbsa,
+        onChange: v => set('tbsa', v),
+        placeholder: "partial + full thickness"
+      }))), React.createElement("div", {
+        className: "dc-outs"
+      }, React.createElement(Out, {
+        k: "Total in 24 h (RL)",
+        v: pk && pk.total,
+        unit: "mL",
+        strong: true,
+        hint: "4 mL \xD7 kg \xD7 %TBSA"
+      }), React.createElement(Out, {
+        k: "First 8 h (from the burn)",
+        v: pk && pk.first8PerHour,
+        unit: "mL/h"
+      }), React.createElement(Out, {
+        k: "Next 16 h",
+        v: pk && pk.next16PerHour,
+        unit: "mL/h"
+      })), React.createElement("div", {
+        className: "dc-fhint"
+      }, "Titrate to urine output 0.5 mL/kg/h (adult), 1 mL/kg/h (child). Children also need maintenance fluid."));
+    }
+    if (id === 'convert') {
+      const mass = D.convertUnits({
+        value: s.cv,
+        from: s.cfrom,
+        to: s.cto
+      });
+      return React.createElement(React.Fragment, null, React.createElement("div", {
+        className: "dc-form"
+      }, React.createElement(Field, {
+        label: "Value"
+      }, React.createElement(NumIn, {
+        value: s.cv,
+        onChange: v => set('cv', v)
+      })), React.createElement(Field, {
+        label: "From"
+      }, React.createElement("select", {
+        className: "inp",
+        value: s.cfrom,
+        onChange: e => set('cfrom', e.target.value)
+      }, ['g', 'mg', 'mcg', 'ng'].map(x => React.createElement("option", {
+        key: x
+      }, x)))), React.createElement(Field, {
+        label: "To"
+      }, React.createElement("select", {
+        className: "inp",
+        value: s.cto,
+        onChange: e => set('cto', e.target.value)
+      }, ['g', 'mg', 'mcg', 'ng'].map(x => React.createElement("option", {
+        key: x
+      }, x))))), React.createElement("div", {
+        className: "dc-outs"
+      }, React.createElement(Out, {
+        k: fmt(parseFloat(s.cv)) + ' ' + s.cfrom + ' =',
+        v: mass,
+        unit: s.cto,
+        strong: true
+      })), React.createElement("div", {
+        className: "dc-form",
+        style: {
+          marginTop: 6
+        }
+      }, React.createElement(Field, {
+        label: "Ratio 1 :"
+      }, React.createElement(NumIn, {
+        value: s.ratio,
+        onChange: v => set('ratio', v)
+      })), React.createElement(Field, {
+        label: "Percent %"
+      }, React.createElement(NumIn, {
+        value: s.pct,
+        onChange: v => set('pct', v)
+      }))), React.createElement("div", {
+        className: "dc-outs"
+      }, React.createElement(Out, {
+        k: '1:' + (s.ratio || '?') + ' =',
+        v: D.convertUnits({
+          kind: 'ratio',
+          value: s.ratio
+        }),
+        unit: "mg/mL",
+        hint: "1:1000 adrenaline = 1 mg/mL"
+      }), React.createElement(Out, {
+        k: (s.pct || '?') + '% =',
+        v: D.convertUnits({
+          kind: 'percent',
+          value: s.pct
+        }),
+        unit: "mg/mL",
+        hint: "% w/v = g per 100 mL"
+      })));
+    }
+    return null;
+  }
+  function CalcsTab({
+    p,
+    dv,
+    prefs,
+    layout,
+    setPref,
+    arrange
+  }) {
+    const ids = D.applyOrder(LIB.CALCS.map(id => ({
+      id
+    })), prefs.calcs || layout.calcs).map(x => x.id);
+    return React.createElement(Sortable, {
+      items: ids.map(id => ({
+        id
+      })),
+      getKey: x => x.id,
+      enabled: arrange,
+      className: "dc-calcs",
+      onMove: (a, b) => setPref({
+        calcs: D.moveItem(ids, a, b)
+      }),
+      render: (x, handle) => React.createElement(CalcCard, {
+        id: x.id,
+        p: p,
+        dv: dv,
+        handle: handle
+      })
+    });
+  }
+  const KIND_LABEL = {
+    infusion: 'ICU infusions',
+    emergency: 'Emergency',
+    paed: 'Paediatric'
+  };
+  function blankEntry(kind) {
+    if (kind === 'infusion') return {
+      name: '',
+      group: 'Insulin, heparin & others',
+      unit: 'mg/h',
+      conc: [{
+        label: 'Standard',
+        amount: '',
+        unit: 'mg',
+        ml: 50
+      }],
+      ampoule: {
+        amount: '',
+        unit: 'mg',
+        ml: '',
+        label: ''
+      },
+      diluent: 'NS',
+      soft: ['', ''],
+      hard: '',
+      start: '',
+      step: '',
+      highAlert: false,
+      notes: '',
+      source: 'Hospital protocol'
+    };
+    if (kind === 'emergency') return {
+      name: '',
+      group: 'Cardiac arrest',
+      dose: '',
+      unit: 'mg',
+      max: '',
+      adult: '',
+      perMl: '',
+      prep: '',
+      route: 'IV',
+      notes: '',
+      source: 'Hospital protocol'
+    };
+    return {
+      name: '',
+      group: 'Other',
+      mode: 'dose',
+      dose: ['', ''],
+      perDay: 3,
+      maxDose: '',
+      maxDay: '',
+      strengths: [{
+        label: '',
+        mg: '',
+        ml: 5
+      }],
+      notes: '',
+      source: 'Hospital protocol'
+    };
+  }
+  function LibraryManager({
+    lib,
+    overrides,
+    reload,
+    onClose,
+    orderSnapshot
+  }) {
+    const [kind, setKind] = useState('infusion');
+    const [q, setQ] = useState('');
+    const [sel, setSel] = useState(null);
+    const [form, setForm] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [confirmDel, setConfirmDel] = useState(false);
+    const list = lib[kind];
+    const entry = sel === '__new' ? null : list.find(e => e.id === sel);
+    const ov = overrides.find(o => o.id === sel);
+    useEffect(() => {
+      setConfirmDel(false);
+      if (sel === '__new') {
+        setForm(blankEntry(kind));
+        return;
+      }
+      if (!entry) {
+        setForm(null);
+        return;
+      }
+      const f = JSON.parse(JSON.stringify(entry));
+      ['id', 'kind', 'reviewed', 'builtIn', 'custom', 'disabled', 'overridden'].forEach(k => delete f[k]);
+      setForm(f);
+    }, [sel, kind]);
+    const counts = k => {
+      const l = lib[k];
+      return {
+        all: l.length,
+        ok: l.filter(e => e.reviewed.state === 'ok').length,
+        stale: l.filter(e => e.reviewed.state === 'stale').length,
+        off: l.filter(e => e.disabled).length
+      };
+    };
+    const c = counts(kind);
+    const save = () => {
+      if (!form || !form.name) {
+        toast('A drug name is required.', 'error');
+        return;
+      }
+      setBusy(true);
+      const id = sel === '__new' ? 'h-' + kind.slice(0, 3) + '-' + Date.now().toString(36) : sel;
+      api.send('PUT', '/api/med/dose-library/' + id, {
+        kind,
+        data: form,
+        disabled: entry ? entry.disabled : false
+      }).then(r => {
+        setBusy(false);
+        if (r && r.ok) {
+          toast('Saved — every clinician now calculates from this.');
+          reload().then(() => setSel(id));
+        } else toast(r && r.error || 'Could not save.', 'error');
+      }).catch(() => {
+        setBusy(false);
+        toast('Could not save.', 'error');
+      });
+    };
+    const toggleOff = () => {
+      if (!entry) return;
+      setBusy(true);
+      api.send('PUT', '/api/med/dose-library/' + entry.id, {
+        kind,
+        data: ov && ov.data ? ov.data : {},
+        disabled: !entry.disabled
+      }).then(r => {
+        setBusy(false);
+        if (r && r.ok) {
+          toast(entry.disabled ? 'Switched back on.' : 'Switched off — hidden from the calculator.');
+          reload();
+        } else toast(r && r.error || 'Could not save.', 'error');
+      }).catch(() => setBusy(false));
+    };
+    const review = clear => {
+      setBusy(true);
+      api.send('POST', '/api/med/dose-library/' + entry.id + '/review', {
+        clear
+      }).then(r => {
+        setBusy(false);
+        if (r && r.ok) {
+          toast(clear ? 'Review cleared.' : 'Marked reviewed by ' + (userName() || 'you') + '.');
+          reload();
+        } else toast(r && r.error || 'Could not record the review.', 'error');
+      }).catch(() => setBusy(false));
+    };
+    const del = () => {
+      setBusy(true);
+      api.send('DELETE', '/api/med/dose-library/' + entry.id).then(r => {
+        setBusy(false);
+        if (r && r.ok) {
+          toast('Deleted.');
+          setSel(null);
+          reload();
+        } else toast(r && r.error || 'Could not delete.', 'error');
+      }).catch(() => setBusy(false));
+    };
+    const publishOrder = () => {
+      setBusy(true);
+      api.send('PUT', '/api/med/dose-library/_layout', {
+        layout: orderSnapshot()
+      }).then(r => {
+        setBusy(false);
+        if (r && r.ok) {
+          toast('Hospital order saved — everyone without their own layout now sees it.');
+          reload();
+        } else toast(r && r.error || 'Could not save the order.', 'error');
+      }).catch(() => setBusy(false));
+    };
+    const upd = (k, v) => setForm(f => Object.assign({}, f, {
+      [k]: v
+    }));
+    const updArr = (k, i, sub, v) => setForm(f => {
+      const a = (f[k] || []).slice();
+      a[i] = Object.assign({}, a[i], {
+        [sub]: v
+      });
+      return Object.assign({}, f, {
+        [k]: a
+      });
+    });
+    const num = v => v === '' || v == null ? '' : v;
+    const term = q.trim().toLowerCase();
+    return React.createElement("div", {
+      className: "dc-modal",
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-label": "Dose library",
+      onClick: e => {
+        if (e.target === e.currentTarget) onClose();
+      }
+    }, React.createElement("div", {
+      className: "dc-modal-box dc-pop"
+    }, React.createElement("div", {
+      className: "dc-modal-h"
+    }, React.createElement(Svg, {
+      d: IC.shield,
+      s: 18
+    }), React.createElement("b", null, "Dose library"), React.createElement("span", {
+      className: "dc-sub"
+    }, "Edit, add, switch off and sign off the drugs every clinician calculates from"), React.createElement("button", {
+      className: "dc-x",
+      onClick: onClose,
+      "aria-label": "Close"
+    }, React.createElement(Svg, {
+      d: IC.x,
+      s: 16
+    }))), React.createElement("div", {
+      className: "dc-modal-tabs"
+    }, Object.keys(KIND_LABEL).map(k => React.createElement("button", {
+      key: k,
+      className: kind === k ? 'is-on' : '',
+      onClick: () => {
+        setKind(k);
+        setSel(null);
+      }
+    }, KIND_LABEL[k], " ", React.createElement("span", {
+      className: "dc-count"
+    }, lib[k].length))), React.createElement("span", {
+      className: "dc-modal-stats"
+    }, React.createElement("span", {
+      className: "dc-chip is-green"
+    }, c.ok, " reviewed"), React.createElement("span", {
+      className: "dc-chip is-amber"
+    }, c.all - c.ok - c.stale, " not reviewed"), c.stale ? React.createElement("span", {
+      className: "dc-chip is-red"
+    }, c.stale, " changed") : null, c.off ? React.createElement("span", {
+      className: "dc-chip"
+    }, c.off, " off") : null), React.createElement("button", {
+      style: MK.btnGhost,
+      disabled: busy,
+      onClick: publishOrder,
+      title: "Save the order you see now (your layout) as the hospital default"
+    }, React.createElement(Svg, {
+      d: IC.move,
+      s: 13
+    }), " Publish current order")), React.createElement("div", {
+      className: "dc-modal-body"
+    }, React.createElement("div", {
+      className: "dc-lib-list"
+    }, React.createElement("div", {
+      className: "dc-search"
+    }, React.createElement(Svg, {
+      d: IC.search,
+      s: 14
+    }), React.createElement("input", {
+      value: q,
+      onChange: e => setQ(e.target.value),
+      placeholder: "Search\u2026"
+    })), React.createElement("button", {
+      className: "dc-lib-add",
+      onClick: () => setSel('__new')
+    }, React.createElement(Svg, {
+      d: IC.plus,
+      s: 13
+    }), " Add hospital drug"), React.createElement("div", {
+      className: "dc-lib-scroll"
+    }, list.filter(e => !term || e.name.toLowerCase().indexOf(term) >= 0).map(e => React.createElement("button", {
+      key: e.id,
+      className: 'dc-lib-row' + (sel === e.id ? ' is-on' : '') + (e.disabled ? ' is-off' : ''),
+      onClick: () => setSel(e.id)
+    }, React.createElement("i", {
+      className: 'dc-dot is-' + (e.reviewed.state === 'ok' ? 'green' : e.reviewed.state === 'stale' ? 'redring' : 'amber')
+    }), React.createElement("span", null, e.name), e.custom ? React.createElement("em", null, "hospital") : e.overridden ? React.createElement("em", null, "edited") : null, e.disabled ? React.createElement("em", null, "off") : null)))), React.createElement("div", {
+      className: "dc-lib-edit"
+    }, !form ? React.createElement("div", {
+      className: "dc-empty"
+    }, "Pick a drug to edit it or sign it off, or add a hospital drug.", React.createElement("br", null), React.createElement("br", null), "A built-in drug is a default from published references; the green tick appears only after someone here reviews it. Editing a reviewed drug turns it red \u2014 \u201CChanged since review\u201D \u2014 until it is reviewed again.") : React.createElement(React.Fragment, null, entry ? React.createElement("div", {
+      className: "dc-chips",
+      style: {
+        marginBottom: 10
+      }
+    }, React.createElement(ReviewChip, {
+      e: entry
+    }), entry.custom ? React.createElement("span", {
+      className: "dc-chip"
+    }, "hospital-added") : React.createElement("span", {
+      className: "dc-chip"
+    }, "built-in", entry.overridden ? ' · edited' : ''), entry.disabled ? React.createElement("span", {
+      className: "dc-chip is-red"
+    }, "switched off") : null) : React.createElement("div", {
+      className: "dc-chips",
+      style: {
+        marginBottom: 10
+      }
+    }, React.createElement("span", {
+      className: "dc-chip is-blue"
+    }, "New hospital drug \u2014 ", KIND_LABEL[kind])), React.createElement("div", {
+      className: "dc-form"
+    }, React.createElement(Field, {
+      label: "Name",
+      wide: true
+    }, React.createElement("input", {
+      className: "inp",
+      value: form.name || '',
+      onChange: e => upd('name', e.target.value)
+    })), React.createElement(Field, {
+      label: "Group"
+    }, React.createElement("input", {
+      className: "inp",
+      value: form.group || '',
+      onChange: e => upd('group', e.target.value),
+      list: 'dc-groups-' + kind
+    }), React.createElement("datalist", {
+      id: 'dc-groups-' + kind
+    }, Array.from(new Set(list.map(e => e.group))).map(g => React.createElement("option", {
+      key: g,
+      value: g
+    })))), kind === 'infusion' ? React.createElement(React.Fragment, null, React.createElement(Field, {
+      label: "Dose unit"
+    }, React.createElement("select", {
+      className: "inp",
+      value: form.unit,
+      onChange: e => upd('unit', e.target.value)
+    }, UNIT_CHOICES.map(x => React.createElement("option", {
+      key: x
+    }, x)))), React.createElement(Field, {
+      label: "Usual from"
+    }, React.createElement(NumIn, {
+      value: num((form.soft || [])[0]),
+      onChange: v => upd('soft', [v, (form.soft || [])[1]])
+    })), React.createElement(Field, {
+      label: "Usual to"
+    }, React.createElement(NumIn, {
+      value: num((form.soft || [])[1]),
+      onChange: v => upd('soft', [(form.soft || [])[0], v])
+    })), React.createElement(Field, {
+      label: "Hard limit"
+    }, React.createElement(NumIn, {
+      value: num(form.hard),
+      onChange: v => upd('hard', v)
+    })), React.createElement(Field, {
+      label: "Usual start"
+    }, React.createElement(NumIn, {
+      value: num(form.start),
+      onChange: v => upd('start', v)
+    })), React.createElement(Field, {
+      label: "Titration step"
+    }, React.createElement(NumIn, {
+      value: num(form.step),
+      onChange: v => upd('step', v)
+    })), React.createElement(Field, {
+      label: "Dose on"
+    }, React.createElement("select", {
+      className: "inp",
+      value: form.weight || 'actual',
+      onChange: e => upd('weight', e.target.value)
+    }, React.createElement("option", {
+      value: "actual"
+    }, "patient's chosen weight"), React.createElement("option", {
+      value: "ideal"
+    }, "ideal weight (hint)"), React.createElement("option", {
+      value: "none"
+    }, "not weight-based"))), React.createElement(Field, {
+      label: "High-alert"
+    }, React.createElement(Seg, {
+      small: true,
+      value: form.highAlert ? 'y' : 'n',
+      onChange: v => upd('highAlert', v === 'y'),
+      options: [{
+        v: 'y',
+        l: 'Yes'
+      }, {
+        v: 'n',
+        l: 'No'
+      }]
+    })), React.createElement(Field, {
+      label: "Diluent"
+    }, React.createElement("input", {
+      className: "inp",
+      value: form.diluent || '',
+      onChange: e => upd('diluent', e.target.value)
+    }))) : null, kind === 'emergency' ? React.createElement(React.Fragment, null, React.createElement(Field, {
+      label: "Dose per kg (or from)"
+    }, React.createElement(NumIn, {
+      value: num(Array.isArray(form.dose) ? form.dose[0] : form.dose),
+      onChange: v => upd('dose', Array.isArray(form.dose) ? [v, form.dose[1]] : v)
+    })), React.createElement(Field, {
+      label: "\u2026to (range, optional)"
+    }, React.createElement(NumIn, {
+      value: num(Array.isArray(form.dose) ? form.dose[1] : ''),
+      onChange: v => upd('dose', v === '' ? Array.isArray(form.dose) ? form.dose[0] : form.dose : [Array.isArray(form.dose) ? form.dose[0] : form.dose, v])
+    })), React.createElement(Field, {
+      label: "Unit"
+    }, React.createElement("select", {
+      className: "inp",
+      value: form.unit,
+      onChange: e => upd('unit', e.target.value)
+    }, ['mg', 'mcg', 'g', 'mmol', 'units', 'mL'].map(x => React.createElement("option", {
+      key: x
+    }, x)))), React.createElement(Field, {
+      label: "Max single dose"
+    }, React.createElement(NumIn, {
+      value: num(form.max),
+      onChange: v => upd('max', v)
+    })), React.createElement(Field, {
+      label: "Min dose"
+    }, React.createElement(NumIn, {
+      value: num(form.min),
+      onChange: v => upd('min', v)
+    })), React.createElement(Field, {
+      label: "Adult dose"
+    }, React.createElement(NumIn, {
+      value: num(form.adult),
+      onChange: v => upd('adult', v)
+    })), React.createElement(Field, {
+      label: "Strength (unit per mL)"
+    }, React.createElement(NumIn, {
+      value: num(form.perMl),
+      onChange: v => upd('perMl', v)
+    })), React.createElement(Field, {
+      label: "Preparation"
+    }, React.createElement("input", {
+      className: "inp",
+      value: form.prep || '',
+      onChange: e => upd('prep', e.target.value)
+    })), React.createElement(Field, {
+      label: "Route"
+    }, React.createElement("input", {
+      className: "inp",
+      value: form.route || '',
+      onChange: e => upd('route', e.target.value)
+    }))) : null, kind === 'paed' ? React.createElement(React.Fragment, null, React.createElement(Field, {
+      label: "Dose is"
+    }, React.createElement(Seg, {
+      small: true,
+      value: form.mode,
+      onChange: v => upd('mode', v),
+      options: [{
+        v: 'dose',
+        l: 'mg/kg/dose'
+      }, {
+        v: 'day',
+        l: 'mg/kg/day'
+      }]
+    })), React.createElement(Field, {
+      label: "mg/kg from"
+    }, React.createElement(NumIn, {
+      value: num((form.dose || [])[0]),
+      onChange: v => upd('dose', [v, (form.dose || [])[1]])
+    })), React.createElement(Field, {
+      label: "mg/kg to"
+    }, React.createElement(NumIn, {
+      value: num((form.dose || [])[1]),
+      onChange: v => upd('dose', [(form.dose || [])[0], v])
+    })), React.createElement(Field, {
+      label: "Doses per day"
+    }, React.createElement(NumIn, {
+      value: num(form.perDay),
+      onChange: v => upd('perDay', v)
+    })), React.createElement(Field, {
+      label: "Max mg/dose"
+    }, React.createElement(NumIn, {
+      value: num(form.maxDose),
+      onChange: v => upd('maxDose', v)
+    })), React.createElement(Field, {
+      label: "Max mg/day"
+    }, React.createElement(NumIn, {
+      value: num(form.maxDay),
+      onChange: v => upd('maxDay', v)
+    })), React.createElement(Field, {
+      label: "Max mg/kg/day"
+    }, React.createElement(NumIn, {
+      value: num(form.maxDayPerKg),
+      onChange: v => upd('maxDayPerKg', v)
+    }))) : null), kind === 'infusion' ? React.createElement("div", {
+      className: "dc-sublist"
+    }, React.createElement("div", {
+      className: "dc-label-row"
+    }, "Concentrations"), (form.conc || []).map((cc, i) => React.createElement("div", {
+      key: i,
+      className: "dc-inline"
+    }, React.createElement("input", {
+      className: "inp",
+      style: {
+        width: 110
+      },
+      value: cc.label || '',
+      onChange: e => updArr('conc', i, 'label', e.target.value),
+      placeholder: "label"
+    }), React.createElement(NumIn, {
+      value: num(cc.amount),
+      onChange: v => updArr('conc', i, 'amount', v),
+      style: {
+        width: 80
+      },
+      placeholder: "amount"
+    }), React.createElement("select", {
+      className: "inp",
+      value: cc.unit,
+      onChange: e => updArr('conc', i, 'unit', e.target.value)
+    }, AMOUNT_UNITS.map(x => React.createElement("option", {
+      key: x
+    }, x))), React.createElement("span", {
+      className: "dc-muted"
+    }, "in"), React.createElement(NumIn, {
+      value: num(cc.ml),
+      onChange: v => updArr('conc', i, 'ml', v),
+      style: {
+        width: 70
+      }
+    }), React.createElement("span", {
+      className: "dc-muted"
+    }, "mL"), React.createElement("button", {
+      className: "dc-mv",
+      onClick: () => upd('conc', form.conc.filter((_, j) => j !== i)),
+      "aria-label": "Remove"
+    }, React.createElement(Svg, {
+      d: IC.x,
+      s: 11
+    })))), React.createElement("button", {
+      className: "dc-link",
+      onClick: () => upd('conc', (form.conc || []).concat([{
+        label: '',
+        amount: '',
+        unit: 'mg',
+        ml: 50
+      }]))
+    }, "+ Add concentration"), React.createElement("div", {
+      className: "dc-label-row",
+      style: {
+        marginTop: 8
+      }
+    }, "Stock ampoule / vial"), React.createElement("div", {
+      className: "dc-inline"
+    }, React.createElement(NumIn, {
+      value: num((form.ampoule || {}).amount),
+      onChange: v => upd('ampoule', Object.assign({}, form.ampoule, {
+        amount: v
+      })),
+      style: {
+        width: 80
+      },
+      placeholder: "amount"
+    }), React.createElement("select", {
+      className: "inp",
+      value: (form.ampoule || {}).unit || 'mg',
+      onChange: e => upd('ampoule', Object.assign({}, form.ampoule, {
+        unit: e.target.value
+      }))
+    }, AMOUNT_UNITS.map(x => React.createElement("option", {
+      key: x
+    }, x))), React.createElement("span", {
+      className: "dc-muted"
+    }, "in"), React.createElement(NumIn, {
+      value: num((form.ampoule || {}).ml),
+      onChange: v => upd('ampoule', Object.assign({}, form.ampoule, {
+        ml: v
+      })),
+      style: {
+        width: 70
+      }
+    }), React.createElement("span", {
+      className: "dc-muted"
+    }, "mL"), React.createElement("input", {
+      className: "inp",
+      style: {
+        flex: 1,
+        minWidth: 120
+      },
+      value: (form.ampoule || {}).label || '',
+      onChange: e => upd('ampoule', Object.assign({}, form.ampoule, {
+        label: e.target.value
+      })),
+      placeholder: "label, e.g. 4 mg / 4 mL ampoule"
+    }))) : null, kind === 'paed' ? React.createElement("div", {
+      className: "dc-sublist"
+    }, React.createElement("div", {
+      className: "dc-label-row"
+    }, "Strengths"), (form.strengths || []).map((st, i) => React.createElement("div", {
+      key: i,
+      className: "dc-inline"
+    }, React.createElement("input", {
+      className: "inp",
+      style: {
+        width: 180
+      },
+      value: st.label || '',
+      onChange: e => updArr('strengths', i, 'label', e.target.value),
+      placeholder: "e.g. Suspension 125 mg/5 mL"
+    }), React.createElement(NumIn, {
+      value: num(st.mg),
+      onChange: v => updArr('strengths', i, 'mg', v),
+      style: {
+        width: 70
+      }
+    }), React.createElement("span", {
+      className: "dc-muted"
+    }, "mg in"), st.form ? React.createElement("span", {
+      className: "dc-muted"
+    }, "1 ", st.form) : React.createElement(React.Fragment, null, React.createElement(NumIn, {
+      value: num(st.ml),
+      onChange: v => updArr('strengths', i, 'ml', v),
+      style: {
+        width: 60
+      }
+    }), React.createElement("span", {
+      className: "dc-muted"
+    }, "mL")), React.createElement("button", {
+      className: "dc-mv",
+      onClick: () => upd('strengths', form.strengths.filter((_, j) => j !== i)),
+      "aria-label": "Remove"
+    }, React.createElement(Svg, {
+      d: IC.x,
+      s: 11
+    })))), React.createElement("button", {
+      className: "dc-link",
+      onClick: () => upd('strengths', (form.strengths || []).concat([{
+        label: '',
+        mg: '',
+        ml: 5
+      }]))
+    }, "+ Add liquid strength"), React.createElement("button", {
+      className: "dc-link",
+      onClick: () => upd('strengths', (form.strengths || []).concat([{
+        label: '',
+        mg: '',
+        form: 'tab'
+      }]))
+    }, "+ Add tablet")) : null, React.createElement("div", {
+      className: "dc-form",
+      style: {
+        marginTop: 8
+      }
+    }, React.createElement(Field, {
+      label: "Notes (shown under the result)",
+      wide: true
+    }, React.createElement("textarea", {
+      className: "inp",
+      rows: 3,
+      value: form.notes || '',
+      onChange: e => upd('notes', e.target.value)
+    })), React.createElement(Field, {
+      label: "Source / protocol",
+      wide: true
+    }, React.createElement("input", {
+      className: "inp",
+      value: form.source || '',
+      onChange: e => upd('source', e.target.value)
+    }))), React.createElement("div", {
+      className: "dc-actions"
+    }, React.createElement("button", {
+      style: MK.btnPri,
+      disabled: busy,
+      onClick: save
+    }, React.createElement(Svg, {
+      d: IC.save,
+      s: 14
+    }), " Save"), entry ? React.createElement(React.Fragment, null, React.createElement("button", {
+      style: MK.btnTone('#1f9d57'),
+      disabled: busy,
+      onClick: () => review(false),
+      title: "Sign off this exact content as checked against hospital protocol"
+    }, React.createElement(Svg, {
+      d: IC.check,
+      s: 14
+    }), " Mark reviewed"), entry.reviewed.state !== 'none' ? React.createElement("button", {
+      style: MK.btnGhost,
+      disabled: busy,
+      onClick: () => review(true)
+    }, "Clear review") : null, React.createElement("button", {
+      style: MK.btnGhost,
+      disabled: busy,
+      onClick: toggleOff
+    }, entry.disabled ? 'Switch on' : 'Switch off'), entry.custom ? confirmDel ? React.createElement("button", {
+      style: MK.btnTone('#d23a52'),
+      disabled: busy,
+      onClick: del
+    }, "Confirm delete") : React.createElement("button", {
+      style: MK.btnGhost,
+      onClick: () => setConfirmDel(true)
+    }, "Delete\u2026") : null) : null), React.createElement("div", {
+      className: "dc-fhint",
+      style: {
+        marginTop: 8
+      }
+    }, "\u201CMark reviewed\u201D signs off what is saved now. Save your edits first, then review."))))));
+  }
+  function MedDoseCalc() {
+    useEffect(() => {
+      injectStyle();
+    }, []);
+    const [overrides, setOverrides] = useState([]);
+    const [offline, setOffline] = useState(false);
+    const [prefs, setPrefs] = useState(() => readJson(localStorage, PREFS_KEY, {}));
+    const [p, setP] = useState(() => Object.assign({
+      weight: '',
+      height: '',
+      age: '',
+      sex: 'M',
+      scr: '',
+      scrUnit: 'umol',
+      basis: 'actual',
+      name: '',
+      uhid: ''
+    }, readJson(sessionStorage, PATIENT_KEY, {})));
+    const [arrange, setArrange] = useState(false);
+    const [libOpen, setLibOpen] = useState(false);
+    const [restore, setRestore] = useState(null);
+    const [showRecent, setShowRecent] = useState(false);
+    const admin = isAdmin();
+    const reload = useCallback(() => api.get('/api/med/dose-library').then(r => {
+      if (r && r.ok) {
+        setOverrides(r.overrides || []);
+        setOffline(!!r.offline);
+      }
+    }).catch(() => setOffline(true)), []);
+    useEffect(() => {
+      reload();
+    }, [reload]);
+    useEffect(() => {
+      writeJson(sessionStorage, PATIENT_KEY, p);
+    }, [p]);
+    const setPref = patch => setPrefs(cur => {
+      const n = Object.assign({}, cur, patch);
+      writeJson(localStorage, PREFS_KEY, n);
+      return n;
+    });
+    const lib = useMemo(() => D.mergeLibrary(LIB, overrides), [overrides]);
+    const layoutDoc = overrides.find(o => o.id === '_layout');
+    const layout = layoutDoc && layoutDoc.layout || {};
+    const dv = derive(p);
+    const tabs = D.applyOrder(TABS, prefs.tabs || layout.tabs);
+    const tab = tabs.some(t => t.id === prefs.tab) ? prefs.tab : tabs[0].id;
+    const tabRef = useRef(null);
+    const [ink, setInk] = useState({
+      left: 0,
+      width: 0
+    });
+    useLayoutEffect(() => {
+      const el = tabRef.current && tabRef.current.querySelector('[data-tab="' + tab + '"]');
+      if (el) setInk({
+        left: el.offsetLeft,
+        width: el.offsetWidth
+      });
+    }, [tab, tabs.map(t => t.id).join(), arrange]);
+    const all = lib.infusion.concat(lib.emergency, lib.paed);
+    const reviewed = all.filter(e => e.reviewed.state === 'ok').length;
+    const stale = all.filter(e => e.reviewed.state === 'stale').length;
+    const pushRecent = r => {
+      setPref({
+        recent: [Object.assign({
+          at: Date.now()
+        }, r)].concat((prefs.recent || []).filter(x => x.label !== r.label)).slice(0, 10)
+      });
+      toast('Saved to recent calculations.');
+    };
+    const ownLayout = !!(prefs.order || prefs.groups || prefs.tabs || prefs.calcs);
+    const orderSnapshot = () => {
+      const ord = kind => D.applyOrder(lib[kind], (prefs.order || {})[kind] || layout[kind]).map(e => e.id);
+      const grp = kind => {
+        const gs = Array.from(new Set(D.applyOrder(lib[kind], (prefs.order || {})[kind] || layout[kind]).map(e => e.group || 'Other')));
+        return D.applyOrder(gs.map(g => ({
+          id: g
+        })), (prefs.groups || {})[kind] || (layout.groups || {})[kind]).map(g => g.id);
+      };
+      return {
+        infusion: ord('infusion'),
+        emergency: ord('emergency'),
+        paed: ord('paed'),
+        groups: {
+          infusion: grp('infusion'),
+          emergency: grp('emergency'),
+          paed: grp('paed')
+        },
+        calcs: D.applyOrder(LIB.CALCS.map(id => ({
+          id
+        })), prefs.calcs || layout.calcs).map(x => x.id),
+        tabs: tabs.map(t => t.id)
+      };
+    };
+    const common = {
+      lib,
+      p,
+      dv,
+      prefs,
+      layout,
+      setPref,
+      arrange,
+      admin
+    };
+    return React.createElement("div", {
+      className: "dc-root",
+      style: MK.page
+    }, React.createElement("div", {
+      className: "dc-hero"
+    }, React.createElement("div", {
+      className: "dc-hero-l"
+    }, React.createElement("div", {
+      className: "dc-hero-ic"
+    }, React.createElement(Svg, {
+      d: "M9 3h6M10 3v5l-5.5 9.5A2.5 2.5 0 0 0 6.7 21h10.6a2.5 2.5 0 0 0 2.2-3.5L14 8V3M7.5 15h9",
+      s: 22,
+      sw: 1.8
+    })), React.createElement("div", null, React.createElement("h2", null, "Dose Calculator"), React.createElement("p", null, "ICU infusions, emergency drugs, paediatric doses and bedside formulas \u2014 from one patient's weight."))), React.createElement("div", {
+      className: "dc-hero-r"
+    }, React.createElement("span", {
+      className: 'dc-chip ' + (reviewed === all.length ? 'is-green' : 'is-amber'),
+      title: "Library entries signed off by this hospital"
+    }, React.createElement(Svg, {
+      d: IC.shield,
+      s: 11
+    }), " ", reviewed, "/", all.length, " reviewed", stale ? ' · ' + stale + ' changed' : ''), offline ? React.createElement("span", {
+      className: "dc-chip",
+      title: "No database \u2014 built-in list only; edits cannot be saved"
+    }, "built-in list (offline)") : null, React.createElement("button", {
+      className: 'dc-tbtn' + (showRecent ? ' is-on' : ''),
+      onClick: () => setShowRecent(!showRecent),
+      disabled: !(prefs.recent || []).length
+    }, React.createElement(Svg, {
+      d: IC.clock,
+      s: 14
+    }), " Recent", (prefs.recent || []).length ? ' (' + prefs.recent.length + ')' : ''), React.createElement("button", {
+      className: 'dc-tbtn' + (arrange ? ' is-on' : ''),
+      onClick: () => setArrange(!arrange),
+      title: "Drag drugs, groups, tabs and calculator cards into your own order"
+    }, React.createElement(Svg, {
+      d: IC.move,
+      s: 14
+    }), " ", arrange ? 'Done arranging' : 'Arrange'), admin ? React.createElement("button", {
+      className: "dc-tbtn",
+      onClick: () => setLibOpen(true)
+    }, React.createElement(Svg, {
+      d: IC.shield,
+      s: 14
+    }), " Library") : null)), arrange ? React.createElement("div", {
+      className: "dc-arrange-bar dc-rise"
+    }, React.createElement(Svg, {
+      d: IC.move,
+      s: 15
+    }), React.createElement("span", null, React.createElement("b", null, "Arrange mode"), " \u2014 drag the \u283F handle (or use \u25B2\u25BC) on any drug, group, tab or calculator card. Your order is saved in this browser."), ownLayout ? React.createElement("button", {
+      style: MK.btnGhost,
+      onClick: () => setPref({
+        order: undefined,
+        groups: undefined,
+        tabs: undefined,
+        calcs: undefined
+      })
+    }, React.createElement(Svg, {
+      d: IC.reset,
+      s: 13
+    }), " Reset to hospital order") : null, admin ? React.createElement("button", {
+      style: MK.btnPri,
+      disabled: offline,
+      onClick: () => api.send('PUT', '/api/med/dose-library/_layout', {
+        layout: orderSnapshot()
+      }).then(r => {
+        if (r && r.ok) {
+          toast('Published as the hospital order.');
+          reload();
+        } else toast(r && r.error || 'Could not save.', 'error');
+      })
+    }, React.createElement(Svg, {
+      d: IC.save,
+      s: 13
+    }), " Publish as hospital order") : null) : null, showRecent && (prefs.recent || []).length ? React.createElement("div", {
+      className: "dc-recent dc-rise"
+    }, (prefs.recent || []).map((r, i) => React.createElement("button", {
+      key: i,
+      className: "dc-recent-chip",
+      onClick: () => {
+        if (r.weight) setP(Object.assign({}, p, {
+          weight: String(r.weight)
+        }));
+        setPref({
+          tab: 'infusion'
+        });
+        setRestore(Object.assign({}, r, {
+          n: Date.now()
+        }));
+        setShowRecent(false);
+      }
+    }, React.createElement("b", null, r.label), React.createElement("span", null, r.weight ? r.weight + ' kg · ' : '', new Date(r.at).toLocaleString([], {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    })))), React.createElement("button", {
+      className: "dc-link",
+      onClick: () => {
+        setPref({
+          recent: []
+        });
+        setShowRecent(false);
+      }
+    }, "Clear")) : null, React.createElement(PatientBar, {
+      p: p,
+      set: setP,
+      dv: dv
+    }), React.createElement("div", {
+      className: "dc-tabs-wrap",
+      ref: tabRef
+    }, React.createElement(Sortable, {
+      items: tabs,
+      getKey: t => t.id,
+      enabled: arrange,
+      axis: "x",
+      className: "dc-tabs",
+      onMove: (a, b) => setPref({
+        tabs: D.moveItem(tabs.map(t => t.id), a, b)
+      }),
+      render: (t, handle) => React.createElement("button", {
+        "data-tab": t.id,
+        className: 'dc-tab' + (tab === t.id ? ' is-on' : ''),
+        onClick: () => {
+          setRestore(null);
+          setPref({
+            tab: t.id
+          });
+        }
+      }, handle, React.createElement(Svg, {
+        d: t.icon,
+        s: 15
+      }), t.label)
+    }), React.createElement("span", {
+      className: "dc-ink",
+      style: {
+        transform: 'translateX(' + ink.left + 'px)',
+        width: ink.width
+      }
+    })), React.createElement("div", {
+      className: "dc-pane",
+      key: tab
+    }, tab === 'infusion' ? React.createElement(InfusionTab, _extends({}, common, {
+      restore: restore,
+      onRecent: pushRecent
+    })) : null, tab === 'emergency' ? React.createElement(EmergencyTab, common) : null, tab === 'paed' ? React.createElement(PaedTab, common) : null, tab === 'calcs' ? React.createElement(CalcsTab, common) : null), React.createElement("div", {
+      className: "dc-disclaimer"
+    }, React.createElement(Svg, {
+      d: IC.alert,
+      s: 14
+    }), React.createElement("span", null, React.createElement("b", null, "Calculation aid, not a prescription."), " Verify every dose against the written prescription and hospital protocol, and use an independent two-person check for high-alert drugs. Built-in library entries are defaults from published references until reviewed by this hospital.")), libOpen ? React.createElement(LibraryManager, {
+      lib: lib,
+      overrides: overrides,
+      reload: reload,
+      onClose: () => setLibOpen(false),
+      orderSnapshot: orderSnapshot
+    }) : null);
+  }
+  function injectStyle() {
+    if (document.getElementById('dose-calc-style')) return;
+    const INK = MK.INK,
+      MUTED = MK.MUTED,
+      FAINT = MK.FAINT,
+      LINE = MK.LINE,
+      MONO = MK.MONO,
+      BODY = MK.BODY;
+    const css = `
+.dc-root{--dc-blue:#0090ca;--dc-green:#1f9d57;--dc-amber:#e08a1e;--dc-red:#d23a52}
+.dc-root *{box-sizing:border-box}
+@keyframes dcRise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@keyframes dcPop{from{opacity:0;transform:scale(.97) translateY(8px)}to{opacity:1;transform:none}}
+@keyframes dcDash{to{stroke-dashoffset:-24}}
+@keyframes dcBlink{50%{opacity:.25}}
+@keyframes dcDrop{0%{transform:translateY(0);opacity:0}12%{opacity:1}80%{opacity:1}100%{transform:translateY(30px);opacity:0}}
+@keyframes dcSpin{to{transform:rotate(360deg)}}
+@keyframes dcWave{0%{transform:translateX(0)}100%{transform:translateX(-25px)}}
+@keyframes dcPulse{0%,100%{box-shadow:0 0 0 0 rgba(210,58,82,.35)}50%{box-shadow:0 0 0 7px rgba(210,58,82,0)}}
+@keyframes dcPulseA{0%,100%{box-shadow:0 0 0 0 rgba(224,138,30,.35)}50%{box-shadow:0 0 0 7px rgba(224,138,30,0)}}
+@keyframes dcShine{from{background-position:-200% 0}to{background-position:200% 0}}
+.dc-rise{animation:dcRise .38s cubic-bezier(.2,.8,.2,1) both}
+.dc-pop{animation:dcPop .28s cubic-bezier(.2,.8,.2,1) both}
+.dc-pane>*{animation:dcRise .32s cubic-bezier(.2,.8,.2,1) both}
+.dc-flow{animation:dcDash linear infinite}
+.dc-blink{animation:dcBlink 1.6s ease-in-out infinite}
+.dc-blink-fast{animation:dcBlink .7s steps(2,start) infinite}
+.dc-drop{animation:dcDrop ease-in infinite}
+.dc-spin{animation:dcSpin linear infinite;transform-box:view-box}
+.dc-wave{animation:dcWave 1.4s linear infinite}
+
+.dc-hero{position:relative;overflow:hidden;display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;padding:18px 22px;margin-bottom:12px;border-radius:18px;color:#fff;
+  background:radial-gradient(1200px 200px at 0% 0%,rgba(255,255,255,.18),transparent 60%),linear-gradient(120deg,#0b5f8a 0%,#0090ca 48%,#28b6a3 100%);box-shadow:0 18px 40px rgba(0,110,160,.28)}
+.dc-hero:after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.14) 50%,transparent 70%);background-size:200% 100%;animation:dcShine 6s ease-in-out infinite;pointer-events:none}
+.dc-hero-l{display:flex;gap:14px;align-items:center;min-width:0}
+.dc-hero-ic{width:46px;height:46px;border-radius:14px;display:grid;place-items:center;background:rgba(255,255,255,.18);box-shadow:inset 0 1px 0 rgba(255,255,255,.35)}
+.dc-hero h2{margin:0;font-size:20px;font-weight:800;letter-spacing:.2px}
+.dc-hero p{margin:3px 0 0;font-size:12.5px;opacity:.88}
+.dc-hero-r{display:flex;gap:8px;flex-wrap:wrap;align-items:center;position:relative;z-index:1}
+.dc-hero .dc-chip.dc-chip{background:rgba(255,255,255,.2);color:#fff;border-color:rgba(255,255,255,.35)}
+.dc-hero .dc-chip.is-amber{background:#ffe2ad;color:#7a4a08}
+.dc-hero .dc-chip.is-green{background:#c9f2da;color:#0f5c36}
+.dc-tbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,.4);background:rgba(255,255,255,.14);color:#fff;font:inherit;font-size:12px;font-weight:700;padding:7px 12px;border-radius:10px;cursor:pointer;transition:background .15s,transform .15s}
+.dc-tbtn:hover:not(:disabled){background:rgba(255,255,255,.26);transform:translateY(-1px)}
+.dc-tbtn.is-on{background:#fff;color:#0072a3}
+.dc-tbtn:disabled{opacity:.5;cursor:default}
+
+.dc-card{background:linear-gradient(152deg,rgba(255,255,255,.82),rgba(236,247,255,.55));backdrop-filter:blur(22px) saturate(1.6);-webkit-backdrop-filter:blur(22px) saturate(1.6);border:1px solid rgba(255,255,255,.92);border-radius:16px;box-shadow:0 12px 36px rgba(31,59,90,.12),0 3px 12px rgba(0,144,202,.07),inset 0 1px 0 #fff;position:relative}
+.dc-card-h{display:flex;align-items:center;gap:9px;padding:12px 16px;border-bottom:1px solid ${LINE};font-size:13.5px;color:${INK};flex-wrap:wrap}
+.dc-card-b{padding:14px 16px}
+.dc-sub{font-size:11.5px;color:${MUTED};font-weight:500}
+.dc-muted{color:${MUTED};font-size:12px}
+.dc-empty{padding:34px 20px;text-align:center;color:${MUTED};font-size:13px;line-height:1.6}
+.dc-count{font-family:${MONO};font-size:10.5px;font-weight:700;color:${MUTED};background:rgba(125,145,180,.14);padding:1px 7px;border-radius:10px;margin-left:6px}
+
+.dc-chip{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:12px;color:#5b6b80;background:rgba(125,145,180,.14);border:1px solid transparent;white-space:nowrap}
+.dc-chip.is-mono{font-family:${MONO}}
+.dc-chip.is-green{color:#16794a;background:rgba(31,157,87,.13)}
+.dc-chip.is-amber{color:#a5620a;background:rgba(224,138,30,.15)}
+.dc-chip.is-red{color:#b4233c;background:rgba(210,58,82,.12)}
+.dc-chip.is-blue{color:#0072a3;background:rgba(0,144,202,.12)}
+.dc-chip.is-red-solid{color:#fff;background:#c8102e;letter-spacing:.6px;font-size:9.5px}
+.dc-chips{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+
+.dc-patient{padding:12px 16px;margin-bottom:12px}
+.dc-pt-row{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
+.dc-pt-row.is-sub{margin-top:10px;padding-top:10px;border-top:1px dashed ${LINE}}
+.dc-pt-title{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:800;color:${INK};text-transform:uppercase;letter-spacing:.6px;align-self:center;margin-right:4px}
+.dc-pt-dot{width:9px;height:9px;border-radius:50%;background:linear-gradient(135deg,#27a8db,#28b6a3);box-shadow:0 0 0 4px rgba(39,168,219,.15)}
+.dc-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.dc-field.is-wide{flex:1;min-width:200px}
+.dc-flabel{font-size:10.5px;font-weight:700;color:${MUTED};text-transform:uppercase;letter-spacing:.4px}
+.dc-fhint{font-size:10.5px;color:${FAINT};line-height:1.5}
+.dc-root .inp{font-family:inherit;font-size:12.5px;color:${INK};padding:7px 9px;border-radius:9px;border:1px solid rgba(125,145,180,.32);background:rgba(255,255,255,.85);transition:border-color .15s,box-shadow .15s;min-width:0}
+.dc-root .inp:focus{outline:0;border-color:#27a8db;box-shadow:0 0 0 3px rgba(39,168,219,.18)}
+.dc-num{width:96px}
+.dc-inline{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.dc-seg{display:inline-flex;padding:2px;border-radius:10px;background:rgba(125,145,180,.14);gap:2px}
+.dc-seg button{border:0;background:transparent;font:inherit;font-size:12px;font-weight:600;color:${BODY};padding:6px 11px;border-radius:8px;cursor:pointer;transition:all .18s}
+.dc-seg.is-small button{font-size:11px;padding:5px 9px}
+.dc-seg button.is-on{background:#fff;color:#0072a3;box-shadow:0 2px 8px rgba(31,59,90,.14)}
+.dc-link{border:0;background:none;color:#0072a3;font:inherit;font-size:11.5px;font-weight:700;cursor:pointer;padding:4px 2px}
+.dc-link:hover{text-decoration:underline}
+.dc-derived{display:flex;gap:6px;flex-wrap:wrap;margin-top:11px}
+.dc-pill{font-size:11.5px;color:${BODY};background:rgba(255,255,255,.7);border:1px solid rgba(125,145,180,.22);padding:4px 10px;border-radius:20px;font-family:${MONO};display:inline-flex;gap:5px;align-items:center}
+.dc-pill b{font-family:inherit;color:${MUTED};font-size:10px;letter-spacing:.4px}
+.dc-pill.is-blue{color:#0072a3;background:rgba(0,144,202,.1)}
+.dc-pill.is-violet{color:#6a52d4;background:rgba(106,82,212,.1)}
+.dc-pill.is-red{color:#b4233c;background:rgba(210,58,82,.1);animation:dcPulse 1.6s infinite}
+.dc-pill.is-action{cursor:pointer;color:#fff;background:linear-gradient(135deg,#27a8db,#0072a3);border:0;font-family:inherit;font-weight:700}
+
+.dc-tabs-wrap{position:relative;margin-bottom:12px;background:rgba(255,255,255,.55);border:1px solid rgba(255,255,255,.9);border-radius:14px;padding:4px;box-shadow:0 6px 20px rgba(31,59,90,.08);overflow-x:auto}
+.dc-tabs{display:flex;gap:2px;position:relative;z-index:1}
+.dc-tab{display:inline-flex;align-items:center;gap:7px;border:0;background:transparent;font:inherit;font-size:13px;font-weight:700;color:${MUTED};padding:9px 15px;border-radius:10px;cursor:pointer;white-space:nowrap;transition:color .2s}
+.dc-tab:hover{color:${INK}}
+.dc-tab.is-on{color:#0072a3}
+.dc-ink{position:absolute;top:4px;bottom:4px;left:4px;border-radius:10px;background:#fff;box-shadow:0 4px 14px rgba(0,114,163,.18);transition:transform .32s cubic-bezier(.3,1.3,.5,1),width .32s cubic-bezier(.3,1.3,.5,1);z-index:0}
+.dc-tabs .dc-sort-item{display:flex}
+
+.dc-inf{display:grid;grid-template-columns:260px minmax(0,1.15fr) minmax(0,1fr);gap:12px;align-items:start}
+.dc-inf.is-two{grid-template-columns:260px minmax(0,1fr)}
+.dc-col{display:flex;flex-direction:column;gap:12px;min-width:0}
+@media (max-width:1380px){.dc-inf{grid-template-columns:250px minmax(0,1fr)}.dc-pump-col{grid-column:2}}
+@media (max-width:860px){.dc-inf,.dc-inf.is-two{grid-template-columns:minmax(0,1fr)}.dc-pump-col{grid-column:auto}.dc-picker .dc-picker-scroll{max-height:260px}}
+
+.dc-picker{position:sticky;top:8px}
+.dc-picker .dc-card-h b{flex:1}
+.dc-search{display:flex;align-items:center;gap:7px;margin:10px 12px 6px;padding:7px 10px;border-radius:10px;background:rgba(255,255,255,.8);border:1px solid rgba(125,145,180,.25);color:${MUTED}}
+.dc-search:focus-within{border-color:#27a8db;box-shadow:0 0 0 3px rgba(39,168,219,.15)}
+.dc-search input{border:0;outline:0;background:transparent;font:inherit;font-size:12.5px;color:${INK};flex:1;min-width:0}
+.dc-search button{border:0;background:none;cursor:pointer;color:${MUTED};display:flex}
+.dc-search.is-inline{margin:0;min-width:160px}
+.dc-picker-scroll{max-height:calc(100vh - 290px);min-height:240px;overflow-y:auto;padding:0 6px 8px}
+.dc-group{margin-top:6px}
+.dc-group-h{display:flex;align-items:center;gap:4px;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:${MUTED};padding:4px 6px}
+.dc-group-h.is-fav{color:#b5850a}
+.dc-group-t{display:flex;align-items:center;gap:6px;flex:1;border:0;background:none;font:inherit;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:${MUTED};cursor:pointer;padding:3px 0;text-align:left}
+.dc-gdot{width:8px;height:8px;border-radius:3px;background:var(--g);flex-shrink:0}
+.dc-chev{margin-left:auto;display:flex;transition:transform .2s;transform:rotate(-90deg)}
+.dc-chev.is-open{transform:none}
+.dc-drug{position:relative;display:flex;align-items:center;gap:6px;padding:8px 8px 8px 12px;border-radius:10px;cursor:pointer;font-size:12.5px;color:${BODY};transition:background .15s,transform .15s}
+.dc-drug:hover{background:rgba(0,144,202,.07)}
+.dc-drug:focus-visible{outline:2px solid #27a8db;outline-offset:-2px}
+.dc-drug.is-on{background:#fff;color:${INK};font-weight:700;box-shadow:0 4px 14px rgba(31,59,90,.1)}
+.dc-drug-bar{position:absolute;left:3px;top:8px;bottom:8px;width:3px;border-radius:3px;background:var(--g);opacity:.35;transition:opacity .2s}
+.dc-drug.is-on .dc-drug-bar{opacity:1}
+.dc-drug-name{flex:1;min-width:0;line-height:1.35}
+.dc-drug-name em{font-style:normal;font-size:10px;color:#0072a3}
+.dc-drug-meta{display:flex;align-items:center;gap:4px}
+.dc-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
+.dc-dot.is-red{background:#d23a52}.dc-dot.is-green{background:#1f9d57}.dc-dot.is-amber{background:#e8a33a}.dc-dot.is-redring{background:#fff;box-shadow:inset 0 0 0 2px #d23a52}
+.dc-star{border:0;background:none;padding:2px;cursor:pointer;color:rgba(125,145,180,.5);display:flex;transition:color .15s,transform .2s}
+.dc-star:hover{color:#e0a400;transform:scale(1.15)}
+.dc-star.is-on{color:#e0a400}
+.dc-star.is-on svg{fill:#f5c542}
+
+.dc-sort-item{transition:box-shadow .2s;border-radius:10px}
+.dc-sort-item.is-dragging{position:relative;z-index:5;box-shadow:0 14px 34px rgba(31,59,90,.25);background:#fff;opacity:.96}
+.dc-handle{display:inline-flex;align-items:center;gap:1px;margin-right:4px}
+.dc-grip{border:0;background:rgba(0,144,202,.1);color:#0072a3;border-radius:6px;padding:3px 2px;cursor:grab;display:flex;touch-action:none}
+.dc-grip:active{cursor:grabbing}
+.dc-mv{border:0;background:rgba(125,145,180,.12);color:${BODY};border-radius:5px;width:20px;height:20px;cursor:pointer;display:inline-grid;place-items:center}
+.dc-mv:disabled{opacity:.3;cursor:default}
+.dc-arrange-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;margin-bottom:12px;border-radius:12px;background:rgba(0,144,202,.08);border:1px dashed rgba(0,144,202,.45);font-size:12.5px;color:#0b5f8a}
+.dc-arrange-bar span{flex:1;min-width:220px}
+
+.dc-drug-head{display:flex;gap:12px;align-items:center;padding:14px 16px;border-bottom:1px solid ${LINE};background:linear-gradient(90deg,color-mix(in srgb,var(--g) 9%,transparent),transparent 70%);border-radius:16px 16px 0 0}
+.dc-drug-swatch{width:12px;align-self:stretch;border-radius:6px;background:linear-gradient(180deg,var(--g),color-mix(in srgb,var(--g) 55%,#fff))}
+.dc-drug-title{font-size:17px;font-weight:800;color:${INK};letter-spacing:.1px}
+.dc-label-row{font-size:10.5px;font-weight:800;color:${MUTED};text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.dc-conc{display:flex;gap:7px;flex-wrap:wrap}
+.dc-conc-chip{display:flex;flex-direction:column;align-items:flex-start;gap:1px;border:1px solid rgba(125,145,180,.28);background:rgba(255,255,255,.75);border-radius:11px;padding:7px 11px;cursor:pointer;font:inherit;text-align:left;transition:all .18s}
+.dc-conc-chip b{font-size:12.5px;color:${INK};font-family:${MONO}}
+.dc-conc-chip span{font-size:10.5px;color:${MUTED}}
+.dc-conc-chip:hover{border-color:#27a8db;transform:translateY(-1px)}
+.dc-conc-chip.is-on{border-color:transparent;background:linear-gradient(135deg,#27a8db,#0072a3);box-shadow:0 6px 16px rgba(0,144,202,.3)}
+.dc-conc-chip.is-on b,.dc-conc-chip.is-on span{color:#fff}
+
+.dc-io{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-top:14px}
+@media (max-width:560px){.dc-io{grid-template-columns:minmax(0,1fr)}}
+.dc-big-in{display:flex;align-items:center;gap:6px}
+.dc-big-num{flex:1;min-width:0;font-family:${MONO};font-size:26px;font-weight:700;color:${INK};text-align:center;padding:8px 6px;border-radius:12px;border:1px solid rgba(125,145,180,.3);background:#fff;transition:border-color .15s,box-shadow .15s}
+.dc-big-num:focus{outline:0;border-color:#27a8db;box-shadow:0 0 0 4px rgba(39,168,219,.16)}
+.dc-step-big{width:42px;height:48px;border-radius:12px;border:1px solid rgba(125,145,180,.3);background:rgba(255,255,255,.85);font-size:22px;font-weight:700;color:#0072a3;cursor:pointer;transition:all .15s}
+.dc-step-big:hover{background:#0090ca;color:#fff;border-color:#0090ca}
+.dc-step-big:active{transform:scale(.94)}
+.dc-range{width:100%;margin:12px 0 4px;accent-color:var(--g,#0090ca);cursor:pointer}
+.dc-result{border-radius:14px;padding:14px 16px;background:rgba(0,144,202,.06);border:1px solid rgba(0,144,202,.18);transition:background .3s,border-color .3s;min-height:122px;display:flex;flex-direction:column;justify-content:center}
+.dc-result.is-ok{background:linear-gradient(140deg,rgba(31,157,87,.1),rgba(31,157,87,.03));border-color:rgba(31,157,87,.3)}
+.dc-result.is-low,.dc-result.is-high{background:linear-gradient(140deg,rgba(224,138,30,.12),rgba(224,138,30,.03));border-color:rgba(224,138,30,.4);animation:dcPulseA 2s infinite}
+.dc-result.is-hard{background:linear-gradient(140deg,rgba(210,58,82,.14),rgba(210,58,82,.04));border-color:rgba(210,58,82,.5);animation:dcPulse 1.2s infinite}
+.dc-result-k{font-size:11px;font-weight:700;color:${MUTED};text-transform:uppercase;letter-spacing:.5px}
+.dc-result-v{font-family:${MONO};font-size:34px;font-weight:800;color:${INK};line-height:1.15;margin:2px 0}
+.dc-result-v small{font-size:14px;color:${MUTED};font-weight:600}
+.dc-result.is-hard .dc-result-v{color:#c8102e}
+.dc-result-s{font-size:11.5px;color:${BODY};line-height:1.5}
+.dc-need{display:flex;gap:8px;align-items:center;font-size:13px;color:#a5620a;font-weight:600}
+.dc-banner{display:flex;gap:7px;align-items:flex-start;font-size:12px;line-height:1.5;padding:8px 11px;border-radius:10px;margin-top:8px}
+.dc-banner.is-red{background:rgba(210,58,82,.1);color:#9f1d33;font-weight:700}
+.dc-banner.is-amber{background:rgba(224,138,30,.12);color:#8a5208}
+.dc-banner.is-blue{background:rgba(0,144,202,.08);color:#0b5f8a}
+
+.dc-two{display:grid;grid-template-columns:minmax(0,240px) minmax(0,1fr);gap:14px;align-items:center}
+@media (max-width:640px){.dc-two{grid-template-columns:minmax(0,1fr)}}
+.dc-gauge{text-align:center}
+.dc-gauge-cap{font-size:12px;font-weight:800;margin-top:-4px}
+.dc-gauge-cap span{display:block;font-weight:500;font-size:10.5px;color:${FAINT};font-family:${MONO};margin-top:2px}
+.dc-gauge-cap.is-ok{color:#16794a}.dc-gauge-cap.is-low,.dc-gauge-cap.is-high{color:#a5620a}.dc-gauge-cap.is-hard{color:#c8102e}.dc-gauge-cap.is-none{color:${MUTED}}
+.dc-facts{display:flex;flex-direction:column;gap:7px}
+.dc-fact{display:flex;flex-direction:column;gap:2px;padding:8px 11px;border-radius:10px;background:rgba(255,255,255,.65);border:1px solid rgba(125,145,180,.16)}
+.dc-fact span{display:flex;align-items:center;gap:5px;font-size:10.5px;color:${MUTED};font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.dc-fact b{font-size:12.5px;color:${INK};font-weight:600;line-height:1.45}
+.dc-note{margin-top:12px;font-size:12px;line-height:1.55;color:${BODY};padding:9px 12px;border-left:3px solid var(--g,#27a8db);background:rgba(255,255,255,.6);border-radius:0 10px 10px 0}
+.dc-src{font-size:10.5px;color:${FAINT};margin-top:7px}
+.dc-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}
+.dc-actions button:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+
+.dc-ttable{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px;padding:12px}
+.dc-trow{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:8px 10px;border-radius:9px;border:1px solid rgba(125,145,180,.18);background:rgba(255,255,255,.7);font:inherit;font-family:${MONO};font-size:12px;color:${BODY};cursor:pointer;transition:all .15s}
+.dc-trow i{font-style:normal;font-size:9.5px;color:${FAINT}}
+.dc-trow b{color:${INK}}
+.dc-trow:hover{transform:translateY(-1px);border-color:#27a8db}
+.dc-trow.is-low{opacity:.7}
+.dc-trow.is-high{background:rgba(224,138,30,.08);border-color:rgba(224,138,30,.3)}
+.dc-trow.is-hard{background:rgba(210,58,82,.08)}
+.dc-trow.is-cur{background:linear-gradient(135deg,#27a8db,#0072a3);border-color:transparent;color:#fff;box-shadow:0 6px 14px rgba(0,144,202,.3)}
+.dc-trow.is-cur b,.dc-trow.is-cur i{color:#fff}
+
+.dc-pump{position:relative}
+.dc-pump-svg{width:100%;height:auto;display:block}
+.dc-pump.is-alarm-red .dc-pump-svg{filter:drop-shadow(0 0 10px rgba(255,77,100,.35))}
+.dc-pump-foot{font-size:11.5px;color:${BODY};margin:4px 2px 8px}
+.dc-pump-foot i{color:${FAINT};font-style:normal}
+.dc-pump-ctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.6);border:1px solid rgba(125,145,180,.18)}
+.dc-pump-btns{display:flex;gap:6px;flex-wrap:wrap}
+.dc-pbtn{display:inline-flex;align-items:center;gap:5px;border:1px solid rgba(125,145,180,.3);background:#fff;font:inherit;font-size:12px;font-weight:700;color:${BODY};padding:8px 12px;border-radius:10px;cursor:pointer;transition:all .15s}
+.dc-pbtn:hover:not(:disabled){transform:translateY(-1px);box-shadow:0 4px 12px rgba(31,59,90,.12)}
+.dc-pbtn:disabled{opacity:.4;cursor:not-allowed}
+.dc-pbtn.is-run{background:linear-gradient(135deg,#25c06b,#169652);color:#fff;border-color:transparent}
+.dc-pbtn.is-pause{background:linear-gradient(135deg,#ffb84d,#e08a1e);color:#fff;border-color:transparent}
+.dc-pump-rate{display:flex;align-items:center;gap:4px}
+.dc-step{width:30px;height:30px;border-radius:9px;border:1px solid rgba(125,145,180,.3);background:#fff;color:#0072a3;font-size:11px;cursor:pointer}
+.dc-step:active{transform:scale(.92)}
+.dc-knob{cursor:ns-resize;border-radius:50%;touch-action:none;display:flex;outline:0}
+.dc-knob:focus-visible{box-shadow:0 0 0 3px rgba(39,168,219,.4)}
+.dc-knob.is-off{opacity:.5;cursor:not-allowed}
+.dc-pump-opts{display:flex;flex-direction:column;gap:5px;font-size:11px;color:${MUTED}}
+.dc-pump-opts label{display:flex;align-items:center;gap:6px}
+.dc-pump-opts select{font:inherit;font-size:11px;padding:3px 5px;border-radius:7px;border:1px solid rgba(125,145,180,.3);background:#fff}
+.dc-check input{accent-color:#0090ca}
+
+.dc-em-top{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.dc-stat{padding:12px 14px;border-radius:14px;background:linear-gradient(152deg,rgba(255,255,255,.85),rgba(236,247,255,.55));border:1px solid #fff;box-shadow:0 8px 22px rgba(31,59,90,.1);animation:dcRise .4s both}
+.dc-stat span{display:block;font-size:10.5px;font-weight:800;color:${MUTED};text-transform:uppercase;letter-spacing:.4px}
+.dc-stat b{display:block;font-family:${MONO};font-size:22px;color:${INK};margin:3px 0 1px}
+.dc-stat i{font-style:normal;font-size:10.5px;color:${FAINT}}
+.dc-stat.is-big{background:linear-gradient(135deg,#0b5f8a,#0090ca);color:#fff}
+.dc-stat.is-big span,.dc-stat.is-big i,.dc-stat.is-big b{color:#fff}
+.dc-stat.is-red b{color:#c8102e}
+.dc-em-group{border-top:1px solid ${LINE}}
+.dc-em-gh{display:flex;align-items:center;gap:7px;padding:9px 16px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:${INK};background:linear-gradient(90deg,color-mix(in srgb,var(--g) 10%,transparent),transparent 60%)}
+.dc-em-row{display:grid;grid-template-columns:auto minmax(170px,1.3fr) minmax(110px,.8fr) minmax(110px,.9fr) minmax(80px,.6fr) minmax(160px,1.4fr);gap:10px;align-items:center;padding:9px 16px;border-top:1px solid rgba(125,145,180,.1);font-size:12px;transition:background .15s}
+.dc-em-row:hover{background:rgba(0,144,202,.04)}
+.dc-em-name b{display:block;color:${INK};font-size:12.5px}
+.dc-em-name span,.dc-em-ml span{display:block;font-size:10.5px;color:${FAINT};font-family:${MONO}}
+.dc-em-dose{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.dc-em-dose b{font-family:${MONO};font-size:15px;color:${INK}}
+.dc-em-ml{font-family:${MONO};font-weight:700;color:#0072a3;font-size:13px}
+.dc-em-ml span{font-family:inherit;font-weight:500}
+.dc-em-route{color:${BODY};font-size:11.5px}
+.dc-em-note{color:${MUTED};font-size:11px;line-height:1.45;display:flex;flex-direction:column;gap:4px;align-items:flex-start}
+@media (max-width:980px){.dc-em-row{grid-template-columns:auto minmax(0,1fr) minmax(0,1fr)}.dc-em-route,.dc-em-note{grid-column:2 / -1}}
+.dc-em-elec{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}
+.dc-em-elec i{font-style:normal;font-size:10.5px}
+
+.dc-oral-wrap{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:14px;padding:10px 14px;border-radius:12px;background:rgba(255,255,255,.6);border:1px solid rgba(125,145,180,.16);font-size:12.5px;color:${BODY}}
+.dc-oral{flex-shrink:0}
+
+.dc-calcs{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px;align-items:start}
+.dc-calcs>.dc-sort-item{min-width:0}
+.dc-calc .dc-card-h b{flex:1}
+.dc-form{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.dc-outs{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-bottom:8px}
+.dc-out{padding:9px 11px;border-radius:11px;background:rgba(255,255,255,.7);border:1px solid rgba(125,145,180,.16)}
+.dc-out span{display:block;font-size:10.5px;color:${MUTED};font-weight:700}
+.dc-out b{display:block;font-family:${MONO};font-size:17px;color:${INK};margin-top:2px}
+.dc-out b small{font-size:10.5px;color:${MUTED};font-weight:600}
+.dc-out i{display:block;font-style:normal;font-size:10px;color:${FAINT};margin-top:2px}
+.dc-out.is-strong{background:linear-gradient(135deg,rgba(39,168,219,.14),rgba(40,182,163,.08));border-color:rgba(0,144,202,.25)}
+.dc-out.is-strong b{font-size:21px;color:#0b5f8a}
+
+.dc-mono{font-size:12.5px;line-height:1.65;color:${BODY};max-height:380px;overflow-y:auto}
+.dc-recent{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+.dc-recent-chip{display:flex;flex-direction:column;align-items:flex-start;gap:1px;border:1px solid rgba(125,145,180,.25);background:rgba(255,255,255,.85);border-radius:11px;padding:7px 11px;cursor:pointer;font:inherit;text-align:left;transition:all .15s}
+.dc-recent-chip:hover{border-color:#27a8db;transform:translateY(-1px)}
+.dc-recent-chip b{font-size:12px;color:${INK}}
+.dc-recent-chip span{font-size:10.5px;color:${FAINT}}
+.dc-disclaimer{display:flex;gap:9px;align-items:flex-start;margin-top:14px;padding:11px 14px;border-radius:12px;background:rgba(224,138,30,.08);border:1px solid rgba(224,138,30,.22);font-size:11.5px;line-height:1.55;color:#7a4a08}
+
+.dc-modal{position:fixed;inset:0;z-index:1000;background:rgba(15,30,45,.42);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:18px;animation:dcRise .2s both}
+.dc-modal-box{width:min(1100px,100%);max-height:calc(100vh - 36px);display:flex;flex-direction:column;background:#f7fbfe;border-radius:18px;box-shadow:0 30px 80px rgba(10,30,50,.35);overflow:hidden}
+.dc-modal-h{display:flex;align-items:center;gap:9px;padding:14px 18px;border-bottom:1px solid ${LINE};color:${INK};font-size:15px;flex-wrap:wrap}
+.dc-x{margin-left:auto;border:0;background:rgba(125,145,180,.14);border-radius:9px;width:32px;height:32px;cursor:pointer;display:grid;place-items:center;color:${BODY}}
+.dc-modal-tabs{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:10px 18px;border-bottom:1px solid ${LINE}}
+.dc-modal-tabs>button:not([style]){border:0;background:transparent;font:inherit;font-size:12.5px;font-weight:700;color:${MUTED};padding:7px 12px;border-radius:9px;cursor:pointer}
+.dc-modal-tabs>button.is-on{background:#fff;color:#0072a3;box-shadow:0 3px 10px rgba(31,59,90,.1)}
+.dc-modal-stats{display:flex;gap:5px;margin-left:auto;flex-wrap:wrap}
+.dc-modal-body{display:grid;grid-template-columns:280px minmax(0,1fr);min-height:0;flex:1}
+@media (max-width:760px){.dc-modal-body{grid-template-columns:minmax(0,1fr)}.dc-lib-list{max-height:220px}}
+.dc-lib-list{border-right:1px solid ${LINE};display:flex;flex-direction:column;min-height:0}
+.dc-lib-add{margin:0 12px 6px;border:1px dashed rgba(0,144,202,.5);background:rgba(0,144,202,.05);color:#0072a3;font:inherit;font-size:12px;font-weight:700;padding:7px;border-radius:9px;cursor:pointer;display:flex;gap:5px;justify-content:center;align-items:center}
+.dc-lib-scroll{overflow-y:auto;padding:0 6px 10px;flex:1}
+.dc-lib-row{display:flex;align-items:center;gap:7px;width:100%;border:0;background:transparent;font:inherit;font-size:12px;color:${BODY};padding:7px 9px;border-radius:8px;cursor:pointer;text-align:left}
+.dc-lib-row span{flex:1}
+.dc-lib-row em{font-style:normal;font-size:9.5px;color:#0072a3;background:rgba(0,144,202,.1);padding:1px 6px;border-radius:8px}
+.dc-lib-row:hover{background:rgba(0,144,202,.07)}
+.dc-lib-row.is-on{background:#fff;box-shadow:0 3px 10px rgba(31,59,90,.1);font-weight:700;color:${INK}}
+.dc-lib-row.is-off span{text-decoration:line-through;opacity:.6}
+.dc-lib-edit{padding:16px 18px;overflow-y:auto;min-height:0}
+.dc-sublist{display:flex;flex-direction:column;gap:6px;margin-top:6px;padding:10px 12px;border-radius:11px;background:rgba(255,255,255,.7);border:1px solid rgba(125,145,180,.16)}
+
+@media (prefers-reduced-motion: reduce){.dc-root *,.dc-root *:before,.dc-root *:after,.dc-modal *{animation:none!important;transition:none!important}}
+@media (max-width:520px){.dc-hero{padding:14px 16px}.dc-hero h2{font-size:17px}.dc-result-v{font-size:28px}.dc-calcs{grid-template-columns:minmax(0,1fr)}}
+`;
+    const el = document.createElement('style');
+    el.id = 'dose-calc-style';
+    el.textContent = css;
+    document.head.appendChild(el);
+  }
+  window.MedDoseCalc = MedDoseCalc;
+})();
+})();
+;
 /* ===== medicine.jsx ===== */
 (function(){
 const {
@@ -6632,7 +12241,7 @@ function MedicineView({
   if (view === 'medInteractions') return React.createElement(MedInteractions, {
     setRoute: setRoute
   });
-  if (view === 'medCalc') return React.createElement(MedCalc, null);
+  if (view === 'medCalc') return window.MedDoseCalc ? React.createElement(window.MedDoseCalc, null) : React.createElement(MedCalc, null);
   if (view === 'medAnalytics') return React.createElement(MedAnalytics, {
     setRoute: setRoute
   });
@@ -6650,6 +12259,9 @@ function medInjectStyle() {
 Object.assign(window, {
   MedicineView,
   DrugSearchBox,
-  medApi
+  medApi,
+  MedMonograph: Monograph,
+  MedPregChip: PregChip,
+  MedAbxChip: AbxChip
 });
 })();
