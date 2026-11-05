@@ -1468,6 +1468,42 @@ function initPriorEntries(ex){
   return [blank()];
 }
 
+/* POP-UPS DRAWN ON THE PAGE, NOT INSIDE THE CARD. Every .card is a glass panel with a
+   backdrop-filter (mockup-ui.js), and a blurred element CONTAINS its position:fixed
+   children and starts its own stacking context — so a menu drawn inside the card was cut
+   off at the card's edge, and its click-away layer only covered the card. This draws the
+   menu on document.body, pinned to the field: below it, or above when there is more room
+   there, never past the window. `children(room)` gets the height the menu may use.
+   zIndex sits above the staff dialogs (6000), which host these dropdowns too. */
+function DropLayer({anchorRef, onClose, maxH=300, gap=5, children}){
+  const [pos,setPos]=React.useState(null);
+  React.useLayoutEffect(()=>{
+    let raf=0;
+    const place=()=>{ raf=0; const el=anchorRef.current; if(!el) return;
+      const r=el.getBoundingClientRect(), vh=window.innerHeight;
+      const below=vh-r.bottom-gap-8, above=r.top-gap-8;
+      const up=below<Math.min(maxH,220)&&above>below;
+      setPos({left:r.left,width:r.width,up,top:r.bottom+gap,bottom:vh-r.top+gap,room:Math.max(120,Math.min(maxH,up?above:below))}); };
+    const req=()=>{ if(!raf) raf=requestAnimationFrame(place); };
+    const key=(e)=>{ if(e.key==='Escape') onClose(); };
+    place();
+    // capture: the page scrolls inside .content, not the window
+    window.addEventListener('scroll',req,true); window.addEventListener('resize',req); window.addEventListener('keydown',key);
+    return ()=>{ if(raf) cancelAnimationFrame(raf);
+      window.removeEventListener('scroll',req,true); window.removeEventListener('resize',req); window.removeEventListener('keydown',key); };
+  },[]);  // eslint-disable-line
+  if(!pos) return null;
+  const layer=<>
+    <div onClick={onClose} style={{position:'fixed',inset:0,zIndex:7000}}/>
+    <div style={{position:'fixed',left:pos.left,width:pos.width,zIndex:7001,...(pos.up?{bottom:pos.bottom}:{top:pos.top}),
+      background:'#fff',border:'1px solid var(--line)',borderRadius:9,boxShadow:'var(--shadow-pop)',overflow:'hidden'}}>
+      {children(pos.room)}
+    </div>
+  </>;
+  const RD=window.ReactDOM;
+  return (RD&&RD.createPortal&&typeof document!=='undefined')?RD.createPortal(layer,document.body):layer;
+}
+
 /* Collapsed multi-select DROPDOWN with a checkbox list + search + add-custom.
    Value is stored as a comma-separated string ("A, B") so tables/exports/profile
    that read a plain string keep working unchanged. Any stored value not in
@@ -1484,9 +1520,10 @@ function MultiSelectDropdown({value, onChange, options, placeholder='Select…',
   const filtered=all.filter(o=>!q.trim()||lab(o).toLowerCase().includes(q.trim().toLowerCase()));
   const canAdd=allowCustom&&q.trim()&&!all.some(o=>lab(o).toLowerCase()===q.trim().toLowerCase());
   const addCustom=()=>{ const v=q.trim(); if(v&&!sel.includes(v)) setSel([...sel,v]); setQ(''); };
+  const anchor=React.useRef(null);
   return (
     <div style={{position:'relative'}}>
-      <div onClick={()=>setOpen(o=>!o)} style={{minHeight:40,display:'flex',alignItems:'center',gap:7,flexWrap:'wrap',padding:'6px 10px',border:'1px solid '+(open?'var(--blue)':'var(--line)'),borderRadius:7,background:'#fff',cursor:'pointer'}}>
+      <div ref={anchor} onClick={()=>setOpen(o=>!o)} style={{minHeight:40,display:'flex',alignItems:'center',gap:7,flexWrap:'wrap',padding:'6px 10px',border:'1px solid '+(open?'var(--blue)':'var(--line)'),borderRadius:7,background:'#fff',cursor:'pointer'}}>
         {sel.length===0
           ? <span style={{fontSize:13,color:'var(--faint)'}}>{placeholder}</span>
           : sel.map(o=>(
@@ -1498,16 +1535,14 @@ function MultiSelectDropdown({value, onChange, options, placeholder='Select…',
         <span className="spacer" style={{flex:1}}/>
         <Ic d={I.chevR} s={15} c="var(--faint)" style={{transform:open?'rotate(-90deg)':'rotate(90deg)',transition:'transform .15s'}}/>
       </div>
-      {open&&<>
-        <div onClick={()=>{setOpen(false);setQ('');}} style={{position:'fixed',inset:0,zIndex:80}}/>
-        <div style={{position:'absolute',left:0,right:0,top:'calc(100% + 5px)',zIndex:81,background:'#fff',border:'1px solid var(--line)',borderRadius:9,boxShadow:'var(--shadow-pop)',overflow:'hidden'}}>
+      {open&&<DropLayer anchorRef={anchor} onClose={()=>{setOpen(false);setQ('');}}>{room=><>
           <div style={{padding:8,borderBottom:'1px solid var(--line-2)',display:'flex',alignItems:'center',gap:8}}>
             <Ic d={I.search} s={14} c="var(--faint)"/>
             <input autoFocus value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&canAdd){e.preventDefault();addCustom();}}}
               placeholder="Search or type to add…" style={{flex:1,border:0,outline:'none',fontSize:12.5,fontFamily:'inherit',background:'transparent'}}/>
             {sel.length>0&&<button type="button" className="btn sm" onClick={()=>setSel([])} style={{padding:'3px 8px',fontSize:11}}>Clear</button>}
           </div>
-          <div style={{maxHeight:240,overflowY:'auto',padding:4}}>
+          <div style={{maxHeight:room-48,overflowY:'auto',padding:4}}>
             {filtered.length===0&&!canAdd&&<div style={{padding:'12px',fontSize:12,color:'var(--faint)',textAlign:'center'}}>No matches</div>}
             {filtered.map(o=>{ const on=sel.includes(o); return (
               <div key={o} onClick={()=>toggle(o)} style={{display:'flex',alignItems:'center',gap:9,padding:'7px 9px',borderRadius:6,cursor:'pointer',fontSize:12.5,color:'var(--ink-2)',fontWeight:on?600:500,background:on?'var(--blue-50)':'transparent'}}
@@ -1521,8 +1556,7 @@ function MultiSelectDropdown({value, onChange, options, placeholder='Select…',
               <Ic d={I.plus} s={14}/>Add “{q.trim()}”
             </div>}
           </div>
-        </div>
-      </>}
+      </>}</DropLayer>}
     </div>
   );
 }
@@ -1539,22 +1573,21 @@ function SelectDropdown({value, onChange, options, placeholder='Select…', labe
   const filtered=all.filter(o=>!q.trim()||lab(o).toLowerCase().includes(q.trim().toLowerCase()));
   const canAdd=allowCustom&&q.trim()&&!all.some(o=>lab(o).toLowerCase()===q.trim().toLowerCase());
   const pick=(v)=>{ onChange(v); setOpen(false); setQ(''); };
+  const anchor=React.useRef(null);
   return (
     <div style={{position:'relative'}}>
-      <div onClick={()=>setOpen(o=>!o)} style={{minHeight:40,display:'flex',alignItems:'center',gap:8,padding:'8px 10px',border:'1px solid '+(open?'var(--blue)':'var(--line)'),borderRadius:7,background:'#fff',cursor:'pointer'}}>
+      <div ref={anchor} onClick={()=>setOpen(o=>!o)} style={{minHeight:40,display:'flex',alignItems:'center',gap:8,padding:'8px 10px',border:'1px solid '+(open?'var(--blue)':'var(--line)'),borderRadius:7,background:'#fff',cursor:'pointer'}}>
         <span style={{flex:1,fontSize:13,color:cur?'var(--ink)':'var(--faint)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{cur?lab(cur):placeholder}</span>
         {cur&&<span onClick={ev=>{ev.stopPropagation();onChange('');}} title="Clear" style={{display:'inline-grid',placeItems:'center',cursor:'pointer',color:'var(--faint)'}}><Ic d={I.x} s={13} sw={2.2}/></span>}
         <Ic d={I.chevR} s={15} c="var(--faint)" style={{transform:open?'rotate(-90deg)':'rotate(90deg)',transition:'transform .15s'}}/>
       </div>
-      {open&&<>
-        <div onClick={()=>{setOpen(false);setQ('');}} style={{position:'fixed',inset:0,zIndex:80}}/>
-        <div style={{position:'absolute',left:0,right:0,top:'calc(100% + 5px)',zIndex:81,background:'#fff',border:'1px solid var(--line)',borderRadius:9,boxShadow:'var(--shadow-pop)',overflow:'hidden'}}>
+      {open&&<DropLayer anchorRef={anchor} onClose={()=>{setOpen(false);setQ('');}} maxH={320}>{room=><>
           <div style={{padding:8,borderBottom:'1px solid var(--line-2)',display:'flex',alignItems:'center',gap:8}}>
             <Ic d={I.search} s={14} c="var(--faint)"/>
             <input autoFocus value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();if(canAdd)pick(q.trim());else if(filtered.length)pick(filtered[0]);}}}
               placeholder="Search or type to add…" style={{flex:1,border:0,outline:'none',fontSize:12.5,fontFamily:'inherit',background:'transparent'}}/>
           </div>
-          <div style={{maxHeight:260,overflowY:'auto',padding:4}}>
+          <div style={{maxHeight:room-48,overflowY:'auto',padding:4}}>
             {filtered.length===0&&!canAdd&&<div style={{padding:'12px',fontSize:12,color:'var(--faint)',textAlign:'center'}}>No matches</div>}
             {filtered.map(o=>{ const on=cur===o; return (
               <div key={o} onClick={()=>pick(o)} style={{display:'flex',alignItems:'center',gap:9,padding:'7px 9px',borderRadius:6,cursor:'pointer',fontSize:12.5,color:'var(--ink-2)',fontWeight:on?700:500,background:on?'var(--blue-50)':'transparent'}}
@@ -1568,8 +1601,7 @@ function SelectDropdown({value, onChange, options, placeholder='Select…', labe
               <Ic d={I.plus} s={14}/>Add “{q.trim()}”
             </div>}
           </div>
-        </div>
-      </>}
+      </>}</DropLayer>}
     </div>
   );
 }
@@ -1587,23 +1619,22 @@ function ComboInput({value, onChange, options, placeholder, labelFn, style}){
   const q=v.trim().toLowerCase();
   const sugg=[...new Set((options||[]).map(lab).filter(Boolean))]
     .filter(l=>l.toLowerCase()!==q&&(!q||l.toLowerCase().includes(q))).slice(0,8);
+  const anchor=React.useRef(null);
   return (
     <div style={{position:'relative'}}>
-      <input value={v} placeholder={placeholder} style={style}
+      <input ref={anchor} value={v} placeholder={placeholder} style={style}
         onChange={ev=>{onChange(ev.target.value);setOpen(true);}}
         onFocus={()=>setOpen(true)}
         onKeyDown={ev=>{if(ev.key==='Escape')setOpen(false);}}/>
-      {open&&sugg.length>0&&<>
-        <div onClick={()=>setOpen(false)} style={{position:'fixed',inset:0,zIndex:80}}/>
-        <div style={{position:'absolute',left:0,right:0,top:'calc(100% + 4px)',zIndex:81,background:'#fff',border:'1px solid var(--line)',borderRadius:9,boxShadow:'var(--shadow-pop)',overflow:'hidden',maxHeight:220,overflowY:'auto',padding:4}}>
+      {open&&sugg.length>0&&<DropLayer anchorRef={anchor} onClose={()=>setOpen(false)} maxH={220} gap={4}>{room=>
+        <div style={{maxHeight:room,overflowY:'auto',padding:4}}>
           {sugg.map(l=>(
             <div key={l} onMouseDown={ev=>{ev.preventDefault();onChange(l);setOpen(false);}}
               style={{padding:'7px 9px',borderRadius:6,cursor:'pointer',fontSize:12.5,color:'var(--ink-2)'}}
               onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'}
               onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>{l}</div>
           ))}
-        </div>
-      </>}
+        </div>}</DropLayer>}
     </div>
   );
 }
@@ -3058,7 +3089,9 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
     );
   };
   const field=(label,node,extra)=>(
-    <div className="field"><div style={{display:'flex',alignItems:'center'}}><label>{label}</label><span className="spacer" style={{flex:1}}/>{extra}</div>{node}</div>
+    // The label row WRAPS: a hint wider than a narrow column drops under the label instead
+    // of running into the next column's label.
+    <div className="field"><div style={{display:'flex',alignItems:'center',flexWrap:'wrap',columnGap:8}}><label>{label}</label><span className="spacer" style={{flex:1}}/>{extra}</div>{node}</div>
   );
   const linkBtn=(t,fn)=><button onClick={fn} style={{border:0,background:'none',color:'var(--blue)',fontSize:11,fontWeight:600,cursor:'pointer'}}>{t}</button>;
 
@@ -3166,7 +3199,9 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
     // wipes the colour the shorthand set and leaves the field with a black border.
     return {border:'1px solid #0090ca',background:'#eef8fc',animation:p?'stf-pulse 1.8s ease-out infinite':undefined}; };
   // The dropdown components draw their own box, so they get a ring around them instead.
-  const ring=(empty,node)=>{ const h=hl(empty); return h?<div style={{borderRadius:8,outline:'1.5px solid #0090ca',outlineOffset:1,animation:h.animation}}>{node}</div>:node; };
+  // Always the same wrapper, highlighted or not: dropping it when the field fills changed the
+  // tree, so React remounted the control — ticking the first department closed its menu.
+  const ring=(empty,node)=>{ const h=hl(empty); return <div style={h?{borderRadius:8,outline:'1.5px solid #0090ca',outlineOffset:1,animation:h.animation}:undefined}>{node}</div>; };
   const row=(kids)=><div style={{display:'flex',flexWrap:'wrap',gap:12}}>{kids}</div>;
   const cell=(flex,node,nflex)=><div style={{flex:narrow?(nflex||'1 1 100%'):flex,minWidth:0}}>{node}</div>;
   const rowInpN={...rowInp,...(narrow?{minHeight:44,fontSize:16}:{})};
@@ -3260,9 +3295,9 @@ function StaffForm({store, empId, setRoute, role, designation, depts}){
               {cell('2 1 200px',field('Current Department'+(chipsOf('current_department').length>1?' · '+chipsOf('current_department').length+' selected':''),
                 ring(!deptOk,<MultiSelectDropdown value={f.current_department} onChange={v=>set('current_department',v)} options={deptOpts} labelFn={(statsDeptNames&&statsDeptNames.length)?undefined:deptLabel} placeholder="Select department(s)…"/>)))}
               {cell('1 1 140px',field('Date of Joining',inp('doj','YYYY-MM-DD','date',hl(!dojOk))),'1 1 150px')}
-              {cell('1 1 150px',field('Total Experience',
-                <div style={{padding:'9px 11px',border:'1px dashed var(--line)',borderRadius:7,fontSize:13,background:'var(--panel-2)',color:'var(--ink)',fontWeight:600}}>{S.fmtYM(totalY)}</div>,
-                <span style={{fontSize:11,color:'var(--muted)',whiteSpace:'nowrap'}}>auto = previous + UNICO</span>),'1 1 150px')}
+              {cell('1 1 150px',field('Total Experience',<div>
+                <div style={{padding:'9px 11px',border:'1px dashed var(--line)',borderRadius:7,fontSize:13,background:'var(--panel-2)',color:'var(--ink)',fontWeight:600}}>{S.fmtYM(totalY)}</div>
+                <div style={{fontSize:11,color:'var(--muted)',marginTop:4}}>Auto: previous + UNICO</div></div>),'1 1 150px')}
               {/* Which unit owns this person when they hold several. Only worth asking
                   once more than one department is selected. */}
               {chipsOf('current_department').length>1
