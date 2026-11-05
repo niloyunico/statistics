@@ -34,11 +34,14 @@ function RosterSetup() {
   const [onlyUnset, setOnlyUnset] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  // The staff register, for picking the Nursing Supervisors.
+  const store = K.useRosterStaff();
+  const [supQ, setSupQ] = useState('');
 
   const fromCfg = (c) => {
     const d = {};
     (c.depts || []).forEach((x) => { d[x.id] = { incharge: (x.incharge && x.incharge.username) || '', manager: (x.manager && x.manager.username) || '' }; });
-    return { cns: (c.cns && c.cns.username) || '', depts: d };
+    return { cns: (c.cns && c.cns.username) || '', depts: d, supervisors: (c.supervisors || []).map((x) => String(x.id)) };
   };
   const load = () => Promise.all([K.api.get('/api/rosters/config'), K.api.get('/api/rosters/reviewers')]).then(([c, p]) => {
     if (!c || !c.ok) { setErr((c && c.error) || 'Could not load the setup.'); return; }
@@ -86,7 +89,7 @@ function RosterSetup() {
   const setSlot = (id, slot, v) => setDraft((d) => ({ ...d, depts: { ...d.depts, [id]: { ...(d.depts[id] || {}), [slot]: v } } }));
   const save = () => {
     setBusy(true);
-    const body = { cns: draft.cns ? { username: draft.cns } : null, depts: {} };
+    const body = { cns: draft.cns ? { username: draft.cns } : null, depts: {}, supervisors: draft.supervisors || [] };
     Object.keys(draft.depts).forEach((id) => {
       const x = draft.depts[id];
       body.depts[id] = { incharge: x.incharge ? { username: x.incharge } : null, manager: x.manager ? { username: x.manager } : null };
@@ -139,6 +142,62 @@ function RosterSetup() {
           </div>
         </div>
       </div>
+
+      {/* Nursing Supervisors: a duty, not a designation — the administrator picks who does it */}
+      {(() => {
+        const staffAll = (store.staff || []).filter((e) => e && e.id != null && e.is_active !== false && !e.former);
+        const byId = {};
+        staffAll.forEach((e) => { byId[String(e.id)] = e; });
+        (cfg.supervisors || []).forEach((x) => { if (!byId[String(x.id)]) byId[String(x.id)] = x; });
+        const sel = draft.supervisors || [];
+        const setSel = (next) => setDraft((d) => ({ ...d, supervisors: next }));
+        const n = supQ.trim().toLowerCase();
+        const hits = n ? staffAll.filter((e) => sel.indexOf(String(e.id)) < 0 && [e.name, e.emp_id, e.current_department, e.designation].join(' ').toLowerCase().indexOf(n) >= 0).slice(0, 8) : [];
+        return (
+          <div className="card">
+            <div className="card-h" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <h3 style={{ margin: 0 }}>Nursing Supervisors</h3>
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#5b45c4', background: 'rgba(106,82,212,.1)', borderRadius: 10, padding: '2px 9px' }}>{sel.length} member{sel.length === 1 ? '' : 's'}</span>
+              <span className="sub" style={{ flex: 1, minWidth: 260 }}>Who does supervisor duty. They stay on their ward roster and also appear on the <b>Nursing Supervisors</b> roster; set its In-charge in the table below.</span>
+            </div>
+            <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                {!sel.length && <span className="sub">No supervisors picked yet.</span>}
+                {sel.map((id) => {
+                  const e = byId[id] || { name: 'Staff #' + id };
+                  return (
+                    <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(106,82,212,.3)', background: 'rgba(106,82,212,.06)', borderRadius: 16, padding: '3px 6px 3px 10px', fontSize: 12 }}>
+                      <b style={{ fontWeight: 700, color: '#16202e' }}>{e.name}</b>
+                      <span style={{ color: '#8a97a8', fontSize: 11 }}>{[e.emp_id, e.current_department].filter(Boolean).join(' · ')}</span>
+                      <button type="button" title="Remove" onClick={() => setSel(sel.filter((x) => x !== id))}
+                        style={{ border: 0, background: 'rgba(106,82,212,.12)', color: '#5b45c4', borderRadius: '50%', width: 18, height: 18, cursor: 'pointer', fontSize: 12, lineHeight: '18px', padding: 0 }}>×</button>
+                    </span>
+                  );
+                })}
+              </div>
+              <div style={{ position: 'relative', maxWidth: 460 }}>
+                <input value={supQ} onChange={(e) => setSupQ(e.target.value)} placeholder="Add a supervisor — name, emp no or unit…"
+                  style={{ width: '100%', boxSizing: 'border-box', padding: '8px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.4)', fontFamily: 'inherit', fontSize: 12.5 }} />
+                {n && (
+                  <div style={{ marginTop: 4, border: '1px solid rgba(125,145,180,.3)', borderRadius: 10, background: '#fff', overflow: 'hidden' }}>
+                    {!hits.length && <div className="sub" style={{ padding: 10 }}>No one matches.</div>}
+                    {hits.map((e) => (
+                      <div key={e.id} onClick={() => { setSel(sel.concat([String(e.id)])); setSupQ(''); }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 11px', cursor: 'pointer', borderBottom: '1px solid rgba(125,145,180,.1)' }}>
+                        <span style={{ flex: 1, minWidth: 0 }}>
+                          <span style={{ display: 'block', fontSize: 12.5, fontWeight: 600, color: '#16202e' }}>{e.name}</span>
+                          <span style={{ display: 'block', fontSize: 10.5, color: '#8a97a8' }}>{[e.emp_id, e.designation, e.current_department].filter(Boolean).join(' · ')}</span>
+                        </span>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: '#5b45c4' }}>+ Add</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="card">
         <div className="card-h" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>

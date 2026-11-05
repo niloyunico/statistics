@@ -192,6 +192,24 @@ async function actorOf(req, doc) {
    it reads the department map, and the inbox asks for it on every refresh. */
 let _idx = null, _idxTs = 0;
 const IDX_TTL = 30000;
+/* Trainee nurses are rostered as one unit, "Trainee Nurses", by their instructor — not on the
+   ward their record names. The same rule as renderer/unico/roster-spec.js (isTrainee / unitOf);
+   kept here too because the server bundle does not ship the renderer files. */
+const TRAINEE_UNIT = 'Trainee Nurses', TRAINEE_ID = 'trainee';
+const MANAGER_UNIT = 'Nurse Managers', MANAGER_ID = 'manager';
+const SUPERVISOR_UNIT = 'Nursing Supervisors', SUPERVISOR_ID = 'supervisor';
+// Nurse Manager / Assistant Nurse Manager (never Senior Manager) — roster-spec.js isNurseManager.
+const isNurseManager = (p) => !!p && /\b(assistant\s+)?nurse\s*manager\b/i.test(String(p.designation || ''));
+function isTraineeNurse(p) {
+  if (!p) return false;
+  const role = String(p.role || 'Nurse').trim().toLowerCase();
+  const des = String(p.designation || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  return (role === 'nurse' && /\btrainee\b/.test(des) && /\bnurs(?:e|ing)\b/.test(des)) || /^(trainee nurse|nurse trainee)$/.test(role);
+}
+const rosterUnitOf = (p) => (isTraineeNurse(p) ? TRAINEE_UNIT : isNurseManager(p) ? MANAGER_UNIT : ((p && p.current_department) || 'Unassigned'));
+// Supervisors are picked in Setup and ALSO stay on their ward: membership, not a unit of their own.
+const isSupervisorUnit = (dept) => String(dept || '').trim().toLowerCase() === SUPERVISOR_UNIT.toLowerCase();
+
 async function deptIndex() {
   if (_idx && Date.now() - _idxTs < IDX_TTL) return _idx;
   const acc = require('./access');
@@ -204,6 +222,11 @@ async function deptIndex() {
     out.push({ id, name: byId[id].name || id, keys });
   }
   out.sort((a, b) => a.name.localeCompare(b.name));
+  // Not a statistics department, but a roster unit with its own In-charge (the instructor):
+  // listed in Setup, the review inbox and the per-person department checklist like any other.
+  [[MANAGER_ID, MANAGER_UNIT], [SUPERVISOR_ID, SUPERVISOR_UNIT], [TRAINEE_ID, TRAINEE_UNIT]].forEach(([id, name]) => {
+    out.push({ id, name, keys: new Set(acc.deptsOfStaff({ current_department: name })) });
+  });
   _idx = out; _idxTs = Date.now();
   return out;
 }
@@ -223,7 +246,21 @@ async function getConfig() {
   const d = obj(raw);
   const depts = {};
   Object.keys(obj(d.depts)).forEach((k) => { const v = obj(d.depts[k]); depts[k] = { incharge: person(v.incharge), manager: person(v.manager) }; });
-  return { cns: person(d.cns), depts, updatedAt: d.updatedAt || null, updatedBy: d.updatedBy || null };
+  return { cns: person(d.cns), depts, supervisors: cleanIds(d.supervisors), updatedAt: d.updatedAt || null, updatedBy: d.updatedBy || null };
+}
+function cleanIds(v) {
+  const seen = new Set(); const out = [];
+  (Array.isArray(v) ? v : []).forEach((x) => { const k = s(x, 40).trim(); if (k && !seen.has(k)) { seen.add(k); out.push(k); } });
+  return out.slice(0, 300);
+}
+// The supervisor members as people (Setup shows names); an id no longer on the register is
+// left out of the answer but kept in storage, so a returning staff member is not dropped.
+async function supervisorPeople(ids) {
+  if (!ids || !ids.length) return [];
+  let reg = [];
+  try { reg = await require('./staff-roster').loadRoster({ cached: true }); } catch (e) { reg = []; }
+  const by = {}; (reg || []).forEach((p) => { if (p && p.id != null && !p.former) by[String(p.id)] = p; });
+  return ids.filter((id) => by[id]).map((id) => ({ id, name: by[id].name || '', emp_id: by[id].emp_id || '', current_department: by[id].current_department || '' }));
 }
 async function saveConfig(doc) {
   const c = await cfgCol();
@@ -309,8 +346,10 @@ async function decorate(req, doc, stub) {
   const actor = await actorOf(req, target);
   const can = W.rights(actor, target, cfg.depts[key] || {}, cfg.cns);
   const signers = signersFor(cfg, key);
-  if (!doc) return { roster: null, signers, can };
-  const out = Object.assign({}, doc, { can, signers, deptId: key });
+  // The supervisor sheet's people are a list from Setup, not a department on their records.
+  const members = target && isSupervisorUnit(target.dept) ? (cfg.supervisors || []) : undefined;
+  if (!doc) return { roster: null, signers, can, members };
+  const out = Object.assign({}, doc, { can, signers, deptId: key }, members ? { members } : {});
   if (Array.isArray(out.history)) out.history = out.history.slice(-50);
   return out;
 }
@@ -405,7 +444,7 @@ function mount(app, opts) {
       const names = new Set();
       try {
         (await require('./staff-roster').loadRoster({ cached: true }))
-          .forEach((p) => { if (p && p.is_active !== false && !p.former) names.add(s(p.current_department || 'Unassigned', 120)); });
+          .forEach((p) => { if (p && p.is_active !== false && !p.former) names.add(s(rosterUnitOf(p), 120)); });
       } catch (e) { /* register unreadable -> fall back to the rosters' own departments */ }
       (await listAll()).forEach((d) => { if (d && d.dept) names.add(d.dept); });
       // Plus the units Setup names this account the In-charge of — they prepare those rosters.
@@ -415,6 +454,7 @@ function mount(app, opts) {
         const cfg0 = await getConfig(); icIndex = await deptIndex();
         Object.keys(cfg0.depts || {}).forEach((k) => { const d = cfg0.depts[k]; if (me && d && d.incharge && d.incharge.username === me) icKeys.add(k); });
       } catch (e) { icKeys = new Set(); }
+      try { const c0 = await getConfig(); if ((c0.supervisors || []).length) names.add(SUPERVISOR_UNIT); } catch (e) { /* no setup yet */ }
       const units = [...names].filter((n) => n && (allowed(n) || (icKeys.size && icIndex && icKeys.has(deptKeyOf(icIndex, n))))).sort((x, y) => x.localeCompare(y));
       const may = (act) => !a || a.unrestricted || acc.can(a, 'roster', act);
       const pe = acc.portalMayEditRoster(a);
@@ -546,11 +586,14 @@ function mount(app, opts) {
       const allowed = await deptMatcher(req);
       const cfg = await getConfig(); const index = await deptIndex();
       const all = await require('./staff-roster').loadRoster({ cached: true });
+      const supSet = new Set(cfg.supervisors || []);
+      const supVisible = supSet.size > 0 && (allowed(SUPERVISOR_UNIT) || await reviewVisible(req, cfg, index, SUPERVISOR_UNIT));
       const out = [];
       for (const p of (all || [])) {
         if (!p || p.is_active === false || p.former) continue;
-        const dept = p.current_department || 'Unassigned';
-        if (!(allowed(dept) || await reviewVisible(req, cfg, index, dept))) continue;
+        const dept = rosterUnitOf(p);   // a trainee belongs to the Trainee Nurses unit
+        const supMember = supSet.has(String(p.id));
+        if (!(allowed(dept) || await reviewVisible(req, cfg, index, dept) || (supMember && supVisible))) continue;
         const o = {}; ROSTER_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) o[k] = p[k]; });
         // The face on the roster row — the URL only, never the storage id behind it.
         const ph = p.photo || p.photo_url;
@@ -691,7 +734,7 @@ function mount(app, opts) {
     try {
       const cfg = await getConfig();
       const depts = (await deptIndex()).map((d) => { const v = cfg.depts[d.id] || {}; return { id: d.id, name: d.name, incharge: v.incharge || null, manager: v.manager || null }; });
-      res.json({ ok: true, cns: cfg.cns, depts, updatedAt: cfg.updatedAt, updatedBy: cfg.updatedBy });
+      res.json({ ok: true, cns: cfg.cns, depts, supervisors: await supervisorPeople(cfg.supervisors), updatedAt: cfg.updatedAt, updatedBy: cfg.updatedBy });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the roster setup.' }); }
   });
   app.put('/api/rosters/config', readGuard, adminOnly, async (req, res) => {
@@ -724,10 +767,17 @@ function mount(app, opts) {
         if (JSON.stringify(row) !== JSON.stringify(cur)) { changed.push(id + ': ' + (row.incharge ? row.incharge.name : '—') + ' / ' + (row.manager ? row.manager.name : '—')); }
         next.depts[id] = row;
       }
-      await saveConfig({ cns: next.cns, depts: next.depts, updatedAt: Date.now(), updatedBy: who(req) });
+      // The supervisor members ride on the same document: sent = replaced, absent = kept.
+      next.supervisors = cfg.supervisors;
+      if (has(b, 'supervisors')) {
+        const want = cleanIds(b.supervisors);
+        if (JSON.stringify(want) !== JSON.stringify(cfg.supervisors)) changed.push('Nursing Supervisors: ' + want.length + ' member' + (want.length === 1 ? '' : 's'));
+        next.supervisors = want;
+      }
+      await saveConfig({ cns: next.cns, depts: next.depts, supervisors: next.supervisors, updatedAt: Date.now(), updatedBy: who(req) });
       if (changed.length) { try { require('./activity-log').log(req, 'roster_config', { target: 'Duty Roster', detail: changed.join(', ').slice(0, 900) }); } catch (e) { /* never breaks the save */ } }
       const saved = await getConfig();
-      res.json({ ok: true, changed: changed.length, cns: saved.cns, depts: index.map((d) => { const v = saved.depts[d.id] || {}; return { id: d.id, name: d.name, incharge: v.incharge || null, manager: v.manager || null }; }), updatedAt: saved.updatedAt, updatedBy: saved.updatedBy });
+      res.json({ ok: true, changed: changed.length, cns: saved.cns, depts: index.map((d) => { const v = saved.depts[d.id] || {}; return { id: d.id, name: d.name, incharge: v.incharge || null, manager: v.manager || null }; }), supervisors: await supervisorPeople(saved.supervisors), updatedAt: saved.updatedAt, updatedBy: saved.updatedBy });
     } catch (e) {
       if (e && /No active account/.test(e.message)) return res.status(400).json({ ok: false, error: e.message });
       res.status(500).json({ ok: false, error: 'Could not save the roster setup.' });
@@ -845,8 +895,8 @@ function mount(app, opts) {
       const id = rosterId(dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
       const doc = publishedOnly(req, [await getOne(id)].filter(Boolean))[0] || null;   // null when never drafted (or not published, to a collector)
       const d = await decorate(req, doc, { dept, status: 'draft', revision: 0 });
-      if (!doc) return res.json({ ok: true, roster: null, signers: d.signers, can: d.can });
-      res.json({ ok: true, roster: d, signers: d.signers, can: d.can });
+      if (!doc) return res.json({ ok: true, roster: null, signers: d.signers, can: d.can, members: d.members });
+      res.json({ ok: true, roster: d, signers: d.signers, can: d.can, members: d.members });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the roster.' }); }
   });
 
@@ -947,6 +997,7 @@ module.exports = {
   mount, COLL, VER_COLL, CFG_COLL, STATUSES, rosterId, normGrid,
   effStatus: W.effStatus, rawStatuses: W.rawStatuses, resumeOnEdit: W.resumeOnEdit, PENDING: W.PENDING, EDITABLE: W.EDITABLE, HISTORY_CAP: W.HISTORY_CAP,
   applyTransition, getConfig, deptIndex, deptKeyOf, getOne, decorate, actorOf, isUnitIncharge,
+  TRAINEE_UNIT, TRAINEE_ID, MANAGER_UNIT, SUPERVISOR_UNIT, isTraineeNurse, isNurseManager, rosterUnitOf,
   // The in-memory store, for the tests to plant a legacy row in.
   __mem: () => mem,
 };

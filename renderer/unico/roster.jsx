@@ -434,7 +434,7 @@ function useRosterConfig() {
   const [v, setV] = useState(ROS_CFG);
   useEffect(() => { let live = true; rosLoadConfig().then((x) => { if (live) setV(x); }); return () => { live = false; }; }, []);
   const reload = React.useCallback(() => rosLoadConfig(true).then((x) => { setV(x); return x; }), []);
-  return { cns: (v && v.cns) || null, depts: (v && v.depts) || [], updatedAt: v && v.updatedAt, loading: !v, reload };
+  return { cns: (v && v.cns) || null, depts: (v && v.depts) || [], supervisors: (v && v.supervisors) || [], updatedAt: v && v.updatedAt, loading: !v, reload };
 }
 
 /* The rule set a stored sheet carries, in the shape rosEval wants. New sheets store the
@@ -466,8 +466,9 @@ const rosFindingsOf = (grid, rows, year, month, rules) => {
 const rosRowsFrom = (doc, staff, dept, withRegister, inchargeName) => {
   const all = {};
   (staff || []).forEach((e) => { all[rosKey(e)] = e; });
+  const supIds = R.SUPERVISOR_UNIT === dept ? new Set(((ROS_CFG && ROS_CFG.supervisors) || []).map((x) => String(x.id))) : null;
   const reg = withRegister === false ? [] : (staff || [])
-    .filter((e) => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept)
+    .filter((e) => e.is_active !== false && !e.former && (supIds ? supIds.has(String(e.id)) : R.unitOf(e) === dept))
     .map((e) => rosRowOf(e));
   const known = Object.keys(all).map((k) => ({ empId: k, empIdShown: all[k].emp_id || '' }));
   const grid = rosMigrateGrid(doc && doc.grid, known);
@@ -836,6 +837,7 @@ function RosVersions({ sheetId, staff, dept, year, month, onClose }) {
 
 /* ================= 1. HOME / INDEX ================= */
 function RosterHome({ index, staffStore, scope, setRoute }) {
+  const rcfg = useRosterConfig();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
@@ -853,13 +855,16 @@ function RosterHome({ index, staffStore, scope, setRoute }) {
   const depts = useMemo(() => {
     const m = {};
     (staffStore.staff || []).filter((e) => e.is_active !== false && !e.former)
-      .forEach((e) => { const d = e.current_department || 'Unassigned'; m[d] = (m[d] || 0) + 1; });
+      .forEach((e) => { const d = R.unitOf(e); m[d] = (m[d] || 0) + 1; });
     // The server lists the units this account is assigned; a unit it names but whose
     // staff are all archived still belongs on the list, so it gets a row with no count
     // rather than vanishing along with the last nurse on it.
     if (sc.scope === 'departments' && sc.units) sc.units.forEach((u) => { if (!(u in m)) m[u] = 0; });
+    // Supervisors stay on their wards; the supervisor roster is a list picked in Setup.
+    const supN = (rcfg.supervisors || []).length;
+    if (supN) m[R.SUPERVISOR_UNIT] = supN;
     return Object.entries(m).filter(([d]) => sc.inScope(d)).sort((a, b) => b[1] - a[1]);
-  }, [staffStore.staff, sc.units, sc.scope]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [staffStore.staff, sc.units, sc.scope, rcfg.supervisors]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const byKey = useMemo(() => {
     const m = {};
@@ -1211,9 +1216,15 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const saveTimer = useRef(null);
   const toastTimer = useRef(null);
 
-  const staff = useMemo(() => (staffStore.staff || [])
-    .filter((e) => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept)
-    .map((e) => rosRowOf(e)), [staffStore.staff, dept]);
+  // Who the supervisor sheet is for comes from Setup (`members`, with the month); every other
+  // unit is the people whose roster unit it is (trainees and nurse managers have their own).
+  const [members, setMembers] = useState(null);
+  const staff = useMemo(() => {
+    const mem = members ? new Set(members.map(String)) : null;
+    return (staffStore.staff || [])
+      .filter((e) => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : R.unitOf(e) === dept))
+      .map((e) => rosRowOf(e));
+  }, [staffStore.staff, dept, members]);
 
   const rows = useMemo(() => {
     const byId = {}; staff.forEach((x) => { byId[x.empId] = x; });
@@ -1244,7 +1255,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const inScope = (scope && scope.inScope) || (() => true);
   const depts = useMemo(() => [...new Set((staffStore.staff || [])
     .filter((e) => e.is_active !== false && !e.former)
-    .map((e) => e.current_department || 'Unassigned'))]
+    .map((e) => R.unitOf(e)).concat([dept]))]
     // The unit being viewed always stays in the list, even if nobody is on it right
     // now — dropping it would leave the switcher showing a different unit than the grid.
     .filter((d) => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
@@ -1255,6 +1266,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     setMeta(d ? { ...d, grid: undefined } : {});
     setSheetCan((d && d.can) || r.can || null);
     setSigners(r.signers || {});
+    setMembers(Array.isArray(r.members) ? r.members : (d && Array.isArray(d.members) ? d.members : null));
   };
   useEffect(() => {
     setLoading(true); setLoadError(''); setConflict('');

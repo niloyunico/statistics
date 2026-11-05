@@ -200,7 +200,8 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.equal(cfgR.status, 200); assert.equal(cfgR.body.cns.name, 'Nasrin Sultana');
     assert.ok(logged.some((l) => l.action === 'roster_config'), 'the setup change is logged');
     const cfgGet = (await call('GET', '/api/rosters/config', null, 'icu')).body;
-    assert.deepEqual(cfgGet.depts.map((d) => d.id), ['ccu', 'micu', 'nicu'], 'every canonical unit is listed, named or not');
+    assert.deepEqual(cfgGet.depts.map((d) => d.id), ['ccu', 'micu', 'nicu', 'manager', 'supervisor', 'trainee'], 'every canonical unit is listed, named or not, plus the Nurse Managers, Nursing Supervisors and Trainee Nurses roster units');
+    assert.equal(cfgGet.depts.find((d) => d.id === 'trainee').name, 'Trainee Nurses');
     assert.equal(cfgGet.depts.find((d) => d.id === 'micu').manager.username, 'farida');
     assert.equal(cfgGet.depts.find((d) => d.id === 'nicu').manager, null);
     const reviewers = (await call('GET', '/api/rosters/reviewers')).body.reviewers;
@@ -305,7 +306,7 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.deepEqual(inbox.rows.map((x) => x.dept), ['micu'], 'a manager sees only the units she is named for');
     assert.equal(inbox.rows[0].pendingForMe, true); assert.equal(inbox.rows[0].status, 'pending_manager'); assert.equal(inbox.rows[0].incharge.name, 'Rahima Akter'); assert.equal(inbox.rows[0].can.forward, true);
     inbox = (await call('GET', '/api/rosters/review?year=2026&month=11', null, 'nasrin')).body;
-    assert.deepEqual(inbox.rows.map((x) => x.dept + ':' + (x.hasSheet ? x.status : 'none') + ':' + x.pendingForMe), ['ccu:approved:false', 'micu:pending_manager:false', 'nicu:none:false'], 'the CNS sees every unit, including the one with no sheet, and nothing waits on her yet');
+    assert.deepEqual(inbox.rows.map((x) => x.dept + ':' + (x.hasSheet ? x.status : 'none') + ':' + x.pendingForMe), ['ccu:approved:false', 'micu:pending_manager:false', 'nicu:none:false', 'manager:none:false', 'supervisor:none:false', 'trainee:none:false'], 'the CNS sees every unit, including the one with no sheet, and nothing waits on her yet');
     assert.equal(inbox.rows.find((x) => x.dept === 'nicu').sheetDept, 'NICU', 'a unit with no sheet still names where to open one');
     assert.equal(inbox.rows.find((x) => x.dept === 'ccu').approvedBy, 'Nasrin Sultana');
     let cnt = (await call('GET', '/api/rosters/review/count?year=2026&month=11', null, 'farida')).body;
@@ -351,6 +352,27 @@ roster.mount(app, { requireApi: as, requireRead: as });
     ic = await call('POST', '/api/rosters/' + encodeURIComponent('ros-NICU-2026-09') + '/transition', { action: 'send_manager' }, 'shirin');
     assert.equal(ic.status, 200, 'she sends it to the Manager');
     assert.equal((await call('PUT', '/api/rosters', { dept: 'MICU', year: 2026, month: 9, grid: {}, baseRevision: 0 }, 'shirin')).status, 403, 'another unit is still refused');
+
+    // The Trainee Nurses unit: an instructor named its In-charge in Setup prepares it.
+    assert.equal((await call('PUT', '/api/rosters/config', { depts: { trainee: { incharge: { username: 'shirin' } } } })).status, 200, 'the trainee unit takes an In-charge');
+    ic = await call('PUT', '/api/rosters', { dept: 'Trainee Nurses', year: 2026, month: 9, grid: { S9: { 1: 'G1' } }, baseRevision: 0 }, 'shirin');
+    assert.equal(ic.status, 200, 'the instructor saves the trainee roster: ' + JSON.stringify(ic.body));
+    assert.equal((await call('GET', '/api/rosters/Trainee%20Nurses/2026/9', null, 'shirin')).body.signers.incharge.username, 'shirin', 'the trainee sheet resolves to its Setup entry');
+    assert.equal(roster.rosterUnitOf({ role: 'Nurse', designation: 'Trainee Nurse', current_department: 'MICU' }), 'Trainee Nurses', 'a trainee is rostered on the trainee unit, not the ward');
+    assert.equal(roster.rosterUnitOf({ role: 'Nurse', designation: 'Staff Nurse', current_department: 'MICU' }), 'MICU');
+    assert.equal(roster.rosterUnitOf({ role: 'Nurse', designation: 'Assistant Nurse Manager', current_department: 'LDR' }), 'Nurse Managers', 'an assistant nurse manager is on the managers roster');
+    assert.equal(roster.rosterUnitOf({ role: 'Nurse', designation: 'Nurse Manager ER , OT & CSSD', current_department: 'Management' }), 'Nurse Managers');
+    assert.equal(roster.rosterUnitOf({ role: 'Nurse', designation: 'Senior Manager (Quality & Training)', current_department: 'Management' }), 'Management', 'a senior manager is not');
+
+    // Nursing Supervisors: members picked in Setup, kept on the config, shown with names.
+    assert.equal((await call('PUT', '/api/rosters/config', { supervisors: ['5'] }, 'icu')).status, 403, 'only an administrator picks supervisors');
+    let sup = await call('PUT', '/api/rosters/config', { supervisors: ['5', '5', '9'] });
+    assert.equal(sup.status, 200);
+    assert.deepEqual((await call('GET', '/api/rosters/config')).body.supervisors.map((x) => x.id), sup.body.supervisors.map((x) => x.id), 'the members round-trip');
+    await call('PUT', '/api/rosters/config', { depts: { micu: { manager: { username: 'farida' } } } });
+    assert.ok(roster.getConfig && (await roster.getConfig()).supervisors.join(',') === '5,9', 'a Setup save that does not send the list keeps it (and de-duplicates)');
+    const supSheet = (await call('GET', '/api/rosters/Nursing%20Supervisors/2026/9')).body;
+    assert.deepEqual(supSheet.members, ['5', '9'], 'the supervisor sheet knows who is on it before it is saved');
 
     // The print log.
     assert.equal((await call('POST', '/api/rosters/print', { kind: 'staff', target: 'Rahima', detail: 'May-Nov 2026' }, 'rahima')).body.ok, true);
