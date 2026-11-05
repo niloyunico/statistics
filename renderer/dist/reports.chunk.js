@@ -4344,7 +4344,7 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['devdays', 'Device Days', 'Clinical', 'Add = enter & send · Edit = review & correct · departments set below'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
+const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['devdays', 'Device Days', 'Clinical', 'Add = enter & send · Edit = review & correct · departments set below'], ['kpi', 'Nursing KPI', 'Clinical', 'Add = enter figures · Edit = change figures, KPIs & reports · Print = print, PDF, PowerPoint, Excel'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
 const MOD_GROUPS = ['Clinical', 'Data', 'Administer', 'Phone'];
 const modsGrouped = list => MOD_GROUPS.map(g => [g, list.filter(m => m[2] === g)]).filter(([, ms]) => ms.length);
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
@@ -4358,6 +4358,13 @@ const PERM_RANK = {
 const PERM_ACTS = [['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete'], ['print', 'Print']];
 const PERM_ORDER = ['view', 'edit', 'add', 'delete', 'print'];
 const MYDEPT_ACTS = ['view', 'print'];
+const KPI_TIPS = {
+  view: 'See the KPI dashboard, figures, reports and action plans',
+  edit: 'Change saved figures (incl. the system’s), edit KPIs and action plans, comment on and finalise reports',
+  add: 'Enter figures for months that have none, add custom KPIs, generate reports',
+  delete: 'Archive a KPI, clear a month, remove a draft report (all kept in history)',
+  print: 'Print, PDF, PowerPoint and Excel — every export is logged'
+};
 const DEVDAYS_TIPS = {
   view: 'See the daily sheet and the summary',
   edit: 'Review: approve or return sent days, and correct them',
@@ -4980,7 +4987,7 @@ function UserModal({
       setRosSelIn(s => s ? [] : s);
       setRosSelMgr(s => s ? [] : s);
       setRosCns(false);
-    } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept', 'devdays'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
+    } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept', 'devdays', 'kpi'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
   };
   const copyAccess = uname => {
     const src = (allUsers || []).find(x => x.username === uname);
@@ -4990,7 +4997,8 @@ function UserModal({
       setPerms(cur => ({
         ...FULL_PERMS(),
         mydept: asActions(cur.mydept),
-        devdays: asActions(cur.devdays)
+        devdays: asActions(cur.devdays),
+        kpi: asActions(cur.kpi)
       }));
       setSubMenus({});
       return;
@@ -5002,7 +5010,7 @@ function UserModal({
       ...NONE_PERMS(),
       ...(src.perms || {})
     };
-    setPerms(cur => USER_MODS.reduce((m, [k]) => (m[k] = k === 'mydept' || k === 'devdays' ? asActions(cur[k]) : asActions(p[k]), m), {}));
+    setPerms(cur => USER_MODS.reduce((m, [k]) => (m[k] = k === 'mydept' || k === 'devdays' || k === 'kpi' ? asActions(cur[k]) : asActions(p[k]), m), {}));
   };
   const toggleAct = (mid, act) => {
     if (mid === 'mydept' && MYDEPT_ACTS.indexOf(act) < 0) return;
@@ -6366,7 +6374,7 @@ function UserModal({
       return React.createElement("button", {
         key: v,
         onClick: () => toggleAct(id, v),
-        title: id === 'devdays' ? DEVDAYS_TIPS[v] : v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : v === 'delete' ? 'Can delete' : 'Can print / save as PDF — take the record out of the system on paper',
+        title: id === 'devdays' ? DEVDAYS_TIPS[v] : id === 'kpi' ? KPI_TIPS[v] : v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : v === 'delete' ? 'Can delete' : 'Can print / save as PDF — take the record out of the system on paper',
         style: {
           display: 'inline-flex',
           alignItems: 'center',
@@ -7667,6 +7675,42 @@ function ActivityLog() {
     },
     role_template_applied: {
       l: 'Role applied to members',
+      c: '#6a52d4'
+    },
+    kpi_value: {
+      l: 'KPI figure',
+      c: '#0090ca'
+    },
+    kpi_def: {
+      l: 'KPI changed',
+      c: '#6a52d4'
+    },
+    kpi_def_archive: {
+      l: 'KPI archived',
+      c: '#d23a52'
+    },
+    kpi_report: {
+      l: 'KPI report',
+      c: '#0090ca'
+    },
+    kpi_report_final: {
+      l: 'KPI report final',
+      c: '#1f9d57'
+    },
+    kpi_report_reopen: {
+      l: 'KPI report re-opened',
+      c: '#e08a1e'
+    },
+    kpi_export: {
+      l: 'KPI export',
+      c: '#3ab5a7'
+    },
+    kpi_print: {
+      l: 'KPI print / PDF',
+      c: '#3ab5a7'
+    },
+    kpi_config: {
+      l: 'KPI settings',
       c: '#6a52d4'
     }
   };
@@ -10714,7 +10758,8 @@ const AC_SHORT = {
   datasubmit: 'DS',
   staffapp: 'SA',
   mydept: 'MD',
-  devdays: 'DD'
+  devdays: 'DD',
+  kpi: 'KP'
 };
 const AC_ACT_LETTER = {
   view: 'V',
