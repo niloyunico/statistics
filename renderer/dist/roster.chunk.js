@@ -625,6 +625,17 @@ const ROS_OC_BADGE = {
   boxShadow: '0 1px 3px rgba(0,0,0,.25)',
   pointerEvents: 'none'
 };
+const ROS_MARK_CORNER = {
+  position: 'absolute',
+  top: 0,
+  left: 0,
+  width: 0,
+  height: 0,
+  borderTop: '9px solid #d23a52',
+  borderRight: '9px solid transparent',
+  borderTopLeftRadius: 5,
+  pointerEvents: 'none'
+};
 const ROS_AL_DOT = {
   position: 'absolute',
   top: 2,
@@ -968,9 +979,10 @@ function RosNoteModal({
   what,
   busy,
   onCancel,
-  onConfirm
+  onConfirm,
+  initial
 }) {
-  const [note, setNote] = useState('');
+  const [note, setNote] = useState(initial || '');
   const presets = ['Night cover is below the minimum', 'Rule warnings are not resolved', 'Wrong staff on the sheet', 'Leave clash', 'Too many consecutive nights'];
   useEffect(() => {
     const k = e => {
@@ -1165,13 +1177,15 @@ function useRosDecide() {
     unit,
     period,
     warnings,
-    selfManager
+    selfManager,
+    note: initialNote
   }) => {
     const what = unit + ' · ' + period;
     if (action === 'return') {
       const note = await new Promise(resolve => setAsk({
         what,
-        resolve
+        resolve,
+        initial: initialNote || ''
       }));
       if (note === null) return {
         ok: false,
@@ -1205,6 +1219,7 @@ function useRosDecide() {
   };
   const modal = ask ? React.createElement(RosNoteModal, {
     what: ask.what,
+    initial: ask.initial,
     busy: busy,
     onCancel: () => {
       ask.resolve(null);
@@ -1312,6 +1327,89 @@ function RosHistoryTimeline({
       }
     }, h.note)));
   }));
+}
+function RosMarkList({
+  marks,
+  rows,
+  year,
+  month,
+  canDone,
+  onDone,
+  onOpen
+}) {
+  const nameOf = {};
+  (rows || []).forEach(r => {
+    nameOf[r.empId] = r.name;
+  });
+  const list = [];
+  Object.keys(marks || {}).forEach(emp => Object.keys(marks[emp] || {}).forEach(d => list.push({
+    emp,
+    d: Number(d),
+    ...marks[emp][d]
+  })));
+  if (!list.length) return null;
+  list.sort((a, b) => a.d - b.d || String(nameOf[a.emp] || '').localeCompare(String(nameOf[b.emp] || '')));
+  const day = d => new Date(year, month, d).toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short'
+  });
+  return React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid rgba(210,58,82,.28)',
+      borderRadius: 12,
+      padding: '10px 14px',
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 800,
+      color: '#8c1d2a',
+      marginBottom: 6
+    }
+  }, "Review notes \xB7 ", list.length, " cell", list.length === 1 ? '' : 's', " to fix"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, list.map(m => React.createElement("div", {
+    key: m.emp + '|' + m.d,
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '5px 8px',
+      borderRadius: 8,
+      background: 'rgba(210,58,82,.05)'
+    }
+  }, React.createElement("span", {
+    onClick: () => onOpen && onOpen(m.emp, m.d),
+    style: {
+      cursor: onOpen ? 'pointer' : 'default',
+      flex: 1,
+      minWidth: 0,
+      fontSize: 12,
+      color: '#16202e'
+    }
+  }, React.createElement("b", null, nameOf[m.emp] || m.emp), " \xB7 ", day(m.d), m.code ? React.createElement("span", {
+    style: {
+      fontFamily: ROS_MONO,
+      fontWeight: 700,
+      color: '#6c7a8c'
+    }
+  }, " (", m.code, ")") : null, " \u2014 ", m.note, React.createElement("span", {
+    style: {
+      color: '#8a97a8',
+      fontSize: 10.5
+    }
+  }, " \xB7 ", m.byName || m.by || 'reviewer')), canDone && React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => onDone(m.emp, m.d)
+  }, "Done")))));
 }
 function RosReturnedBanner({
   meta
@@ -2872,6 +2970,7 @@ function RosterGrid({
   const [guests, setGuests] = useState({});
   const [oncall, setOncall] = useState({});
   const [altLeave, setAltLeave] = useState({});
+  const [marks, setMarks] = useState({});
   const [movedOut, setMovedOut] = useState([]);
   const [addOpen, setAddOpen] = useState(false);
   const staff = useMemo(() => {
@@ -2950,6 +3049,7 @@ function RosterGrid({
       setStoredNames(d && d.names || {});
       setGuests(d && d.guests || {});
       setOncall(d && d.oncall || {});
+      setMarks(d && d.marks || {});
       setAltLeave(d && d.altLeave || {});
       setMovedOut(Array.isArray(r.movedOut) ? r.movedOut : []);
       setStatus(d && d.status || 'draft');
@@ -3000,6 +3100,16 @@ function RosterGrid({
     setDirty(true);
   };
   const cellCode = (empId, d) => (grid[empId] || {})[d] || '';
+  const markDone = (empId, d) => rosApi.post('/api/rosters/' + encodeURIComponent(meta.id || rosSheetId(dept, year, month)) + '/marks', {
+    empId,
+    day: d,
+    remove: true
+  }).then(r => {
+    if (r && r.ok) {
+      setMarks(r.roster && r.roster.marks || {});
+      rosToast('Review note marked done.');
+    } else rosToast(r && r.error || 'Could not clear the note.', 'error');
+  });
   const ocMarked = (empId, d) => !!(oncall[empId] || {})[d] && R.isDuty(cellCode(empId, d));
   const alOf = (empId, d) => cellCode(empId, d) === 'AL' && (altLeave[empId] || {})[d] || null;
   const alPrefill = (empId, d) => {
@@ -3802,6 +3912,13 @@ function RosterGrid({
     }));
   })(), stNorm === 'returned' && React.createElement(RosReturnedBanner, {
     meta: meta
+  }), React.createElement(RosMarkList, {
+    marks: marks,
+    rows: rows,
+    year: year,
+    month: month,
+    canDone: canEdit,
+    onDone: markDone
   }), !canEdit && !loadError && !conflict && ROS_EDITABLE.indexOf(stNorm) >= 0 && React.createElement("div", {
     style: {
       display: 'flex',
@@ -4568,6 +4685,7 @@ function RosterGrid({
       const sh = R.BY_CODE[c];
       const oc = ocMarked(x.empId, d),
         al = c === 'AL' ? alOf(x.empId, d) : null;
+      const mk = (marks[x.empId] || {})[d];
       const alTxt = c !== 'AL' ? '' : (al && al.for ? ' · in lieu of ' + rosDate(al.for) : ' · in-lieu date not set — click to add') + (al && al.note ? ' · ' + al.note : '');
       return React.createElement("td", {
         key: d,
@@ -4581,9 +4699,11 @@ function RosterGrid({
         onMouseDown: cellDown(x.empId, d),
         onMouseEnter: cellOver(x.empId, d),
         onMouseUp: cellUp(x.empId, x.name, d),
-        title: c ? c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt : 'Click to assign a shift',
+        title: c ? c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt + (mk ? '\nReview note: ' + mk.note : '') : mk ? 'Review note: ' + mk.note : 'Click to assign a shift',
         style: paintStyle(x.empId, d, c)
-      }, c || '·', oc && React.createElement("i", {
+      }, c || '·', mk && React.createElement("i", {
+        style: ROS_MARK_CORNER
+      }), oc && React.createElement("i", {
         style: ROS_OC_BADGE
       }, "OC"), c === 'AL' && !(al && al.for) && React.createElement("i", {
         style: ROS_AL_DOT
@@ -7454,7 +7574,24 @@ function RosterGrid({
       d: "M18 6L6 18M6 6l12 12",
       s: 12,
       sw: 2.4
-    }))), pick.alStep ? React.createElement("div", {
+    }))), (marks[pick.empId] || {})[pick.d] && React.createElement("div", {
+      style: {
+        margin: '8px 11px 0',
+        padding: '7px 9px',
+        borderRadius: 8,
+        background: 'rgba(210,58,82,.07)',
+        border: '1px solid rgba(210,58,82,.25)',
+        fontSize: 11,
+        color: '#8c1d2a'
+      }
+    }, React.createElement("b", null, "Review note:"), " ", marks[pick.empId][pick.d].note, canEdit && React.createElement("button", {
+      type: "button",
+      className: "btn sm",
+      style: {
+        marginLeft: 8
+      },
+      onClick: () => markDone(pick.empId, pick.d)
+    }, "Done")), pick.alStep ? React.createElement("div", {
       style: {
         padding: '11px 12px',
         display: 'flex',
@@ -9300,6 +9437,14 @@ window.UNICO_ROSTER_KIT = {
   findingsOf: rosFindingsOf,
   rowsFrom: rosRowsFrom,
   printHtml: rosPrintHtml,
+  deptName: rosDeptName,
+  signNames: rosSignNames,
+  signLine: rosSignLine,
+  RosMarkList,
+  OC_BADGE: ROS_OC_BADGE,
+  AL_DOT: ROS_AL_DOT,
+  MARK_CORNER: ROS_MARK_CORNER,
+  date: rosDate,
   bColor: rosBColor,
   MONO: ROS_MONO
 };
@@ -9645,6 +9790,665 @@ function RiSheetFrame({
     }
   }));
 }
+const riDay = (year, month, d) => new Date(year, month, d).toLocaleDateString('en-GB', {
+  weekday: 'short',
+  day: 'numeric',
+  month: 'short'
+});
+const riFri = (year, month, d) => new Date(year, month, d).getDay() === 5;
+function riFocusOf(text, rows) {
+  const days = new Set();
+  const re = /Day (\d+)/g;
+  let m;
+  while (m = re.exec(String(text))) days.add(Number(m[1]));
+  const people = new Set(rows.filter(r => r.name && String(text).indexOf(r.name) >= 0).map(r => r.empId));
+  return {
+    days,
+    people,
+    label: text
+  };
+}
+function riPeopleOf(view, doc, year, month, cfg) {
+  const days = R.daysIn(year, month);
+  const fris = [];
+  for (let d = 1; d <= days; d++) if (riFri(year, month, d)) fris.push(d);
+  const marks = doc && doc.marks || {},
+    al = doc && doc.altLeave || {},
+    oc = doc && doc.oncall || {};
+  return view.rows.map(r => {
+    const row = view.grid[r.empId] || {};
+    const t = R.totalsFor(row, days);
+    let run = 0,
+      maxRun = 0,
+      offs = 0,
+      alNoDate = 0,
+      ocN = t.OC || 0;
+    for (let d = 1; d <= days; d++) {
+      const c = row[d];
+      if (c && R.bucketOf(c) === 'N') {
+        run++;
+        maxRun = Math.max(maxRun, run);
+      } else run = 0;
+      if (R.isOff(c)) offs++;
+      if (c === 'AL' && !((al[r.empId] || {})[d] || {}).for) alNoDate++;
+      if ((oc[r.empId] || {})[d] && R.isDuty(c)) ocN++;
+    }
+    const friOff = fris.filter(d => R.isOff(row[d]) || R.isLeave(row[d])).length;
+    const nMarks = Object.keys(marks[r.empId] || {}).length;
+    const flags = [];
+    if (t.hours > RI_OVERTIME_H) flags.push('Over ' + RI_OVERTIME_H + ' h');
+    if (cfg.maxNights && maxRun > cfg.maxNights) flags.push(maxRun + ' nights in a row');
+    if (cfg.fridayOff && fris.length && !friOff && !r.pca) flags.push('No Friday off');
+    if (alNoDate) flags.push(alNoDate + ' AL without date');
+    if (nMarks) flags.push(nMarks + ' review note' + (nMarks === 1 ? '' : 's'));
+    return {
+      r,
+      t,
+      maxRun,
+      offs,
+      friOff,
+      ocN,
+      alNoDate,
+      nMarks,
+      flags
+    };
+  });
+}
+function riDiff(rows, grid, oldGrid, days) {
+  const out = [];
+  rows.forEach(r => {
+    const a = oldGrid[r.empId] || {},
+      b = grid[r.empId] || {};
+    for (let d = 1; d <= days; d++) {
+      const x = a[d] || '',
+        y = b[d] || '';
+      if (x !== y) out.push({
+        empId: r.empId,
+        name: r.name,
+        d,
+        from: x,
+        to: y
+      });
+    }
+  });
+  return out;
+}
+const RI_CARD = {
+  background: '#fff',
+  border: '1px solid rgba(125,145,180,.22)',
+  borderRadius: 14,
+  boxShadow: '0 6px 20px rgba(31,59,90,.06)',
+  padding: '14px 18px'
+};
+const RI_CAP = {
+  fontSize: 10,
+  fontWeight: 800,
+  letterSpacing: .9,
+  textTransform: 'uppercase',
+  color: '#7d8ea8'
+};
+function RiGrid({
+  view,
+  year,
+  month,
+  doc,
+  changes,
+  focus,
+  filter,
+  person,
+  onCell,
+  flagsOf
+}) {
+  const K = window.UNICO_ROSTER_KIT;
+  const days = R.daysIn(year, month);
+  const ds = Array.from({
+    length: days
+  }, (_, i) => i + 1);
+  const marks = doc && doc.marks || {},
+    oc = doc && doc.oncall || {},
+    al = doc && doc.altLeave || {};
+  const changed = {};
+  (changes || []).forEach(c => {
+    changed[c.empId + '|' + c.d] = c.from;
+  });
+  const changedRows = new Set((changes || []).map(c => c.empId));
+  const rows = view.rows.filter(r => person ? r.empId === person : filter === 'flagged' ? flagsOf(r.empId).length > 0 : filter === 'changed' ? changedRows.has(r.empId) : true);
+  const hit = (emp, d) => !!focus && (!focus.days.size || focus.days.has(d)) && (!focus.people.size || focus.people.has(emp));
+  const th = {
+    position: 'sticky',
+    top: 0,
+    zIndex: 2,
+    background: '#eef2f7',
+    color: '#16202e',
+    fontSize: 10,
+    fontWeight: 800,
+    padding: '4px 0',
+    borderBottom: '1px solid #c9d3df',
+    borderRight: '1px solid #e1e7ef',
+    textAlign: 'center',
+    minWidth: 30
+  };
+  return React.createElement("div", {
+    style: {
+      overflow: 'auto',
+      maxHeight: '62vh',
+      border: '1px solid #d5dde8',
+      borderRadius: 10
+    }
+  }, React.createElement("table", {
+    style: {
+      borderCollapse: 'separate',
+      borderSpacing: 0,
+      width: '100%',
+      fontFamily: "'IBM Plex Sans',system-ui,sans-serif"
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+    style: {
+      ...th,
+      left: 0,
+      zIndex: 3,
+      textAlign: 'left',
+      padding: '4px 10px',
+      minWidth: 170
+    }
+  }, "Staff"), ds.map(d => {
+    const fr = riFri(year, month, d);
+    const lit = focus && focus.days.has(d);
+    return React.createElement("th", {
+      key: d,
+      style: {
+        ...th,
+        background: lit ? '#ffe9a8' : fr ? '#16202e' : th.background,
+        color: fr && !lit ? '#fff' : th.color
+      }
+    }, React.createElement("div", null, d), React.createElement("div", {
+      style: {
+        fontSize: 8.5,
+        fontWeight: 700,
+        opacity: .8
+      }
+    }, String(new Date(year, month, d).toLocaleDateString('en-GB', {
+      weekday: 'short'
+    })).slice(0, 2)));
+  }), React.createElement("th", {
+    style: {
+      ...th,
+      minWidth: 44
+    }
+  }, "Hrs"))), React.createElement("tbody", null, rows.map(r => {
+    const row = view.grid[r.empId] || {};
+    const fl = flagsOf(r.empId);
+    return React.createElement("tr", {
+      key: r.empId
+    }, React.createElement("td", {
+      style: {
+        position: 'sticky',
+        left: 0,
+        zIndex: 1,
+        background: '#fff',
+        borderBottom: '1px solid #e6ebf1',
+        borderRight: '1px solid #d5dde8',
+        padding: '4px 10px',
+        whiteSpace: 'nowrap',
+        maxWidth: 220,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 700,
+        color: '#16202e',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6
+      }
+    }, r.name, fl.length > 0 && React.createElement("span", {
+      title: fl.join(' · '),
+      style: {
+        width: 7,
+        height: 7,
+        borderRadius: '50%',
+        background: '#d23a52',
+        flexShrink: 0
+      }
+    })), React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: '#8a97a8'
+      }
+    }, [r.empIdShown, r.desig].filter(Boolean).join(' · '))), ds.map(d => {
+      const c = row[d] || '';
+      const mk = (marks[r.empId] || {})[d];
+      const was = changed[r.empId + '|' + d];
+      const ocOn = !!(oc[r.empId] || {})[d] && R.isDuty(c);
+      const alx = c === 'AL' ? (al[r.empId] || {})[d] : null;
+      const lit = hit(r.empId, d);
+      const bg = lit ? '#fff3c4' : R.isOff(c) ? '#d9dde3' : R.isLeave(c) ? '#eef0f3' : '#fff';
+      const tip = [c ? c + ((R.BY_CODE[c] || {}).label ? ' — ' + R.BY_CODE[c].label : '') : 'empty', ocOn ? '+ on call' : '', c === 'AL' ? alx && alx.for ? 'in lieu of ' + K.date(alx.for) : 'in-lieu date not set' : '', was !== undefined ? 'was ' + (was || 'empty') : '', mk ? 'Note: ' + mk.note : ''].filter(Boolean).join('\n');
+      return React.createElement("td", {
+        key: d,
+        title: tip,
+        onClick: e => onCell(r, d, e.currentTarget.getBoundingClientRect()),
+        style: {
+          position: 'relative',
+          cursor: 'pointer',
+          textAlign: 'center',
+          padding: '5px 0',
+          fontSize: 10.5,
+          fontWeight: R.isLeave(c) ? 700 : 800,
+          fontStyle: R.isLeave(c) ? 'italic' : 'normal',
+          fontFamily: "'IBM Plex Mono',monospace",
+          color: '#16202e',
+          background: bg,
+          borderBottom: '1px solid #e6ebf1',
+          borderRight: '1px solid #eef1f5',
+          boxShadow: was !== undefined ? 'inset 0 0 0 2px #0090ca' : lit ? 'inset 0 0 0 2px #e0a81e' : 'none'
+        }
+      }, c || React.createElement("span", {
+        style: {
+          color: '#c4ccd6'
+        }
+      }, "\xB7"), mk && React.createElement("i", {
+        style: K.MARK_CORNER
+      }), ocOn && React.createElement("i", {
+        style: {
+          ...K.OC_BADGE,
+          top: -1,
+          right: -1
+        }
+      }, "OC"), c === 'AL' && !(alx && alx.for) && React.createElement("i", {
+        style: K.AL_DOT
+      }));
+    }), React.createElement("td", {
+      style: {
+        textAlign: 'center',
+        fontSize: 11,
+        fontWeight: 800,
+        color: R.totalsFor(row, days).hours > RI_OVERTIME_H ? '#b4232f' : '#16202e',
+        borderBottom: '1px solid #e6ebf1',
+        fontFamily: "'IBM Plex Mono',monospace"
+      }
+    }, R.totalsFor(row, days).hours));
+  }), !rows.length && React.createElement("tr", null, React.createElement("td", {
+    colSpan: days + 2,
+    style: {
+      padding: 22,
+      textAlign: 'center',
+      color: '#8a97a8',
+      fontSize: 12
+    }
+  }, "Nobody matches this filter.")))));
+}
+function RiCellPop({
+  cell,
+  doc,
+  year,
+  month,
+  can,
+  busy,
+  onClose,
+  onMark,
+  onUnmark,
+  onEdit
+}) {
+  const K = window.UNICO_ROSTER_KIT;
+  const {
+    r,
+    d,
+    rect,
+    code,
+    was
+  } = cell;
+  const mk = ((doc.marks || {})[r.empId] || {})[d];
+  const [note, setNote] = useState(mk ? mk.note : '');
+  const [to, setTo] = useState(code);
+  const alx = code === 'AL' ? ((doc.altLeave || {})[r.empId] || {})[d] : null;
+  const ocOn = !!((doc.oncall || {})[r.empId] || {})[d] && R.isDuty(code);
+  useEffect(() => {
+    const k = e => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, [onClose]);
+  const W = 300,
+    vw = window.innerWidth,
+    vh = window.innerHeight;
+  const left = Math.max(8, Math.min(vw - W - 8, rect.left + rect.width / 2 - W / 2));
+  const below = vh - rect.bottom > 330;
+  const inp = {
+    width: '100%',
+    boxSizing: 'border-box',
+    padding: '6px 9px',
+    borderRadius: 8,
+    border: '1px solid rgba(125,145,180,.4)',
+    fontFamily: 'inherit',
+    fontSize: 12
+  };
+  return K.portal(React.createElement(React.Fragment, null, React.createElement("div", {
+    onClick: onClose,
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 7000
+    }
+  }), React.createElement("div", {
+    style: {
+      position: 'fixed',
+      left,
+      width: W,
+      zIndex: 7001,
+      ...(below ? {
+        top: rect.bottom + 6
+      } : {
+        bottom: vh - rect.top + 6
+      }),
+      background: '#fff',
+      borderRadius: 12,
+      border: '1px solid rgba(125,145,180,.3)',
+      boxShadow: '0 18px 48px rgba(16,28,46,.24)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '10px 13px',
+      background: '#f4f7fb',
+      borderBottom: '1px solid rgba(125,145,180,.2)'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: '#16202e'
+    }
+  }, r.name), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: '#6c7a8c'
+    }
+  }, riDay(year, month, d), " \xB7 ", React.createElement("b", {
+    style: {
+      fontFamily: "'IBM Plex Mono',monospace",
+      color: '#16202e'
+    }
+  }, code || 'empty'), code && R.BY_CODE[code] ? ' — ' + R.BY_CODE[code].label : ''), ocOn && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#0d3a5c',
+      fontWeight: 700,
+      marginTop: 2
+    }
+  }, "+ On call"), code === 'AL' && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: alx && alx.for ? '#0072a3' : '#b5670a',
+      fontWeight: 700,
+      marginTop: 2
+    }
+  }, alx && alx.for ? 'In lieu of ' + K.date(alx.for) + (alx.note ? ' · ' + alx.note : '') : 'Alternative leave — in-lieu date not set'), was !== undefined && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#0072a3',
+      fontWeight: 700,
+      marginTop: 2
+    }
+  }, "Changed \u2014 was ", was || 'empty')), React.createElement("div", {
+    style: {
+      padding: '10px 13px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, (can.mark || mk) && React.createElement("div", null, React.createElement("div", {
+    style: {
+      ...RI_CAP,
+      marginBottom: 4
+    }
+  }, "Note for the in-charge"), can.mark ? React.createElement("textarea", {
+    value: note,
+    onChange: e => setNote(e.target.value),
+    maxLength: 200,
+    rows: 2,
+    placeholder: "e.g. No night duty right after leave",
+    style: {
+      ...inp,
+      resize: 'vertical'
+    }
+  }) : React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: '#8c1d2a'
+    }
+  }, mk.note), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 6,
+      justifyContent: 'flex-end',
+      marginTop: 6
+    }
+  }, mk && (can.mark || can.markDone) && React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    disabled: busy,
+    onClick: () => onUnmark(r.empId, d)
+  }, "Remove note"), can.mark && React.createElement("button", {
+    type: "button",
+    className: "btn sm pri",
+    disabled: busy || !note.trim(),
+    onClick: () => onMark(r.empId, d, note.trim())
+  }, mk ? 'Update note' : 'Pin note'))), can.reviewEdit && React.createElement("div", {
+    style: {
+      borderTop: '1px solid rgba(125,145,180,.18)',
+      paddingTop: 9
+    }
+  }, React.createElement("div", {
+    style: {
+      ...RI_CAP,
+      marginBottom: 4
+    }
+  }, "Change the shift directly"), React.createElement("select", {
+    value: to,
+    onChange: e => setTo(e.target.value),
+    style: inp
+  }, React.createElement("option", {
+    value: ""
+  }, "\u2014 empty \u2014"), R.BUCKETS.map(b => React.createElement("optgroup", {
+    key: b.id,
+    label: b.label
+  }, R.SHIFTS.filter(x => x.bucket === b.id).map(x => React.createElement("option", {
+    key: x.code,
+    value: x.code
+  }, x.code, " \u2014 ", x.label))))), to !== code && React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c',
+      marginTop: 5
+    }
+  }, React.createElement("b", {
+    style: {
+      fontFamily: "'IBM Plex Mono',monospace"
+    }
+  }, code || '—', " \u2192 ", to || '—'), " is saved at once and logged in the history for the in-charge."), React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      marginTop: 6
+    }
+  }, React.createElement("button", {
+    type: "button",
+    className: "btn sm pri",
+    disabled: busy || to === code,
+    onClick: () => onEdit(r.empId, d, to, code)
+  }, "Apply change"))), !can.mark && !can.reviewEdit && !mk && React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: '#8a97a8'
+    }
+  }, "Read-only \u2014 this roster is not waiting on you.")))));
+}
+function RiCover({
+  view,
+  year,
+  month,
+  minOnDuty
+}) {
+  const K = window.UNICO_ROSTER_KIT;
+  const days = R.daysIn(year, month);
+  const ids = view.rows.filter(r => !r.pca).map(r => r.empId);
+  const nm = {};
+  view.rows.forEach(r => {
+    nm[r.empId] = r.name;
+  });
+  const cov = Array.from({
+    length: days
+  }, (_, i) => R.coverageFor(view.grid, ids, i + 1));
+  const tot = cov.map(c => c.G + c.M + c.E + c.N);
+  const top = Math.max(minOnDuty || 0, ...tot, 1) + 1;
+  const BW = 26,
+    H = 170,
+    PB = 34,
+    PT = 10,
+    ch = H - PB - PT;
+  const y = v => PT + ch - v / top * ch;
+  const low = tot.filter(t => minOnDuty && t < minOnDuty).length;
+  return React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 14,
+      flexWrap: 'wrap',
+      marginBottom: 8,
+      fontSize: 11.5,
+      color: '#3c4858'
+    }
+  }, ['G', 'M', 'E', 'N'].map(b => React.createElement("span", {
+    key: b,
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 11,
+      height: 11,
+      borderRadius: 3,
+      background: K.bColor(b)
+    }
+  }), {
+    G: 'General',
+    M: 'Morning',
+    E: 'Evening',
+    N: 'Night'
+  }[b])), minOnDuty ? React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 5
+    }
+  }, React.createElement("i", {
+    style: {
+      width: 16,
+      borderTop: '2px dashed #d23a52'
+    }
+  }), "Minimum ", minOnDuty, " on duty") : null, React.createElement("span", {
+    style: {
+      marginLeft: 'auto',
+      fontWeight: 700,
+      color: low ? '#b4232f' : '#157a43'
+    }
+  }, low ? low + ' day' + (low === 1 ? '' : 's') + ' below the minimum' : 'Every day meets the minimum')), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("svg", {
+    viewBox: '0 0 ' + (days * BW + 30) + ' ' + H,
+    style: {
+      width: '100%',
+      minWidth: days * 20,
+      height: 'auto',
+      display: 'block'
+    },
+    role: "img",
+    "aria-label": "Staff on duty per day"
+  }, [0, Math.ceil(top / 2), top].map(v => React.createElement("g", {
+    key: v
+  }, React.createElement("line", {
+    x1: 26,
+    x2: days * BW + 30,
+    y1: y(v),
+    y2: y(v),
+    stroke: "#e6ebf1"
+  }), React.createElement("text", {
+    x: 20,
+    y: y(v) + 3,
+    fontSize: "9",
+    textAnchor: "end",
+    fill: "#8a97a8"
+  }, v))), cov.map((c, i) => {
+    const d = i + 1,
+      x = 30 + i * BW + 4;
+    let acc = 0;
+    const isLow = minOnDuty && tot[i] < minOnDuty,
+      fr = riFri(year, month, d);
+    return React.createElement("g", {
+      key: d
+    }, fr && React.createElement("rect", {
+      x: 30 + i * BW,
+      y: PT,
+      width: BW,
+      height: ch,
+      fill: "#16202e",
+      opacity: ".05"
+    }), ['N', 'E', 'M', 'G'].map(b => {
+      const v = c[b] || 0;
+      if (!v) return null;
+      const y0 = y(acc + v),
+        hh = y(acc) - y(acc + v);
+      acc += v;
+      return React.createElement("rect", {
+        key: b,
+        x: x,
+        y: y0,
+        width: BW - 8,
+        height: hh,
+        rx: "2",
+        fill: K.bColor(b)
+      }, React.createElement("title", null, riDay(year, month, d) + ' · ' + b + ' ' + v + (c.names && c.names[b] && c.names[b].length ? ': ' + c.names[b].map(id => nm[id] || id).join(', ') : '')));
+    }), React.createElement("text", {
+      x: x + (BW - 8) / 2,
+      y: y(tot[i]) - 3,
+      fontSize: "9",
+      textAnchor: "middle",
+      fill: isLow ? '#b4232f' : '#3c4858',
+      fontWeight: "700"
+    }, tot[i]), React.createElement("text", {
+      x: x + (BW - 8) / 2,
+      y: H - 20,
+      fontSize: "9.5",
+      textAnchor: "middle",
+      fill: isLow ? '#b4232f' : fr ? '#16202e' : '#6c7a8c',
+      fontWeight: isLow || fr ? 800 : 500
+    }, d), React.createElement("text", {
+      x: x + (BW - 8) / 2,
+      y: H - 9,
+      fontSize: "8",
+      textAnchor: "middle",
+      fill: "#9aa6b4"
+    }, String(new Date(year, month, d).toLocaleDateString('en-GB', {
+      weekday: 'short'
+    })).slice(0, 2)));
+  }), minOnDuty ? React.createElement("line", {
+    x1: 26,
+    x2: days * BW + 30,
+    y1: y(minOnDuty),
+    y2: y(minOnDuty),
+    stroke: "#d23a52",
+    strokeDasharray: "5 4",
+    strokeWidth: "1.5"
+  }) : null)));
+}
 function RiPreview({
   row,
   year,
@@ -9662,9 +10466,21 @@ function RiPreview({
     can: null
   });
   const [err, setErr] = useState('');
-  const [showClear, setShowClear] = useState(false);
+  const [tab, setTab] = useState('sheet');
+  const [focus, setFocus] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [person, setPerson] = useState('');
+  const [cell, setCell] = useState(null);
+  const [acting, setActing] = useState(false);
+  const [versions, setVersions] = useState([]);
+  const [cmpRev, setCmpRev] = useState(null);
+  const [cmpGrid, setCmpGrid] = useState(null);
+  const [ticks, setTicks] = useState({});
   const [openRule, setOpenRule] = useState({});
-  const rulesRef = useRef(null);
+  const [showClear, setShowClear] = useState(false);
+  const rulesRef = useRef(null),
+    sheetRef = useRef(null),
+    checkRef = useRef(null);
   const dept = row.sheetDept || row.deptName;
   const load = useCallback(() => K.api.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
     if (r && r.ok) {
@@ -9682,21 +10498,87 @@ function RiPreview({
   useEffect(() => {
     load();
   }, [load]);
+  const take = r => {
+    if (r && r.ok && r.roster) {
+      setDoc(d => ({
+        ...r.roster,
+        movedOut: d && d.movedOut || []
+      }));
+      setExtra(e => ({
+        ...e,
+        can: r.roster.can || e.can,
+        signers: r.roster.signers || e.signers
+      }));
+      return true;
+    }
+    K.toast(r && r.error || 'Could not save that.', 'error');
+    return false;
+  };
+  const docId = doc && doc.id,
+    docRev = doc ? doc.revision || 0 : 0;
+  useEffect(() => {
+    if (!docId) return undefined;
+    let live = true;
+    K.api.get('/api/rosters/' + encodeURIComponent(docId) + '/versions').then(r => {
+      if (!live || !r || !r.ok) return;
+      const seen = {};
+      const list = (r.versions || []).filter(v => {
+        if (seen[v.revision]) return false;
+        seen[v.revision] = 1;
+        return true;
+      });
+      setVersions(list);
+      setCmpRev(cur => {
+        if (cur != null && list.some(v => v.revision === cur)) return cur;
+        const prev = list.find(v => v.revision < docRev);
+        return prev ? prev.revision : null;
+      });
+    }).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [docId, docRev]);
+  useEffect(() => {
+    if (!docId || cmpRev == null) {
+      setCmpGrid(null);
+      return undefined;
+    }
+    let live = true;
+    K.api.get('/api/rosters/' + encodeURIComponent(docId) + '/versions/' + cmpRev).then(r => {
+      if (live && r && r.ok && r.version) setCmpGrid(K.rowsFrom({
+        ...r.version,
+        guests: doc && doc.guests || {},
+        movedOut: doc && doc.movedOut || []
+      }, staff, dept).grid);
+    }).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [docId, cmpRev]);
   const view = useMemo(() => doc ? K.rowsFrom(doc, staff, dept, undefined, extra.signers && extra.signers.incharge && extra.signers.incharge.name) : {
     rows: [],
     grid: {}
   }, [doc, staff, dept, extra]);
   const ev = useMemo(() => doc ? K.findingsOf(view.grid, view.rows, year, month, doc.rules) : null, [doc, view, year, month]);
+  const cfg = useMemo(() => K.rulesOf(doc && doc.rules).cfg, [doc]);
+  const days = R.daysIn(year, month);
+  const people = useMemo(() => riPeopleOf(view, doc, year, month, cfg), [view, doc, year, month, cfg]);
+  const flagsBy = useMemo(() => {
+    const m = {};
+    people.forEach(p => {
+      m[p.r.empId] = p.flags;
+    });
+    return m;
+  }, [people]);
+  const changes = useMemo(() => cmpGrid ? riDiff(view.rows, view.grid, cmpGrid, days) : [], [cmpGrid, view, days]);
   const stats = useMemo(() => {
-    const days = R.daysIn(year, month);
     let hours = 0,
       shifts = 0,
       over = 0;
-    view.rows.forEach(x => {
-      const t = R.totalsFor(view.grid[x.empId] || {}, days);
-      hours += t.hours;
-      shifts += t.G + t.M + t.E + t.N;
-      if (t.hours > RI_OVERTIME_H) over++;
+    people.forEach(p => {
+      hours += p.t.hours;
+      shifts += p.t.G + p.t.M + p.t.E + p.t.N;
+      if (p.t.hours > RI_OVERTIME_H) over++;
     });
     return {
       hours,
@@ -9704,48 +10586,209 @@ function RiPreview({
       over,
       pca: view.rows.filter(x => x.pca).length
     };
-  }, [view, year, month]);
+  }, [people, view]);
+  const lowDays = useMemo(() => {
+    const ids = view.rows.filter(r => !r.pca).map(r => r.empId);
+    let n = 0;
+    for (let d = 1; d <= days; d++) {
+      const c = R.coverageFor(view.grid, ids, d);
+      if (cfg.minOnDuty && c.G + c.M + c.E + c.N < cfg.minOnDuty) n++;
+    }
+    return n;
+  }, [view, days, cfg]);
   const me = window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username) || '';
-  const html = useMemo(() => doc && K.printHtml ? K.printHtml({
-    dept,
-    year,
-    month,
-    doc,
-    rows: view.rows,
-    grid: view.grid,
-    signers: extra.signers,
-    colour: true,
-    summary: true,
-    legend: true,
-    printedBy: me
-  }) : '', [doc, view, extra, dept, year, month, me]);
-  const decide = action => onDecide({
-    ...row,
-    id: doc && doc.id || row.id
-  }, action).then(r => {
-    if (r && r.ok) load();
-  });
-  const days = R.daysIn(year, month);
-  const d2 = d => String(d).padStart(2, '0') + ' ' + R.MONTHS[month].slice(0, 3) + ' ' + year;
-  const card = {
-    background: 'linear-gradient(152deg,rgba(255,255,255,.86),rgba(240,248,255,.6))',
-    border: '1px solid rgba(255,255,255,.95)',
-    borderRadius: 16,
-    boxShadow: '0 12px 34px rgba(31,59,90,.1)',
-    padding: '14px 18px'
-  };
-  const cap = {
-    fontSize: 10,
-    fontWeight: 800,
-    letterSpacing: .9,
-    textTransform: 'uppercase',
-    color: '#7d8ea8'
-  };
+  const deptName = K.deptName ? K.deptName(dept) : dept;
+  const html = useMemo(() => {
+    if (!doc || !K.printHtml) return '';
+    const def = K.signNames ? K.signNames(doc, extra.signers) : null;
+    let signPeople;
+    if (def) {
+      const role = {
+        prepared: 'In-charge, ' + deptName,
+        checked: 'Nurse Manager',
+        approved: 'Chief of Nursing Services'
+      };
+      const byName = nm => {
+        const k = String(nm || '').trim().toLowerCase();
+        return k ? (staff || []).find(e => e && !e.former && String(e.name || '').trim().toLowerCase() === k) : null;
+      };
+      signPeople = {};
+      ['prepared', 'checked', 'approved'].forEach(k => {
+        const e = byName(def[k]);
+        signPeople[k] = e ? {
+          name: e.name,
+          line: K.signLine(e) || role[k]
+        } : {
+          name: def[k],
+          line: role[k]
+        };
+      });
+    }
+    return K.printHtml({
+      dept,
+      deptName,
+      year,
+      month,
+      doc,
+      rows: view.rows,
+      grid: view.grid,
+      signers: extra.signers,
+      signPeople,
+      colourDesign: false,
+      summary: true,
+      cards: true,
+      legend: true,
+      printedBy: me
+    });
+  }, [doc, view, extra, dept, deptName, year, month, me, staff]);
   const st = K.statusNorm(doc ? doc.status : null);
   const can = extra.can || {};
   const failing = ev ? ev.rules.filter(r => r[2].length) : [];
   const clear = ev ? ev.rules.filter(r => !r[2].length) : [];
+  const nMarks = Object.keys(doc && doc.marks || {}).reduce((a, k) => a + Object.keys(doc.marks[k] || {}).length, 0);
+  const alNoDate = people.reduce((a, p) => a + p.alNoDate, 0);
+  const flagged = people.filter(p => p.flags.length).length;
+  const deciding = !!(can.approve || can.forward);
   const roleLine = can.approve ? 'You are approving as the CNS' : can.forward ? 'You are checking as the Manager' : can.send ? 'You prepare this roster' : '';
+  const checks = [['cover', 'Daily cover checked', lowDays ? lowDays + ' day' + (lowDays === 1 ? '' : 's') + ' below the minimum' : 'every day meets the minimum', !!lowDays, () => setTab('cover')], ['leave', 'Leave & AL dates checked', alNoDate ? alNoDate + ' AL without an in-lieu date' : 'all AL dated', !!alNoDate, () => {
+    setTab('people');
+  }], ['hours', 'Hours & nights checked', flagged ? flagged + ' staff flagged' : 'nobody flagged', !!flagged, () => setTab('people')], ['notes', 'Review notes settled', nMarks ? nMarks + ' note' + (nMarks === 1 ? '' : 's') + ' still open' : 'no open notes', !!nMarks, () => {
+    setTab('sheet');
+    setFilter('flagged');
+  }], ['sign', 'Sign-off names correct', 'Prepared / Checked / Approved on the official sheet', false, () => setTab('doc')]];
+  const done = checks.filter(c => ticks[c[0]]).length;
+  const allTicked = done === checks.length;
+  const decide = action => {
+    if ((action === 'approve' || action === 'forward') && !allTicked) {
+      K.toast('Tick the review checklist first — ' + (checks.length - done) + ' left.', 'info');
+      if (checkRef.current) checkRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center'
+      });
+      return;
+    }
+    const note = action === 'return' && nMarks ? nMarks + ' cell' + (nMarks === 1 ? '' : 's') + ' marked on the sheet — see the review notes.' : '';
+    onDecide({
+      ...row,
+      id: doc && doc.id || row.id
+    }, action, {
+      note
+    }).then(r => {
+      if (r && r.ok) {
+        setTicks({});
+        load();
+      }
+    });
+  };
+  const post = (path, body) => {
+    setActing(true);
+    return K.api.post('/api/rosters/' + encodeURIComponent(doc.id) + path, body).then(r => {
+      setActing(false);
+      return r;
+    }).catch(() => {
+      setActing(false);
+      return {
+        ok: false,
+        error: 'Could not reach the server.'
+      };
+    });
+  };
+  const onMark = (empId, d, note) => post('/marks', {
+    empId,
+    day: d,
+    note
+  }).then(r => {
+    if (take(r)) {
+      K.toast('Note pinned for the in-charge.');
+      setCell(null);
+    }
+  });
+  const onUnmark = (empId, d) => post('/marks', {
+    empId,
+    day: d,
+    remove: true
+  }).then(r => {
+    if (take(r)) {
+      K.toast('Note removed.');
+      setCell(null);
+    }
+  });
+  const onEdit = (empId, d, code, before) => post('/review-edit', {
+    empId,
+    day: d,
+    code,
+    baseRevision: doc.revision || 0
+  }).then(r => {
+    if (take(r)) {
+      K.toast((before || '—') + ' → ' + (code || '—') + ' saved and logged.');
+      setCell(null);
+    } else if (r && r.conflict) load();
+  });
+  const openCell = (r, d, rect) => setCell({
+    r,
+    d,
+    rect,
+    code: (view.grid[r.empId] || {})[d] || '',
+    was: (() => {
+      const c = changes.find(x => x.empId === r.empId && x.d === d);
+      return c ? c.from : undefined;
+    })()
+  });
+  const pointAt = f => {
+    setFocus(riFocusOf(f, view.rows));
+    setPerson('');
+    setFilter('all');
+    setTab('sheet');
+    setTimeout(() => {
+      if (sheetRef.current) sheetRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      });
+    }, 30);
+  };
+  const d2 = d => String(d).padStart(2, '0') + ' ' + R.MONTHS[month].slice(0, 3) + ' ' + year;
+  const TABS = [['sheet', 'Review sheet', nMarks], ['doc', 'Official document', 0], ['people', 'People', flagged], ['changes', 'Changes', changes.length], ['cover', 'Daily cover', lowDays]];
+  const seg = on => ({
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 7,
+    padding: '7px 13px',
+    borderRadius: 9,
+    border: 0,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    fontSize: 12.5,
+    fontWeight: on ? 800 : 600,
+    color: on ? '#fff' : '#3c4858',
+    background: on ? '#0d3a5c' : 'transparent'
+  });
+  const badge = (n, on) => n ? React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 800,
+      padding: '1px 7px',
+      borderRadius: 9,
+      background: on ? 'rgba(255,255,255,.22)' : 'rgba(210,58,82,.12)',
+      color: on ? '#fff' : '#b4232f'
+    }
+  }, n) : null;
+  const pill = on => ({
+    padding: '4px 11px',
+    borderRadius: 14,
+    border: '1px solid ' + (on ? '#0d3a5c' : 'rgba(125,145,180,.35)'),
+    background: on ? '#0d3a5c' : '#fff',
+    color: on ? '#fff' : '#3c4858',
+    fontSize: 11.5,
+    fontWeight: 700,
+    cursor: 'pointer',
+    fontFamily: 'inherit'
+  });
+  const nameOf = id => (view.rows.find(r => r.empId === id) || {}).name || id;
+  const chg = {};
+  changes.forEach(c => {
+    (chg[c.empId] || (chg[c.empId] = [])).push(c);
+  });
+  const vLabel = v => 'rev ' + v.revision + ' · ' + (K.ROS_HIST_LABEL ? K.ROS_HIST_LABEL[v.action] || v.action || '' : v.action || '') + ' · ' + K.when(v.at) + (v.byName ? ' · ' + v.byName : '');
   return React.createElement("div", {
     style: {
       display: 'flex',
@@ -9753,7 +10796,7 @@ function RiPreview({
       gap: 14
     }
   }, React.createElement("div", {
-    style: card
+    style: RI_CARD
   }, React.createElement("div", {
     style: {
       display: 'flex',
@@ -9777,7 +10820,7 @@ function RiPreview({
       color: '#0d1b2e',
       letterSpacing: -.2
     }
-  }, row.deptName), React.createElement("div", {
+  }, deptName), React.createElement("div", {
     style: {
       fontSize: 12.5,
       color: '#0072a3',
@@ -9788,7 +10831,7 @@ function RiPreview({
       color: '#8a97a8',
       fontWeight: 500
     }
-  }, "\xB7 ", d2(1), " \u2013 ", d2(days))), doc && React.createElement("div", {
+  }, "\xB7 ", d2(1), " \u2013 ", d2(days), doc ? ' · rev ' + (doc.revision || 0) : '')), doc && React.createElement("div", {
     style: {
       fontSize: 11,
       color: '#8a97a8',
@@ -9820,14 +10863,14 @@ function RiPreview({
     signers: extra.signers
   })), err && React.createElement("div", {
     style: {
-      ...card,
+      ...RI_CARD,
       color: '#b4232f',
       fontSize: 12.5
     }
   }, err), doc && React.createElement("div", {
     style: {
       display: 'grid',
-      gridTemplateColumns: 'minmax(0,1fr) 320px',
+      gridTemplateColumns: 'minmax(0,1fr) 330px',
       gap: 14,
       alignItems: 'start'
     },
@@ -9841,27 +10884,27 @@ function RiPreview({
     }
   }, React.createElement("div", {
     style: {
-      ...card,
+      ...RI_CARD,
       padding: 0,
       display: 'grid',
       gridTemplateColumns: 'repeat(5,1fr)'
     },
     className: "ri-sum"
-  }, [['Staff', view.rows.length, stats.pca ? view.rows.length - stats.pca + ' nurses · ' + stats.pca + ' PCA' + (stats.pca === 1 ? '' : 's') : 'on the sheet', '#0d1b2e', null], ['Shifts', stats.shifts, 'duty shifts this month', '#0072a3', null], ['Total hours', stats.hours, 'all staff', '#5b45c4', null], ['Over ' + RI_OVERTIME_H + ' h', stats.over, stats.over ? 'staff — check overtime' : 'nobody', stats.over ? '#b5670a' : '#157a43', null], ['Rule warnings', ev ? ev.totalViol : 0, failing.length ? failing.length + ' rule' + (failing.length === 1 ? '' : 's') + ' not met' : 'all rules met', ev && ev.totalViol ? '#b4232f' : '#157a43', () => {
+  }, [['Staff', view.rows.length, stats.pca ? view.rows.length - stats.pca + ' nurses · ' + stats.pca + ' PCA' : 'on the sheet', '#0d1b2e', () => setTab('people')], ['Duty shifts', stats.shifts, lowDays ? lowDays + ' low day' + (lowDays === 1 ? '' : 's') : 'cover met every day', lowDays ? '#b5670a' : '#0072a3', () => setTab('cover')], ['Total hours', stats.hours, stats.over ? stats.over + ' over ' + RI_OVERTIME_H + ' h' : 'nobody over ' + RI_OVERTIME_H + ' h', stats.over ? '#b5670a' : '#5b45c4', () => setTab('people')], ['Changes', changes.length, cmpRev != null ? 'since rev ' + cmpRev : 'first version', changes.length ? '#0072a3' : '#9aa6b4', () => setTab('changes')], ['Rule warnings', ev ? ev.totalViol : 0, failing.length ? failing.length + ' rule' + (failing.length === 1 ? '' : 's') + ' not met' : 'all rules met', ev && ev.totalViol ? '#b4232f' : '#157a43', () => {
     if (rulesRef.current) rulesRef.current.scrollIntoView({
       behavior: 'smooth',
       block: 'start'
     });
   }]].map(([l, v, sub, c, onClick], i) => React.createElement("div", {
     key: l,
-    onClick: onClick || undefined,
+    onClick: onClick,
     style: {
       padding: '11px 16px',
       borderLeft: i ? '1px solid rgba(125,145,180,.18)' : 0,
-      cursor: onClick ? 'pointer' : 'default'
+      cursor: 'pointer'
     }
   }, React.createElement("div", {
-    style: cap
+    style: RI_CAP
   }, l), React.createElement("div", {
     style: {
       fontFamily: "'IBM Plex Mono',monospace",
@@ -9880,13 +10923,14 @@ function RiPreview({
     }
   }, sub)))), ev && React.createElement("div", {
     ref: rulesRef,
-    style: card
+    style: RI_CARD
   }, React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
       gap: 10,
-      marginBottom: failing.length ? 10 : 0
+      marginBottom: failing.length ? 8 : 0,
+      flexWrap: 'wrap'
     }
   }, React.createElement("div", {
     style: {
@@ -9903,20 +10947,20 @@ function RiPreview({
       color: failing.length ? '#b4232f' : '#157a43',
       background: failing.length ? 'rgba(210,58,82,.1)' : 'rgba(31,157,87,.12)'
     }
-  }, failing.length ? failing.length + ' need attention' : 'all clear'), React.createElement("span", {
+  }, failing.length ? failing.length + ' need attention' : 'all clear'), failing.length > 0 && React.createElement("span", {
     style: {
       fontSize: 11,
       color: '#8a97a8'
     }
-  }, "\xB7 nurse cover counts nurses only; PCAs are checked for their own hours and rest")), failing.map(([rule, base, list]) => {
+  }, "\xB7 click a warning to see it on the sheet")), failing.map(([rule, base, list]) => {
     const open = !!openRule[rule];
-    const shown = open ? list : list.slice(0, 3);
+    const shown = open ? list : list.slice(0, 6);
     return React.createElement("div", {
       key: rule,
       style: {
         display: 'flex',
         gap: 12,
-        padding: '9px 0',
+        padding: '8px 0',
         borderTop: '1px solid rgba(125,145,180,.14)'
       }
     }, React.createElement("span", {
@@ -9956,17 +11000,24 @@ function RiPreview({
         gap: 4,
         marginTop: 4
       }
-    }, shown.map((f, i) => React.createElement("span", {
-      key: i,
-      style: {
-        fontSize: 10.5,
-        color: '#8c1d2a',
-        background: 'rgba(210,58,82,.07)',
-        border: '1px solid rgba(210,58,82,.16)',
-        borderRadius: 6,
-        padding: '1px 7px'
-      }
-    }, f)), list.length > 3 && React.createElement("button", {
+    }, shown.map((f, i) => {
+      const on = focus && focus.label === f;
+      return React.createElement("button", {
+        type: "button",
+        key: i,
+        onClick: () => on ? setFocus(null) : pointAt(f),
+        style: {
+          fontSize: 10.5,
+          color: on ? '#fff' : '#8c1d2a',
+          background: on ? '#b4232f' : 'rgba(210,58,82,.07)',
+          border: '1px solid rgba(210,58,82,.2)',
+          borderRadius: 6,
+          padding: '1px 7px',
+          cursor: 'pointer',
+          fontFamily: 'inherit'
+        }
+      }, f);
+    }), list.length > 6 && React.createElement("button", {
       type: "button",
       onClick: () => setOpenRule(o => ({
         ...o,
@@ -9981,11 +11032,11 @@ function RiPreview({
         cursor: 'pointer',
         fontFamily: 'inherit'
       }
-    }, open ? 'Show less' : '+' + (list.length - 3) + ' more'))));
+    }, open ? 'Show less' : '+' + (list.length - 6) + ' more'))));
   }), clear.length > 0 && React.createElement("div", {
     style: {
       borderTop: failing.length ? '1px solid rgba(125,145,180,.14)' : 0,
-      paddingTop: failing.length ? 9 : 8
+      paddingTop: 8
     }
   }, React.createElement("button", {
     type: "button",
@@ -10000,7 +11051,7 @@ function RiPreview({
       fontWeight: 700,
       color: '#157a43'
     }
-  }, "\u2713 ", clear.length, " rule", clear.length === 1 ? '' : 's', " clear ", showClear ? '▴' : '▾'), showClear ? React.createElement("div", {
+  }, "\u2713 ", clear.length, " rule", clear.length === 1 ? '' : 's', " clear ", showClear ? '▴' : '▾'), showClear && React.createElement("div", {
     style: {
       marginTop: 6,
       display: 'flex',
@@ -10022,25 +11073,422 @@ function RiPreview({
     style: {
       color: '#9aa6b4'
     }
-  }, "\xB7 ", base)))) : React.createElement("span", {
+  }, "\xB7 ", base)))))), React.createElement("div", {
+    ref: sheetRef,
+    style: RI_CARD
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 4,
+      flexWrap: 'wrap',
+      padding: 4,
+      background: '#f1f4f8',
+      borderRadius: 11,
+      marginBottom: 12
+    }
+  }, TABS.map(([id, label, n]) => React.createElement("button", {
+    key: id,
+    type: "button",
+    onClick: () => setTab(id),
+    style: seg(tab === id)
+  }, label, badge(n, tab === id)))), tab === 'sheet' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, [['all', 'Everyone'], ['flagged', 'Flagged'], ['changed', 'Changed']].map(([id, l]) => React.createElement("button", {
+    key: id,
+    type: "button",
+    onClick: () => {
+      setFilter(id);
+      setPerson('');
+    },
+    style: pill(!person && filter === id)
+  }, l)), person && React.createElement("button", {
+    type: "button",
+    onClick: () => setPerson(''),
+    style: pill(true)
+  }, nameOf(person), " \u2715"), focus && React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 11.5,
+      fontWeight: 700,
+      color: '#8a5a00',
+      background: '#fff3c4',
+      border: '1px solid #f0d27a',
+      borderRadius: 14,
+      padding: '3px 10px'
+    }
+  }, "Showing: ", focus.label, React.createElement("button", {
+    type: "button",
+    onClick: () => setFocus(null),
+    style: {
+      border: 0,
+      background: 'none',
+      cursor: 'pointer',
+      fontWeight: 800,
+      color: '#8a5a00'
+    }
+  }, "\u2715")), React.createElement("span", {
+    style: {
+      marginLeft: 'auto',
+      fontSize: 11,
+      color: '#8a97a8'
+    }
+  }, can.mark || can.reviewEdit ? 'Click a cell to pin a note' + (can.reviewEdit ? ' or change the shift' : '') : 'Click a cell for its details')), React.createElement(RiGrid, {
+    view: view,
+    year: year,
+    month: month,
+    doc: doc,
+    changes: changes,
+    focus: focus,
+    filter: filter,
+    person: person,
+    onCell: openCell,
+    flagsOf: id => flagsBy[id] || []
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap',
+      marginTop: 8,
+      fontSize: 10.5,
+      color: '#6c7a8c'
+    }
+  }, React.createElement("span", null, React.createElement("i", {
+    style: {
+      display: 'inline-block',
+      width: 12,
+      height: 10,
+      background: '#d9dde3',
+      verticalAlign: -1,
+      marginRight: 4
+    }
+  }), "Day off"), React.createElement("span", null, React.createElement("i", {
+    style: {
+      display: 'inline-block',
+      width: 12,
+      height: 10,
+      background: '#eef0f3',
+      verticalAlign: -1,
+      marginRight: 4
+    }
+  }), "Leave"), React.createElement("span", null, React.createElement("i", {
+    style: {
+      display: 'inline-block',
+      width: 12,
+      height: 10,
+      boxShadow: 'inset 0 0 0 2px #0090ca',
+      verticalAlign: -1,
+      marginRight: 4
+    }
+  }), "Changed", cmpRev != null ? ' since rev ' + cmpRev : ''), React.createElement("span", null, React.createElement("i", {
+    style: {
+      display: 'inline-block',
+      width: 0,
+      height: 0,
+      borderTop: '9px solid #d23a52',
+      borderRight: '9px solid transparent',
+      verticalAlign: -1,
+      marginRight: 4
+    }
+  }), "Review note"), React.createElement("span", null, React.createElement("i", {
+    style: {
+      display: 'inline-block',
+      width: 12,
+      height: 10,
+      background: '#fff3c4',
+      verticalAlign: -1,
+      marginRight: 4
+    }
+  }), "Warning you picked"))), tab === 'doc' && (html ? React.createElement(RiSheetFrame, {
+    html: html
+  }) : React.createElement(K.RosSheetTable, {
+    rows: view.rows,
+    grid: view.grid,
+    year: year,
+    month: month,
+    maxHeight: "56vh"
+  })), tab === 'people' && React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 12
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, ['Staff', 'Hours', 'G', 'M', 'E', 'N', 'Nights in a row', 'Off', 'Fridays off', 'Leave', 'On call', 'Flags'].map(h => React.createElement("th", {
+    key: h,
+    style: {
+      ...RI_TH,
+      textAlign: h === 'Staff' || h === 'Flags' ? 'left' : 'center'
+    }
+  }, h)))), React.createElement("tbody", null, people.slice().sort((a, b) => b.flags.length - a.flags.length || String(a.r.name).localeCompare(String(b.r.name))).map(p => React.createElement("tr", {
+    key: p.r.empId,
+    onClick: () => {
+      setPerson(p.r.empId);
+      setFocus(null);
+      setTab('sheet');
+    },
+    style: {
+      cursor: 'pointer',
+      background: p.flags.length ? 'rgba(210,58,82,.04)' : 'transparent'
+    }
+  }, React.createElement("td", {
+    style: RI_TD
+  }, React.createElement("b", {
+    style: {
+      color: '#16202e'
+    }
+  }, p.r.name), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#8a97a8'
+    }
+  }, p.r.desig || '')), [p.t.hours, p.t.G, p.t.M, p.t.E, p.t.N, p.maxRun, p.offs, p.friOff, p.t.leave, p.ocN].map((v, i) => React.createElement("td", {
+    key: i,
+    style: {
+      ...RI_TD,
+      textAlign: 'center',
+      fontFamily: "'IBM Plex Mono',monospace",
+      fontWeight: i === 0 ? 800 : 500,
+      color: i === 0 && v > RI_OVERTIME_H || i === 5 && cfg.maxNights && v > cfg.maxNights ? '#b4232f' : '#16202e'
+    }
+  }, v || (i === 0 ? 0 : '·'))), React.createElement("td", {
+    style: RI_TD
+  }, p.flags.length ? p.flags.map(f => React.createElement("span", {
+    key: f,
+    style: {
+      display: 'inline-block',
+      margin: '1px 4px 1px 0',
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: '#8c1d2a',
+      background: 'rgba(210,58,82,.09)',
+      borderRadius: 6,
+      padding: '1px 7px'
+    }
+  }, f)) : React.createElement("span", {
+    style: {
+      color: '#157a43',
+      fontWeight: 700
+    }
+  }, "\u2713")))))), React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      color: '#8a97a8',
+      marginTop: 6
+    }
+  }, "Click a person to see only their row on the review sheet.")), tab === 'changes' && React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 10
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 12,
+      color: '#3c4858'
+    }
+  }, "Compare the sheet now with"), React.createElement("select", {
+    value: cmpRev == null ? '' : String(cmpRev),
+    onChange: e => setCmpRev(e.target.value === '' ? null : Number(e.target.value)),
+    style: {
+      padding: '6px 9px',
+      borderRadius: 8,
+      border: '1px solid rgba(125,145,180,.4)',
+      fontFamily: 'inherit',
+      fontSize: 12
+    }
+  }, !versions.length && React.createElement("option", {
+    value: ""
+  }, "no earlier version"), versions.filter(v => v.revision < docRev || v.revision === cmpRev).map(v => React.createElement("option", {
+    key: v.revision,
+    value: v.revision
+  }, vLabel(v)))), changes.length > 0 && React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => {
+      setFilter('changed');
+      setPerson('');
+      setTab('sheet');
+    }
+  }, "Show on the sheet")), cmpRev == null ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#8a97a8',
+      padding: '10px 2px'
+    }
+  }, "This is the first version sent for review \u2014 there is nothing earlier to compare with.") : !changes.length ? React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#157a43',
+      padding: '10px 2px',
+      fontWeight: 700
+    }
+  }, "\u2713 No shift changed since rev ", cmpRev, ".") : Object.keys(chg).map(id => React.createElement("div", {
+    key: id,
+    style: {
+      borderTop: '1px solid rgba(125,145,180,.14)',
+      padding: '8px 0'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: '#16202e',
+      marginBottom: 4
+    }
+  }, nameOf(id), " ", React.createElement("span", {
+    style: {
+      fontWeight: 500,
+      color: '#8a97a8',
+      fontSize: 11
+    }
+  }, "\xB7 ", chg[id].length, " change", chg[id].length === 1 ? '' : 's')), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexWrap: 'wrap',
+      gap: 5
+    }
+  }, chg[id].map(c => React.createElement("span", {
+    key: c.d,
     style: {
       fontSize: 11,
-      color: '#8a97a8',
-      marginLeft: 6
+      color: '#0d3a5c',
+      background: 'rgba(0,144,202,.08)',
+      border: '1px solid rgba(0,144,202,.22)',
+      borderRadius: 7,
+      padding: '2px 8px',
+      fontFamily: "'IBM Plex Mono',monospace"
     }
-  }, clear.map(r => r[0]).join(' · '))))), React.createElement("div", {
+  }, riDay(year, month, c.d), ": ", c.from || '—', " \u2192 ", React.createElement("b", null, c.to || '—')))))), (doc.history || []).some(h => h.action === 'edit') && React.createElement("div", {
+    style: {
+      marginTop: 10,
+      fontSize: 11.5,
+      color: '#6c7a8c'
+    }
+  }, React.createElement("div", {
+    style: {
+      ...RI_CAP,
+      marginBottom: 4
+    }
+  }, "Changed during review"), (doc.history || []).filter(h => h.action === 'edit').slice(-12).reverse().map((h, i) => React.createElement("div", {
+    key: i
+  }, "\u2022 ", h.note, " ", React.createElement("span", {
+    style: {
+      color: '#9aa6b4'
+    }
+  }, "\u2014 ", h.byName || h.by, ", ", K.when(h.at)))))), tab === 'cover' && React.createElement(RiCover, {
+    view: view,
+    year: year,
+    month: month,
+    minOnDuty: cfg.minOnDuty
+  }))), React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
-      gap: 14
+      gap: 14,
+      position: 'sticky',
+      top: 12
+    }
+  }, deciding && React.createElement("div", {
+    ref: checkRef,
+    style: RI_CARD
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 8
+    }
+  }, React.createElement("div", {
+    style: RI_CAP
+  }, "Review checklist"), React.createElement("span", {
+    style: {
+      marginLeft: 'auto',
+      fontSize: 11,
+      fontWeight: 800,
+      color: allTicked ? '#157a43' : '#b5670a'
+    }
+  }, done, " of ", checks.length)), React.createElement("div", {
+    style: {
+      height: 4,
+      borderRadius: 2,
+      background: '#eef1f5',
+      marginBottom: 8
     }
   }, React.createElement("div", {
     style: {
-      ...card,
+      height: 4,
+      borderRadius: 2,
+      width: done / checks.length * 100 + '%',
+      background: allTicked ? '#1f9d57' : '#e0a81e',
+      transition: 'width .2s'
+    }
+  })), checks.map(([id, label, sub, warn, go]) => React.createElement("label", {
+    key: id,
+    style: {
+      display: 'flex',
+      gap: 9,
+      alignItems: 'flex-start',
+      padding: '6px 2px',
+      cursor: 'pointer',
+      borderTop: '1px solid rgba(125,145,180,.1)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!ticks[id],
+    onChange: e => setTicks(t => ({
+      ...t,
+      [id]: e.target.checked
+    })),
+    style: {
+      marginTop: 2
+    }
+  }), React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("span", {
+    style: {
+      display: 'block',
+      fontSize: 12,
+      fontWeight: 700,
+      color: '#16202e'
+    }
+  }, label), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: warn ? '#b5670a' : '#8a97a8'
+    }
+  }, warn ? '⚠ ' : '', sub, " \xB7 ", React.createElement("a", {
+    onClick: e => {
+      e.preventDefault();
+      go();
+    },
+    href: "#",
+    style: {
+      color: '#0072a3',
+      fontWeight: 700
+    }
+  }, "look")))))), React.createElement("div", {
+    style: {
+      ...RI_CARD,
       borderTop: '3px solid ' + (st === 'pending_cns' ? '#5b45c4' : st === 'pending_manager' ? '#0072a3' : st === 'approved' ? '#1f9d57' : st === 'returned' ? '#d23a52' : '#b5670a')
     }
   }, React.createElement("div", {
-    style: cap
+    style: RI_CAP
   }, "Your decision"), roleLine && React.createElement("div", {
     style: {
       fontSize: 13,
@@ -10054,31 +11502,27 @@ function RiPreview({
       color: '#6c7a8c',
       marginTop: 3
     }
-  }, doc.sentAt && riSentShown(st) ? 'Sent ' + K.when(doc.sentAt) + ' by ' + (doc.sentByName || doc.sentBy || '—') : 'With the in-charge — not sent for review yet'), ev && ev.totalViol || stats.over ? React.createElement("div", {
+  }, doc.sentAt && riSentShown(st) ? 'Sent ' + K.when(doc.sentAt) + ' by ' + (doc.sentByName || doc.sentBy || '—') : 'With the in-charge — not sent for review yet'), deciding && !allTicked && React.createElement("div", {
     style: {
       marginTop: 10,
+      fontSize: 11.5,
+      color: '#8a5a00',
       background: 'rgba(224,138,30,.09)',
       border: '1px solid rgba(224,138,30,.28)',
       borderRadius: 9,
-      padding: '7px 10px',
-      fontSize: 11.5,
-      color: '#8a5a00',
-      lineHeight: 1.5
+      padding: '7px 10px'
     }
-  }, ev && ev.totalViol ? React.createElement("div", null, "\u26A0 ", ev.totalViol, " rule warning", ev.totalViol === 1 ? '' : 's', " on this sheet") : null, stats.over ? React.createElement("div", null, "\u26A0 ", stats.over, " staff over ", RI_OVERTIME_H, " hours") : null) : React.createElement("div", {
+  }, "\uD83D\uDD12 ", can.approve ? 'Approve' : 'Forward', " unlocks when the checklist is ticked (", checks.length - done, " left)."), nMarks > 0 && React.createElement("div", {
     style: {
-      marginTop: 10,
-      background: 'rgba(31,157,87,.08)',
-      border: '1px solid rgba(31,157,87,.25)',
-      borderRadius: 9,
-      padding: '7px 10px',
+      marginTop: 8,
       fontSize: 11.5,
-      color: '#157a43'
+      color: '#8c1d2a'
     }
-  }, "\u2713 No rule warnings, nobody over ", RI_OVERTIME_H, " hours"), React.createElement("div", {
+  }, nMarks, " review note", nMarks === 1 ? '' : 's', " pinned \u2014 Return sends them to the in-charge."), React.createElement("div", {
     className: "ri-dec",
     style: {
-      marginTop: 12
+      marginTop: 12,
+      opacity: busy ? .7 : 1
     }
   }, K.RosDecisionButtons({
     status: doc.status,
@@ -10091,50 +11535,59 @@ function RiPreview({
       fontSize: 11.5,
       color: '#8a97a8'
     }
-  }, st === 'approved' ? 'Approved — this roster is published.' : 'No step for you on this roster right now.')), (can.return || can.approve || can.forward) && React.createElement("div", {
+  }, st === 'approved' ? 'Approved — this roster is published.' : 'No step for you on this roster right now.')), can.reviewEdit && React.createElement("div", {
     style: {
       fontSize: 10.5,
       color: '#9aa6b4',
       marginTop: 8
     }
-  }, "Return sends it back to the in-charge, flagged red; a reason is optional.")), React.createElement("div", {
-    style: card
-  }, React.createElement("div", {
+  }, "Small fixes: click a cell and change it directly \u2014 it is logged. Bigger ones: pin notes and Return.")), nMarks > 0 && K.RosMarkList && React.createElement("div", {
     style: {
-      ...cap,
-      marginBottom: 10
+      ...RI_CARD,
+      padding: '10px 12px'
     }
-  }, "Activity"), React.createElement(K.RosHistoryTimeline, {
-    history: doc.history
-  })))), doc && React.createElement("div", null, React.createElement("div", {
-    style: {
-      display: 'flex',
-      alignItems: 'baseline',
-      gap: 10,
-      margin: '2px 2px 8px'
-    }
-  }, React.createElement("span", {
-    style: {
-      fontSize: 13.5,
-      fontWeight: 800,
-      color: '#16202e'
-    }
-  }, "The roster"), React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: '#8a97a8'
-    }
-  }, "exactly as it will be printed and published")), html ? React.createElement(RiSheetFrame, {
-    html: html
-  }) : React.createElement(K.RosSheetTable, {
+  }, React.createElement(K.RosMarkList, {
+    marks: doc.marks,
     rows: view.rows,
-    grid: view.grid,
     year: year,
     month: month,
-    maxHeight: "56vh"
-  })), !doc && !err && React.createElement("div", {
+    canDone: !!(can.mark || can.markDone),
+    onDone: onUnmark,
+    onOpen: (emp, d) => {
+      const r = view.rows.find(x => x.empId === emp);
+      if (r) {
+        setTab('sheet');
+        setPerson(emp);
+      }
+    }
+  })), React.createElement("div", {
+    style: RI_CARD
+  }, React.createElement("div", {
     style: {
-      ...card,
+      ...RI_CAP,
+      marginBottom: 10
+    }
+  }, "Activity"), React.createElement("div", {
+    style: {
+      maxHeight: 360,
+      overflowY: 'auto'
+    }
+  }, React.createElement(K.RosHistoryTimeline, {
+    history: doc.history
+  }))))), cell && doc && React.createElement(RiCellPop, {
+    cell: cell,
+    doc: doc,
+    year: year,
+    month: month,
+    can: can,
+    busy: acting,
+    onClose: () => setCell(null),
+    onMark: onMark,
+    onUnmark: onUnmark,
+    onEdit: onEdit
+  }), !doc && !err && React.createElement("div", {
+    style: {
+      ...RI_CARD,
       textAlign: 'center',
       padding: 34,
       color: '#6c7a8c',
@@ -10171,12 +11624,13 @@ function RosterReviewFull({
     return review.rows.filter(r => riIn(curTab, r)).filter(r => !needle || [r.deptName, riPerson(r.incharge), riPerson(r.manager)].join(' ').toLowerCase().indexOf(needle) >= 0);
   }, [review.rows, curTab, q]);
   const period = R.MONTHS[month] + ' ' + year;
-  const onDecide = (row, action) => decider.run({
+  const onDecide = (row, action, opts) => decider.run({
     id: row.id,
     action,
     unit: row.deptName,
     period,
-    warnings: 0
+    warnings: 0,
+    note: opts && opts.note
   }).then(r => {
     if (r && r.ok) review.reload();
     return r;
