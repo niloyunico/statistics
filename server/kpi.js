@@ -107,7 +107,7 @@ async function ensureSeed(now) {
 /* ---------------------------------------------------------------- helpers --- */
 
 const cleanDef = (d) => { if (!d) return null; const { _id, history, ...rest } = d; return Object.assign({ id: _id }, rest, { history: (history || []).slice(-15) }); };
-const activeDefs = (defs) => defs.filter((d) => d && d.active !== false && !d.removedAt).sort((a, b) => (a.order || 0) - (b.order || 0));
+const activeDefs = (defs) => defs.filter(K.isLive).sort((a, b) => (a.order || 0) - (b.order || 0));
 const actor = (req, a) => (a && a.username) || (req.user && req.user.sub) || 'local';
 const nameOf = (req, a) => (a && a.name) || (req.user && req.user.name) || actor(req, a);
 const str = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
@@ -394,6 +394,26 @@ function mount(app, opts) {
     } catch (e) { fail(res, e, 'Could not restore the KPI.'); }
   });
 
+  // Enable / disable: a switched-off KPI stays on Manage KPIs but leaves the dashboard, Data Update,
+  // new reports, exports and the missing-data badge. Nothing is deleted; final reports keep it.
+  app.post('/api/kpi/defs/:id/enabled', guard, async (req, res) => {
+    try {
+      const a = await resolve(req, res, 'edit'); if (!a) return;
+      const b = body(req);
+      if (typeof b.enabled !== 'boolean') return res.status(400).json({ ok: false, error: 'Say whether the KPI is enabled.' });
+      const cur = await getDoc(DEFS, String(req.params.id || ''));
+      if (!cur || cur.active === false || cur.removedAt) return res.status(404).json({ ok: false, error: 'This KPI no longer exists or is archived.' });
+      if (!cur.disabled === b.enabled) return res.json({ ok: true, def: cleanDef(cur), unchanged: true });
+      const t = now(), what = b.enabled ? 'enabled' : 'disabled';
+      const doc = Object.assign({}, cur, { disabled: !b.enabled, disabledAt: b.enabled ? null : t, disabledBy: b.enabled ? null : actor(req, a),
+        updatedAt: stamp(t), updatedBy: actor(req, a), updatedByName: nameOf(req, a),
+        history: (cur.history || []).concat([{ at: t, by: actor(req, a), action: what }]).slice(-100) });
+      if (!(await putDoc(DEFS, doc, cur.updatedAt))) return res.status(409).json({ ok: false, code: 'stale', error: 'Someone changed this KPI at the same moment. Try again.' });
+      activity.log(req, 'kpi_def', { target: cur.name, detail: what });
+      res.json({ ok: true, def: cleanDef(doc) });
+    } catch (e) { fail(res, e, 'Could not change the KPI.'); }
+  });
+
   app.post('/api/kpi/defs-order', guard, async (req, res) => {
     try {
       const a = await resolve(req, res, 'edit'); if (!a) return;
@@ -513,7 +533,8 @@ function mount(app, opts) {
       if (!K.isMonth(ym)) return res.status(400).json({ ok: false, error: 'Invalid month.' });
       if (ym > K.thisMonth(now())) return res.status(400).json({ ok: false, error: 'You cannot enter a month that has not come yet.' });
       const def = await getDoc(DEFS, kpiId);
-      if (!def || def.active === false) return res.status(404).json({ ok: false, error: 'This KPI is not active.' });
+      if (!def || def.active === false || def.removedAt) return res.status(404).json({ ok: false, error: 'This KPI is not active.' });
+      if (def.disabled) return res.status(409).json({ ok: false, code: 'disabled', error: 'This KPI is disabled. Enable it in Manage KPIs to enter figures.' });
       const id = kpiId + ':' + ym;
       const cur = await getDoc(MONTHS, id);
       const live = cur && !cur.removedAt;

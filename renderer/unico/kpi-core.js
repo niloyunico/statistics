@@ -99,6 +99,8 @@
      here; months before it are "not started" and never reported as missing. */
   const startOf = (def, cfg) => (def && isMonth(def.startMonth) ? def.startMonth : cfgOf(cfg).cycleStart);
   const isStarted = (def, ym, cfg) => isMonth(ym) && ym >= startOf(def, cfg);
+  // A KPI that counts: not archived and not switched off (disabled KPIs stay on Manage KPIs only).
+  const isLive = (d) => !!d && d.active !== false && !d.removedAt && !d.disabled;
 
   /* The cycle a month falls in: index 1..cycles from the start, 0 before it (the baseline
      period), and cycles+1 after the last one ends (still judged by the last target). With a
@@ -425,7 +427,7 @@
   const API = {
     MONS, MONS_FULL, FORMULAS, FORMULA_LABEL, DIRECTIONS, ACTION_STATUSES, ACTION_LABEL, DEFAULT_PILLARS, DEFAULT_CFG, STATUS, PRESETS, MAX_MONTHS,
     has, isMonth, addMonth, monthDiff, monthsBetween, fmtMonth, fmtMonthLong, fmtRange, toMonKey, toYm, thisMonth, lastClosedMonth,
-    cfgOf, pillarOf, startOf, isStarted, cycleOf, cycleRange, yearRange, isFullYear, presetRange, presetOf, targetFor, round, computeValue, periodValue, gap, statusOf, trendOf, achievement,
+    cfgOf, pillarOf, startOf, isStarted, isLive, cycleOf, cycleRange, yearRange, isFullYear, presetRange, presetOf, targetFor, round, computeValue, periodValue, gap, statusOf, trendOf, achievement,
     resolveCell, validateEntry, medianOf, deviates, CHECK_META, checkLevel, evidenceSteps, COUNTED, unitKind, fmt, unitLabel, gapLabel, slug, newKpiId, buildRows, summarize, reportId, parseReportId,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;

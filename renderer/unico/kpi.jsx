@@ -890,7 +890,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const [edit, setEdit] = useState(null);
     const [tick, setTick] = useState(0);
     const cfg = meta.config;
-    const active = defs.filter((d) => d.active !== false && !d.removedAt);
+    const active = defs.filter(K.isLive);
     useEffect(() => {
       if (!range) return;
       let live = true; setErr('');
@@ -1594,7 +1594,15 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const cfg = meta.config;
     const list = defs.filter((d) => archived || (d.active !== false && !d.removedAt));
     const groups = cfg.pillars.map((pl) => ({ pl, list: list.filter((d) => d.pillar === pl.id) })).filter((g) => g.list.length);
-    const activeIds = defs.filter((d) => d.active !== false && !d.removedAt).map((d) => d.id);
+    const activeIds = defs.filter((d) => d.active !== false && !d.removedAt).map((d) => d.id);   // order list: enabled + disabled
+    const liveN = defs.filter(K.isLive).length, offN = activeIds.length - liveN;
+    async function setEnabled(d, enabled) {
+      if (!enabled) {
+        const ok = await confirmBox({ title: 'Disable “' + d.name + '”?', message: 'It stays here on Manage KPIs but leaves the dashboard, Data Update, new reports, exports and the missing-data badge. Its saved figures and final reports are kept. Switch it on again at any time.', confirmLabel: 'Disable' });
+        if (!ok) return;
+      }
+      try { await api('/api/kpi/defs/' + encodeURIComponent(d.id) + '/enabled', { method: 'POST', body: JSON.stringify({ enabled }) }); toast(d.name + (enabled ? ' enabled.' : ' disabled.'), 'success'); refreshBadge(); reload(); } catch (e) { toast(e.message, 'error'); }
+    }
     async function move(id, n) {
       const ids = activeIds.slice(); const i = ids.indexOf(id); if (i < 0 || i + n < 0 || i + n >= ids.length) return;
       ids.splice(i, 1); ids.splice(i + n, 0, id);
@@ -1614,7 +1622,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     return (
       <div className="kp-wrap">
         <div className="kp-card kp-bar">
-          <b style={{ fontSize: 14 }}>{activeIds.length} KPIs</b><span className="kp-muted">in {groups.length} pillars · from the Nursing Department KPI deck{defs.some((d) => d.custom) ? ' and your own' : ''}</span>
+          <b style={{ fontSize: 14 }}>{liveN} KPIs</b>{offN > 0 && <span className="kp-pill" style={{ background: '#f1f2f4', color: '#5b6573' }}>{offN} disabled</span>}<span className="kp-muted">in {groups.length} pillars · from the Nursing Department KPI deck{defs.some((d) => d.custom) ? ' and your own' : ''}</span>
           <span style={{ flex: 1 }} />
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}><input type="checkbox" checked={archived} onChange={(e) => setArchived(e.target.checked)} style={{ width: 'auto' }} />Show archived</label>
           {meta.isAdmin && <Btn disabled={busy} onClick={reseed} title="Put back any KPI of the deck that is missing">Restore deck KPIs</Btn>}
@@ -1624,14 +1632,16 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           <div key={g.pl.id} className="kp-card kp-rise">
             <div className="kp-h" style={{ borderLeft: '5px solid ' + g.pl.color }}><h3>{g.pl.label}</h3><span className="kp-muted">{g.list.length}</span></div>
             <div className="kp-grid3 kp-pad">{g.list.map((d) => {
-              const off = d.active === false || d.removedAt;
+              const off = d.active === false || d.removedAt, dis = !off && !!d.disabled;
               const i = activeIds.indexOf(d.id);
               return (
-                <div key={d.id} className="kp-card kp-pad" style={{ display: 'flex', flexDirection: 'column', gap: 7, opacity: off ? 0.55 : 1 }}>
+                <div key={d.id} className="kp-card kp-pad" style={{ display: 'flex', flexDirection: 'column', gap: 7, opacity: off ? 0.55 : 1, background: dis ? '#f6f7f9' : undefined }}>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}><span className="kp-code" style={{ background: g.pl.color }}>{d.code || '•'}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 800, color: 'var(--ink)', lineHeight: 1.25 }}>{d.name}</div><div className="kp-muted" style={{ fontSize: 11 }}>{d.unit} · {d.goalDirection === 'lower_is_better' ? 'lower is better' : 'higher is better'}</div></div>
-                    {d.custom && <span className="kp-src" style={{ background: '#ebebfb', color: '#3f3fa8' }}>Custom</span>}</div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 11.5 }}>
+                    <div style={{ flex: 1, minWidth: 0, opacity: dis ? 0.6 : 1 }}><div style={{ fontWeight: 800, color: 'var(--ink)', lineHeight: 1.25 }}>{d.name}</div><div className="kp-muted" style={{ fontSize: 11 }}>{d.unit} · {d.goalDirection === 'lower_is_better' ? 'lower is better' : 'higher is better'}</div></div>
+                    {d.custom && <span className="kp-src" style={{ background: '#ebebfb', color: '#3f3fa8' }}>Custom</span>}
+                    {!off && meta.canEdit && <label className={'kp-switch light' + (dis ? '' : ' on')} title={dis ? 'Disabled — click to enable this KPI again' : 'Enabled — click to disable (it stays here but is not counted anywhere)'} onClick={() => setEnabled(d, dis)} style={{ flexDirection: 'column', gap: 2, fontSize: 9.5, color: dis ? '#7a8494' : '#1f7a4c' }}><i /><span>{dis ? 'OFF' : 'ON'}</span></label>}</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontSize: 11.5, opacity: dis ? 0.6 : 1 }}>
+                    {dis && <span className="kp-pill" style={{ background: '#e9ebef', color: '#4a5463' }}>Disabled — not counted</span>}
                     <span className="kp-pill" style={{ background: '#f3f5f8', color: '#3a4656' }}>Baseline {d.baseline && K.has(d.baseline.value) ? K.fmt(d, d.baseline.value) : '—'}</span>
                     <span className="kp-pill" style={{ background: '#eef7f5', color: '#0d5e55' }}>Target {(d.targets || []).length ? d.targets.map((t) => K.fmt(d, t.value)).join(' → ') : (K.has(d.baselineTargetPct) ? d.baselineTargetPct + '% vs baseline' : '—')}</span>
                     <span className="kp-pill" style={d.source && d.source.indId && d.autoFill !== false ? { background: '#e1f1fa', color: '#0b4f6c' } : { background: '#ebebfb', color: '#3f3fa8' }}>{d.source && d.source.indId ? (d.autoFill !== false ? 'Auto from quality' : 'Typed (auto-fill off)') : 'Typed monthly'}</span>
@@ -1664,7 +1674,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const [assigned, setAssigned] = useState(() => !!lsGet('kpi_assigned_only'));
     useEffect(() => { lsSet('kpi_assigned_only', assigned); }, [assigned]);
     const cfg = meta.config;
-    const active = defs.filter((d) => d.active !== false && !d.removedAt);
+    const active = defs.filter(K.isLive);
     const items = [];
     active.forEach((d) => (d.actions || []).forEach((a) => {
       if (assigned && !(a.owner || a.due || (a.status && a.status !== 'open'))) return;
@@ -1804,7 +1814,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         {!(v === 'kpiReports' && report) && (
           <div className="kp-hero kp-rise">
             <div className="kp-hero-row">
-              <div><h1>{cfg.reportTitle}</h1><div className="sub">{defs.filter((d) => d.active !== false && !d.removedAt).length} KPIs · {cfg.pillars.length} pillars · {cfg.hospitalName}</div></div>
+              <div><h1>{cfg.reportTitle}</h1><div className="sub">{defs.filter(K.isLive).length} KPIs · {cfg.pillars.length} pillars · {cfg.hospitalName}</div></div>
               <label className={'kp-switch' + (showCalc ? ' on' : '')} title="Show how every figure was calculated: the units it came from, who sent and approved each figure, and the data checks" onClick={() => setShowCalc(!showCalc)} style={{ position: 'relative', zIndex: 1 }}><i /><span>Show calculation</span></label>
               <div className="kp-cycle">
                 <div className="lab"><span>{cyc.label}{cyc.monthNo ? ' · month ' + cyc.monthNo + ' of ' + cyc.of : ''}</span><span>{K.fmtMonth(cfg.cycleStart)} → {K.fmtMonth(K.cycleRange(cfg.cycles, cfg).to)}</span></div>

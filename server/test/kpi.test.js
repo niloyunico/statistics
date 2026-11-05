@@ -221,6 +221,21 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   assert.equal((await call('DELETE /api/kpi/defs/:id', admin, { params: { id: custom.id } })).status, 200);
   assert.equal((await call('GET /api/kpi/defs', viewer)).body.defs.length, 17, 'archived KPI off the list');
   assert.equal((await call('GET /api/kpi/defs', manager, { query: { all: '1' } })).body.defs.length, 18, 'still there for managers');
+  // disable / enable: stays on Manage KPIs (all=1) but leaves everything that counts
+  assert.equal((await call('POST /api/kpi/defs/:id/enabled', clerk, { params: { id: 'kpi-ssi' }, body: { enabled: false } })).status, 403, 'disabling needs Edit');
+  assert.equal((await call('POST /api/kpi/defs/:id/enabled', manager, { params: { id: 'kpi-ssi' }, body: {} })).status, 400);
+  r = await call('POST /api/kpi/defs/:id/enabled', manager, { params: { id: 'kpi-ssi' }, body: { enabled: false } });
+  assert.equal(r.status, 200); assert.equal(r.body.def.disabled, true);
+  assert.equal((await call('GET /api/kpi/defs', viewer)).body.defs.length, 16, 'disabled KPI not counted');
+  assert.ok((await call('GET /api/kpi/defs', manager, { query: { all: '1' } })).body.defs.find((d) => d.id === 'kpi-ssi').disabled, 'still on Manage KPIs');
+  assert.ok(!(await call('GET /api/kpi/report/:id', viewer, { params: { id: '2026-10_2026-10' } })).body.report.rows.some((x) => x.kpiId === 'kpi-ssi'), 'not in a new report');
+  assert.equal((await call('PUT /api/kpi/values/:kpi/:month', manager, { params: { kpi: 'kpi-ssi', month: '2026-10' }, body: { num: 0, den: 10 } })).body.code, 'disabled', 'no figures for a disabled KPI');
+  assert.equal((await call('DELETE /api/kpi/defs/:id', admin, { params: { id: 'kpi-ssi' } })).status, 200, 'a disabled KPI can still be archived');
+  assert.equal((await call('POST /api/kpi/defs/:id/enabled', manager, { params: { id: 'kpi-ssi' }, body: { enabled: true } })).status, 404, 'archived: restore first');
+  assert.equal((await call('POST /api/kpi/defs/:id/restore', manager, { params: { id: 'kpi-ssi' } })).status, 200);
+  r = await call('POST /api/kpi/defs/:id/enabled', manager, { params: { id: 'kpi-ssi' }, body: { enabled: true } });
+  assert.equal(r.status, 200); assert.equal(r.body.def.disabled, false);
+  assert.equal((await call('GET /api/kpi/defs', viewer)).body.defs.length, 17, 'back in');
   assert.equal((await call('POST /api/kpi/seed', manager)).status, 403, 'restoring the deck is admin-only');
   assert.equal((await call('POST /api/kpi/seed', admin)).body.added, 0, 'nothing missing');
 
