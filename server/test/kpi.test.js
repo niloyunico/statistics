@@ -120,6 +120,13 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   assert.deepEqual(K.presetRange('3m', '2026-10'), { from: '2026-08', to: '2026-10' });
   assert.deepEqual(K.presetRange('cycle2', null, cfg), { from: '2027-03', to: '2027-08' });
   assert.equal(K.presetOf('2026-09', '2027-02', cfg), 'cycle1');
+  // a calendar year: January to December, "so far" while it is running
+  assert.deepEqual(K.yearRange(2025), { from: '2025-01', to: '2025-12', year: 2025, partial: false });
+  assert.deepEqual(K.yearRange(2026, '2026-10'), { from: '2026-01', to: '2026-10', year: 2026, partial: true });
+  assert.equal(K.presetOf('2025-01', '2025-12', cfg), 'year', 'a whole year is named a year, not "12 months"');
+  assert.equal(K.fmtRange('2025-01', '2025-12'), 'Year 2025');
+  assert.equal(K.fmtRange('2026-01', '2026-10'), 'Jan 2026 – Oct 2026');
+  assert.deepEqual(K.presetRange('year', '2025-06'), { from: '2025-01', to: '2025-12', year: 2025, partial: false });
   assert.equal(K.toMonKey('2026-11'), 'Nov-26'); assert.equal(K.toYm('Nov-26'), '2026-11');
   assert.equal(K.parseReportId('2026-10_2026-09'), null, 'end before start');
   assert.equal(K.validateEntry({ formula: 'pct', numLabel: 'Accurate records' }, { num: 5, den: 4 }), 'The accurate records cannot be more than the denominator for a percentage.');
@@ -326,6 +333,14 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   r = await put(manager, 'kpi-documentation', '2026-09', { num: 4, den: 40, confirm: true });
   assert.equal(r.status, 200);
   assert.equal(kpi._mem.kpiMonths.get('kpi-documentation:2026-09').confirmed, true);
+
+  /* ---- a year report, and a year in Data Update with months still to come ---- */
+  r = await call('GET /api/kpi/report/:id', viewer, { params: { id: '2026-01_2026-12' } });
+  assert.equal(r.body.report.preset, 'year');
+  assert.equal(r.body.report.months.length, 12);
+  r = await call('GET /api/kpi/values', viewer, { query: { from: '2026-01', to: '2026-12', checks: '1' } });
+  assert.ok(Object.keys(r.body.checks).every((k) => !r.body.checks[k]['2026-12'] && !r.body.checks[k]['2026-11']), 'November (still running) and December owe nothing yet');
+  assert.ok(Object.keys(r.body.checks).some((k) => r.body.checks[k]['2026-10']), 'October, which has ended, is checked');
 
   /* ---- auto-fill off ---- */
   defNow = (await call('GET /api/kpi/defs', manager, { query: { all: '1' } })).body.defs.find((d) => d.id === 'kpi-hand-hygiene');

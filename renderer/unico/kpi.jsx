@@ -387,27 +387,35 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   }
 
   /* ============================================================ period picker === */
-  function usePeriod(meta, key, def) {
+  /* `yearCap`: how far a running year reaches — the last closed month on the Dashboard and in
+     Reports ("2026 so far"); all twelve months in Data Update (future months show greyed out). */
+  function usePeriod(meta, key, def, yearCap) {
     const [p, setP] = useState(() => lsGet('kpi_period_' + key) || { preset: def || '6m' });
     useEffect(() => { lsSet('kpi_period_' + key, p); }, [p, key]);
     const range = useMemo(() => {
       if (!meta) return null;
       if (p.preset === 'custom' && K.isMonth(p.from) && K.isMonth(p.to) && p.from <= p.to) return { from: p.from, to: K.monthDiff(p.from, p.to) >= K.MAX_MONTHS ? K.addMonth(p.from, K.MAX_MONTHS - 1) : p.to };
+      if (p.preset === 'year') return K.yearRange(p.year || meta.lastClosed.slice(0, 4), yearCap === 'all' ? null : meta.lastClosed);
       return K.presetRange(p.preset === 'custom' ? '6m' : p.preset, K.isMonth(p.end) ? p.end : meta.lastClosed, meta.config);
-    }, [p, meta]);
+    }, [p, meta, yearCap]);
     return [p, setP, range];
   }
+  // Years to choose from: from the year before the programme started up to this year.
+  const yearsOf = (meta) => { const last = +meta.thisMonth.slice(0, 4), first = Math.min(+meta.config.cycleStart.slice(0, 4) - 1, last - 2); const out = []; for (let y = last; y >= first; y--) out.push(y); return out; };
   function PeriodPicker({ meta, p, setP, range, presets, maxMonth }) {
     const list = K.PRESETS.filter((x) => !presets || presets.indexOf(x.id) >= 0);
     const top = maxMonth || meta.thisMonth;
-    const isN = !K.PRESETS.find((x) => x.id === p.preset && x.cycle) && p.preset !== 'custom';
+    const isN = !K.PRESETS.find((x) => x.id === p.preset && x.cycle) && p.preset !== 'custom' && p.preset !== 'year';
     return (
       <div className="kp-chips" style={{ alignItems: 'center' }}>
         {list.map((x) => {
           const r = x.cycle ? K.cycleRange(x.cycle, meta.config) : null;
-          return <button key={x.id} className={'kp-chip' + (p.preset === x.id ? ' on' : '')} title={r ? K.fmtRange(r.from, r.to) : ''}
-            onClick={() => setP(Object.assign({}, p, { preset: x.id }, x.id === 'custom' && !p.from ? { from: range.from, to: range.to } : {}))}>{x.label}</button>;
+          return <button key={x.id} className={'kp-chip' + (p.preset === x.id ? ' on' : '')} title={r ? K.fmtRange(r.from, r.to) : x.id === 'year' ? 'A calendar year, January to December' : ''}
+            onClick={() => setP(Object.assign({}, p, { preset: x.id }, x.id === 'custom' && !p.from ? { from: range.from, to: range.to } : {}, x.id === 'year' && !p.year ? { year: +meta.lastClosed.slice(0, 4) } : {}))}>{x.label}</button>;
         })}
+        {p.preset === 'year' && <select className="kp-sel" value={p.year || +meta.lastClosed.slice(0, 4)} onChange={(e) => setP(Object.assign({}, p, { year: +e.target.value }))} aria-label="Year">
+          {yearsOf(meta).map((y) => <option key={y} value={y}>{y}</option>)}</select>}
+        {p.preset === 'year' && range && range.partial && <span className="kp-muted" style={{ fontSize: 11.5 }}>so far — the year is not over</span>}
         {isN && <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center', fontSize: 12, color: 'var(--muted)' }}>ending
           <input type="month" className="kp-sel" value={K.isMonth(p.end) ? p.end : meta.lastClosed} max={top} onChange={(e) => K.isMonth(e.target.value) && setP(Object.assign({}, p, { end: e.target.value }))} /></span>}
         {p.preset === 'custom' && <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center', fontSize: 12, color: 'var(--muted)' }}>
@@ -617,7 +625,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const tiles = [['met', 'On target'], ['near', 'Close to target'], ['off', 'Needs action'], ['nodata', 'No data / no target']];
     return (
       <div className="kp-wrap">
-        <div className="kp-card kp-bar"><PeriodPicker meta={meta} p={p} setP={setP} range={range} presets={['1m', '3m', '6m', '12m', 'cycle1', 'cycle2', 'custom']} />
+        <div className="kp-card kp-bar"><PeriodPicker meta={meta} p={p} setP={setP} range={range} presets={['1m', '3m', '6m', '12m', 'year', 'cycle1', 'cycle2', 'custom']} />
           {rep && rep.state === 'final' && <span className="kp-pill" style={{ background: '#e7f6ed', color: '#14713f' }}>Showing the final report</span>}</div>
         {err && <div className="kp-banner">{err}</div>}
         {!rep && !err && <div className="kp-card kp-empty">Working out where every KPI stands…</div>}
@@ -695,7 +703,48 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   }
 
   /* ============================================================ data update === */
-  function EntryDialog({ meta, def, ym, cell, onClose, onSaved, showCalc, checks }) {
+  /* When one KPI starts counting — its own month, or "the same as all KPIs". Saved on the KPI
+     (PUT /api/kpi/defs/:id startMonth); nothing is deleted, earlier months simply stop counting. */
+  function StartDialog({ meta, def, suggest, onClose, onSaved }) {
+    const cfg = meta.config;
+    const [m, setM] = useState(suggest || def.startMonth || '');
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState('');
+    const eff = K.isMonth(m) ? m : cfg.cycleStart;
+    async function save(value) {
+      setBusy(true); setErr('');
+      try {
+        await api('/api/kpi/defs/' + encodeURIComponent(def.id), { method: 'PUT', body: JSON.stringify({ startMonth: K.isMonth(value) ? value : null, baseUpdatedAt: def.updatedAt }) });
+        toast(def.name + ' — counting starts ' + K.fmtMonthLong(K.isMonth(value) ? value : cfg.cycleStart) + '.', 'success');
+        onSaved();
+      } catch (e) { setErr(e.message); setBusy(false); }
+    }
+    return (
+      <div className="kp-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="kp-dlg" role="dialog">
+          <div className="kp-dlg-h"><span className="kp-code" style={{ background: K.pillarOf(cfg, def.pillar).color, marginTop: 2 }}>{def.code || '•'}</span>
+            <div><h3>When does {def.name} start?</h3><div className="kp-muted">Cycles, targets and the missing-data checks count from this month. Earlier months are kept but not counted.</div></div>
+            <button className="kp-x" onClick={onClose}>×</button></div>
+          <div className="kp-dlg-b">
+            <label className="kp-fld"><span className="kp-lab">This KPI starts on</span>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input type="month" className="kp-in" value={m} max={meta.thisMonth} onChange={(e) => setM(e.target.value)} />
+                <span className="kp-muted">{K.isMonth(m) ? '' : 'blank = the same as all KPIs (' + K.fmtMonthLong(cfg.cycleStart) + ')'}</span>
+              </div></label>
+            <div className="kp-banner info" style={{ display: 'block' }}>{Array.from({ length: cfg.cycles }, (_, i) => { const r = K.cycleRange(i + 1, cfg, { startMonth: eff }); return 'Cycle ' + (i + 1) + ': ' + K.fmtRange(r.from, r.to); }).join(' · ')}</div>
+            {err && <div className="kp-err">{err}</div>}
+          </div>
+          <div className="kp-dlg-f">
+            <Btn pri disabled={busy || (m && !K.isMonth(m))} onClick={() => save(m)}>Save</Btn>
+            {def.startMonth && <Btn disabled={busy} onClick={() => save(null)}>Same as all KPIs</Btn>}
+            <span style={{ flex: 1 }} /><Btn onClick={onClose}>Cancel</Btn>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function EntryDialog({ meta, def, ym, cell, onClose, onSaved, showCalc, checks, onStartHere }) {
     const f = def.formula;
     const saved = cell.source === 'manual' || cell.source === 'edited';
     const may = saved ? meta.canEdit : (meta.canAdd || meta.canEdit);
@@ -762,7 +811,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             <button className="kp-x" onClick={onClose} aria-label="Close">×</button>
           </div>
           <div className="kp-dlg-b">
-            {cell.notStarted && <div className="kp-banner info">This KPI starts in {K.fmtMonthLong(K.startOf(def, meta.config))}. A figure for {K.fmtMonthLong(ym)} can be kept for reference, but it is not counted in any report.</div>}
+            {cell.notStarted && <div className="kp-banner info"><div>This KPI starts in {K.fmtMonthLong(K.startOf(def, meta.config))}. A figure for {K.fmtMonthLong(ym)} can be kept for reference, but it is not counted in any report.
+              {meta.canEdit && onStartHere && <><br /><button onClick={() => onStartHere(ym)}>Start this KPI from {K.fmtMonthLong(ym)}</button></>}</div></div>}
             {cell.auto && (
               <div className="kp-sys"><b>System figure: {K.fmt(def, cell.auto.value)}</b>
                 <span>{K.has(cell.auto.num) ? cell.auto.num + (K.has(cell.auto.den) ? ' ÷ ' + cell.auto.den : '') : ''}</span>
@@ -822,8 +872,17 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     );
   }
 
-  function DataEntry({ meta, defs, focusKpi, showCalc }) {
-    const [p, setP, range] = usePeriod(meta, 'entry', '6m');
+  function DataEntry({ meta, defs, focusKpi, showCalc, reload }) {
+    const [startFor, setStartFor] = useState(null);           // { def, suggest } — the per-KPI start dialog
+    const [allStart, setAllStart] = useState(meta.config.cycleStart);
+    useEffect(() => { setAllStart(meta.config.cycleStart); }, [meta.config.cycleStart]);
+    async function saveAllStart() {
+      const ok = await confirmBox({ title: 'All KPIs start on ' + K.fmtMonthLong(allStart) + '?', message: 'Cycles, targets and the missing-data checks of every KPI count from ' + K.fmtMonthLong(allStart) + ' (a KPI with its own start month keeps it). Earlier months are kept, only not counted. Nothing is deleted.', confirmLabel: 'Change start' });
+      if (!ok) { setAllStart(meta.config.cycleStart); return; }
+      try { await api('/api/kpi/config', { method: 'PUT', body: JSON.stringify({ cycleStart: allStart }) }); toast('All KPIs now start ' + K.fmtMonthLong(allStart) + '.', 'success'); refreshBadge(); if (reload) reload(); setTick((t) => t + 1); }
+      catch (e) { toast(e.message, 'error'); setAllStart(meta.config.cycleStart); }
+    }
+    const [p, setP, range] = usePeriod(meta, 'entry', '6m', 'all');
     const [vals, setVals] = useState(null);
     const [err, setErr] = useState('');
     const [only, setOnly] = useState(false);
@@ -880,11 +939,17 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     return (
       <div className="kp-wrap">
         <div className="kp-card kp-bar">
-          <PeriodPicker meta={meta} p={p} setP={setP} range={range} presets={['1m', '3m', '6m', '12m', 'cycle1', 'cycle2', 'custom']} maxMonth={meta.thisMonth} />
+          <PeriodPicker meta={meta} p={p} setP={setP} range={range} presets={['1m', '3m', '6m', '12m', 'year', 'cycle1', 'cycle2', 'custom']} maxMonth={meta.thisMonth} />
           <span style={{ flex: 1 }} />
           <input className="kp-in" placeholder="Find a KPI…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 170 }} />
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}><input type="checkbox" checked={only} onChange={(e) => setOnly(e.target.checked)} style={{ width: 'auto' }} />Only gaps</label>
           <Btn onClick={() => setTick((t) => t + 1)} title="Read the quality data again">↻ Refresh system figures</Btn>
+          <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5, fontWeight: 700, color: 'var(--ink-2)', padding: '3px 4px 3px 10px', borderRadius: 9, background: '#eef8fd', border: '1px solid #b9dcef' }} title="Every KPI counts its cycles, targets and missing-data checks from this month, unless it has its own start">
+            All KPIs start on
+            {meta.isAdmin ? <><input type="month" className="kp-sel" value={allStart} max={meta.thisMonth} onChange={(e) => K.isMonth(e.target.value) && setAllStart(e.target.value)} style={{ padding: '4px 8px' }} />
+              {allStart !== meta.config.cycleStart && <Btn pri onClick={saveAllStart}>Save</Btn>}</>
+              : <b style={{ padding: '0 8px 0 2px' }}>{K.fmtMonth(meta.config.cycleStart)}</b>}
+          </span>
         </div>
         {gaps.length > 0 && (meta.canAdd || meta.canEdit) && (
           <div className="kp-banner" role="status"><span style={{ fontSize: 16 }}>✎</span>
@@ -911,7 +976,10 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                     <td className="k"><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span className="kp-code" style={{ background: g.pl.color }}>{d.code || '•'}</span>
                       <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, color: 'var(--ink)', lineHeight: 1.25 }}>{d.name}</div><div className="kp-muted" style={{ fontSize: 10.5 }}>{d.unit}
                         {d.source && d.source.indId ? (d.autoFill === false || meta.config.autoFill === false ? ' · typed monthly (auto-fill off)' : ' · auto from quality') : ' · typed monthly'}
-                        {d.startMonth && K.isMonth(d.startMonth) ? ' · starts ' + K.fmtMonth(d.startMonth) : ''}</div></div></div></td>
+                        </div>
+                        <button onClick={() => meta.canEdit && setStartFor({ def: d })} disabled={!meta.canEdit} title={meta.canEdit ? 'Change when this KPI starts counting' : ''}
+                          style={{ border: 0, background: 'transparent', padding: 0, font: 'inherit', fontSize: 10.5, fontWeight: 700, color: d.startMonth ? '#8a5a00' : '#0b6b8f', cursor: meta.canEdit ? 'pointer' : 'default' }}>
+                          {(d.startMonth ? '◷ starts ' + K.fmtMonth(d.startMonth) + ' (own)' : '◷ starts ' + K.fmtMonth(meta.config.cycleStart)) + (meta.canEdit ? ' ✎' : '')}</button></div></div></td>
                     {months.map((m) => {
                       const c = cellOf(d.id, m), future = m > meta.thisMonth, ch = checksOf(d.id, m);
                       const pre = !future && c.notStarted;
@@ -930,7 +998,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           </div>}
         </div>
         <div className="kp-muted">Figures from the quality data and the hand hygiene audit fill themselves. You can still click one and type over it — the system figure stays visible beside yours, and “Revert to system figure” brings it back.</div>
-        {edit && <EntryDialog key={edit.k} meta={meta} def={edit.def} ym={edit.ym} cell={edit.cell} checks={edit.checks || ((checksOf(edit.def.id, edit.ym) || {}).items)} showCalc={showCalc} onClose={() => setEdit(null)} onSaved={(c, next) => { onSaved(c, next); setTick((t) => t + 1); }} />}
+        {startFor && <StartDialog meta={meta} def={startFor.def} suggest={startFor.suggest} onClose={() => setStartFor(null)} onSaved={() => { setStartFor(null); refreshBadge(); if (reload) reload(); setTick((t) => t + 1); }} />}
+        {edit && <EntryDialog key={edit.k} onStartHere={(ym) => { const def = edit.def; setEdit(null); setStartFor({ def, suggest: ym }); }} meta={meta} def={edit.def} ym={edit.ym} cell={edit.cell} checks={edit.checks || ((checksOf(edit.def.id, edit.ym) || {}).items)} showCalc={showCalc} onClose={() => setEdit(null)} onSaved={(c, next) => { onSaved(c, next); setTick((t) => t + 1); }} />}
       </div>
     );
   }
@@ -973,7 +1042,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                 <b style={{ fontSize: 14.5, color: 'var(--ink)', flex: 1 }}>{K.fmtRange(r.from, r.to)}</b>
                 <span className="kp-pill" style={r.state === 'final' ? { background: '#e7f6ed', color: '#14713f' } : { background: '#fff1d6', color: '#8a5a00' }}>{r.state === 'final' ? 'Final' : 'Draft'}</span>
               </div>
-              <div className="kp-muted">{(K.PRESETS.find((x) => x.id === r.preset) || {}).label || 'Custom'}{r.summary ? ' · ' + r.summary.met + ' on target · ' + r.summary.off + ' need action' : ''}</div>
+              <div className="kp-muted">{(r.preset === 'year' ? 'Year ' + r.from.slice(0, 4) : (K.PRESETS.find((x) => x.id === r.preset) || {}).label || 'Custom')}{r.summary ? ' · ' + r.summary.met + ' on target · ' + r.summary.off + ' need action' : ''}</div>
               <SumBar s={r.summary} />
               <div className="kp-muted" style={{ fontSize: 11 }}>{r.state === 'final' ? 'Finalised by ' + (r.finalizedBy || '—') + ' · ' + when(r.finalizedAt) : (r.generatedBy || '') + ' · ' + when(r.generatedAt)}</div>
             </div>
@@ -1724,7 +1793,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const segs = Array.from({ length: cfg.cycleMonths * cfg.cycles }, (_, i) => i);
     const doneN = cyc.index === 0 ? 0 : cyc.index > cfg.cycles ? segs.length : (cyc.index - 1) * cfg.cycleMonths + (cyc.monthNo || 0);
     let body;
-    if (v === 'kpiEntry') body = <DataEntry meta={meta} defs={defs} focusKpi={kpi} showCalc={showCalc} />;
+    if (v === 'kpiEntry') body = <DataEntry meta={meta} defs={defs} focusKpi={kpi} showCalc={showCalc} reload={() => { loadMeta(); loadDefs(); }} />;
     else if (v === 'kpiReports') body = report ? <ReportDoc key={report} meta={meta} id={report} setRoute={setRoute} showCalc={showCalc} /> : <ReportsHome meta={meta} setRoute={setRoute} />;
     else if (v === 'kpiManage') body = <ManageKpis meta={meta} defs={defs} reload={loadDefs} />;
     else if (v === 'kpiActions') body = <ActionBoard meta={meta} defs={defs} reload={loadDefs} focusKpi={kpi} />;

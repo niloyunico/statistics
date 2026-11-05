@@ -476,7 +476,9 @@ function mount(app, opts) {
         await E.loadSources(v.ctx, { now: now() }, deps);
         const all = E.evidenceAll(v.ctx, defs, months, v.savedById, cfg);
         checks = {};
+        const closed = K.lastClosedMonth(now());
         Object.keys(all).forEach((k) => { checks[k] = {}; Object.keys(all[k]).forEach((m) => {
+          if (m > closed) return; // the running month and later ones owe nothing yet
           const cs = all[k][m].checks.filter((c) => c.level !== 'info');
           if (cs.length) checks[k][m] = { level: cs.some((c) => c.level === 'error') ? 'error' : 'warn', items: cs.map((c) => ({ code: c.code, level: c.level, text: c.text })) };
         }); });
