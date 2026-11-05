@@ -793,6 +793,16 @@ function staffDeptList(e){
   const parts=String((e&&e.current_department)||'').split(',').map(x=>x.trim()).filter(Boolean);
   return parts.length?parts.map(x=>staffCanonDept(x)):[staffCanonDept(e&&e.current_department)];
 }
+// A person's extracurricular activities. The form stores a comma list and also takes
+// free-typed values, so "singing" and "Singing" must count as one activity: a match on
+// the standard list takes its spelling, a custom value keeps its own (first letter capitalised).
+function staffActivities(e){
+  const std=(window.STAFF&&window.STAFF.EXTRACURRICULARS)||[];
+  const seen={};
+  return String((e&&e.extracurricular)||'').split(/[,;]/).map(x=>x.trim().replace(/\s+/g,' ')).filter(Boolean)
+    .map(x=>std.find(s=>s.toLowerCase()===x.toLowerCase())||x.charAt(0).toUpperCase()+x.slice(1))
+    .filter(x=>{ const k=x.toLowerCase(); if(seen[k]) return false; seen[k]=1; return true; });
+}
 
 function StaffDirectory({store, setRoute, initialFilter}){
   const [q,setQ]=React.useState('');
@@ -910,6 +920,7 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
   const [qual,setQual]=React.useState(M.qual||'');
   const [expB,setExpB]=React.useState(M.expB||'');
   const [training,setTraining]=React.useState(M.training||'');
+  const [activity,setActivity]=React.useState(M.activity||'');
   const [sortBy,setSortBy]=React.useState(M.sortBy||(recentDays?'entry':'name'));
   const [showInactive,setShowInactive]=React.useState(!!M.showInactive);
   /* THE STAFF GROUP IS A TAB ON THIS PAGE, NOT A ROUTE. Switching it used to setRoute() to
@@ -922,7 +933,7 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
   const [seededFrom,setSeededFrom]=React.useState(group);
   if(seededFrom!==group){ setSeededFrom(group); setTab(group); }
   // Remember the filters as they change…
-  React.useEffect(()=>{ DIR_MEMO[memoKey]=Object.assign({},DIR_MEMO[memoKey],{q,chip,dept,desig,vacc,qual,expB,training,sortBy,showInactive,tab}); });
+  React.useEffect(()=>{ DIR_MEMO[memoKey]=Object.assign({},DIR_MEMO[memoKey],{q,chip,dept,desig,vacc,qual,expB,training,activity,sortBy,showInactive,tab}); });
   // …and the scroll position, tracked live (an unmount-time read is too late: the
   // list is gone and .content has already collapsed by the time cleanup runs).
   React.useEffect(()=>{
@@ -978,7 +989,8 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
   const staffDeptsOf=staffDeptList;
   const filtered=base.filter(e=>{
     if(!matchChip(e))return false;
-    if(q&&!`${e.name} ${e.emp_id} ${e.phone||''}`.toLowerCase().includes(q.toLowerCase()))return false;
+    if(q&&!`${e.name} ${e.emp_id} ${e.phone||''} ${staffActivities(e).join(' ')}`.toLowerCase().includes(q.toLowerCase()))return false;
+    if(activity&&!staffActivities(e).some(a=>a.toLowerCase()===activity))return false;
     if(dept&&staffDeptsOf(e).indexOf(dept)<0)return false;
     if(desig&&staffCanonDesig(e.designation)!==desig)return false;
     if(vacc==='__ok'&&!vaccOK(e.hepatitis_b_vaccination))return false;
@@ -1007,10 +1019,18 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
   const deptOpts=[...new Set(all.flatMap(e=>staffDeptsOf(e)))].sort((a,b)=>a.localeCompare(b));
   const desigOpts=[...new Set(all.map(e=>staffCanonDesig(e.designation)).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const qualOpts=S.uniqueVals(all,'qualification');
+  // Activities on this tab with head-counts, most common first ("who can sing?" → Singing (12)).
+  // Keyed lower-case so two spellings of one custom activity share a row.
+  const actOpts=(()=>{ const m={};
+    base.forEach(e=>staffActivities(e).forEach(a=>{ const k=a.toLowerCase(); (m[k]||(m[k]={k,label:a,n:0})).n++; }));
+    return Object.values(m).sort((a,b)=>b.n-a.n||a.label.localeCompare(b.label)); })();
+  // Why a row is listed: the activity picked, or the one the search text hits, goes first.
+  const ql=q.trim().toLowerCase();
+  const actHit=(a)=>{ const k=a.toLowerCase(); return (!!activity&&k===activity)||(!!ql&&k.includes(ql)); };
   const sel={padding:'9px 11px',border:'1px solid var(--line)',borderRadius:8,fontSize:12.5,fontFamily:'inherit',background:'#fff'};
   const chips=[['all','All'],['fav','★ Favorites'],['missing','⚠ Missing vaccination'],['icu','ICU staff'],['emergency','Emergency / ER'],['otcath','OT / Cath Lab'],['newhire','New hire']]
     .concat(apprOn?[['apprDue','◷ Appraisal due'],['apprOverdue','⚠ Appraisal overdue']]:[]);
-  const anyFilter=q||dept||desig||vacc||qual||expB||training||chip!=='all';
+  const anyFilter=q||dept||desig||vacc||qual||expB||training||activity||chip!=='all';
   return (
     <div className="grid" style={{gap:14}}>
       <div style={{display:'flex',alignItems:'flex-end',gap:12,flexWrap:'wrap'}}>
@@ -1045,15 +1065,18 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
       {/* filter bar */}
       <div className="card" style={{padding:'12px 14px',display:'flex',gap:10,flexWrap:'wrap',alignItems:'center'}}>
         <div style={{display:'flex',alignItems:'center',gap:8,background:'#fff',border:'1px solid var(--line)',borderRadius:8,padding:'8px 11px',flex:1,minWidth:200,color:'var(--faint)'}}><Ic d={I.search} s={15}/>
-          <input placeholder="Search name / Emp ID / Phone" value={q} onChange={e=>setQ(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:13,color:'var(--ink)',width:'100%'}}/></div>
+          <input placeholder="Search name / Emp ID / Phone / Activity" value={q} onChange={e=>setQ(e.target.value)} style={{border:0,background:'transparent',outline:'none',fontFamily:'inherit',fontSize:13,color:'var(--ink)',width:'100%'}}/></div>
         <select style={sel} value={dept} onChange={e=>setDept(e.target.value)}><option value="">All Departments</option>{deptOpts.map(d=><option key={d} value={d}>{staffDeptLabel(d)}</option>)}</select>
         <select style={sel} value={desig} onChange={e=>setDesig(e.target.value)}><option value="">All Designations</option>{desigOpts.map(d=><option key={d}>{d}</option>)}</select>
         <select style={sel} value={vacc} onChange={e=>setVacc(e.target.value)}><option value="">All Vaccination</option><option value="__ok">✓ Compliant</option><option value="__gap">⚠ Has gap</option>{[...new Set(all.map(e=>e.hepatitis_b_vaccination).filter(Boolean))].map(d=><option key={d}>{d}</option>)}</select>
         {qualOpts.length>0&&<select style={sel} value={qual} onChange={e=>setQual(e.target.value)}><option value="">All Qualifications</option>{qualOpts.map(d=><option key={d}>{d}</option>)}</select>}
         <select style={sel} value={expB} onChange={e=>setExpB(e.target.value)}><option value="">All Experience</option>{['<1','1-3','3-5','5-10','10+'].map(x=><option key={x} value={x}>{x} yrs</option>)}</select>
         <select style={sel} value={training} onChange={e=>setTraining(e.target.value)}><option value="">Any Training</option><option value="has">Has training</option><option value="none">No training</option></select>
+        {(actOpts.length>0||activity)&&<select style={{...sel,...(activity?{borderColor:'#6a52d4',color:'#6a52d4',fontWeight:600}:null)}} value={activity} onChange={e=>setActivity(e.target.value)} title="Find staff by extracurricular activity">
+          <option value="">All Activities</option>{actOpts.map(o=><option key={o.k} value={o.k}>{o.label} ({o.n})</option>)}
+          {activity&&!actOpts.some(o=>o.k===activity)&&<option value={activity}>{activity.charAt(0).toUpperCase()+activity.slice(1)} (0)</option>}</select>}
         <select style={sel} value={sortBy} onChange={e=>setSortBy(e.target.value)}>{recentDays>0&&<option value="entry">Sort: {updates?'Latest update':'Newest entry'}</option>}<option value="name">Sort: Name</option><option value="exp">Sort: Experience</option><option value="doj">Sort: Newest hire</option><option value="dept">Sort: Department</option>{apprOn&&<option value="appraisal">Sort: Appraisal score</option>}</select>
-        <button className="btn pri sm" style={{opacity:anyFilter?1:.5}} onClick={()=>{setQ('');setDept('');setDesig('');setVacc('');setQual('');setExpB('');setTraining('');setChip('all');}}>Clear filters</button>
+        <button className="btn pri sm" style={{opacity:anyFilter?1:.5}} onClick={()=>{setQ('');setDept('');setDesig('');setVacc('');setQual('');setExpB('');setTraining('');setActivity('');setChip('all');}}>Clear filters</button>
         <ExportMenu rows={sorted} role={label}/>
       </div>
 
@@ -1061,7 +1084,7 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
       <div className="card" style={{overflow:'hidden'}}>
         <div style={{overflowX:'auto'}}>
           <table className="tbl">
-            <thead><tr><th style={{textAlign:'center',width:34}}>★</th><th style={{textAlign:'left'}}>Emp ID</th><th style={{textAlign:'left'}}>Name</th>{recentDays>0&&<th style={{textAlign:'left'}}>{updates?'Last Updated':'Entry Date'}</th>}<th style={{textAlign:'left'}}>Designation</th><th style={{textAlign:'left'}}>Department</th><th>Experience</th><th style={{textAlign:'left'}}>Vaccination</th>{apprOn&&<th style={{textAlign:'left'}}>Appraisal</th>}<th style={{textAlign:'left'}}>Phone</th><th style={{textAlign:'right'}}>Manage</th></tr></thead>
+            <thead><tr><th style={{textAlign:'center',width:34}}>★</th><th style={{textAlign:'left'}}>Emp ID</th><th style={{textAlign:'left'}}>Name</th>{recentDays>0&&<th style={{textAlign:'left'}}>{updates?'Last Updated':'Entry Date'}</th>}<th style={{textAlign:'left'}}>Designation</th><th style={{textAlign:'left'}}>Department</th><th style={{textAlign:'left'}}>Activities</th><th>Experience</th><th style={{textAlign:'left'}}>Vaccination</th>{apprOn&&<th style={{textAlign:'left'}}>Appraisal</th>}<th style={{textAlign:'left'}}>Phone</th><th style={{textAlign:'right'}}>Manage</th></tr></thead>
             <tbody>
               {sorted.map(e=>(
                 <tr key={e.id} style={{opacity:e.is_active?1:.55}}>
@@ -1078,6 +1101,12 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
                   {recentDays>0&&<td className="num" style={{textAlign:'left',whiteSpace:'nowrap'}}>{updates?new Date(recentTime(e)).toLocaleString('en-GB',{timeZone:'Asia/Dhaka',dateStyle:'short',timeStyle:'short'}):new Date(recentTime(e)).toLocaleDateString('en-GB',{timeZone:'Asia/Dhaka'})}</td>}
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>
+                  <td style={{textAlign:'left'}}>{(()=>{ const acts=staffActivities(e); if(!acts.length) return <span style={{color:'var(--faint)'}}>—</span>;
+                    const ord=[...acts.filter(actHit),...acts.filter(a=>!actHit(a))], more=ord.length-2;
+                    return <div title={acts.join(', ')} style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center',maxWidth:220}}>
+                      {ord.slice(0,2).map(a=>{ const hit=actHit(a); return <span key={a} style={{fontSize:11,fontWeight:600,padding:'2px 8px',borderRadius:10,whiteSpace:'nowrap',
+                        background:hit?'#6a52d4':'#f1eefb',color:hit?'#fff':'#6a52d4',border:'1px solid '+(hit?'#6a52d4':'#e3dcf7')}}>{a}</span>; })}
+                      {more>0&&<span style={{fontSize:11,fontWeight:700,color:'var(--muted)'}}>+{more}</span>}</div>; })()}</td>
                   <td title={e.total_experience_text||''} className="num">{window.STAFF.expLabel(e)}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}><span style={{color:vaccColor(e.hepatitis_b_vaccination),fontWeight:600}}>{e.hepatitis_b_vaccination||'Unknown'}</span></td>
                   {apprOn&&<td style={{textAlign:'left',cursor:'pointer'}} title="Open the performance record on this profile"
