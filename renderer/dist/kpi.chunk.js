@@ -771,7 +771,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       fill: col
     }));
   }
-  function usePeriod(meta, key, def) {
+  function usePeriod(meta, key, def, yearCap) {
     const [p, setP] = useState(() => lsGet('kpi_period_' + key) || {
       preset: def || '6m'
     });
@@ -784,10 +784,18 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         from: p.from,
         to: K.monthDiff(p.from, p.to) >= K.MAX_MONTHS ? K.addMonth(p.from, K.MAX_MONTHS - 1) : p.to
       };
+      if (p.preset === 'year') return K.yearRange(p.year || meta.lastClosed.slice(0, 4), yearCap === 'all' ? null : meta.lastClosed);
       return K.presetRange(p.preset === 'custom' ? '6m' : p.preset, K.isMonth(p.end) ? p.end : meta.lastClosed, meta.config);
-    }, [p, meta]);
+    }, [p, meta, yearCap]);
     return [p, setP, range];
   }
+  const yearsOf = meta => {
+    const last = +meta.thisMonth.slice(0, 4),
+      first = Math.min(+meta.config.cycleStart.slice(0, 4) - 1, last - 2);
+    const out = [];
+    for (let y = last; y >= first; y--) out.push(y);
+    return out;
+  };
   function PeriodPicker({
     meta,
     p,
@@ -798,7 +806,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   }) {
     const list = K.PRESETS.filter(x => !presets || presets.indexOf(x.id) >= 0);
     const top = maxMonth || meta.thisMonth;
-    const isN = !K.PRESETS.find(x => x.id === p.preset && x.cycle) && p.preset !== 'custom';
+    const isN = !K.PRESETS.find(x => x.id === p.preset && x.cycle) && p.preset !== 'custom' && p.preset !== 'year';
     return React.createElement("div", {
       className: "kp-chips",
       style: {
@@ -809,15 +817,32 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       return React.createElement("button", {
         key: x.id,
         className: 'kp-chip' + (p.preset === x.id ? ' on' : ''),
-        title: r ? K.fmtRange(r.from, r.to) : '',
+        title: r ? K.fmtRange(r.from, r.to) : x.id === 'year' ? 'A calendar year, January to December' : '',
         onClick: () => setP(Object.assign({}, p, {
           preset: x.id
         }, x.id === 'custom' && !p.from ? {
           from: range.from,
           to: range.to
+        } : {}, x.id === 'year' && !p.year ? {
+          year: +meta.lastClosed.slice(0, 4)
         } : {}))
       }, x.label);
-    }), isN && React.createElement("span", {
+    }), p.preset === 'year' && React.createElement("select", {
+      className: "kp-sel",
+      value: p.year || +meta.lastClosed.slice(0, 4),
+      onChange: e => setP(Object.assign({}, p, {
+        year: +e.target.value
+      })),
+      "aria-label": "Year"
+    }, yearsOf(meta).map(y => React.createElement("option", {
+      key: y,
+      value: y
+    }, y))), p.preset === 'year' && range && range.partial && React.createElement("span", {
+      className: "kp-muted",
+      style: {
+        fontSize: 11.5
+      }
+    }, "so far \u2014 the year is not over"), isN && React.createElement("span", {
       style: {
         display: 'inline-flex',
         gap: 5,
@@ -1403,7 +1428,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       p: p,
       setP: setP,
       range: range,
-      presets: ['1m', '3m', '6m', '12m', 'cycle1', 'cycle2', 'custom']
+      presets: ['1m', '3m', '6m', '12m', 'year', 'cycle1', 'cycle2', 'custom']
     }), rep && rep.state === 'final' && React.createElement("span", {
       className: "kp-pill",
       style: {
@@ -1669,6 +1694,107 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       showCalc: showCalc
     }));
   }
+  function StartDialog({
+    meta,
+    def,
+    suggest,
+    onClose,
+    onSaved
+  }) {
+    const cfg = meta.config;
+    const [m, setM] = useState(suggest || def.startMonth || '');
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState('');
+    const eff = K.isMonth(m) ? m : cfg.cycleStart;
+    async function save(value) {
+      setBusy(true);
+      setErr('');
+      try {
+        await api('/api/kpi/defs/' + encodeURIComponent(def.id), {
+          method: 'PUT',
+          body: JSON.stringify({
+            startMonth: K.isMonth(value) ? value : null,
+            baseUpdatedAt: def.updatedAt
+          })
+        });
+        toast(def.name + ' — counting starts ' + K.fmtMonthLong(K.isMonth(value) ? value : cfg.cycleStart) + '.', 'success');
+        onSaved();
+      } catch (e) {
+        setErr(e.message);
+        setBusy(false);
+      }
+    }
+    return React.createElement("div", {
+      className: "kp-back",
+      onMouseDown: e => e.target === e.currentTarget && onClose()
+    }, React.createElement("div", {
+      className: "kp-dlg",
+      role: "dialog"
+    }, React.createElement("div", {
+      className: "kp-dlg-h"
+    }, React.createElement("span", {
+      className: "kp-code",
+      style: {
+        background: K.pillarOf(cfg, def.pillar).color,
+        marginTop: 2
+      }
+    }, def.code || '•'), React.createElement("div", null, React.createElement("h3", null, "When does ", def.name, " start?"), React.createElement("div", {
+      className: "kp-muted"
+    }, "Cycles, targets and the missing-data checks count from this month. Earlier months are kept but not counted.")), React.createElement("button", {
+      className: "kp-x",
+      onClick: onClose
+    }, "\xD7")), React.createElement("div", {
+      className: "kp-dlg-b"
+    }, React.createElement("label", {
+      className: "kp-fld"
+    }, React.createElement("span", {
+      className: "kp-lab"
+    }, "This KPI starts on"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("input", {
+      type: "month",
+      className: "kp-in",
+      value: m,
+      max: meta.thisMonth,
+      onChange: e => setM(e.target.value)
+    }), React.createElement("span", {
+      className: "kp-muted"
+    }, K.isMonth(m) ? '' : 'blank = the same as all KPIs (' + K.fmtMonthLong(cfg.cycleStart) + ')'))), React.createElement("div", {
+      className: "kp-banner info",
+      style: {
+        display: 'block'
+      }
+    }, Array.from({
+      length: cfg.cycles
+    }, (_, i) => {
+      const r = K.cycleRange(i + 1, cfg, {
+        startMonth: eff
+      });
+      return 'Cycle ' + (i + 1) + ': ' + K.fmtRange(r.from, r.to);
+    }).join(' · ')), err && React.createElement("div", {
+      className: "kp-err"
+    }, err)), React.createElement("div", {
+      className: "kp-dlg-f"
+    }, React.createElement(Btn, {
+      pri: true,
+      disabled: busy || m && !K.isMonth(m),
+      onClick: () => save(m)
+    }, "Save"), def.startMonth && React.createElement(Btn, {
+      disabled: busy,
+      onClick: () => save(null)
+    }, "Same as all KPIs"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement(Btn, {
+      onClick: onClose
+    }, "Cancel"))));
+  }
   function EntryDialog({
     meta,
     def,
@@ -1677,7 +1803,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     onClose,
     onSaved,
     showCalc,
-    checks
+    checks,
+    onStartHere
   }) {
     const f = def.formula;
     const saved = cell.source === 'manual' || cell.source === 'edited';
@@ -1831,7 +1958,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       className: "kp-dlg-b"
     }, cell.notStarted && React.createElement("div", {
       className: "kp-banner info"
-    }, "This KPI starts in ", K.fmtMonthLong(K.startOf(def, meta.config)), ". A figure for ", K.fmtMonthLong(ym), " can be kept for reference, but it is not counted in any report."), cell.auto && React.createElement("div", {
+    }, React.createElement("div", null, "This KPI starts in ", K.fmtMonthLong(K.startOf(def, meta.config)), ". A figure for ", K.fmtMonthLong(ym), " can be kept for reference, but it is not counted in any report.", meta.canEdit && onStartHere && React.createElement(React.Fragment, null, React.createElement("br", null), React.createElement("button", {
+      onClick: () => onStartHere(ym)
+    }, "Start this KPI from ", K.fmtMonthLong(ym))))), cell.auto && React.createElement("div", {
       className: "kp-sys"
     }, React.createElement("b", null, "System figure: ", K.fmt(def, cell.auto.value)), React.createElement("span", null, K.has(cell.auto.num) ? cell.auto.num + (K.has(cell.auto.den) ? ' ÷ ' + cell.auto.den : '') : ''), React.createElement("span", {
       style: {
@@ -1990,9 +2119,41 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     meta,
     defs,
     focusKpi,
-    showCalc
+    showCalc,
+    reload
   }) {
-    const [p, setP, range] = usePeriod(meta, 'entry', '6m');
+    const [startFor, setStartFor] = useState(null);
+    const [allStart, setAllStart] = useState(meta.config.cycleStart);
+    useEffect(() => {
+      setAllStart(meta.config.cycleStart);
+    }, [meta.config.cycleStart]);
+    async function saveAllStart() {
+      const ok = await confirmBox({
+        title: 'All KPIs start on ' + K.fmtMonthLong(allStart) + '?',
+        message: 'Cycles, targets and the missing-data checks of every KPI count from ' + K.fmtMonthLong(allStart) + ' (a KPI with its own start month keeps it). Earlier months are kept, only not counted. Nothing is deleted.',
+        confirmLabel: 'Change start'
+      });
+      if (!ok) {
+        setAllStart(meta.config.cycleStart);
+        return;
+      }
+      try {
+        await api('/api/kpi/config', {
+          method: 'PUT',
+          body: JSON.stringify({
+            cycleStart: allStart
+          })
+        });
+        toast('All KPIs now start ' + K.fmtMonthLong(allStart) + '.', 'success');
+        refreshBadge();
+        if (reload) reload();
+        setTick(t => t + 1);
+      } catch (e) {
+        toast(e.message, 'error');
+        setAllStart(meta.config.cycleStart);
+      }
+    }
+    const [p, setP, range] = usePeriod(meta, 'entry', '6m', 'all');
     const [vals, setVals] = useState(null);
     const [err, setErr] = useState('');
     const [only, setOnly] = useState(false);
@@ -2090,7 +2251,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       p: p,
       setP: setP,
       range: range,
-      presets: ['1m', '3m', '6m', '12m', 'cycle1', 'cycle2', 'custom'],
+      presets: ['1m', '3m', '6m', '12m', 'year', 'cycle1', 'cycle2', 'custom'],
       maxMonth: meta.thisMonth
     }), React.createElement("span", {
       style: {
@@ -2123,7 +2284,37 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }), "Only gaps"), React.createElement(Btn, {
       onClick: () => setTick(t => t + 1),
       title: "Read the quality data again"
-    }, "\u21BB Refresh system figures")), gaps.length > 0 && (meta.canAdd || meta.canEdit) && React.createElement("div", {
+    }, "\u21BB Refresh system figures"), React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        gap: 6,
+        alignItems: 'center',
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink-2)',
+        padding: '3px 4px 3px 10px',
+        borderRadius: 9,
+        background: '#eef8fd',
+        border: '1px solid #b9dcef'
+      },
+      title: "Every KPI counts its cycles, targets and missing-data checks from this month, unless it has its own start"
+    }, "All KPIs start on", meta.isAdmin ? React.createElement(React.Fragment, null, React.createElement("input", {
+      type: "month",
+      className: "kp-sel",
+      value: allStart,
+      max: meta.thisMonth,
+      onChange: e => K.isMonth(e.target.value) && setAllStart(e.target.value),
+      style: {
+        padding: '4px 8px'
+      }
+    }), allStart !== meta.config.cycleStart && React.createElement(Btn, {
+      pri: true,
+      onClick: saveAllStart
+    }, "Save")) : React.createElement("b", {
+      style: {
+        padding: '0 8px 0 2px'
+      }
+    }, K.fmtMonth(meta.config.cycleStart)))), gaps.length > 0 && (meta.canAdd || meta.canEdit) && React.createElement("div", {
       className: "kp-banner",
       role: "status"
     }, React.createElement("span", {
@@ -2252,7 +2443,23 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontSize: 10.5
       }
-    }, d.unit, d.source && d.source.indId ? d.autoFill === false || meta.config.autoFill === false ? ' · typed monthly (auto-fill off)' : ' · auto from quality' : ' · typed monthly', d.startMonth && K.isMonth(d.startMonth) ? ' · starts ' + K.fmtMonth(d.startMonth) : '')))), months.map(m => {
+    }, d.unit, d.source && d.source.indId ? d.autoFill === false || meta.config.autoFill === false ? ' · typed monthly (auto-fill off)' : ' · auto from quality' : ' · typed monthly'), React.createElement("button", {
+      onClick: () => meta.canEdit && setStartFor({
+        def: d
+      }),
+      disabled: !meta.canEdit,
+      title: meta.canEdit ? 'Change when this KPI starts counting' : '',
+      style: {
+        border: 0,
+        background: 'transparent',
+        padding: 0,
+        font: 'inherit',
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: d.startMonth ? '#8a5a00' : '#0b6b8f',
+        cursor: meta.canEdit ? 'pointer' : 'default'
+      }
+    }, (d.startMonth ? '◷ starts ' + K.fmtMonth(d.startMonth) + ' (own)' : '◷ starts ' + K.fmtMonth(meta.config.cycleStart)) + (meta.canEdit ? ' ✎' : ''))))), months.map(m => {
       const c = cellOf(d.id, m),
         future = m > meta.thisMonth,
         ch = checksOf(d.id, m);
@@ -2313,8 +2520,27 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       className: "kp-empty"
     }, only ? 'No gaps — every KPI has its figures in this period.' : 'No KPI matches.'))), React.createElement("div", {
       className: "kp-muted"
-    }, "Figures from the quality data and the hand hygiene audit fill themselves. You can still click one and type over it \u2014 the system figure stays visible beside yours, and \u201CRevert to system figure\u201D brings it back."), edit && React.createElement(EntryDialog, {
+    }, "Figures from the quality data and the hand hygiene audit fill themselves. You can still click one and type over it \u2014 the system figure stays visible beside yours, and \u201CRevert to system figure\u201D brings it back."), startFor && React.createElement(StartDialog, {
+      meta: meta,
+      def: startFor.def,
+      suggest: startFor.suggest,
+      onClose: () => setStartFor(null),
+      onSaved: () => {
+        setStartFor(null);
+        refreshBadge();
+        if (reload) reload();
+        setTick(t => t + 1);
+      }
+    }), edit && React.createElement(EntryDialog, {
       key: edit.k,
+      onStartHere: ym => {
+        const def = edit.def;
+        setEdit(null);
+        setStartFor({
+          def,
+          suggest: ym
+        });
+      },
       meta: meta,
       def: edit.def,
       ym: edit.ym,
@@ -2477,7 +2703,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }
     }, r.state === 'final' ? 'Final' : 'Draft')), React.createElement("div", {
       className: "kp-muted"
-    }, (K.PRESETS.find(x => x.id === r.preset) || {}).label || 'Custom', r.summary ? ' · ' + r.summary.met + ' on target · ' + r.summary.off + ' need action' : ''), React.createElement(SumBar, {
+    }, r.preset === 'year' ? 'Year ' + r.from.slice(0, 4) : (K.PRESETS.find(x => x.id === r.preset) || {}).label || 'Custom', r.summary ? ' · ' + r.summary.met + ' on target · ' + r.summary.off + ' need action' : ''), React.createElement(SumBar, {
       s: r.summary
     }), React.createElement("div", {
       className: "kp-muted",
@@ -4981,7 +5207,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       meta: meta,
       defs: defs,
       focusKpi: kpi,
-      showCalc: showCalc
+      showCalc: showCalc,
+      reload: () => {
+        loadMeta();
+        loadDefs();
+      }
     });else if (v === 'kpiReports') body = report ? React.createElement(ReportDoc, {
       key: report,
       meta: meta,

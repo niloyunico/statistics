@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=b55d12daea","reports":"/dist/reports.chunk.js?v=4a957c6744","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=a57ab1a414","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=b63f83005d","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=b55d12daea","reports":"/dist/reports.chunk.js?v=4a957c6744","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=400716dfd1","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=b63f83005d","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -6874,6 +6874,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     { id: '12m', label: '12 months', n: 12 },
     { id: 'cycle1', label: 'Cycle 1', cycle: 1 },
     { id: 'cycle2', label: 'Cycle 2', cycle: 2 },
+    { id: 'year', label: 'Year' },
     { id: 'custom', label: 'Custom' },
   ];
   const MAX_MONTHS = 36;
@@ -6892,7 +6893,10 @@ window.QI_CORRECTIONS_BY_DEFID = {
   }
   const fmtMonth = (ym) => (isMonth(ym) ? MONS[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4) : String(ym || ''));
   const fmtMonthLong = (ym) => (isMonth(ym) ? MONS_FULL[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4) : String(ym || ''));
-  const fmtRange = (from, to) => (from === to ? fmtMonthLong(from) : fmtMonth(from) + ' – ' + fmtMonth(to));
+  // "October 2026" · "Year 2026" (a whole January–December) · "Sep 2026 – Feb 2027".
+  const fmtRange = (from, to) => (from === to ? fmtMonthLong(from)
+    : (isMonth(from) && isMonth(to) && from.slice(5) === '01' && to.slice(5) === '12' && from.slice(0, 4) === to.slice(0, 4)) ? 'Year ' + from.slice(0, 4)
+    : fmtMonth(from) + ' – ' + fmtMonth(to));
   // '2026-11' → 'Nov-26' (the quality data's month key) and back.
   const toMonKey = (ym) => MONS[+ym.slice(5, 7) - 1] + '-' + ym.slice(2, 4);
   function toYm(key) {
@@ -6944,16 +6948,28 @@ window.QI_CORRECTIONS_BY_DEFID = {
     const from = addMonth(startOf(def, c), (k - 1) * c.cycleMonths);
     return { from, to: addMonth(from, c.cycleMonths - 1) };
   }
+  /* A calendar year, January to December (the hospital's reporting year). `capTo` stops it at a
+     month — the last closed month for a year still running ("2026 so far"); omitted = all 12. */
+  function yearRange(year, capTo) {
+    const y = parseInt(year, 10) || +thisMonth().slice(0, 4);
+    const from = y + '-01', dec = y + '-12';
+    const to = isMonth(capTo) && capTo < dec ? (capTo < from ? from : capTo) : dec;
+    return { from, to, year: y, partial: to !== dec };
+  }
+  const isFullYear = (from, to) => isMonth(from) && isMonth(to) && from.slice(5) === '01' && to.slice(5) === '12' && from.slice(0, 4) === to.slice(0, 4);
   // The report period for a preset, ending at `end` (default: the last closed month).
+  // 'year' takes the year from `end` and runs January → December (capped at `end` if given as a cap).
   function presetRange(preset, end, cfg) {
     const p = PRESETS.find((x) => x.id === preset) || PRESETS[0];
     if (p.cycle) return cycleRange(p.cycle, cfg);
+    if (p.id === 'year') { const y = isMonth(end) ? end.slice(0, 4) : thisMonth().slice(0, 4); return yearRange(y, lastClosedMonth()); }
     const to = isMonth(end) ? end : lastClosedMonth();
     return { from: addMonth(to, -((p.n || 1) - 1)), to };
   }
-  // A cycle is named as a cycle first; otherwise by its length; otherwise 'custom'.
+  // A cycle is named as a cycle first; then a calendar year; otherwise by its length; otherwise 'custom'.
   function presetOf(from, to, cfg) {
     for (const p of PRESETS) if (p.cycle) { const r = cycleRange(p.cycle, cfg); if (r.from === from && r.to === to) return p.id; }
+    if (isFullYear(from, to)) return 'year';
     for (const p of PRESETS) if (p.n && monthDiff(from, to) + 1 === p.n) return p.id;
     return 'custom';
   }
@@ -7238,7 +7254,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
   const API = {
     MONS, MONS_FULL, FORMULAS, FORMULA_LABEL, DIRECTIONS, ACTION_STATUSES, ACTION_LABEL, DEFAULT_PILLARS, DEFAULT_CFG, STATUS, PRESETS, MAX_MONTHS,
     has, isMonth, addMonth, monthDiff, monthsBetween, fmtMonth, fmtMonthLong, fmtRange, toMonKey, toYm, thisMonth, lastClosedMonth,
-    cfgOf, pillarOf, startOf, isStarted, cycleOf, cycleRange, presetRange, presetOf, targetFor, round, computeValue, periodValue, gap, statusOf, trendOf, achievement,
+    cfgOf, pillarOf, startOf, isStarted, cycleOf, cycleRange, yearRange, isFullYear, presetRange, presetOf, targetFor, round, computeValue, periodValue, gap, statusOf, trendOf, achievement,
     resolveCell, validateEntry, medianOf, deviates, CHECK_META, checkLevel, evidenceSteps, COUNTED, unitKind, fmt, unitLabel, gapLabel, slug, newKpiId, buildRows, summarize, reportId, parseReportId,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
