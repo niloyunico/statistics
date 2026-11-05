@@ -114,6 +114,16 @@
     }));
     const set = (patch) => setS((s) => ({ ...s, ...(typeof patch === 'function' ? patch(s) : patch) }));
     const dateRef = useRef(null);
+    // The units this account may roster (/api/rosters/scope). Someone bound to a few units —
+    // an In-charge of Trainee Nurses — sees only those here, as on the Rosters tab; null = all.
+    const [scopeUnits, setScopeUnits] = useState(null);
+    useEffect(() => {
+      let live = true;
+      fetch('/api/rosters/scope', { credentials: 'same-origin', cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => {
+        if (live && j && j.ok && j.scope === 'departments' && Array.isArray(j.units)) setScopeUnits(new Set(j.units));
+      }).catch(() => {});
+      return () => { live = false; };
+    }, []);
     useEffect(() => {
       const rs = () => set({ narrow: window.innerWidth < 1240 });
       window.addEventListener('resize', rs);
@@ -136,7 +146,7 @@
         const dept = R.unitOf ? R.unitOf(e) : (e.current_department || 'Unassigned');   // trainees: one Trainee Nurses unit
         (by[dept] = by[dept] || []).push(e);
       });
-      const units = Object.keys(by).sort((a, b) => a.localeCompare(b)).map((dept) => {
+      const units = Object.keys(by).filter((d) => !scopeUnits || scopeUnits.has(d)).sort((a, b) => a.localeCompare(b)).map((dept) => {
         const people = by[dept];
         const hc = [0, 0, 0, 0];
         people.forEach((e) => { hc[desigBucket(e)]++; });
@@ -144,7 +154,7 @@
         return { dept, div: divOf(dept), people, hc, incharge: chief ? chief.name : '—' };
       });
       return units;
-    }, [staffStore.staff]);
+    }, [staffStore.staff, scopeUnits]);
 
     /* ---- roster sheets: index once, then each (dept, y, m) the view touches ---- */
     const [index, setIndex] = useState(null);        // list of {dept, year, month, status}

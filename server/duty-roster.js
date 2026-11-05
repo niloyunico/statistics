@@ -139,11 +139,42 @@ function normRoster(input, existing) {
 // in server/access.js, which also holds the fallback for accounts assigned none yet.
 // Rosters are keyed on the department string, matched with the same vocabulary as
 // staff scoping, so "Level 10", "Level-10" and "IPD Cabin Level 10" are one unit.
+/* The units Duty Roster -> Setup names this account for: In-charge of / Manager of. */
+async function rosterPlaceOf(req) {
+  const me = String((req.access && req.access.username) || '').toLowerCase();
+  const out = { incharge: new Set(), manager: new Set(), any: false };
+  if (!me) return out;
+  try {
+    const cfg = await getConfig();
+    Object.keys(cfg.depts || {}).forEach((k) => {
+      const d = cfg.depts[k] || {};
+      if (d.incharge && String(d.incharge.username || '').toLowerCase() === me) out.incharge.add(k);
+      if (d.manager && String(d.manager.username || '').toLowerCase() === me) out.manager.add(k);
+    });
+  } catch (e) { /* no setup yet */ }
+  out.any = out.incharge.size > 0 || out.manager.size > 0;
+  return out;
+}
+
+/* Someone with a PLACE in the roster chain (an In-charge or a Manager — by role or by Setup)
+   sees exactly the units that place gives them, plus any units an administrator listed on
+   their account explicitly. The account-wide "all units" default that ticking Duty Roster
+   leaves behind must NOT open every unit to them: an instructor made In-charge of Trainee
+   Nurses saw — and could edit — every ward's roster. Their Setup units arrive through
+   reviewVisible / isUnitIncharge; this matcher only answers for the rest. The CNS and
+   administrators keep the whole hospital. */
+async function holdsRosterPlace(req) {
+  const a = req.access;
+  if (!a || a.unrestricted || a.rosterRole === 'cns') return false;
+  if (a.rosterRole === 'incharge' || a.rosterRole === 'manager') return true;
+  return (await rosterPlaceOf(req)).any;
+}
 async function deptMatcher(req) {
   const a = req.access;
   if (!a || a.unrestricted) return () => true;
   const acc = require('./access');
   const keys = await acc.rosterDeptNames(a);
+  if (keys === null && await holdsRosterPlace(req)) return () => false;
   return (dept) => acc.rosterVisible(keys, dept);
 }
 
@@ -363,10 +394,9 @@ async function reviewVisible(req, cfg, index, dept) {
   const key = deptKeyOf(index, dept);
   const d = key && cfg.depts[key];
   const me = (req.access && req.access.username) || '';
-  // The unit's own In-charge (Setup) sees its sheets whatever their roster unit list says.
+  // The unit's own In-charge or Manager (Setup) sees its sheets whatever their unit list says.
   if (me && d && d.incharge && d.incharge.username === me) return true;
-  if (role !== 'manager') return false;
-  return !!(d && d.manager && d.manager.username === me);
+  return !!(me && d && d.manager && d.manager.username === me);
 }
 
 /* Is this account the In-charge Duty Roster -> Setup names for the unit `dept`? Then it may
@@ -452,8 +482,14 @@ function mount(app, opts) {
       try {
         const me = (a && a.username) || '';
         const cfg0 = await getConfig(); icIndex = await deptIndex();
-        Object.keys(cfg0.depts || {}).forEach((k) => { const d = cfg0.depts[k]; if (me && d && d.incharge && d.incharge.username === me) icKeys.add(k); });
+        Object.keys(cfg0.depts || {}).forEach((k) => {
+          const d = cfg0.depts[k];
+          if (me && d && ((d.incharge && d.incharge.username === me) || (d.manager && d.manager.username === me))) icKeys.add(k);
+        });
+        // A Setup unit nobody is on yet (no staff, no sheet) still belongs on their list.
+        icIndex.forEach((d) => { if (icKeys.has(d.id)) names.add(d.name); });
       } catch (e) { icKeys = new Set(); }
+      const placeBound = await holdsRosterPlace(req) && (await acc.rosterDeptNames(a)) === null;
       try { const c0 = await getConfig(); if ((c0.supervisors || []).length) names.add(SUPERVISOR_UNIT); } catch (e) { /* no setup yet */ }
       const units = [...names].filter((n) => n && (allowed(n) || (icKeys.size && icIndex && icKeys.has(deptKeyOf(icIndex, n))))).sort((x, y) => x.localeCompare(y));
       const may = (act) => !a || a.unrestricted || acc.can(a, 'roster', act);
@@ -462,7 +498,8 @@ function mount(app, opts) {
       const edit = pe || (console_ && may('edit'));
       res.json({
         ok: true,
-        scope: (a && !a.unrestricted && a.rosterScope) || 'all',
+        // Someone with a place in the chain is bound to their units, whatever the account default says.
+        scope: placeBound ? 'departments' : ((a && !a.unrestricted && a.rosterScope) || 'all'),
         units,
         // Collectors and in-charges only ever receive APPROVED sheets (publishedOnly),
         // so the renderer must not offer them an editor for a unit they can only read.

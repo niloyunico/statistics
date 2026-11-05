@@ -21,6 +21,7 @@ const ACCOUNTS = [
   { username: 'nasrin', name: 'Nasrin Sultana', role: 'User', active: true, rosterRole: 'cns' },
   { username: 'gone', name: 'Left Already', role: 'User', active: false, rosterRole: 'manager' },
   { username: 'shirin', name: 'Shirin Akter', role: 'User', active: true, rosterRole: 'incharge', rosterScope: 'departments', rosterDepartments: [] },
+  { username: 'chelcia', name: 'Chelcia Bani Baroi', role: 'User', active: true, rosterRole: 'incharge', rosterScope: 'all' },
   { username: 'plain', name: 'No Role', role: 'User', active: true },
 ];
 const fakeUsers = {
@@ -61,6 +62,9 @@ const USERS = {
   // Named NICU's In-charge in Setup, but holds Duty Roster VIEW only and no units: the
   // setup alone must let her prepare NICU's roster — and nothing else.
   shirin: { unrestricted: false, username: 'shirin', name: 'Shirin Akter', role: 'User', rosterRole: 'incharge', perms: { roster: ['view'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'departments', rosterDepartments: [] },
+  // The live case: Duty Roster V/E/A/D/P with the account-wide "all units" default, In-charge
+  // of Trainee Nurses only — she must see that unit and nothing else.
+  chelcia: { unrestricted: false, username: 'chelcia', name: 'Chelcia Bani Baroi', role: 'User', rosterRole: 'incharge', perms: { roster: ['view', 'edit', 'add', 'delete', 'print'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'all' },
   // A second CNS-role holder who prepares a unit too: must not sign what she sent.
   dual: { unrestricted: false, username: 'dual', name: 'Dual Role', role: 'User', rosterRole: 'cns', perms: { roster: ['view', 'edit'] }, departments: [], qualityAreas: [], staffScope: 'all', rosterScope: 'all' },
 };
@@ -205,7 +209,7 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.equal(cfgGet.depts.find((d) => d.id === 'micu').manager.username, 'farida');
     assert.equal(cfgGet.depts.find((d) => d.id === 'nicu').manager, null);
     const reviewers = (await call('GET', '/api/rosters/reviewers')).body.reviewers;
-    assert.deepEqual(reviewers.map((r) => r.username + ':' + r.rosterRole).sort(), ['admin:admin', 'farida:manager', 'nasrin:cns', 'rahima:incharge', 'shirin:incharge'], 'active role holders plus administrators, nobody else');
+    assert.deepEqual(reviewers.map((r) => r.username + ':' + r.rosterRole).sort(), ['admin:admin', 'chelcia:incharge', 'farida:manager', 'nasrin:cns', 'rahima:incharge', 'shirin:incharge'], 'active role holders plus administrators, nobody else');
     assert.ok(reviewers.every((r) => r.perms === undefined && r.passwordHash === undefined), 'names and roster fields only');
 
     // The account-level flags the screens are built from.
@@ -373,6 +377,19 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.ok(roster.getConfig && (await roster.getConfig()).supervisors.join(',') === '5,9', 'a Setup save that does not send the list keeps it (and de-duplicates)');
     const supSheet = (await call('GET', '/api/rosters/Nursing%20Supervisors/2026/9')).body;
     assert.deepEqual(supSheet.members, ['5', '9'], 'the supervisor sheet knows who is on it before it is saved');
+
+    // SECURITY: an In-charge with full Duty Roster rights and the "all units" default sees only
+    // the unit Setup gives her.
+    assert.equal((await call('PUT', '/api/rosters/config', { depts: { trainee: { incharge: { username: 'chelcia' } } } })).status, 200);
+    const chScope = (await call('GET', '/api/rosters/scope', null, 'chelcia')).body;
+    assert.equal(chScope.scope, 'departments', 'she is bound to her units, not "all"');
+    assert.deepEqual(chScope.units, ['Trainee Nurses'], 'her only unit is Trainee Nurses');
+    assert.equal((await call('GET', '/api/rosters/MICU/2026/10', null, 'chelcia')).status, 403, 'MICU is closed to her');
+    assert.equal((await call('PUT', '/api/rosters', { dept: 'MICU', year: 2026, month: 8, grid: {}, baseRevision: 0 }, 'chelcia')).status, 403, 'and she cannot write it');
+    const chList = (await call('GET', '/api/rosters', null, 'chelcia')).body.rosters;
+    assert.ok(chList.length > 0 && chList.every((r) => r.dept === 'Trainee Nurses'), 'the roster list holds only Trainee Nurses sheets: ' + chList.map((r) => r.dept).join(','));
+    assert.equal((await call('PUT', '/api/rosters', { dept: 'Trainee Nurses', year: 2026, month: 8, grid: { S9: { 2: 'G1' } }, baseRevision: 0 }, 'chelcia')).status, 200, 'she prepares her own unit');
+    assert.equal((await call('GET', '/api/rosters/review', null, 'chelcia')).status, 403, 'no review inbox for an In-charge');
 
     // The print log.
     assert.equal((await call('POST', '/api/rosters/print', { kind: 'staff', target: 'Rahima', detail: 'May-Nov 2026' }, 'rahima')).body.ok, true);
