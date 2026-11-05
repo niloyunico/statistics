@@ -2161,7 +2161,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const [edit, setEdit] = useState(null);
     const [tick, setTick] = useState(0);
     const cfg = meta.config;
-    const active = defs.filter(d => d.active !== false && !d.removedAt);
+    const active = defs.filter(K.isLive);
     useEffect(() => {
       if (!range) return;
       let live = true;
@@ -4495,6 +4495,31 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       list: list.filter(d => d.pillar === pl.id)
     })).filter(g => g.list.length);
     const activeIds = defs.filter(d => d.active !== false && !d.removedAt).map(d => d.id);
+    const liveN = defs.filter(K.isLive).length,
+      offN = activeIds.length - liveN;
+    async function setEnabled(d, enabled) {
+      if (!enabled) {
+        const ok = await confirmBox({
+          title: 'Disable “' + d.name + '”?',
+          message: 'It stays here on Manage KPIs but leaves the dashboard, Data Update, new reports, exports and the missing-data badge. Its saved figures and final reports are kept. Switch it on again at any time.',
+          confirmLabel: 'Disable'
+        });
+        if (!ok) return;
+      }
+      try {
+        await api('/api/kpi/defs/' + encodeURIComponent(d.id) + '/enabled', {
+          method: 'POST',
+          body: JSON.stringify({
+            enabled
+          })
+        });
+        toast(d.name + (enabled ? ' enabled.' : ' disabled.'), 'success');
+        refreshBadge();
+        reload();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
     async function move(id, n) {
       const ids = activeIds.slice();
       const i = ids.indexOf(id);
@@ -4563,7 +4588,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontSize: 14
       }
-    }, activeIds.length, " KPIs"), React.createElement("span", {
+    }, liveN, " KPIs"), offN > 0 && React.createElement("span", {
+      className: "kp-pill",
+      style: {
+        background: '#f1f2f4',
+        color: '#5b6573'
+      }
+    }, offN, " disabled"), React.createElement("span", {
       className: "kp-muted"
     }, "in ", groups.length, " pillars \xB7 from the Nursing Department KPI deck", defs.some(d => d.custom) ? ' and your own' : ''), React.createElement("span", {
       style: {
@@ -4607,7 +4638,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }, g.list.length)), React.createElement("div", {
       className: "kp-grid3 kp-pad"
     }, g.list.map(d => {
-      const off = d.active === false || d.removedAt;
+      const off = d.active === false || d.removedAt,
+        dis = !off && !!d.disabled;
       const i = activeIds.indexOf(d.id);
       return React.createElement("div", {
         key: d.id,
@@ -4616,7 +4648,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           display: 'flex',
           flexDirection: 'column',
           gap: 7,
-          opacity: off ? 0.55 : 1
+          opacity: off ? 0.55 : 1,
+          background: dis ? '#f6f7f9' : undefined
         }
       }, React.createElement("div", {
         style: {
@@ -4632,7 +4665,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }, d.code || '•'), React.createElement("div", {
         style: {
           flex: 1,
-          minWidth: 0
+          minWidth: 0,
+          opacity: dis ? 0.6 : 1
         }
       }, React.createElement("div", {
         style: {
@@ -4651,14 +4685,31 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           background: '#ebebfb',
           color: '#3f3fa8'
         }
-      }, "Custom")), React.createElement("div", {
+      }, "Custom"), !off && meta.canEdit && React.createElement("label", {
+        className: 'kp-switch light' + (dis ? '' : ' on'),
+        title: dis ? 'Disabled — click to enable this KPI again' : 'Enabled — click to disable (it stays here but is not counted anywhere)',
+        onClick: () => setEnabled(d, dis),
+        style: {
+          flexDirection: 'column',
+          gap: 2,
+          fontSize: 9.5,
+          color: dis ? '#7a8494' : '#1f7a4c'
+        }
+      }, React.createElement("i", null), React.createElement("span", null, dis ? 'OFF' : 'ON'))), React.createElement("div", {
         style: {
           display: 'flex',
           gap: 6,
           flexWrap: 'wrap',
-          fontSize: 11.5
+          fontSize: 11.5,
+          opacity: dis ? 0.6 : 1
         }
-      }, React.createElement("span", {
+      }, dis && React.createElement("span", {
+        className: "kp-pill",
+        style: {
+          background: '#e9ebef',
+          color: '#4a5463'
+        }
+      }, "Disabled \u2014 not counted"), React.createElement("span", {
         className: "kp-pill",
         style: {
           background: '#f3f5f8',
@@ -4752,7 +4803,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       lsSet('kpi_assigned_only', assigned);
     }, [assigned]);
     const cfg = meta.config;
-    const active = defs.filter(d => d.active !== false && !d.removedAt);
+    const active = defs.filter(K.isLive);
     const items = [];
     active.forEach(d => (d.actions || []).forEach(a => {
       if (assigned && !(a.owner || a.due || a.status && a.status !== 'open')) return;
@@ -5251,7 +5302,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       className: "kp-hero-row"
     }, React.createElement("div", null, React.createElement("h1", null, cfg.reportTitle), React.createElement("div", {
       className: "sub"
-    }, defs.filter(d => d.active !== false && !d.removedAt).length, " KPIs \xB7 ", cfg.pillars.length, " pillars \xB7 ", cfg.hospitalName)), React.createElement("label", {
+    }, defs.filter(K.isLive).length, " KPIs \xB7 ", cfg.pillars.length, " pillars \xB7 ", cfg.hospitalName)), React.createElement("label", {
       className: 'kp-switch' + (showCalc ? ' on' : ''),
       title: "Show how every figure was calculated: the units it came from, who sent and approved each figure, and the data checks",
       onClick: () => setShowCalc(!showCalc),
