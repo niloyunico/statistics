@@ -96,6 +96,19 @@
       ...(typeof patch === 'function' ? patch(s) : patch)
     }));
     const dateRef = useRef(null);
+    const [scopeUnits, setScopeUnits] = useState(null);
+    useEffect(() => {
+      let live = true;
+      fetch('/api/rosters/scope', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      }).then(r => r.ok ? r.json() : null).then(j => {
+        if (live && j && j.ok && j.scope === 'departments' && Array.isArray(j.units)) setScopeUnits(new Set(j.units));
+      }).catch(() => {});
+      return () => {
+        live = false;
+      };
+    }, []);
     useEffect(() => {
       const rs = () => set({
         narrow: window.innerWidth < 1240
@@ -128,7 +141,7 @@
         const dept = R.unitOf ? R.unitOf(e) : e.current_department || 'Unassigned';
         (by[dept] = by[dept] || []).push(e);
       });
-      const units = Object.keys(by).sort((a, b) => a.localeCompare(b)).map(dept => {
+      const units = Object.keys(by).filter(d => !scopeUnits || scopeUnits.has(d)).sort((a, b) => a.localeCompare(b)).map(dept => {
         const people = by[dept];
         const hc = [0, 0, 0, 0];
         people.forEach(e => {
@@ -144,7 +157,7 @@
         };
       });
       return units;
-    }, [staffStore.staff]);
+    }, [staffStore.staff, scopeUnits]);
     const [index, setIndex] = useState(null);
     const [sheets, setSheets] = useState({});
     useEffect(() => {
