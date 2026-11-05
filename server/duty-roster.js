@@ -108,12 +108,39 @@ function normGuests(v) {
   });
   return out;
 }
+/* What a cell can carry beside its code: an on-call mark on top of a shift, and the date an
+   Alternative Leave stands in for (+ an optional reason). Each is kept only where the cell
+   still holds a matching code, so changing a cell never leaves a stale mark behind. */
+function cellExtras(doc, i, prev) {
+  const src = (k) => obj(has(i, k) ? i[k] : prev[k]);
+  const each = (m, fn) => Object.keys(m).slice(0, 400).forEach((emp) => {
+    const row = obj(m[emp]);
+    Object.keys(row).forEach((d) => { const day = parseInt(d, 10); if (day >= 1 && day <= 31) fn(s(emp, 40), day, row[d]); });
+  });
+  const oc = {}, al = {};
+  // The mark rides on a duty shift only — on call on a day off is the OC code itself.
+  // (Off / leave / OC codes as in renderer/unico/roster-spec.js.)
+  const NOT_DUTY = ['OC', 'DO', 'OFF', 'AL', 'CL', 'EL', 'ML', 'FL', 'PH'];
+  each(src('oncall'), (emp, day, v) => {
+    const c = (doc.grid[emp] || {})[day];
+    if (v && c && NOT_DUTY.indexOf(c) < 0) (oc[emp] || (oc[emp] = {}))[day] = 1;
+  });
+  each(src('altLeave'), (emp, day, v) => {
+    if ((doc.grid[emp] || {})[day] !== 'AL') return;
+    const x = obj(v), f = s(x.for, 10).trim(), note = s(x.note, 120).trim();
+    const okDate = /^\d{4}-\d{2}-\d{2}$/.test(f) && !isNaN(Date.parse(f + 'T00:00:00Z'));
+    if (!okDate && !note) return;
+    (al[emp] || (al[emp] = {}))[day] = { for: okDate ? f : '', note };
+  });
+  doc.oncall = oc; doc.altLeave = al;
+  return doc;
+}
 function normRoster(input, existing) {
   const i = obj(input), prev = obj(existing);
   const year = parseInt(i.year, 10) || prev.year || new Date().getFullYear();
   const month = Number.isInteger(parseInt(i.month, 10)) ? parseInt(i.month, 10) : (prev.month != null ? prev.month : new Date().getMonth());
   const editable = W.EDITABLE.indexOf(W.effStatus(prev)) >= 0 || !existing;
-  return {
+  return cellExtras({
     dept: s(i.dept || prev.dept, 40),
     deptName: s(i.deptName || prev.deptName, 120),
     year, month,
@@ -142,7 +169,7 @@ function normRoster(input, existing) {
     checkedBy: (editable && has(i, 'checkedBy')) ? s(i.checkedBy, 120) : s(prev.checkedBy, 120),
     approvedBy: s(prev.approvedBy, 120),
     note: has(i, 'note') ? s(i.note, 1000) : s(prev.note, 1000),
-  };
+  }, i, prev);
 }
 
 /* ------------------------------------------------------------- access helpers --- */

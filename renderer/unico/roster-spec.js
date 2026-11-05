@@ -47,6 +47,9 @@
     ['N11', '9:00 PM - 7:00 AM', 'N', 10],
     ['DN1', '12:00 PM - next 8:00 AM', 'N', 20],
 
+    // On call: reachable for the unit, not working on site — so it is not daily cover and has
+    // no worked hours, and it is not off or leave either (counted on its own, t.OC).
+    ['OC', 'On Call', 'O', 0],
     ['PH', 'Public Holiday', 'O', 0],
     ['DO', 'Day Off', 'O', 0],
     ['OFF', 'Off Day', 'O', 0],
@@ -91,10 +94,11 @@
 
   // Per-person totals for one month: counts per bucket + total paid hours.
   function totalsFor(row, days) {
-    var t = { G: 0, M: 0, E: 0, N: 0, O: 0, hours: 0, leave: 0 };
+    var t = { G: 0, M: 0, E: 0, N: 0, O: 0, OC: 0, hours: 0, leave: 0 };
     for (var d = 1; d <= days; d++) {
       var c = row && row[d];
       if (!c) continue;
+      if (c === 'OC') { t.OC++; continue; }
       var b = bucketOf(c);
       if (b) t[b]++;
       t.hours += hoursOf(c);

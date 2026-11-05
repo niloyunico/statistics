@@ -411,6 +411,17 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/6')).body.movedOut, ['S5'], 'a moved guest is left off the home sheet that month');
     assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/5')).body.movedOut, [], 'and only that month');
     assert.deepEqual((await call('GET', '/api/rosters/CCU/2026/6')).body.movedOut, [], 'and only their home unit');
+    // On call + Alternative-leave details travel with the sheet — only where the cell still matches.
+    let ex = await call('PUT', '/api/rosters', { dept: 'CCU', year: 2027, month: 4, grid: { S1: { 1: 'G1', 2: 'OC', 3: 'AL', 4: 'AL', 5: 'M4' } }, order: ['S1'],
+      oncall: { S1: { 1: 1, 2: 1, 9: 1 } }, altLeave: { S1: { 3: { for: '2027-03-16', note: 'Holiday duty' }, 4: { for: 'nonsense' }, 5: { for: '2027-03-20' } } }, baseRevision: 0 });
+    assert.equal(ex.status, 200, JSON.stringify(ex.body));
+    assert.deepEqual(ex.body.roster.oncall, { S1: { 1: 1 } }, 'an on-call mark sits on a shift only (not on OC, not on an empty day)');
+    assert.deepEqual(ex.body.roster.altLeave, { S1: { 3: { for: '2027-03-16', note: 'Holiday duty' } } }, 'AL details only on AL cells, with a real date or a reason');
+    ex = await call('PUT', '/api/rosters', { dept: 'CCU', year: 2027, month: 4, grid: { S1: { 1: 'G1', 2: 'OC', 3: 'AL', 4: 'AL', 5: 'M4' } }, order: ['S1'], baseRevision: 1 });
+    assert.equal(ex.body.roster.altLeave.S1[3].for, '2027-03-16', 'a save without the fields keeps them');
+    assert.deepEqual(ex.body.roster.oncall, { S1: { 1: 1 } });
+    ex = await call('PUT', '/api/rosters', { dept: 'CCU', year: 2027, month: 4, grid: { S1: { 1: 'OFF', 3: 'CL' } }, order: ['S1'], baseRevision: 2 });
+    assert.deepEqual([ex.body.roster.oncall, ex.body.roster.altLeave], [{}, {}], 'changing the cells drops their extras');
     // Search for staff to add: administrators only; minimal fields.
     assert.equal((await call('GET', '/api/rosters/staff-search?q=ra', null, 'nasrin')).status, 403, 'the CNS prepares no roster: no search');
     assert.equal((await call('GET', '/api/rosters/staff-search?q=ra', null, 'rahima')).status, 403, 'an in-charge may not add staff from another unit');

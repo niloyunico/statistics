@@ -382,6 +382,9 @@ function ShiftLegend({ compact }) {
 // the server holds the same line (staff-search 403, a non-admin save keeps the stored guests).
 // No signed-in user = open local-PC mode, which the server also treats as administrator.
 const rosIsAdmin = () => { try { const u = window.__UNICO_USER__; return !u || u.role === 'Administrator'; } catch (e) { return false; } };
+// Corner marks on a grid cell: on call on top of the shift, and an AL whose worked date is not set.
+const ROS_OC_BADGE = { position: 'absolute', top: -5, right: -6, fontStyle: 'normal', fontSize: 7, fontWeight: 800, lineHeight: '11px', padding: '0 3px', borderRadius: 5, background: '#0d3a5c', color: '#fff', letterSpacing: .3, boxShadow: '0 1px 3px rgba(0,0,0,.25)', pointerEvents: 'none' };
+const ROS_AL_DOT = { position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#e08a1e', boxShadow: '0 0 0 1.5px #fff', pointerEvents: 'none' };
 const rosPortal = (n) => (window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
 
 /* ---- THE REVIEW CHAIN ----
@@ -1332,6 +1335,10 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   // Staff added from another unit ({ 'S<id>': { from, mode, name, desig, emp } }), and this
   // unit's people moved onto another unit's sheet this month (left off here unless they have shifts).
   const [guests, setGuests] = useState({});
+  // Beside the codes: on-call marks on top of a duty shift ({ empId: { day: 1 } }) and the date
+  // each Alternative Leave stands in for ({ empId: { day: { for: 'YYYY-MM-DD', note } } }).
+  const [oncall, setOncall] = useState({});
+  const [altLeave, setAltLeave] = useState({});
   const [movedOut, setMovedOut] = useState([]);
   const [addOpen, setAddOpen] = useState(false);
   const staff = useMemo(() => {
@@ -1402,6 +1409,8 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       setOrderManual(!!(d && d.rules && d.rules.orderManual));
       setStoredNames((d && d.names) || {});
       setGuests((d && d.guests) || {});
+      setOncall((d && d.oncall) || {});
+      setAltLeave((d && d.altLeave) || {});
       setMovedOut(Array.isArray(r.movedOut) ? r.movedOut : []);
       setStatus((d && d.status) || 'draft');
       setRev((d && d.revision) || 0);
@@ -1450,6 +1459,10 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   };
 
   const cellCode = (empId, d) => (grid[empId] || {})[d] || '';
+  const ocMarked = (empId, d) => !!((oncall[empId] || {})[d]) && R.isDuty(cellCode(empId, d));
+  const alOf = (empId, d) => (cellCode(empId, d) === 'AL' && (altLeave[empId] || {})[d]) || null;
+  // Clicking an AL cell opens straight on its "in lieu of" details.
+  const alPrefill = (empId, d) => { if (cellCode(empId, d) !== 'AL') return {}; const a = alOf(empId, d) || {}; return { alStep: true, alFor: a.for || '', alNote: a.note || '' }; };
   const setCells = (fn) => { setGrid((g) => fn(g)); setDirty(true); };
   const writeCell = (g, empId, d, code) => {
     const row = { ...(g[empId] || {}) };
@@ -1600,7 +1613,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const save = (nextStatus, quiet) => {
     setBusy(true);
     return rosApi.put('/api/rosters', {
-      dept, deptName: dept, year, month, grid, order: rows.map((r) => r.empId), guests,
+      dept, deptName: dept, year, month, grid, order: rows.map((r) => r.empId), guests, oncall, altLeave,
       // Which revision these edits were made on: the server refuses the save if someone
       // saved since, instead of this whole grid erasing their cells.
       baseRevision: rev,
@@ -1651,7 +1664,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => { saveTimer.current = null; save(null, true); }, 1600);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [grid, cfg, en, custom, order, orderManual, dirty, retryTick]);   // eslint-disable-line
+  }, [grid, oncall, altLeave, cfg, en, custom, order, orderManual, dirty, retryTick]);   // eslint-disable-line
 
   // Leaving the sheet — another month or unit remounts it, or the person opens another
   // module — must not drop edits still waiting for the 1.6 s autosave. The refs carry
@@ -1742,13 +1755,13 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     }
     const r = evn.currentTarget.getBoundingClientRect();
     setDrag(null); setDragOver(null);
-    setPick({ empId, name, d, x: r.left + r.width / 2, cellTop: r.top, cellBottom: r.bottom });
+    setPick({ empId, name, d, x: r.left + r.width / 2, cellTop: r.top, cellBottom: r.bottom, ...alPrefill(empId, d) });
   };
   const paintStyle = (empId, d, c) => {
     const b = R.bucketOf(c) || '', col = rosBColor(b);
     const queued = queue.some((q) => (q.aId === empId && q.aDi === d) || (q.bId === empId && q.bDi === d));
     return {
-      display: 'inline-grid', placeItems: 'center', width: 40, minWidth: 40, padding: '4px 2px', borderRadius: 6,
+      display: 'inline-grid', placeItems: 'center', width: 40, minWidth: 40, padding: '4px 2px', borderRadius: 6, position: 'relative',
       cursor: brush ? 'crosshair' : 'pointer', userSelect: 'none',
       border: '1px solid ' + (c ? (b === 'O' ? 'rgba(125,145,180,.3)' : col) : 'rgba(125,145,180,.22)'),
       fontFamily: ROS_MONO, fontSize: 10, fontWeight: 700,
@@ -2065,11 +2078,15 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                         {Array.from({ length: days }, (_, k) => k + 1).map((d) => {
                           const c = rowG[d] || '';
                           const sh = R.BY_CODE[c];
+                          const oc = ocMarked(x.empId, d), al = c === 'AL' ? alOf(x.empId, d) : null;
+                          const alTxt = c !== 'AL' ? '' : (al && al.for ? ' · in lieu of ' + rosDate(al.for) : ' · in-lieu date not set — click to add') + (al && al.note ? ' · ' + al.note : '');
                           return (
                             <td key={d} style={{ padding: 2, textAlign: 'center', borderBottom: '1px solid rgba(125,145,180,.14)', background: rosIsFri(year, month, d) ? 'rgba(224,138,30,.09)' : 'transparent' }}>
                               <span onMouseDown={cellDown(x.empId, d)} onMouseEnter={cellOver(x.empId, d)} onMouseUp={cellUp(x.empId, x.name, d)}
-                                title={c ? (c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '')) : 'Click to assign a shift'}
-                                style={paintStyle(x.empId, d, c)}>{c || '·'}</span>
+                                title={c ? (c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt) : 'Click to assign a shift'}
+                                style={paintStyle(x.empId, d, c)}>{c || '·'}
+                                {oc && <i style={ROS_OC_BADGE}>OC</i>}
+                                {c === 'AL' && !(al && al.for) && <i style={ROS_AL_DOT} />}</span>
                             </td>
                           );
                         })}
@@ -2859,7 +2876,26 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
           borderRadius: 13, boxShadow: '0 22px 56px rgba(31,59,90,.28)', animation: 'rosPop .16s cubic-bezier(.2,.7,.3,1) both',
         };
         const current = cellCode(pick.empId, pick.d);
-        const doPick = (k) => { push(); setCells((g) => writeCell(g, pick.empId, pick.d, k)); setPick(null); };
+        const doPick = (k) => {
+          push(); setCells((g) => writeCell(g, pick.empId, pick.d, k));
+          // AL asks which worked day it stands in for — Skip leaves it without.
+          if (k === 'AL') { const a = (altLeave[pick.empId] || {})[pick.d] || {}; setPick((p) => ({ ...p, alStep: true, alFor: a.for || '', alNote: a.note || '' })); return; }
+          setPick(null);
+        };
+        const ocOn = !!((oncall[pick.empId] || {})[pick.d]);
+        const ocOk = R.isDuty(current);
+        const toggleOc = () => {
+          if (!canEdit) return editBlocked();
+          if (!ocOk) return;
+          setOncall((m) => { const row = { ...(m[pick.empId] || {}) }; if (row[pick.d]) delete row[pick.d]; else row[pick.d] = 1; return { ...m, [pick.empId]: row }; });
+          setDirty(true);
+        };
+        const saveAl = () => {
+          if (!canEdit) return editBlocked();
+          setAltLeave((m) => ({ ...m, [pick.empId]: { ...(m[pick.empId] || {}), [pick.d]: { for: pick.alFor || '', note: String(pick.alNote || '').trim() } } }));
+          setDirty(true); setPick(null);
+        };
+        const alInp = { width: '100%', boxSizing: 'border-box', padding: '6px 9px', borderRadius: 8, border: '1px solid rgba(125,145,180,.4)', fontFamily: 'inherit', fontSize: 11.5, color: '#16202e', background: '#fff' };
         return (
           <React.Fragment>
             <div onClick={() => setPick(null)} style={{ position: 'fixed', inset: 0, zIndex: 3900 }} />
@@ -2870,7 +2906,28 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                 <span style={{ flex: 1 }} />
                 <span className="ros-x" onClick={() => setPick(null)} style={{ cursor: 'pointer', color: '#9aa6b4', display: 'grid', placeItems: 'center', width: 20, height: 20, borderRadius: 6 }}><Ic d="M18 6L6 18M6 6l12 12" s={12} sw={2.4} /></span>
               </div>
+              {pick.alStep ? (
+                <div style={{ padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ fontSize: 11.5, fontWeight: 700, color: '#16202e' }}>Alternative leave — in lieu of which date?</div>
+                  <div style={{ fontSize: 10.5, color: '#6c7a8c', marginTop: -4 }}>The day worked that this leave replaces — any month.</div>
+                  <input type="date" value={pick.alFor || ''} disabled={!canEdit} onChange={(e) => { const v = e.target.value; setPick((p) => ({ ...p, alFor: v })); }} style={alInp} />
+                  {pick.alFor && <div style={{ fontSize: 10.5, fontWeight: 700, color: '#0072a3', marginTop: -3 }}>{new Date(pick.alFor + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</div>}
+                  <input value={pick.alNote || ''} maxLength={120} disabled={!canEdit} placeholder="Reason (optional) — e.g. public holiday duty" onChange={(e) => { const v = e.target.value; setPick((p) => ({ ...p, alNote: v })); }} style={alInp} />
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                    <button type="button" className="btn sm" onClick={() => setPick((p) => ({ ...p, alStep: false }))}>Change shift</button>
+                    <button type="button" className="btn sm" onClick={() => setPick(null)}>Skip</button>
+                    <button type="button" className="btn sm pri" disabled={!canEdit} onClick={saveAl}>Save</button>
+                  </div>
+                </div>
+              ) : (
               <div style={{ padding: '9px 11px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div onClick={toggleOc} title={ocOk ? 'On call as well as this shift' : 'Pick a duty shift first — on call on a day off is the OC code'}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 9px', borderRadius: 8, cursor: ocOk ? 'pointer' : 'not-allowed', opacity: ocOk ? 1 : 0.5,
+                    border: '1px solid ' + (ocOn && ocOk ? '#0d3a5c' : 'rgba(125,145,180,.3)'), background: ocOn && ocOk ? 'rgba(13,58,92,.08)' : '#fff' }}>
+                  <input type="checkbox" readOnly checked={ocOn && ocOk} style={{ margin: 0, pointerEvents: 'none' }} />
+                  <b style={{ fontSize: 10.5, color: '#16202e' }}>On call</b>
+                  <span style={{ fontSize: 10, color: '#6c7a8c' }}>in addition to the shift</span>
+                </div>
                 {[['G', 'General', '#6a52d4'], ['M', 'Morning', '#b5670a'], ['E', 'Evening', '#0072a3'], ['N', 'Night', '#5b45c4'], ['O', 'Leave / off', '#7d8ea8']].map(([b, label, color]) => (
                   <div key={b}>
                     <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: .8, textTransform: 'uppercase', color, marginBottom: 5 }}>{label}</div>
@@ -2897,6 +2954,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                   </div>
                 </div>
               </div>
+              )}
             </div>
           </React.Fragment>
         );
@@ -3161,12 +3219,17 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     ['Checked by', ...who('checked', 'Nurse Manager'), fwd ? rosDate(fwd.at) : (sent && sent.action === 'send_cns' ? 'sent directly to CNS' : '')],
     ['Approved by', ...who('approved', 'Chief of Nursing Services'), ok ? rosDate(ok.at) : ''],
   ];
-  const pill = (code) => {
+  const ocm = (doc && doc.oncall) || {}, alm = (doc && doc.altLeave) || {};
+  // On call on top of a duty shift — the same rule the server keeps (a duty code only).
+  const marked = (empId, d) => !!((ocm[empId] || {})[d]) && R.isDuty(((grid || {})[empId] || {})[d]);
+  const anyMark = Object.keys(ocm).some((id) => Object.keys(ocm[id] || {}).some((d) => marked(id, d)));
+  const pill = (code, mark) => {
     if (!code) return '';
-    if (official) return rosEsc(code);
+    const dot = mark ? '<b class="ocm">•</b>' : '';
+    if (official) return rosEsc(code) + dot;
     const b = R.bucketOf(code);
     const c = b === 'O' ? '#6b7a8d' : rosBColor(b);
-    return '<span class="k" style="background:' + c + (b === 'O' ? '14' : '1c') + ';color:' + c + '">' + rosEsc(code) + '</span>';
+    return '<span class="k" style="background:' + c + (b === 'O' ? '14' : '1c') + ';color:' + c + '">' + rosEsc(code) + dot + '</span>';
   };
   const fri = (d) => new Date(year, month, d).getDay() === 5;
   const head1 = ds.map((d) => '<th class="d' + (fri(d) ? ' fr' : '') + '">' + d + '</th>').join('');
@@ -3177,14 +3240,15 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
   const tableFor = (list, title, cls) => {
     // A G / M / E / N / O total column only when someone in this table has one — a unit that
     // works no General shift does not print an empty G column. Hrs always.
-    const totOf = (r) => R.totalsFor((grid && grid[r.empId]) || {}, days);
-    const tb = ['G', 'M', 'E', 'N', 'O'].filter((b) => list.some((r) => totOf(r)[b] > 0));
+    // OC = the on-call days: OC codes plus marks on top of a shift.
+    const totOf = (r) => { const t = R.totalsFor((grid && grid[r.empId]) || {}, days); t.OC = (t.OC || 0) + ds.filter((d) => marked(r.empId, d)).length; return t; };
+    const tb = ['G', 'M', 'E', 'N', 'O', 'OC'].filter((b) => list.some((r) => totOf(r)[b] > 0));
     const body = list.map((r, i) => {
       const row = (grid && grid[r.empId]) || {};
       const t = totOf(r);
       // Official sheet: a day off is a solid grey cell, leave a light hatched one.
       const shade = (c) => (!official || !c ? '' : R.isOff(c) ? ' xo' : R.isLeave(c) ? ' xl' : '');
-      const cells = ds.map((d) => '<td class="c' + (fri(d) ? ' fr' : '') + shade(row[d]) + '">' + pill(row[d] || '') + '</td>').join('');
+      const cells = ds.map((d) => '<td class="c' + (fri(d) ? ' fr' : '') + shade(row[d]) + '">' + pill(row[d] || '', marked(r.empId, d)) + '</td>').join('');
       return '<tr class="r"><td class="n">' + (i + 1) + '</td><td class="e">' + rosEsc(r.empIdShown || '') + '</td>'
         + '<td class="nm"><b>' + rosEsc(r.name) + '</b>' + (r.desig ? '<span> · ' + rosEsc(r.desig) + '</span>' : '') + '</td>' + cells
         + tb.map((b) => '<td class="t">' + (t[b] || '') + '</td>').join('')
@@ -3198,7 +3262,8 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     // leave this month does not print an empty line for it.
     const some = (fn) => ds.some((d) => fn(d) > 0);
     const sums = !summary ? '' : [['General on duty', (d) => cov[d].G], ['Morning on duty', (d) => cov[d].M], ['Evening on duty', (d) => cov[d].E],
-      ['Night on duty', (d) => cov[d].N], ['On leave', leaveOn]].filter(([, fn]) => some(fn)).map(([l, fn]) => sumRow(l, fn, tb.length + 1)).join('');
+      ['Night on duty', (d) => cov[d].N], ['On call', (d) => ids.filter((id) => ((grid || {})[id] || {})[d] === 'OC' || marked(id, d)).length],
+      ['On leave', leaveOn]].filter(([, fn]) => some(fn)).map(([l, fn]) => sumRow(l, fn, tb.length + 1)).join('');
     return '<div class="grp' + (cls ? ' ' + cls : '') + '">' + (title ? '<div class="gt"><span>' + rosEsc(title) + '</span></div>' : '')
       + '<table class="rt"><colgroup><col class="n"><col class="e"><col class="nm">' + ds.map(() => '<col class="d">').join('') + tb.map(() => '<col class="t">').join('') + '<col class="h"></colgroup>'
       + '<thead><tr><th rowspan="2">S/N</th><th rowspan="2">Emp ID</th><th rowspan="2" style="text-align:left;padding-left:4px">Name · Designation</th>' + head1
@@ -3227,11 +3292,12 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
   const schedChunks = []; for (let i = 0; i < schedRows.length; i += per) schedChunks.push(schedRows.slice(i, i + per));
   const officialLegend = '<div class="lgx"><div class="lgh">Shift schedule</div><div class="schs">' + schedChunks.map((ch) => '<table class="sch"><thead><tr><th>Code</th><th>Shift</th><th>Time</th><th>Hrs</th></tr></thead><tbody>'
       + ch.map(([c, n, t, h, x]) => '<tr><td class="cd' + (x ? ' ' + x : '') + '">' + rosEsc(c) + '</td><td>' + rosEsc(n) + '</td><td>' + rosEsc(t) + '</td><td class="hr">' + rosEsc(h) + '</td></tr>').join('') + '</tbody></table>').join('') + '</div>'
-    + '<div class="key"><span><i class="sw xo"></i>Day off</span><span><i class="sw xl"></i>Leave</span><span><i class="sw"></i>On duty</span></div></div>';
+    + '<div class="key"><span><i class="sw xo"></i>Day off</span><span><i class="sw xl"></i>Leave</span><span><i class="sw"></i>On duty</span>' + (anyMark ? '<span><b class="ocm">•</b> after a code = on call as well</span>' : '') + '</div></div>';
   const legendHtml = !legend ? '' : (!used.size ? '<div class="lgx"><div class="lgh">' + (official ? 'Shift schedule' : 'Shift legend') + '</div><div class="lgn">No shifts entered yet.</div></div>'
     : official ? officialLegend
     : '<div class="lgx"><div class="lgh">Shift legend</div><div class="lg">' + groups.map((g) => '<div class="lgb" style="--lc:' + (g.b.id === 'O' ? '#6b7a8d14' : rosBColor(g.b.id) + '1c') + '"><b style="color:' + rosBColor(g.b.id) + '">' + rosEsc(g.b.label) + '</b>'
         + g.codes.map((s) => '<span><i>' + rosEsc(s.code) + '</i> ' + rosEsc(s.label) + '</span>').join('') + '</div>').join('')
+      + (anyMark ? '<div class="lgb"><b>On call</b><span><i>•</i> after a code = on call as well</span></div>' : '')
       + (unknown.length ? '<div class="lgb"><b>Other</b>' + unknown.map((c) => '<span><i>' + rosEsc(c) + '</i></span>').join('') + '</div>' : '')
       + '</div></div>');
   const at = new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
@@ -3250,6 +3316,7 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     ds.forEach((d) => { const c = row[d]; if (c && (R.isLeave(c) || R.isOff(c))) offBy[c] = (offBy[c] || 0) + 1; });
   });
   const duty = mix.G + mix.M + mix.E + mix.N;
+  const onCallN = rows.reduce((a, r) => a + ds.filter((d) => (g0[r.empId] || {})[d] === 'OC' || marked(r.empId, d)).length, 0);
   const hrs = perHrs.reduce((a, b) => a + b, 0);
   const onDuty = ds.map((d) => { const c = R.coverageFor(g0, ids, d); return c.G + c.M + c.E + c.N; });
   const lo = onDuty.length ? Math.min.apply(null, onDuty) : 0, hi = onDuty.length ? Math.max.apply(null, onDuty) : 0;
@@ -3261,12 +3328,19 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
   const dayLbl = (d) => d + ' ' + R.MONTHS[month].slice(0, 3);
   const tiles = [
     ['Staff', String(rows.length), (pcas.length ? nurses.length + ' nursing · ' + pcas.length + ' PCA · ' : '') + (desigTxt || 'no one yet'), 'b'],
-    ['Shift mix', String(duty), duty ? ['G', 'M', 'E', 'N'].filter((b) => mix[b]).map((b) => b + ' ' + mix[b]).join(' · ') : 'no duty shifts yet', 't'],
+    ['Shift mix', String(duty), (duty ? ['G', 'M', 'E', 'N'].filter((b) => mix[b]).map((b) => b + ' ' + mix[b]).join(' · ') : 'no duty shifts yet') + (onCallN ? ' · on call ' + onCallN : ''), 't'],
     ['Daily cover', duty ? (lo === hi ? String(lo) : lo + '–' + hi) : '0',
       !duty ? 'on duty per day' : empty ? '⚠ ' + empty + ' day' + (empty === 1 ? '' : 's') + ' with no one on duty' : 'on duty per day · lowest ' + dayLbl(onDuty.indexOf(lo) + 1), empty ? 'a' : 'g'],
     ['Off & leave', String(Object.keys(offBy).reduce((a, k) => a + offBy[k], 0)), offTxt || 'none this month', 'v'],
     ['Hours', hrs + ' h', perHrs.length ? (Math.min.apply(null, perHrs) === Math.max.apply(null, perHrs) ? Math.min.apply(null, perHrs) + ' h each' : Math.min.apply(null, perHrs) + '–' + Math.max.apply(null, perHrs) + ' h per person') : '', 'sl'],
   ];
+  /* Alternative leave: which worked day each AL stands in for — so a reader sees what it was for. */
+  const alRows = [];
+  rows.forEach((r) => { const row = g0[r.empId] || {}; ds.forEach((d) => { if (row[d] !== 'AL') return; const a = (alm[r.empId] || {})[d] || {};
+    alRows.push([r.name, dayLbl(d) + ' ' + year, a.for ? rosDate(a.for) : '—', a.note || '']); }); });
+  const alHtml = !alRows.length ? '' : '<div class="alx"><div class="lgh">Alternative leave</div><table class="alt"><colgroup><col style="width:34%"><col style="width:14%"><col style="width:18%"><col></colgroup>'
+    + '<thead><tr><th>Name</th><th>AL on</th><th>In lieu of (date worked)</th><th>Reason</th></tr></thead><tbody>'
+    + alRows.map(([n, on, f, why]) => '<tr><td>' + rosEsc(n) + '</td><td>' + rosEsc(on) + '</td><td><b>' + rosEsc(f) + '</b></td><td>' + rosEsc(why) + '</td></tr>').join('') + '</tbody></table></div>';
   const NAVY = '#0d3a5c';
   const css = '@page{size:A4 landscape;margin:7mm 8mm 9mm;@bottom-right{content:"Page " counter(page) " of " counter(pages);font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}@bottom-left{content:"Duty Roster · ' + String(dn).replace(/["\\]/g, '') + ' · ' + R.MONTHS[month] + ' ' + year + '";font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}}'
     + '*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
@@ -3302,7 +3376,8 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lnr .notes{margin-top:0}.lgx{border:1px solid #d9e4ee;border-radius:8px;padding:4px 9px 5px;page-break-inside:avoid;background:#fbfdff}.lgh{font-size:6.4pt;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#0072a3;margin-bottom:2px}.lgn{font-size:7pt;color:#7b8796}'
     + '.lg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 16px;font-size:6.6pt;color:#3c4858}.lgb b{display:block;font-size:6.8pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.6px}.lgb span{display:inline-block;margin-right:8px;white-space:nowrap}'
     + '.lgb i{font-style:normal;font-weight:800;color:#0d1b2e;display:inline-block;min-width:18px;text-align:center;border-radius:4px;padding:0 3px;background:var(--lc,#eef2f6)}'
-    + '.foot{page-break-inside:avoid;break-inside:avoid}'
+    + '.foot{page-break-inside:avoid;break-inside:avoid}.ocm{font-weight:900;margin-left:1px}'
+    + '.alx{margin-top:7px;border:1px solid #d9e4ee;border-radius:8px;padding:4px 9px 5px;background:#fbfdff;break-inside:avoid;page-break-inside:avoid}.alt{width:100%;border-collapse:collapse;font-size:7pt}.alt th{background:#0d3a5c;color:#fff;text-align:left;padding:2px 6px;font-weight:700}.alt td{border-bottom:1px solid #e6ecf2;padding:2px 6px;color:#16202e}'
     + '.notes{margin-top:6px;border-radius:8px;background:#fffaf2;border:1px solid #f1dfc2;padding:4px 9px}.nb{font-size:7pt;color:#5a4a33}.nb b{color:#b5670a}.rm{margin-top:3px;font-size:7.4pt;color:#3c4858;border-bottom:1px dotted #c9b48f;height:14px}'
     + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px;font-size:8pt;page-break-inside:avoid}'
     + '.signs>div{border:1px solid #e3e9f0;border-top:3px solid var(--sc);border-radius:9px;padding:0 11px 6px;background:linear-gradient(180deg,var(--sb),#fff 45%)}.signs>div:nth-child(1){--sc:#0072a3;--sb:#f1f8fd}.signs>div:nth-child(2){--sc:#5b45c4;--sb:#f5f3fd}.signs>div:nth-child(3){--sc:#1f6f43;--sb:#f0f8f3}'
@@ -3320,8 +3395,10 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     + '.lhm{text-align:center}.lhm .org{font-size:11.5pt;font-weight:700;letter-spacing:.4px}.lhm .dv{font-size:7.5pt;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#333}.lhm h1{margin:2px 0 0;font-size:15pt;font-weight:800;letter-spacing:5px}'
     // Grids: one border per cell side (right + bottom) inside a framed table, never
     // border-collapse — html2canvas (the PDF) draws collapsed borders as two lines with a gap.
-    + 'table.rt,.meta,.sch{border-collapse:separate;border-spacing:0;border-top:.75pt solid #000;border-left:.75pt solid #000}'
-    + '.rt th,.rt td,.meta th,.meta td,.sch th,.sch td{border:0;border-right:.75pt solid #000;border-bottom:.75pt solid #000}'
+    + 'table.rt,.meta,.sch,.alt{border-collapse:separate;border-spacing:0;border-top:.75pt solid #000;border-left:.75pt solid #000}'
+    + '.rt th,.rt td,.meta th,.meta td,.sch th,.sch td,.alt th,.alt td{border:0;border-right:.75pt solid #000;border-bottom:.75pt solid #000}'
+    + '.ocm{font-weight:900;margin-left:1px}.alx{margin-top:7px;border:1.25pt solid #000;padding:4px 8px 5px;break-inside:avoid;page-break-inside:avoid}'
+    + '.alt{width:100%;font-size:7.5pt}.alt th{background:#d0d0d0;text-align:left;padding:1px 6px;font-weight:700}.alt td{padding:1px 6px}'
     + '.lhr{justify-self:end}.meta{font-size:7.5pt}.meta th{text-align:left;font-weight:700;padding:1px 6px;background:#e0e0e0}.meta td{padding:1px 8px;font-weight:700;min-width:40mm}'
     + '.rule{border-top:2pt solid #000;border-bottom:.6pt solid #000;height:3.5px;margin:1px 0 6px}'
     // summary strip
@@ -3360,7 +3437,7 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
       + '<div class="rtx"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dn) + '</div></div></header>';
   const html = head
     + (cards !== false ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>')
-    + tables
+    + tables + alHtml
     // Legend and notes side by side, and kept on the same page as the signatures.
     + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>'
     + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>'
