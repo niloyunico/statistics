@@ -3139,7 +3139,7 @@ function rosSignNames(doc, signers) {
   };
 }
 
-function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, signPeople, colour, summary, legend, pcaNewPage, printedBy }) {
+function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, signPeople, colour, summary, cards, legend, pcaNewPage, printedBy }) {
   const days = R.daysIn(year, month);
   const ds = Array.from({ length: days }, (_, i) => i + 1);
   const dn = deptName || dept;
@@ -3291,7 +3291,7 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
   const html = '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>'
     + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>'
     + '<div class="rt"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dn) + '</div></div></header>'
-    + (summary ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>')
+    + (cards !== false ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>')
     + tables
     // Legend and notes side by side, and kept on the same page as the signatures.
     + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>'
@@ -3346,7 +3346,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [opt, setOpt] = useState(() => {
-    const d = { colour: true, summary: true, legend: true, pcaNewPage: false };
+    const d = { colour: true, summary: true, cards: true, legend: true, pcaNewPage: false };
     try { return { ...d, ...(JSON.parse(localStorage.getItem(ROS_PRINT_OPT_KEY) || '{}') || {}) }; } catch (e) { return d; }
   });
   const [busy, setBusy] = useState(false);
@@ -3477,6 +3477,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
           <RosStatusChip st={doc ? doc.status : null} />
           <div style={{ flex: 1 }} />
           {tog('colour', 'Colour codes')}
+          {tog('cards', 'Summary cards')}
           {tog('summary', 'Daily cover rows')}
           {tog('legend', 'Shift legend')}
           {view.rows.some((r) => r.pca) && tog('pcaNewPage', 'PCAs on a new page')}
