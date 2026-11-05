@@ -127,6 +127,10 @@ ok('another unit\'s in-charge gets nothing', !can(actor({ username: 'someone', r
 ok('not named in Setup: still needs the permission', !can(setupIncharge, 'draft', noCfg).edit);
 ok('Setup in-charge transition send_manager works', W.transition(sheet('draft'), 'send_manager', setupIncharge, cfg, { now: 5 }).ok);
 
+const slotManager = actor({ username: 'farida', name: 'Farida Begum' });   // named Manager in Setup, no role ticked
+ok('a Setup Manager slot forwards without the role', can(slotManager, 'pending_manager').forward && can(slotManager, 'pending_manager').return);
+ok('a Setup Manager slot never approves', !can(slotManager, 'pending_cns').approve);
+
 const rs = W.resumeOnEdit(sheet('returned'), incharge, 9);
 assert.deepEqual(rs.set, { status: 'draft', stage: null }); assert.equal(rs.entry.action, 'resume'); assert.equal(rs.entry.revision, 3); pass += 3;
 

@@ -96,6 +96,18 @@ function normGrid(input) {
 // send `note` or `status` wiped the note and moved a submitted roster back to draft.)
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k) && o[k] !== undefined;
 
+/* Staff from another unit put on this sheet ("guests"): `both` = also on their home roster
+   (floating / borrowed duty), `move` = on this roster only, for this month. Keyed like grid
+   rows ('S' + staff id); bounded. */
+function normGuests(v) {
+  const src = obj(v), out = {};
+  Object.keys(src).slice(0, 100).forEach((k) => {
+    const key = s(k, 40); if (!/^S\S+$/.test(key)) return;
+    const g = obj(src[k]);
+    out[key] = { from: s(g.from, 120), mode: g.mode === 'move' ? 'move' : 'both', name: s(g.name, 120), desig: s(g.desig, 120), emp: s(g.emp, 40) };
+  });
+  return out;
+}
 function normRoster(input, existing) {
   const i = obj(input), prev = obj(existing);
   const year = parseInt(i.year, 10) || prev.year || new Date().getFullYear();
@@ -119,6 +131,7 @@ function normRoster(input, existing) {
       return out;
     }()),
     rules: has(i, 'rules') ? obj(i.rules) : obj(prev.rules),
+    guests: has(i, 'guests') ? normGuests(i.guests) : normGuests(prev.guests),
     // A SAVE never changes the status: every hand-over is a transition (applyTransition),
     // which is what stamps the names and writes the history. The stored spelling is kept
     // as-is so a legacy 'submitted' row is not silently rewritten by an autosave.
@@ -311,6 +324,20 @@ async function listAll() {
   const docs = await c.find({}, { projection: { grid: 0, history: 0 } }).sort({ year: -1, month: -1 }).toArray();
   return docs.map(outDoc);
 }
+// This unit's people who were MOVED onto another unit's sheet for the same month — the home
+// sheet leaves them off (a guest added with "keep on both" stays on both).
+async function movedOutOf(dept, year, month) {
+  const home = String(dept || '').trim().toLowerCase();
+  const out = new Set();
+  try {
+    (await listAll()).forEach((d) => {
+      if (!d || d.year !== year || d.month !== month || String(d.dept || '').trim().toLowerCase() === home) return;
+      const g = obj(d.guests);
+      Object.keys(g).forEach((k) => { if (g[k] && g[k].mode === 'move' && String(g[k].from || '').trim().toLowerCase() === home) out.add(k); });
+    });
+  } catch (e) { /* no sheets */ }
+  return [...out];
+}
 async function getOne(id) {
   const c = await col();
   if (!c) return memOut(mem.find((x) => x.id === id));
@@ -366,6 +393,13 @@ async function applyTransition(req, id, action, note) {
   try {
     require('./activity-log').log(req, r.activity, { target: doc.deptName || doc.dept, detail: (doc.month + 1) + '/' + doc.year + ' · rev ' + (doc.revision || 0) + (r.entry.note ? ' · ' + r.entry.note : '') });
   } catch (e) { /* logging never breaks the request */ }
+  // The In-charge who sends to the Manager IS that unit's Manager (Setup names the same person
+  // in both places): the check is theirs to give, so it goes straight on to the CNS — history
+  // shows both steps, "Checked by" is them.
+  const cfgDept = cfg.depts[key] || {};
+  if (action === 'send_manager' && cfgDept.manager && actor.username && cfgDept.manager.username === actor.username) {
+    return applyTransition(req, id, 'forward', '');
+  }
   return { status: 200, body: { ok: true, roster: await decorate(req, await getOne(id)) } };
 }
 
@@ -439,9 +473,10 @@ function mount(app, opts) {
     next();
   };
   // Account-level flags for the screen (per-sheet rights ride on the sheet itself).
-  const accountCan = (req) => {
+  // `place` = rosterPlaceOf(req): a Manager slot in Setup counts as the Manager role.
+  const accountCan = (req, place) => {
     const role = roleOf(req);
-    const admin = role === 'admin', mgr = role === 'manager', cns = role === 'cns';
+    const admin = role === 'admin', mgr = role === 'manager' || !!(place && place.manager && place.manager.size), cns = role === 'cns';
     return { forward: admin || mgr, approve: admin || cns, return: admin || mgr || cns, reopen: admin, review: admin || mgr || cns, setup: admin, role };
   };
 
@@ -512,7 +547,7 @@ function mount(app, opts) {
           delete: console_ && may('delete'),
           submit: edit,
           send: edit,
-        }, accountCan(req)),
+        }, accountCan(req, await rosterPlaceOf(req))),
       });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load your roster access.' }); }
   });
@@ -534,7 +569,7 @@ function mount(app, opts) {
      those rows with the same vocabulary the access check uses (rosterVisible) — which is
      also how a unit spelled four ways in the register still reviews as one row. */
   app.get('/api/rosters/access', readGuard, async (req, res) => {
-    if (!accountCan(req).review) return res.status(403).json({ ok: false, error: 'Reviewing every unit needs a roster review role (manager, CNS or administrator).' });
+    if (!accountCan(req, await rosterPlaceOf(req)).review) return res.status(403).json({ ok: false, error: 'Reviewing every unit needs a roster review role (manager, CNS or administrator).' });
     try {
       const acc = require('./access');
       const depts = (await deptIndex()).map((d) => ({ id: d.id, name: d.name }));
@@ -684,7 +719,8 @@ function mount(app, opts) {
     };
     for (const d of index) {
       const mine = role === 'admin' || role === 'cns'
-        || (role === 'manager' && ((cfg.depts[d.id] && cfg.depts[d.id].manager && cfg.depts[d.id].manager.username === me) || allowed(d.id) || allowed(d.name)));
+        || (cfg.depts[d.id] && cfg.depts[d.id].manager && cfg.depts[d.id].manager.username === me)
+        || (role === 'manager' && (allowed(d.id) || allowed(d.name)));
       if (!mine) continue;
       rows.push(await rowOf(d.id, d.name, byKey[d.id] || null));
     }
@@ -703,7 +739,7 @@ function mount(app, opts) {
   app.get('/api/rosters/review', readGuard, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
-      if (!accountCan(req).review) return res.status(403).json({ ok: false, error: 'The review inbox is for managers, the CNS and administrators.' });
+      if (!accountCan(req, await rosterPlaceOf(req)).review) return res.status(403).json({ ok: false, error: 'The review inbox is for managers, the CNS and administrators.' });
       const { year, month } = ymOf(req);
       const { rows, cfg } = await reviewRows(req, year, month);
       res.json({ ok: true, year, month, me: (req.access && req.access.username) || null, role: roleOf(req), cns: cfg.cns, rows });
@@ -715,7 +751,7 @@ function mount(app, opts) {
     try {
       const { year, month } = ymOf(req);
       let pending = 0, returned = 0;
-      if (accountCan(req).review) pending = (await reviewRows(req, year, month)).rows.filter((r) => r.pendingForMe).length;
+      if (accountCan(req, await rosterPlaceOf(req)).review) pending = (await reviewRows(req, year, month)).rows.filter((r) => r.pendingForMe).length;
       const allowed = await deptMatcher(req);
       const actor = await actorOf(req, null);
       if (actor.canEdit) returned = (await listAll()).filter((d) => d && d.year === year && d.month === month && d.status === 'returned' && allowed(d.dept)).length;
@@ -828,8 +864,21 @@ function mount(app, opts) {
       let list = [];
       try {
         const users = await require('./db').getUsers();
-        if (users && typeof users.find === 'function') list = await users.find({ active: { $ne: false } }, { projection: { username: 1, name: 1, title: 1, role: 1, rosterRole: 1, rosterScope: 1, rosterDepartments: 1 } }).toArray();
+        if (users && typeof users.find === 'function') list = await users.find({ active: { $ne: false } }, { projection: { username: 1, name: 1, title: 1, role: 1, rosterRole: 1, rosterScope: 1, rosterDepartments: 1, staffId: 1, staffEmpId: 1 } }).toArray();
       } catch (e) { list = []; }
+      // The label beside a name is the person's DESIGNATION from the staff register (linked
+      // record, else employee no., else a unique name match) — the account's free-text title
+      // read like a job ("Nurse Manager" beside an Instructor) and is only the last resort.
+      let staffAll = [];
+      try { staffAll = (await require('./staff-roster').loadRoster({ cached: true })) || []; } catch (e) { staffAll = []; }
+      const nameKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+      const desigOf = (u) => {
+        let p = null;
+        if (u.staffId != null && u.staffId !== '') p = staffAll.find((e) => e && String(e.id) === String(u.staffId));
+        if (!p && u.staffEmpId) p = staffAll.find((e) => e && e.emp_id && String(e.emp_id) === String(u.staffEmpId));
+        if (!p && u.name) { const m = staffAll.filter((e) => e && !e.former && nameKey(e.name) === nameKey(u.name)); if (m.length === 1) p = m[0]; }
+        return (p && p.designation) || '';
+      };
       // A portal login can only be an In-charge (it has no review inbox); a Manager / CNS
       // place saved on one before that rule is not offered.
       const PORTAL = require('./access').PORTAL_ROLES || [];
@@ -840,7 +889,7 @@ function mount(app, opts) {
       };
       const out = list
         .filter((u) => roleOf(u))
-        .map((u) => ({ username: u.username, name: u.name || u.username, title: u.title || '', rosterRole: roleOf(u), rosterScope: u.rosterScope || null, rosterDepartments: Array.isArray(u.rosterDepartments) ? u.rosterDepartments : [] }))
+        .map((u) => ({ username: u.username, name: u.name || u.username, title: u.title || '', desig: desigOf(u), rosterRole: roleOf(u), rosterScope: u.rosterScope || null, rosterDepartments: Array.isArray(u.rosterDepartments) ? u.rosterDepartments : [] }))
         .sort((x, y) => String(x.name).localeCompare(String(y.name)));
       res.json({ ok: true, reviewers: out });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the reviewers.' }); }
@@ -905,7 +954,7 @@ function mount(app, opts) {
       const eff = cur.status;
       // The final step decides whether the whole move is allowed: a caller who cannot
       // approve must not get the sheet sent to the CNS as a side effect of trying.
-      if (status === 'approved' && !accountCan(req).approve) return res.status(403).json({ ok: false, code: 'forbidden', error: 'Only the CNS can approve a roster.' });
+      if (status === 'approved' && !accountCan(req, await rosterPlaceOf(req)).approve) return res.status(403).json({ ok: false, code: 'forbidden', error: 'Only the CNS can approve a roster.' });
       let steps = [];
       if (status === 'submitted') steps = ['send_cns'];
       else if (status === 'approved') steps = (W.EDITABLE.indexOf(eff) >= 0 ? ['send_cns'] : eff === 'pending_manager' ? ['forward'] : []).concat(['approve']);
@@ -924,6 +973,32 @@ function mount(app, opts) {
   // One month, with the grid — plus the names to print and what this account may do with
   // it. A unit that has no sheet yet still answers with the names, so a brand-new sheet
   // opens with its sign-off block filled in.
+  /* Find anyone on the register to add to a roster from another unit. Only for an account that
+     may write at least one roster (an In-charge without the Staff module still needs names);
+     minimal fields, at most 20, so it is not a way to read the register. */
+  app.get('/api/rosters/staff-search', readGuard, async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const acc = require('./access');
+      const a = req.access || {};
+      const writer = a.unrestricted || acc.portalMayEditRoster(a) || (!isCollector(req) && acc.can(a, 'roster', 'edit')) || (await rosterPlaceOf(req)).incharge.size > 0;
+      if (!writer) return res.status(403).json({ ok: false, error: 'Adding staff to a roster needs a roster you may prepare.' });
+      const q = s(req.query.q, 60).trim().toLowerCase();
+      if (q.length < 2) return res.json({ ok: true, staff: [] });
+      const all = await require('./staff-roster').loadRoster({ cached: true });
+      const out = [];
+      for (const p of (all || [])) {
+        if (!p || p.is_active === false || p.former || p.id == null) continue;
+        const hay = [p.name, p.emp_id, p.designation, p.current_department].join(' ').toLowerCase();
+        if (hay.indexOf(q) < 0) continue;
+        const ph = p.photo || p.photo_url;
+        out.push({ id: p.id, name: p.name || '', emp_id: p.emp_id || '', designation: p.designation || '', current_department: p.current_department || '', role: p.role || '', unit: rosterUnitOf(p), photo: ph ? (typeof ph === 'string' ? ph : (ph.url || '')) : '' });
+        if (out.length >= 20) break;
+      }
+      res.json({ ok: true, staff: out });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not search the staff.' }); }
+  });
+
   app.get('/api/rosters/:dept/:year/:month', readGuard, async (req, res) => {
     try {
       const dept = s(req.params.dept, 40);
@@ -932,8 +1007,9 @@ function mount(app, opts) {
       const id = rosterId(dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
       const doc = publishedOnly(req, [await getOne(id)].filter(Boolean))[0] || null;   // null when never drafted (or not published, to a collector)
       const d = await decorate(req, doc, { dept, status: 'draft', revision: 0 });
-      if (!doc) return res.json({ ok: true, roster: null, signers: d.signers, can: d.can, members: d.members });
-      res.json({ ok: true, roster: d, signers: d.signers, can: d.can, members: d.members });
+      const movedOut = await movedOutOf(dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
+      if (!doc) return res.json({ ok: true, roster: null, signers: d.signers, can: d.can, members: d.members, movedOut });
+      res.json({ ok: true, roster: d, signers: d.signers, can: d.can, members: d.members, movedOut });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the roster.' }); }
   });
 
@@ -1034,7 +1110,7 @@ module.exports = {
   mount, COLL, VER_COLL, CFG_COLL, STATUSES, rosterId, normGrid,
   effStatus: W.effStatus, rawStatuses: W.rawStatuses, resumeOnEdit: W.resumeOnEdit, PENDING: W.PENDING, EDITABLE: W.EDITABLE, HISTORY_CAP: W.HISTORY_CAP,
   applyTransition, getConfig, deptIndex, deptKeyOf, getOne, decorate, actorOf, isUnitIncharge,
-  TRAINEE_UNIT, TRAINEE_ID, MANAGER_UNIT, SUPERVISOR_UNIT, isTraineeNurse, isNurseManager, rosterUnitOf,
+  TRAINEE_UNIT, TRAINEE_ID, MANAGER_UNIT, SUPERVISOR_UNIT, isTraineeNurse, isNurseManager, rosterUnitOf, movedOutOf, normGuests,
   // The in-memory store, for the tests to plant a legacy row in.
   __mem: () => mem,
 };

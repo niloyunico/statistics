@@ -116,9 +116,10 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
   const rosterHeld=(()=>{
     if(!rcfg) return '';
     if(rcfg.cns&&rcfg.cns.username===u.username) return 'CNS · every department';
-    const slot=u.rosterRole==='manager'?'manager':u.rosterRole==='incharge'?'incharge':null;
-    const ds=(rcfg.depts||[]).filter(d=>slot&&d[slot]&&d[slot].username===u.username).map(d=>d.name);
-    return ds.length?ds.slice(0,4).join(', ')+(ds.length>4?' +'+(ds.length-4):''):'';
+    const names=(slot)=>(rcfg.depts||[]).filter(d=>d[slot]&&d[slot].username===u.username).map(d=>d.name);
+    const short=(ds)=>ds.slice(0,3).join(', ')+(ds.length>3?' +'+(ds.length-3):'');
+    const pi=names('incharge'), mg=names('manager');
+    return [pi.length?'Prepares '+short(pi):'', mg.length?'Checks '+short(mg):''].filter(Boolean).join(' · ');
   })();
   const Editor=window.UserModal;
   const run=async(key,fn,msg)=>{ setBusy(key); try{ await fn(); K.uToast(msg); reload(); }catch(e){ K.uToast(e.message||'Failed','error'); } finally{ setBusy(''); } };
@@ -182,7 +183,7 @@ function AcPerson({u,all,lastSeen,depts,designation,me,onBack,reload,admins}){
               {row('Created',acDate(u.createdAt))}
               {row('Last changed',acDate(u.updatedAt))}
               {t!=='portal'&&row('Report sign-off',({prepare:'Prepares',check:'Checks',approve:'Approves'})[u.signoff]||'Takes no part')}
-              {row('Duty roster role',(({incharge:'In-charge · prepares',manager:'Manager · checks',cns:'CNS · approves'})[u.rosterRole]||'None')+(rosterHeld&&u.rosterRole!=='cns'?' — '+rosterHeld:''))}
+              {row('Duty roster',rosterHeld||(({incharge:'In-charge',manager:'Manager',cns:'CNS · approves'})[u.rosterRole]||'None'))}
             </div>
           </div></div>
 

@@ -79,10 +79,13 @@ function RosterSetup() {
   const byUser = {};
   people.forEach((u) => { byUser[u.username] = u; });
   const optionsFor = (role, deptId, current) => {
-    // Administrators may hold any slot; they are listed after the people with the role.
-    const list = people.filter((u) => u.rosterRole === role || u.rosterRole === 'admin');
+    // The same person may prepare AND check a unit, so an In-charge or a Manager slot offers
+    // everyone in the chain (the matching role first); the CNS place only CNS-role holders.
+    // Administrators may hold any slot and are listed last.
+    const list = people.filter((u) => u.rosterRole === 'admin' || (role === 'cns' ? u.rosterRole === 'cns' : (u.rosterRole === 'incharge' || u.rosterRole === 'manager')));
     const covers = (u) => (u.rosterDepartments || []).indexOf(deptId) >= 0;
-    const sorted = list.slice().sort((a, b) => ((a.rosterRole === 'admin') - (b.rosterRole === 'admin')) || (covers(b) - covers(a)) || String(a.name).localeCompare(String(b.name)));
+    const rank = (u) => (u.rosterRole === role ? 0 : u.rosterRole === 'admin' ? 2 : 1);
+    const sorted = list.slice().sort((a, b) => (rank(a) - rank(b)) || (covers(b) - covers(a)) || String(a.name).localeCompare(String(b.name)));
     if (current && !sorted.some((u) => u.username === current)) sorted.unshift(byUser[current] || { username: current, name: current + ' (no roster role)' });
     return sorted;
   };
@@ -115,7 +118,7 @@ function RosterSetup() {
     <select value={value} onChange={(e) => onChange(e.target.value)}
       style={{ width: '100%', boxSizing: 'border-box', padding: '7px 9px', borderRadius: 8, border: '1px solid ' + (missing ? 'rgba(224,138,30,.55)' : 'rgba(125,145,180,.35)'), background: missing ? 'rgba(224,138,30,.06)' : '#fff', fontFamily: 'inherit', fontSize: 12, color: value ? '#16202e' : '#9aa6b4' }}>
       <option value="">— not set —</option>
-      {opts.map((u) => <option key={u.username} value={u.username}>{u.name}{u.rosterRole === 'admin' ? ' · Administrator' : u.title ? ' · ' + u.title : ''}</option>)}
+      {opts.map((u) => <option key={u.username} value={u.username}>{u.name}{u.desig ? ' · ' + u.desig : u.rosterRole === 'admin' ? ' · Administrator' : u.title ? ' · ' + u.title : ''}</option>)}
     </select>
   );
   const nRole = (r) => people.filter((u) => u.rosterRole === r).length;

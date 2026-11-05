@@ -211,6 +211,7 @@ roster.mount(app, { requireApi: as, requireRead: as });
     const reviewers = (await call('GET', '/api/rosters/reviewers')).body.reviewers;
     assert.deepEqual(reviewers.map((r) => r.username + ':' + r.rosterRole).sort(), ['admin:admin', 'chelcia:incharge', 'farida:manager', 'nasrin:cns', 'rahima:incharge', 'shirin:incharge'], 'active role holders plus administrators, nobody else');
     assert.ok(reviewers.every((r) => r.perms === undefined && r.passwordHash === undefined), 'names and roster fields only');
+    assert.ok(reviewers.every((r) => typeof r.desig === 'string'), 'each carries the staff-register designation (blank when unlinked) for the picker label');
 
     // The account-level flags the screens are built from.
     let can = (await call('GET', '/api/rosters/scope', null, 'farida')).body.can;
@@ -390,6 +391,31 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.ok(chList.length > 0 && chList.every((r) => r.dept === 'Trainee Nurses'), 'the roster list holds only Trainee Nurses sheets: ' + chList.map((r) => r.dept).join(','));
     assert.equal((await call('PUT', '/api/rosters', { dept: 'Trainee Nurses', year: 2026, month: 8, grid: { S9: { 2: 'G1' } }, baseRevision: 0 }, 'chelcia')).status, 200, 'she prepares her own unit');
     assert.equal((await call('GET', '/api/rosters/review', null, 'chelcia')).status, 403, 'no review inbox for an In-charge');
+
+    // One person as In-charge AND Manager of a unit: sending goes straight on to the CNS.
+    assert.equal((await call('PUT', '/api/rosters/config', { depts: { trainee: { incharge: { username: 'chelcia' }, manager: { username: 'chelcia' } } } })).status, 200);
+    let dual = await call('POST', '/api/rosters/' + encodeURIComponent('ros-Trainee Nurses-2026-08') + '/transition', { action: 'send_manager' }, 'chelcia');
+    assert.equal(dual.status, 200, JSON.stringify(dual.body));
+    assert.equal(dual.body.roster.status, 'pending_cns', 'the check was hers to give: straight to the CNS');
+    assert.deepEqual(dual.body.roster.history.slice(-2).map((h) => h.action), ['send_manager', 'forward'], 'history shows both steps');
+    assert.equal(dual.body.roster.checkedBy, 'Chelcia Bani Baroi', 'checked by her');
+    // A Manager slot in Setup is a grant without the Manager role: Farida-like account with role '' would
+    // still forward — covered by roster-workflow isMgr; here the inbox opens for a slot-only manager.
+    assert.equal((await call('GET', '/api/rosters/review', null, 'chelcia')).status, 200, 'managing a unit opens the review inbox');
+
+    // Guest staff: someone from another unit on this sheet — "move" takes them off home for that month.
+    let g = await call('PUT', '/api/rosters', { dept: 'NICU', year: 2026, month: 6, grid: { S5: { 1: 'M4' } }, order: ['S5'], guests: { S5: { from: 'MICU', mode: 'move', name: 'Guest Five', desig: 'Staff Nurse' }, bad: { from: 'x' } }, baseRevision: 0 });
+    assert.equal(g.status, 200, JSON.stringify(g.body));
+    assert.deepEqual(Object.keys(g.body.roster.guests), ['S5'], 'guests are kept, malformed keys dropped');
+    assert.equal(g.body.roster.guests.S5.mode, 'move');
+    assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/6')).body.movedOut, ['S5'], 'a moved guest is left off the home sheet that month');
+    assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/5')).body.movedOut, [], 'and only that month');
+    assert.deepEqual((await call('GET', '/api/rosters/CCU/2026/6')).body.movedOut, [], 'and only their home unit');
+    // Search for staff to add: only for someone who may prepare a roster; minimal fields.
+    assert.equal((await call('GET', '/api/rosters/staff-search?q=ra', null, 'nasrin')).status, 403, 'the CNS prepares no roster: no search');
+    const found = (await call('GET', '/api/rosters/staff-search?q=a', null, 'admin')).body;
+    assert.ok(found.ok && Array.isArray(found.staff) && found.staff.length <= 20);
+    found.staff.forEach((p) => assert.deepEqual(Object.keys(p).sort(), ['current_department', 'designation', 'emp_id', 'id', 'name', 'photo', 'role', 'unit'], 'only the fields needed to pick someone'));
 
     // The print log.
     assert.equal((await call('POST', '/api/rosters/print', { kind: 'staff', target: 'Rahima', detail: 'May-Nov 2026' }, 'rahima')).body.ok, true);

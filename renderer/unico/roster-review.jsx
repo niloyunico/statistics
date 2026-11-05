@@ -182,7 +182,7 @@ function RiPreview({ row, year, month, staff, onBack, onDecide, busy, setRoute }
   const rulesRef = useRef(null);
   const dept = row.sheetDept || row.deptName;
   const load = useCallback(() => K.api.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then((r) => {
-    if (r && r.ok) { setDoc(r.roster || null); setExtra({ signers: r.signers || {}, can: (r.roster && r.roster.can) || r.can || null }); setErr(''); }
+    if (r && r.ok) { setDoc(r.roster ? { ...r.roster, movedOut: r.movedOut || [] } : null); setExtra({ signers: r.signers || {}, can: (r.roster && r.roster.can) || r.can || null }); setErr(''); }
     else setErr((r && r.error) || 'Could not load the sheet.');
   }).catch(() => setErr('Could not reach the server.')), [dept, year, month]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);

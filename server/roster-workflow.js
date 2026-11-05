@@ -83,7 +83,9 @@ function rights(actor, doc, cfgDept, cfgCns) {
   // The person Duty Roster -> Setup names as this unit's In-charge prepares its roster: the
   // setup IS the grant, so they need no separate Duty Roster Edit permission for it.
   const inchOfUnit = !!(me && cfgDept && cfgDept.incharge && cfgDept.incharge.username && cfgDept.incharge.username === me);
-  const isMgr = a.rosterRole === 'manager' && (mgrOfUnit || a.inScope === true);
+  // Named the unit's Manager in Setup = the grant (the role is not needed); a Manager-role
+  // account also checks the units on its own list.
+  const isMgr = mgrOfUnit || (a.rosterRole === 'manager' && a.inScope === true);
   const isCns = a.rosterRole === 'cns';
   const editor = (a.inScope === true && a.canEdit === true) || inchOfUnit;
   const editable = EDITABLE.indexOf(st) >= 0;

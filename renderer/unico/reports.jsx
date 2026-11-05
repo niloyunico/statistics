@@ -2134,17 +2134,23 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   // account is saved. The setup route is an administrator's, so only an administrator sees the list.
   const viewerAdmin=(()=>{ const me=typeof window!=='undefined'?window.__UNICO_USER__:null; return !me||me.role==='Administrator'; })();   // no user = open local mode
   const [rcfg,setRcfg]=useState(null);          // GET /api/rosters/config
-  const [rosSel,setRosSel]=useState(null);      // department ids for the current slot (null = not loaded)
+  // Two independent lists — the same person may prepare AND check a unit (then a sent roster
+  // goes straight on to the CNS) — plus the CNS place. null = not loaded yet.
+  const [rosSelIn,setRosSelIn]=useState(null);   // departments they prepare (In-charge of)
+  const [rosSelMgr,setRosSelMgr]=useState(null); // departments they check (Manager of)
+  const [rosCns,setRosCns]=useState(editing&&initial.rosterRole==='cns');
   const [rosQ,setRosQ]=useState('');
   const [rosViewAdded,setRosViewAdded]=useState(false);
-  const rosSlot=rosterRole==='manager'?'manager':rosterRole==='incharge'?'incharge':null;
   const acctName=String(editing?initial.username:username||'').trim().toLowerCase();
   const heldIn=(cfg,slot)=>((cfg&&cfg.depts)||[]).filter(d=>d[slot]&&d[slot].username===acctName).map(d=>d.id);
   React.useEffect(()=>{ if(!viewerAdmin) return undefined; let live=true;
     fetch('/api/rosters/config',{credentials:'same-origin',cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{ if(live&&j&&j.ok) setRcfg(j); }).catch(()=>{});
     return ()=>{ live=false; }; },[]);   // eslint-disable-line react-hooks/exhaustive-deps
-  // The ticks follow the role: switching Manager <-> In-charge shows what they hold in that slot.
-  React.useEffect(()=>{ if(rcfg) setRosSel(rosSlot?heldIn(rcfg,rosSlot):[]); },[rcfg,rosSlot]);   // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(()=>{ if(!rcfg) return;
+    setRosSelIn(heldIn(rcfg,'incharge')); setRosSelMgr(heldIn(rcfg,'manager'));
+    if(rcfg.cns&&rcfg.cns.username===acctName) setRosCns(true); },[rcfg]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The account's role follows the ticks (what the review chain and the Setup pickers read).
+  const rosDerivedRole=()=>rosCns?'cns':((rosSelMgr||[]).length?'manager':((rosSelIn||[]).length?'incharge':''));
   // "Own profile only": no module at all + linked to their staff record = Home and My Profile.
   const [ownOnly,setOwnOnly]=useState(false);
   const [copyFrom,setCopyFrom]=useState('');
@@ -2348,7 +2354,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   const quickSet=(kind)=>{ setCopyFrom(''); setOwnOnly(kind==='own');
     if(kind==='none'){ setPerms(NONE_PERMS()); setSubMenus({}); }
     // Their own profile and nothing else: no module, own record only, no roster role.
-    else if(kind==='own'){ setPerms(NONE_PERMS()); setSubMenus({}); setStaffScope('self'); setRosterRole(''); }
+    else if(kind==='own'){ setPerms(NONE_PERMS()); setSubMenus({}); setStaffScope('self'); setRosterRole(''); setRosSelIn(s=>s?[]:s); setRosSelMgr(s=>s?[]:s); setRosCns(false); }
     // Console modules only: Data Submission needs a scope, the staff app is a phone login and
     // Access Control lists every account — none of those is a harmless "view".
     // Those modules are LEFT as they are (not cleared): clearing Data Submission on Save also wiped
@@ -2380,20 +2386,27 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     if((v==='manager'||v==='cns')&&!isAdmin&&!isColl&&asActions(perms.roster).indexOf('view')<0){
       setPerms(p=>({...p,roster:PERM_ORDER.filter(a=>asActions(p.roster).concat('view').indexOf(a)>=0)})); setRosViewAdded(true); }
   };
+  // Anyone placed in the chain needs Duty Roster view to open their rosters / the review inbox.
+  React.useEffect(()=>{
+    const placed=rosCns||(rosSelMgr||[]).length||(rosSelIn||[]).length;
+    if(placed&&!isAdmin&&!isColl&&asActions(perms.roster).indexOf('view')<0){
+      setPerms(p=>({...p,roster:PERM_ORDER.filter(a=>asActions(p.roster).concat('view').indexOf(a)>=0)})); setRosViewAdded(true); }
+  },[rosCns,rosSelIn,rosSelMgr]);   // eslint-disable-line react-hooks/exhaustive-deps
   // What saving changes in Duty Roster → Setup: only the slots that move, so the rest of the
   // hospital's assignment is untouched. null = nothing to send.
   const rosCfgPlan=()=>{
-    if(!viewerAdmin||!rcfg||rosSel==null||isAdmin||!acctName) return null;
+    if(!viewerAdmin||!rcfg||rosSelIn==null||rosSelMgr==null||isAdmin||!acctName) return null;
     const body={depts:{}}; let n=0; const lost=[];
     const nm=id=>((rcfg.depts||[]).find(d=>d.id===id)||{}).name||id;
     ['incharge','manager'].forEach(slot=>{
-      const held=heldIn(rcfg,slot), want=slot===rosSlot?rosSel:[];
+      const held=heldIn(rcfg,slot), want=slot==='incharge'?rosSelIn:(isColl?[]:rosSelMgr);
       held.filter(id=>want.indexOf(id)<0).forEach(id=>{ (body.depts[id]=body.depts[id]||{})[slot]=null; n++; lost.push((slot==='manager'?'Manager':'In-charge')+' of '+nm(id)); });
       want.filter(id=>held.indexOf(id)<0).forEach(id=>{ (body.depts[id]=body.depts[id]||{})[slot]={username:acctName}; n++; });
     });
     const wasCns=!!(rcfg.cns&&rcfg.cns.username===acctName);
-    if(rosterRole==='cns'&&!wasCns){ body.cns={username:acctName}; n++; }
-    if(rosterRole!=='cns'&&wasCns){ body.cns=null; n++; lost.push('the CNS'); }
+    const cnsNow=rosCns&&!isColl;
+    if(cnsNow&&!wasCns){ body.cns={username:acctName}; n++; }
+    if(!cnsNow&&wasCns){ body.cns=null; n++; lost.push('the CNS'); }
     return n?{body,lost}:null;
   };
 
@@ -2456,7 +2469,8 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
       if(!isColl&&signoffSet) payload.signoff=signoff||'';
       // Only when it changed, so saving an unrelated field never rewrites it.
       // A portal login may only be an In-charge (the server holds the same rule).
-      if(!isAdmin&&(!editing||rosterRole!==(initial.rosterRole||''))) payload.rosterRole=isColl?(rosterRole==='incharge'?'incharge':''):(rosterRole||'');
+      const roleOut=(viewerAdmin&&rcfg&&rosSelIn!=null)?rosDerivedRole():rosterRole;
+      if(!isAdmin&&(!editing||roleOut!==(initial.rosterRole||''))) payload.rosterRole=isColl?(roleOut==='incharge'?'incharge':''):(roleOut||'');
       // The staff record link, for a portal login too (the console branch below sends its own).
       if(isColl&&staffLinkDirty){ payload.staffId=staffId!==''?Number(staffId):null; payload.staffEmpId=(linkedRec&&linkedRec.emp_id)?linkedRec.emp_id:''; }
       // Send `role` only when the admin actually changed it: an account the form cannot
@@ -2551,58 +2565,61 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   );
   // ---- Account tab: their place in the duty roster chain, and which departments ----
   const rosterRoleBlock=(portal)=>{
-    const opts=portal?[['','None'],['incharge','In-charge · prepares']]:[['','None'],['incharge','In-charge · prepares'],['manager','Manager · checks'],['cns','CNS · approves']];
+    const head=<div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:6}}>Duty roster <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· which units they prepare, check or approve</span></div>;
+    // Not an administrator: the setup route is theirs to read, not to change — show the role only.
+    if(!viewerAdmin){
+      return (<div>{head}<div style={{fontSize:12,color:'var(--ink-2)'}}>{({incharge:'In-charge · prepares',manager:'Manager · checks',cns:'CNS · approves'})[rosterRole]||'No place in the roster chain'}</div>
+        <div style={{fontSize:11,color:'var(--muted)',marginTop:4}}>An administrator assigns their departments (Duty Roster → Setup).</div></div>);
+    }
     const list=(rcfg&&rcfg.depts)||[];
     const needle=rosQ.trim().toLowerCase();
     const shown=list.filter(d=>!needle||String(d.name).toLowerCase().indexOf(needle)>=0);
-    const sel=rosSel||[];
-    const tog=(id)=>setRosSel(s=>(s||[]).indexOf(id)>=0?(s||[]).filter(x=>x!==id):[...(s||[]),id]);
     const otherCns=rcfg&&rcfg.cns&&rcfg.cns.username!==acctName?rcfg.cns:null;
-    return (
-      <div>
-        <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:6}}>Duty roster role <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>· their place in the roster review chain</span></div>
-        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
-          {opts.map(([v,l])=>{ const on=rosterRole===v||(portal&&v===''&&rosterRole!=='incharge'); return (
-            <button key={v||'none'} type="button" onClick={()=>pickRosterRole(v)}
-              style={{font:'inherit',cursor:'pointer',padding:'5px 12px',borderRadius:16,fontSize:12,fontWeight:600,border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue-50)':'#fff',color:on?'var(--blue-700)':'var(--muted)'}}>{l}</button>
-          );})}
+    const both=(rosSelIn||[]).filter(id=>(rosSelMgr||[]).indexOf(id)>=0);
+    const nm=id=>(list.find(d=>d.id===id)||{}).name||id;
+    const panel=(slot,title,sub,sel,setSel,tone)=>(
+      <div style={{border:'1px solid var(--line)',borderRadius:10,overflow:'hidden',borderTop:'3px solid '+tone}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',background:'var(--blue-50)',borderBottom:'1px solid var(--line)',flexWrap:'wrap'}}>
+          <b style={{fontSize:12,color:'var(--ink)'}}>{title}</b>
+          <span style={{fontSize:10.5,color:'var(--muted)'}}>{sub}</span>
+          <span style={{fontSize:10.5,fontWeight:700,color:tone,background:'#fff',border:'1px solid var(--line)',borderRadius:10,padding:'1px 8px'}}>{(sel||[]).length} department{(sel||[]).length===1?'':'s'}</span>
+          <span style={{flex:1}}/>
+          <button type="button" className="btn sm" onClick={()=>setSel(s=>[...new Set([...(s||[]),...shown.map(d=>d.id)])])}>Select all</button>
+          <button type="button" className="btn sm" onClick={()=>setSel([])}>Clear</button>
         </div>
-        <div style={{fontSize:10.5,color:'var(--muted)',marginTop:6,lineHeight:1.6}}>
-          {rosterRole==='manager'?'They check the rosters of the departments ticked below, and forward each one to the CNS or return it with a note.'
-            :rosterRole==='cns'?'They give the final approval for every department.'
-            :rosterRole==='incharge'?'They prepare and send the rosters of the departments ticked below; their name fills “Prepared by”.'
-            :'Takes no part in the roster review.'}
-          {portal&&' To make this person a Manager or the CNS, convert the account first.'}
-        </div>
-        {rosViewAdded&&<div style={{fontSize:11,color:'#157a43',marginTop:4}}>Duty Roster view was added on Module access — they need it to open the review inbox.</div>}
-        {rosterRole==='cns'&&viewerAdmin&&rcfg&&(
-          <div style={{fontSize:11.5,marginTop:8,color:otherCns?'#8a5a00':'#157a43'}}>{otherCns?'Saving makes them the CNS in place of '+otherCns.name+'.':'They will be the CNS for every department.'}</div>
-        )}
-        {rosSlot&&!viewerAdmin&&<div style={{fontSize:11,color:'var(--muted)',marginTop:8}}>An administrator assigns their departments (Duty Roster → Setup).</div>}
-        {rosSlot&&viewerAdmin&&(
-          <div style={{marginTop:10,border:'1px solid var(--line)',borderRadius:10,overflow:'hidden'}}>
-            <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 10px',background:'var(--blue-50)',borderBottom:'1px solid var(--line)',flexWrap:'wrap'}}>
-              <b style={{fontSize:12,color:'var(--ink)'}}>{rosSlot==='manager'?'Departments they check':'Departments they prepare'}</b>
-              <span style={{fontSize:10.5,fontWeight:700,color:'var(--blue-700)',background:'#fff',border:'1px solid var(--blue-100)',borderRadius:10,padding:'1px 8px'}}>{sel.length} department{sel.length===1?'':'s'}</span>
-              <span style={{flex:1}}/>
-              <input value={rosQ} onChange={e=>setRosQ(e.target.value)} placeholder="Find…" style={{padding:'4px 8px',border:'1px solid var(--line)',borderRadius:6,fontSize:11.5,fontFamily:'inherit',width:130}}/>
-              <button type="button" className="btn sm" onClick={()=>setRosSel(s=>[...new Set([...(s||[]),...shown.map(d=>d.id)])])}>Select all</button>
-              <button type="button" className="btn sm" onClick={()=>setRosSel([])}>Clear</button>
-            </div>
-            {!rcfg ? <div style={{padding:12,fontSize:11.5,color:'var(--muted)'}}>Loading departments…</div> : (
-              <div style={{maxHeight:220,overflow:'auto',display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))'}}>
-                {shown.map(d=>{ const on=sel.indexOf(d.id)>=0; const holder=d[rosSlot]; const other=holder&&holder.username!==acctName?holder:null; return (
-                  <label key={d.id} style={{display:'flex',alignItems:'flex-start',gap:7,padding:'6px 10px',cursor:'pointer',fontSize:12,borderBottom:'1px solid var(--line)',background:on?'var(--blue-50)':'#fff'}}>
-                    <input type="checkbox" checked={on} onChange={()=>tog(d.id)} style={{marginTop:2}}/>
-                    <span style={{minWidth:0}}><span style={{display:'block',fontWeight:600,color:'var(--ink)'}}>{d.name}</span>
-                      {other&&<span style={{display:'block',fontSize:10.5,color:on?'#b5670a':'var(--muted)'}}>{on?'replaces '+other.name:'now: '+other.name}</span>}</span>
-                  </label>
-                );})}
-                {!shown.length&&<div style={{padding:12,fontSize:11.5,color:'var(--muted)'}}>No departments{needle?' match':''}.</div>}
-              </div>
-            )}
+        {!rcfg ? <div style={{padding:12,fontSize:11.5,color:'var(--muted)'}}>Loading departments…</div> : (
+          <div style={{maxHeight:200,overflow:'auto',display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(210px,1fr))'}}>
+            {shown.map(d=>{ const on=(sel||[]).indexOf(d.id)>=0; const holder=d[slot]; const other=holder&&holder.username!==acctName?holder:null; return (
+              <label key={d.id} style={{display:'flex',alignItems:'flex-start',gap:7,padding:'6px 10px',cursor:'pointer',fontSize:12,borderBottom:'1px solid var(--line)',background:on?'var(--blue-50)':'#fff'}}>
+                <input type="checkbox" checked={on} onChange={()=>setSel(s=>(s||[]).indexOf(d.id)>=0?(s||[]).filter(x=>x!==d.id):[...(s||[]),d.id])} style={{marginTop:2}}/>
+                <span style={{minWidth:0}}><span style={{display:'block',fontWeight:600,color:'var(--ink)'}}>{d.name}</span>
+                  {other&&<span style={{display:'block',fontSize:10.5,color:on?'#b5670a':'var(--muted)'}}>{on?'replaces '+other.name:'now: '+other.name}</span>}</span>
+              </label>
+            );})}
+            {!shown.length&&<div style={{padding:12,fontSize:11.5,color:'var(--muted)'}}>No departments{needle?' match':''}.</div>}
           </div>
         )}
+      </div>
+    );
+    return (
+      <div>
+        {head}
+        <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:8}}>
+          <input value={rosQ} onChange={e=>setRosQ(e.target.value)} placeholder="Find a department…" style={{padding:'5px 9px',border:'1px solid var(--line)',borderRadius:7,fontSize:12,fontFamily:'inherit',width:200}}/>
+          {!portal&&(
+            <label style={{display:'inline-flex',alignItems:'center',gap:7,padding:'5px 11px',borderRadius:16,border:'1px solid '+(rosCns?'#5b45c4':'var(--line)'),background:rosCns?'rgba(106,82,212,.08)':'#fff',fontSize:12,fontWeight:600,cursor:'pointer',color:rosCns?'#5b45c4':'var(--ink-2)'}}>
+              <input type="checkbox" checked={rosCns} onChange={e=>setRosCns(e.target.checked)}/>CNS · approves every unit
+            </label>
+          )}
+          {rosCns&&otherCns&&<span style={{fontSize:11,color:'#8a5a00'}}>Saving makes them the CNS in place of {otherCns.name}.</span>}
+        </div>
+        <div style={{display:'grid',gap:10}}>
+          {panel('incharge','Prepares','In-charge of — they build and send these rosters',rosSelIn,setRosSelIn,'#0072a3')}
+          {!portal&&panel('manager','Checks','Manager of — they check these and forward to the CNS',rosSelMgr,setRosSelMgr,'#5b45c4')}
+        </div>
+        {both.length>0&&<div style={{fontSize:11.5,color:'#157a43',marginTop:8}}>They prepare and check {both.map(nm).join(', ')} — when they send it, it goes straight to the CNS.</div>}
+        {portal&&<div style={{fontSize:10.5,color:'var(--muted)',marginTop:6}}>To make this person a Manager or the CNS, convert the account first.</div>}
+        {rosViewAdded&&<div style={{fontSize:11,color:'#157a43',marginTop:6}}>Duty Roster view was added on Module access — they need it to open their rosters.</div>}
       </div>
     );
   };
