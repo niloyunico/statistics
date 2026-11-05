@@ -69,6 +69,16 @@ const rosRowOf = e => ({
   pca: rosIsPca(e),
   photo: MK && MK.photoUrlOf && MK.photoUrlOf(e) || ''
 });
+const rosGuestRow = (id, g) => ({
+  empId: id,
+  empIdShown: g.emp || '',
+  name: g.name || id,
+  desig: g.desig || '',
+  pca: rosIsPca({
+    designation: g.desig
+  }),
+  photo: ''
+});
 const rosMigrateGrid = (grid, rows) => {
   const g = grid || {};
   const keys = Object.keys(g);
@@ -768,7 +778,9 @@ const rosRowsFrom = (doc, staff, dept, withRegister, inchargeName) => {
     all[rosKey(e)] = e;
   });
   const supIds = R.SUPERVISOR_UNIT === dept ? new Set((ROS_CFG && ROS_CFG.supervisors || []).map(x => String(x.id))) : null;
-  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (supIds ? supIds.has(String(e.id)) : R.unitOf(e) === dept)).map(e => rosRowOf(e));
+  const guests = doc && doc.guests || {};
+  const moved = new Set(doc && doc.movedOut || []);
+  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (supIds ? supIds.has(String(e.id)) : R.unitOf(e) === dept)).map(e => rosRowOf(e)).filter(r => !moved.has(r.empId) || Object.keys(doc && doc.grid && doc.grid[r.empId] || {}).length);
   const known = Object.keys(all).map(k => ({
     empId: k,
     empIdShown: all[k].emp_id || ''
@@ -781,7 +793,8 @@ const rosRowsFrom = (doc, staff, dept, withRegister, inchargeName) => {
     if (!id || seen[id]) return;
     seen[id] = 1;
     const e = all[id];
-    out.push(e ? rosRowOf(e) : {
+    const g = guests[id];
+    out.push(e ? rosRowOf(e) : g ? rosGuestRow(id, g) : {
       empId: id,
       empIdShown: '',
       name: names[id] || id,
@@ -789,10 +802,11 @@ const rosRowsFrom = (doc, staff, dept, withRegister, inchargeName) => {
     });
   };
   (doc && doc.order || []).forEach(id => {
-    if (grid[id] || reg.some(r => r.empId === id)) add(id);
+    if (grid[id] || guests[id] || reg.some(r => r.empId === id)) add(id);
   });
   Object.keys(grid).forEach(add);
   reg.forEach(r => add(r.empId));
+  Object.keys(guests).forEach(add);
   const manual = !!(doc && doc.rules && doc.rules.orderManual);
   return {
     rows: rosByGroup(manual ? out : rosSeniorSort(out, inchargeName)),
@@ -834,7 +848,8 @@ function RosDecisionButtons({
   onAction,
   busy,
   compact,
-  hasManager
+  hasManager,
+  selfManager
 }) {
   const c = can || {};
   const resend = rosStatusNorm(status) === 'returned';
@@ -896,7 +911,7 @@ function RosDecisionButtons({
     }), label || m.label);
   };
   const out = [];
-  if (c.send) {
+  if (c.send && selfManager) out.push(btn('send_manager', 'Check & send to CNS'));else if (c.send) {
     out.push(btn('send_cns', resend ? 'Resend to CNS' : null));
     out.push(btn('send_manager', resend ? 'Resend to Manager' : null));
   }
@@ -1114,7 +1129,8 @@ function useRosDecide() {
     action,
     unit,
     period,
-    warnings
+    warnings,
+    selfManager
   }) => {
     const what = unit + ' · ' + period;
     if (action === 'return') {
@@ -1130,7 +1146,7 @@ function useRosDecide() {
     }
     const warn = warnings ? ' It still has ' + warnings + ' rule warning' + (warnings === 1 ? '' : 's') + '.' : '';
     const msgs = {
-      send_manager: ['Send to the Manager?', what + ' goes to the unit Manager for checking. It is locked while it is with them.' + warn],
+      send_manager: selfManager ? ['Check and send to the CNS?', 'You are also this unit’s Manager, so your check is part of sending: ' + what + ' goes straight to the CNS for approval.' + warn] : ['Send to the Manager?', what + ' goes to the unit Manager for checking. It is locked while it is with them.' + warn],
       send_cns: ['Send straight to the CNS?', 'This skips the Manager check. ' + what + ' goes directly to the CNS for approval.' + warn, true],
       forward: ['Forward to the CNS?', 'You have checked ' + what + '. It goes to the CNS for final approval.'],
       approve: ['Approve this roster?', what + ' becomes the published roster and is locked.' + warn],
@@ -2462,6 +2478,296 @@ function RosterAccessReview({
     className: "sub"
   }, "No account has Duty Roster access yet.")))))));
 }
+function RosAddStaff({
+  dept,
+  year,
+  month,
+  onClose,
+  onAdd,
+  onRoster
+}) {
+  const [q, setQ] = useState('');
+  const [hits, setHits] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [pick, setPick] = useState(null);
+  const [mode, setMode] = useState('both');
+  useEffect(() => {
+    const n = q.trim();
+    if (n.length < 2) {
+      setHits([]);
+      setErr('');
+      return undefined;
+    }
+    let live = true;
+    const t = setTimeout(() => {
+      setBusy(true);
+      rosApi.get('/api/rosters/staff-search?q=' + encodeURIComponent(n)).then(r => {
+        if (!live) return;
+        setBusy(false);
+        if (r && r.ok) {
+          setHits(r.staff || []);
+          setErr('');
+        } else {
+          setHits([]);
+          setErr(r && r.error || 'Could not search the staff.');
+        }
+      }).catch(() => {
+        if (live) {
+          setBusy(false);
+          setErr('Could not reach the server.');
+        }
+      });
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [q]);
+  const monthName = new Date(year, month, 1).toLocaleString('en-GB', {
+    month: 'long',
+    year: 'numeric'
+  });
+  const pill = (v, title, sub) => React.createElement("label", {
+    key: v,
+    style: {
+      flex: 1,
+      minWidth: 180,
+      display: 'flex',
+      gap: 8,
+      alignItems: 'flex-start',
+      padding: '9px 11px',
+      borderRadius: 10,
+      cursor: 'pointer',
+      border: '1px solid ' + (mode === v ? 'rgba(0,144,202,.5)' : 'rgba(125,145,180,.3)'),
+      background: mode === v ? 'rgba(0,144,202,.07)' : '#fff'
+    }
+  }, React.createElement("input", {
+    type: "radio",
+    checked: mode === v,
+    onChange: () => setMode(v),
+    style: {
+      marginTop: 2
+    }
+  }), React.createElement("span", null, React.createElement("b", {
+    style: {
+      display: 'block',
+      fontSize: 12,
+      color: '#16202e'
+    }
+  }, title), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c'
+    }
+  }, sub)));
+  return React.createElement("div", {
+    onMouseDown: e => {
+      if (e.target === e.currentTarget) onClose();
+    },
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 9000,
+      background: 'rgba(16,28,46,.38)',
+      display: 'flex',
+      alignItems: 'flex-start',
+      justifyContent: 'center',
+      padding: '8vh 16px 16px'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: 'min(560px,100%)',
+      background: '#fff',
+      borderRadius: 16,
+      boxShadow: '0 24px 60px rgba(16,28,46,.28)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("div", {
+    style: {
+      padding: '14px 18px',
+      borderBottom: '1px solid rgba(125,145,180,.2)',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      flex: 1
+    }
+  }, React.createElement("h3", {
+    style: ROS_H3
+  }, "Add staff from another unit"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: '#8a97a8',
+      marginTop: 2
+    }
+  }, dept, " \xB7 ", monthName)), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: onClose
+  }, "Close")), React.createElement("div", {
+    style: {
+      padding: '14px 18px',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("input", {
+    autoFocus: true,
+    value: q,
+    onChange: e => {
+      setQ(e.target.value);
+      setPick(null);
+    },
+    placeholder: "Search by name, employee no., designation or unit\u2026",
+    style: {
+      width: '100%',
+      boxSizing: 'border-box',
+      padding: '9px 12px',
+      borderRadius: 10,
+      border: '1px solid rgba(125,145,180,.4)',
+      fontFamily: 'inherit',
+      fontSize: 12.5
+    }
+  }), !pick && q.trim().length >= 2 && React.createElement("div", {
+    style: {
+      maxHeight: 280,
+      overflow: 'auto',
+      border: '1px solid rgba(125,145,180,.25)',
+      borderRadius: 10
+    }
+  }, busy && !hits.length && React.createElement("div", {
+    style: {
+      padding: 12,
+      fontSize: 11.5,
+      color: '#8a97a8'
+    }
+  }, "Searching\u2026"), err && React.createElement("div", {
+    style: {
+      padding: 12,
+      fontSize: 11.5,
+      color: '#a92c42'
+    }
+  }, err), !busy && !err && !hits.length && React.createElement("div", {
+    style: {
+      padding: 12,
+      fontSize: 11.5,
+      color: '#8a97a8'
+    }
+  }, "No one matches."), hits.map(p => {
+    const here = onRoster('S' + String(p.id));
+    return React.createElement("div", {
+      key: p.id,
+      onClick: () => {
+        if (!here) setPick(p);
+      },
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '8px 12px',
+        cursor: here ? 'default' : 'pointer',
+        opacity: here ? 0.55 : 1,
+        borderBottom: '1px solid rgba(125,145,180,.12)'
+      }
+    }, React.createElement(MK.Av, {
+      name: p.name,
+      emp: p,
+      empId: p.emp_id,
+      size: 30,
+      radius: rosAvRadius(30)
+    }), React.createElement("span", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: '#16202e'
+      }
+    }, p.name), React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 10.5,
+        color: '#8a97a8'
+      }
+    }, [p.emp_id, p.designation, p.unit || p.current_department].filter(Boolean).join(' · '))), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: here ? '#8a97a8' : '#0072a3',
+        whiteSpace: 'nowrap'
+      }
+    }, here ? 'On this roster' : 'Select'));
+  })), pick && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '9px 12px',
+      borderRadius: 10,
+      background: 'rgba(0,144,202,.06)',
+      border: '1px solid rgba(0,144,202,.2)'
+    }
+  }, React.createElement(MK.Av, {
+    name: pick.name,
+    emp: pick,
+    empId: pick.emp_id,
+    size: 34,
+    radius: rosAvRadius(34)
+  }), React.createElement("span", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("b", {
+    style: {
+      display: 'block',
+      fontSize: 13,
+      color: '#16202e'
+    }
+  }, pick.name), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c'
+    }
+  }, [pick.emp_id, pick.designation, pick.unit || pick.current_department].filter(Boolean).join(' · '))), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => setPick(null)
+  }, "Change")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, pill('both', 'Keep on both rosters', 'Also stays on the ' + (pick.unit || 'home') + ' roster'), pill('move', 'Only on this roster', 'Off the ' + (pick.unit || 'home') + ' roster for ' + monthName)), React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      gap: 8
+    }
+  }, React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: onClose
+  }, "Cancel"), React.createElement("button", {
+    type: "button",
+    className: "btn sm primary",
+    onClick: () => onAdd(pick, mode)
+  }, "Add to ", dept))))));
+}
 function RosterGrid({
   staffStore,
   scope,
@@ -2528,10 +2834,20 @@ function RosterGrid({
   const saveTimer = useRef(null);
   const toastTimer = useRef(null);
   const [members, setMembers] = useState(null);
+  const [guests, setGuests] = useState({});
+  const [movedOut, setMovedOut] = useState([]);
+  const [addOpen, setAddOpen] = useState(false);
   const staff = useMemo(() => {
     const mem = members ? new Set(members.map(String)) : null;
-    return (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : R.unitOf(e) === dept)).map(e => rosRowOf(e));
-  }, [staffStore.staff, dept, members]);
+    const moved = new Set(movedOut);
+    const byKey = {};
+    (staffStore.staff || []).forEach(e => {
+      if (e && e.id != null) byKey[rosKey(e)] = e;
+    });
+    const home = (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : R.unitOf(e) === dept)).map(e => rosRowOf(e)).filter(r => !moved.has(r.empId) || Object.keys(grid[r.empId] || {}).length);
+    const have = new Set(home.map(r => r.empId));
+    return home.concat(Object.keys(guests).filter(k => !have.has(k)).map(k => byKey[k] ? rosRowOf(byKey[k]) : rosGuestRow(k, guests[k])));
+  }, [staffStore.staff, dept, members, guests, movedOut, grid]);
   const rows = useMemo(() => {
     const byId = {};
     staff.forEach(x => {
@@ -2595,6 +2911,8 @@ function RosterGrid({
       setOrder(d && d.order || []);
       setOrderManual(!!(d && d.rules && d.rules.orderManual));
       setStoredNames(d && d.names || {});
+      setGuests(d && d.guests || {});
+      setMovedOut(Array.isArray(r.movedOut) ? r.movedOut : []);
       setStatus(d && d.status || 'draft');
       setRev(d && d.revision || 0);
       const ru = rosRulesOf(d && d.rules);
@@ -2737,6 +3055,27 @@ function RosterGrid({
       if (v) editBlocked();
       return;
     }
+    if (v === 'unguest') {
+      const g = guests[empId];
+      if (!g) return;
+      if (!window.confirm('Take ' + (g.name || 'this person') + ' off this roster? Their shifts on this sheet are cleared' + (g.mode === 'move' ? ' and they go back on the ' + (g.from || 'home') + ' roster.' : '.'))) return;
+      setGuests(m => {
+        const n = {
+          ...m
+        };
+        delete n[empId];
+        return n;
+      });
+      setOrder(o => o.filter(k => k !== empId));
+      setCells(gr => {
+        const n = {
+          ...gr
+        };
+        delete n[empId];
+        return n;
+      });
+      return;
+    }
     const pat = ROS_PATTERNS.find(p => p[0] === v);
     push();
     setCells(g => {
@@ -2829,6 +3168,7 @@ function RosterGrid({
       month,
       grid,
       order: rows.map(r => r.empId),
+      guests,
       baseRevision: rev,
       rules: {
         cfg,
@@ -2947,12 +3287,14 @@ function RosterGrid({
       const ok = await save(null, true);
       if (ok === false) return;
     }
+    const selfManager = !!(signers.manager && window.__UNICO_USER__ && String(window.__UNICO_USER__.username || '').toLowerCase() === String(signers.manager.username || '').toLowerCase());
     const r = await decider.run({
       id: meta.id || rosSheetId(dept, year, month),
       action,
       unit: dept,
       period: monthLabel,
-      warnings: totalViol
+      warnings: totalViol,
+      selfManager
     });
     if (r && r.ok) {
       await refreshMeta();
@@ -3401,7 +3743,8 @@ function RosterGrid({
       can: sheetCan,
       onAction: act,
       busy: busy || decider.busy,
-      hasManager: !!signers.manager
+      hasManager: !!signers.manager,
+      selfManager: !!(signers.manager && window.__UNICO_USER__ && String(window.__UNICO_USER__.username || '').toLowerCase() === String(signers.manager.username || '').toLowerCase())
     }));
   })(), stNorm === 'returned' && React.createElement(RosReturnedBanner, {
     meta: meta
@@ -3609,6 +3952,51 @@ function RosterGrid({
   }, "click a cell to pick \xB7 drag a shift onto another to swap \xB7 paint with a brush"), React.createElement("span", {
     style: {
       flex: 1
+    }
+  }), canEdit && React.createElement("button", {
+    type: "button",
+    onClick: () => setAddOpen(true),
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid rgba(0,144,202,.35)',
+      background: 'rgba(0,144,202,.08)',
+      color: '#0072a3',
+      padding: '5px 11px',
+      borderRadius: 9,
+      fontSize: 10.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement(Ic, {
+    d: "M12 5v14M5 12h14",
+    s: 12,
+    sw: 2.4
+  }), "Add staff from another unit"), addOpen && React.createElement(RosAddStaff, {
+    dept: dept,
+    year: year,
+    month: month,
+    onClose: () => setAddOpen(false),
+    onRoster: k => rows.some(r => r.empId === k),
+    onAdd: (p, mode) => {
+      const k = 'S' + String(p.id);
+      setGuests(m => ({
+        ...m,
+        [k]: {
+          from: p.unit || p.current_department || '',
+          mode,
+          name: p.name || '',
+          desig: p.designation || '',
+          emp: p.emp_id || ''
+        }
+      }));
+      setOrder(o => o.indexOf(k) >= 0 ? o : o.concat([k]));
+      setDirty(true);
+      setAddOpen(false);
+      rosToast((p.name || 'Staff') + ' added to ' + dept + (mode === 'move' ? ' — off the ' + (p.unit || 'home') + ' roster this month.' : '.'));
     }
   }), React.createElement("div", {
     style: {
@@ -4117,7 +4505,9 @@ function RosterGrid({
       value: "blanks"
     }, "Fill blanks OFF"), React.createElement("option", {
       value: "clear"
-    }, "Clear row")))), Array.from({
+    }, "Clear row"), guests[x.empId] && React.createElement("option", {
+      value: "unguest"
+    }, "Remove from this roster")))), Array.from({
       length: days
     }, (_, k) => k + 1).map(d => {
       const c = rowG[d] || '';
@@ -7955,17 +8345,35 @@ function rosPrintHtml({
     codes: R.SHIFTS.filter(s => s.bucket === b.id && used.has(s.code))
   })).filter(g => g.codes.length);
   const unknown = [...used].filter(c => !R.BY_CODE[c]);
-  const legendHtml = !legend ? '' : !used.size ? '<div class="lgx"><div class="lgh">Shift legend</div><div class="lgn">No shifts entered yet.</div></div>' : '<div class="lgx"><div class="lgh">Shift legend</div><div class="lg">' + groups.map(g => '<div class="lgb"><b style="color:' + (colour ? rosBColor(g.b.id) : '#16202e') + '">' + rosEsc(g.b.label) + '</b>' + g.codes.map(s => '<span><i>' + rosEsc(s.code) + '</i> ' + rosEsc(s.label) + '</span>').join('') + '</div>').join('') + (unknown.length ? '<div class="lgb"><b>Other</b>' + unknown.map(c => '<span><i>' + rosEsc(c) + '</i></span>').join('') + '</div>' : '') + '</div></div>';
+  const legendHtml = !legend ? '' : !used.size ? '<div class="lgx"><div class="lgh">Shift legend</div><div class="lgn">No shifts entered yet.</div></div>' : '<div class="lgx"><div class="lgh">Shift legend</div><div class="lg">' + groups.map(g => '<div class="lgb" style="--lc:' + (colour ? g.b.id === 'O' ? '#6b7a8d14' : rosBColor(g.b.id) + '1c' : '#eef2f6') + '"><b style="color:' + (colour ? rosBColor(g.b.id) : '#16202e') + '">' + rosEsc(g.b.label) + '</b>' + g.codes.map(s => '<span><i>' + rosEsc(s.code) + '</i> ' + rosEsc(s.label) + '</span>').join('') + '</div>').join('') + (unknown.length ? '<div class="lgb"><b>Other</b>' + unknown.map(c => '<span><i>' + rosEsc(c) + '</i></span>').join('') + '</div>' : '') + '</div></div>';
   const at = new Date().toLocaleString('en-GB', {
     dateStyle: 'medium',
     timeStyle: 'short'
   });
   const d2 = d => String(d).padStart(2, '0') + ' ' + R.MONTHS[month].slice(0, 3) + ' ' + year;
   const period = d2(1) + ' – ' + d2(days);
+  const tot = {
+    hrs: 0,
+    N: 0,
+    leave: 0,
+    shifts: 0
+  };
+  rows.forEach(r => {
+    const row = grid && grid[r.empId] || {};
+    const tt = R.totalsFor(row, days);
+    tot.hrs += tt.hours || 0;
+    tot.N += tt.N || 0;
+    ds.forEach(d => {
+      const c = row[d];
+      if (!c) return;
+      if (R.isLeave(c)) tot.leave++;else if (R.bucketOf(c) && R.bucketOf(c) !== 'O') tot.shifts++;
+    });
+  });
+  const tiles = [['Staff', String(rows.length), pcas.length ? nurses.length + ' nurses · ' + pcas.length + ' PCA' + (pcas.length === 1 ? '' : 's') : 'on this roster', 'b'], ['Duty shifts', String(tot.shifts), 'across ' + days + ' days', 't'], ['Total hours', String(tot.hrs), rows.length ? 'avg ' + Math.round(tot.hrs / rows.length) + ' h / person' : '', 'g'], ['Night shifts', String(tot.N), 'this month', 'v'], ['Leave days', String(tot.leave), 'annual, casual, sick …', 'a']];
   const NAVY = '#0d3a5c';
-  const css = '@page{size:A4 landscape;margin:8mm}*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff}@media print{body{padding:0}}' + '.lh{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding-bottom:5px}.lh img{height:36px}' + '.lh .mid{text-align:center}.lh .mid h1{margin:0;font-size:16pt;font-weight:800;letter-spacing:5px;color:' + NAVY + '}' + '.lh .mid .mo{font-size:10.5pt;font-weight:700;color:#0072a3;margin-top:1px}.lh .mid .pd{font-size:7.6pt;color:#5b6878;letter-spacing:.4px}' + '.lh .rt{text-align:right}.lh .rt .kind{font-size:6.8pt;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;color:#7b8796}.lh .rt .dp{font-size:14pt;font-weight:800;color:#0d1b2e;margin-top:1px}.lh .rt .sf{font-size:7.4pt;color:#5b6878;font-weight:600}' + '.bar{height:3px;border-radius:2px;background:linear-gradient(90deg,#0072a3,#27a8db 55%,#3ab5a7);margin-bottom:7px}' + '.info{display:flex;gap:8px;margin:0 0 7px}.info div{border:1px solid #d9e2ec;border-radius:6px;padding:3px 10px;background:#f7fafc}' + '.info span{display:block;font-size:6pt;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#7b8796}.info b{font-size:8.6pt;color:#0d1b2e}.info i{font-style:normal;font-size:7.4pt;color:#5b6878;font-weight:600}' + '.gt{display:flex;align-items:center;gap:8px;margin:5px 0 3px}.gt span{display:inline-block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#fff;background:#0072a3;border-radius:10px;padding:2px 10px}' + '.gt:after{content:"";flex:1;height:1px;background:#d9e2ec}.gp .gt span{background:#5b45c4}.grp.np{page-break-before:always}' + 'table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;border:1px solid #c9d3de;border-radius:5px;overflow:hidden}thead{display:table-header-group}tr{page-break-inside:avoid}' + 'th{background:' + NAVY + ';color:#fff;font-weight:700;padding:3px 0;font-size:7pt;border-right:1px solid rgba(255,255,255,.12)}th.w{font-weight:500;font-size:6.2pt;background:#1d4f76;padding:1px 0 2px}th.fr{background:#2a6a99}' + '.gp th{background:#3b2f7a}.gp th.w{background:#4d3f94}.gp th.fr{background:#5f50aa}' + 'td{border-right:1px solid #e3e9f0;border-bottom:1px solid #e3e9f0;text-align:center;padding:0;height:14px}tr.r:nth-child(even) td{background:#f7fafc}' + 'td.c{padding:1px}td.fr{background:#eef4fa!important}' + '.k{display:inline-block;min-width:88%;border-radius:3px;padding:0;font-size:6.7pt;font-weight:800;letter-spacing:.1px}.k.ko{color:#6b7a8d}' + 'td.n{color:#7b8796;font-size:6.8pt}td.e{font-size:6.6pt;color:#5b6878}td.nm{text-align:left;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{font-size:7.5pt;color:#0d1b2e}td.nm span{font-size:6.2pt;color:#7b8796}' + 'td.t{font-size:7pt;background:#f1f5f9!important;color:#3c4858}td.h{font-weight:800;color:#0d1b2e}col.n{width:6mm}col.e{width:12mm}col.nm{width:52mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}' + 'tr.sum td{background:#eaf2f9!important;font-size:6.6pt;font-weight:700;color:' + NAVY + ';height:12px}tr.sum td.sl{text-align:right;padding-right:6px;font-weight:600;color:#3c5a74}.gp tr.sum td{background:#f0edfa!important;color:#3b2f7a}' + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lnr .notes{margin-top:0}.lgx{border:1px solid #d9e2ec;border-radius:6px;padding:4px 9px 5px;page-break-inside:avoid}.lgh{font-size:6.4pt;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#7b8796;margin-bottom:2px}.lgn{font-size:7pt;color:#7b8796}' + '.lg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 16px;font-size:6.6pt;color:#3c4858}.lgb b{display:block;font-size:6.8pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.6px}.lgb span{display:inline-block;margin-right:8px;white-space:nowrap}.lgb i{font-style:normal;font-weight:800;color:#0d1b2e}' + '.foot{page-break-inside:avoid;break-inside:avoid}' + '.notes{margin-top:6px;border-radius:6px;background:#f7fafc;border:1px solid #e3e9f0;padding:4px 9px}.nb{font-size:7pt;color:#3c4858}.rm{margin-top:3px;font-size:7.4pt;color:#3c4858;border-bottom:1px dotted #9aa6b4;height:14px}' + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:8px;font-size:8pt;page-break-inside:avoid}.signs>div{border:1px solid #e3e9f0;border-radius:6px;padding:0 10px 6px}' + '.signs .sp{height:32px}.signs .ln{border-top:1px solid #16202e;padding-top:4px}.signs .dt{margin-top:6px;font-size:7.4pt;color:#3c4858}' + '.signs span{display:block;font-size:6.4pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#7b8796}.signs b{display:block;font-size:9pt;color:#0d1b2e}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}' + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}.cr{margin-top:3px;text-align:center;font-size:6px;color:#a3adba}';
-  const html = '<header class="lh"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals">' + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>' + '<div class="rt"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dept) + '</div>' + '<div class="sf">' + rows.length + ' staff' + (pcas.length ? ' · ' + nurses.length + ' nurses · ' + pcas.length + ' PCA' + (pcas.length === 1 ? '' : 's') : '') + '</div></div></header><div class="bar"></div>' + tables + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>' + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>' + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><div class="sp"></div><div class="ln"><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + '</em>' + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>' + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>' + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div></div>';
-  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dept + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + css + '</style></head><body>' + html + '</body></html>';
+  const css = '@page{size:A4 landscape;margin:7mm 8mm 9mm;@bottom-right{content:"Page " counter(page) " of " counter(pages);font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}@bottom-left{content:"Duty Roster · ' + String(dept).replace(/["\\]/g, '') + ' · ' + R.MONTHS[month] + ' ' + year + '";font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}}' + '*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff}@media print{body{padding:0}}' + '.band{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding:5px 14px;border-radius:10px;color:#fff;' + 'background:linear-gradient(118deg,#0d3a5c 0%,#0b5f8f 48%,#1795c6 78%,#3ab5a7 100%);position:relative;overflow:hidden}' + '.band:after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.07)}' + '.band .lg0{display:inline-flex;align-items:center;background:#fff;border-radius:8px;padding:4px 9px;box-shadow:0 2px 6px rgba(0,0,0,.15)}.band img{height:25px;display:block}' + '.band .mid{text-align:center;position:relative;z-index:1}.band h1{margin:0;font-size:14pt;font-weight:800;letter-spacing:6px;line-height:1.15}' + '.band .mo{display:inline-block;margin-top:1px;font-size:8.8pt;font-weight:700;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:12px;padding:0 12px}' + '.band .pd{font-size:7pt;opacity:.85;letter-spacing:.5px;margin-top:1px}' + '.band .rt{text-align:right;position:relative;z-index:1}.band .kind{font-size:6.6pt;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;opacity:.8}.band .dp{font-size:15pt;font-weight:800;line-height:1.15}' + '.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:5px 0 3px}' + '.tile{border-radius:8px;padding:2px 10px 3px;border:1px solid #e3e9f0;border-left:4px solid var(--c);background:linear-gradient(90deg,var(--bg),#fff 85%)}' + '.tile span{display:block;font-size:6pt;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:#6b7a8d}.tile b{font-size:11pt;font-weight:800;color:var(--c);line-height:1.15}.tile i{font-style:normal;font-size:6.6pt;color:#7b8796;margin-left:6px}' + '.tile.b{--c:#0072a3;--bg:#e8f4fb}.tile.t{--c:#0f8a7e;--bg:#e6f6f3}.tile.g{--c:#1f6f43;--bg:#eaf6ee}.tile.v{--c:#5b45c4;--bg:#efecfb}.tile.a{--c:#b5670a;--bg:#fdf3e4}' + '.gt{display:flex;align-items:center;gap:8px;margin:5px 0 3px}.gt span{display:inline-block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#fff;background:linear-gradient(90deg,#0072a3,#1795c6);border-radius:10px;padding:2px 11px}' + '.gt:after{content:"";flex:1;height:1px;background:linear-gradient(90deg,#c9d9e8,transparent)}.gp .gt span{background:linear-gradient(90deg,#5b45c4,#7e6be0)}.grp.np{page-break-before:always}' + 'table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;border:1px solid #c9d6e3;border-radius:8px;overflow:hidden}thead{display:table-header-group}tr{page-break-inside:avoid}' + 'th{background:' + NAVY + ';color:#fff;font-weight:700;padding:3px 0;font-size:7pt;border-right:1px solid rgba(255,255,255,.1)}th.w{font-weight:500;font-size:6.2pt;background:#1d5c87;padding:1px 0 2px}th.fr{background:#b5670a}th.w.fr{background:#cf7d17}' + '.gp th{background:#3b2f7a}.gp th.w{background:#4d3f94}.gp th.fr{background:#b5670a}.gp th.w.fr{background:#cf7d17}' + 'td{border-right:1px solid #e6ecf2;border-bottom:1px solid #e6ecf2;text-align:center;padding:0;height:13px}tr.r:nth-child(even) td{background:#f6f9fc}' + 'td.c{padding:1px}td.fr{background:#fdf5ea!important}' + '.k{display:inline-block;min-width:88%;border-radius:4px;padding:0;font-size:6.7pt;font-weight:800;letter-spacing:.1px}.k.ko{color:#6b7a8d}' + 'td.n{color:#7b8796;font-size:6.8pt}td.e{font-size:6.6pt;color:#5b6878}td.nm{text-align:left;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{font-size:7.5pt;color:#0d1b2e}td.nm span{font-size:6.2pt;color:#7b8796}' + 'td.t{font-size:7pt;background:#f1f5f9!important;color:#3c4858}td.h{font-weight:800;color:#0d1b2e;background:#e4eef7!important}col.n{width:6mm}col.e{width:12mm}col.nm{width:52mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}' + 'tr.sum td{background:#eaf3fa!important;font-size:6.6pt;font-weight:700;color:' + NAVY + ';height:12px}tr.sum:first-of-type td{border-top:1.5px solid #9cc3de}tr.sum td.sl{text-align:right;padding-right:6px;font-weight:600;color:#3c5a74}.gp tr.sum td{background:#f0edfa!important;color:#3b2f7a}' + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lnr .notes{margin-top:0}.lgx{border:1px solid #d9e4ee;border-radius:8px;padding:4px 9px 5px;page-break-inside:avoid;background:#fbfdff}.lgh{font-size:6.4pt;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#0072a3;margin-bottom:2px}.lgn{font-size:7pt;color:#7b8796}' + '.lg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 16px;font-size:6.6pt;color:#3c4858}.lgb b{display:block;font-size:6.8pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.6px}.lgb span{display:inline-block;margin-right:8px;white-space:nowrap}' + '.lgb i{font-style:normal;font-weight:800;color:#0d1b2e;display:inline-block;min-width:18px;text-align:center;border-radius:4px;padding:0 3px;background:var(--lc,#eef2f6)}' + '.foot{page-break-inside:avoid;break-inside:avoid}' + '.notes{margin-top:6px;border-radius:8px;background:#fffaf2;border:1px solid #f1dfc2;padding:4px 9px}.nb{font-size:7pt;color:#5a4a33}.nb b{color:#b5670a}.rm{margin-top:3px;font-size:7.4pt;color:#3c4858;border-bottom:1px dotted #c9b48f;height:14px}' + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px;font-size:8pt;page-break-inside:avoid}' + '.signs>div{border:1px solid #e3e9f0;border-top:3px solid var(--sc);border-radius:9px;padding:0 11px 6px;background:linear-gradient(180deg,var(--sb),#fff 45%)}.signs>div:nth-child(1){--sc:#0072a3;--sb:#f1f8fd}.signs>div:nth-child(2){--sc:#5b45c4;--sb:#f5f3fd}.signs>div:nth-child(3){--sc:#1f6f43;--sb:#f0f8f3}' + '.signs .sp{height:28px}.signs .ln{border-top:1px solid #16202e;padding-top:4px}.signs .dt{margin-top:6px;font-size:7.4pt;color:#3c4858}' + '.signs span{display:block;font-size:6.4pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--sc)}.signs b{display:block;font-size:9pt;color:#0d1b2e}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}' + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}.cr{margin-top:3px;text-align:center;font-size:6px;color:#a3adba}' + 'body.mono .band{background:#fff;color:#0d1b2e;border:1.5px solid #0d1b2e}body.mono .band:after{display:none}body.mono .band .mo{background:#fff;border-color:#0d1b2e}body.mono .band .lg0{box-shadow:none;padding:0}' + 'body.mono .tile{--c:#0d1b2e!important;--bg:#fff!important}body.mono .gt span,body.mono .gp .gt span{background:#0d1b2e}' + 'body.mono th,body.mono .gp th{background:#2b3440!important}body.mono td.fr{background:#f2f2f2!important}body.mono .signs>div{--sc:#0d1b2e!important;--sb:#fff!important}body.mono .notes{background:#fff;border-color:#d9e2ec}body.mono .nb b{color:#0d1b2e}';
+  const html = '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>' + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>' + '<div class="rt"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dept) + '</div></div></header>' + (summary ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>') + tables + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>' + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>' + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><div class="sp"></div><div class="ln"><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + '</em>' + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>' + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>' + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div></div>';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dept + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + css + '</style></head><body' + (colour ? '' : ' class="mono"') + '>' + html + '</body></html>';
 }
 const ROS_PRINT_OPT_KEY = 'unico_roster_print_opts_v1';
 function RosterPrint({
@@ -8000,7 +8408,10 @@ function RosterPrint({
   const frame = useRef(null);
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
-      setDoc(r && r.ok ? r.roster : null);
+      setDoc(r && r.ok && r.roster ? {
+        ...r.roster,
+        movedOut: r.movedOut || []
+      } : null);
       setSigners(r && r.ok && r.signers || {});
       setCan(r && r.ok && (r.roster && r.roster.can || r.can) || null);
       setLoading(false);
@@ -8746,7 +9157,10 @@ function RiPreview({
   const dept = row.sheetDept || row.deptName;
   const load = useCallback(() => K.api.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
     if (r && r.ok) {
-      setDoc(r.roster || null);
+      setDoc(r.roster ? {
+        ...r.roster,
+        movedOut: r.movedOut || []
+      } : null);
       setExtra({
         signers: r.signers || {},
         can: r.roster && r.roster.can || r.can || null
@@ -10279,9 +10693,10 @@ function RosterSetup() {
     byUser[u.username] = u;
   });
   const optionsFor = (role, deptId, current) => {
-    const list = people.filter(u => u.rosterRole === role || u.rosterRole === 'admin');
+    const list = people.filter(u => u.rosterRole === 'admin' || (role === 'cns' ? u.rosterRole === 'cns' : u.rosterRole === 'incharge' || u.rosterRole === 'manager'));
     const covers = u => (u.rosterDepartments || []).indexOf(deptId) >= 0;
-    const sorted = list.slice().sort((a, b) => (a.rosterRole === 'admin') - (b.rosterRole === 'admin') || covers(b) - covers(a) || String(a.name).localeCompare(String(b.name)));
+    const rank = u => u.rosterRole === role ? 0 : u.rosterRole === 'admin' ? 2 : 1;
+    const sorted = list.slice().sort((a, b) => rank(a) - rank(b) || covers(b) - covers(a) || String(a.name).localeCompare(String(b.name)));
     if (current && !sorted.some(u => u.username === current)) sorted.unshift(byUser[current] || {
       username: current,
       name: current + ' (no roster role)'
@@ -10361,7 +10776,7 @@ function RosterSetup() {
   }, "\u2014 not set \u2014"), opts.map(u => React.createElement("option", {
     key: u.username,
     value: u.username
-  }, u.name, u.rosterRole === 'admin' ? ' · Administrator' : u.title ? ' · ' + u.title : '')));
+  }, u.name, u.desig ? ' · ' + u.desig : u.rosterRole === 'admin' ? ' · Administrator' : u.title ? ' · ' + u.title : '')));
   const nRole = r => people.filter(u => u.rosterRole === r).length;
   return React.createElement("div", {
     className: "mk-scope",

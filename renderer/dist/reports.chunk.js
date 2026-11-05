@@ -4727,10 +4727,11 @@ function UserModal({
     return !me || me.role === 'Administrator';
   })();
   const [rcfg, setRcfg] = useState(null);
-  const [rosSel, setRosSel] = useState(null);
+  const [rosSelIn, setRosSelIn] = useState(null);
+  const [rosSelMgr, setRosSelMgr] = useState(null);
+  const [rosCns, setRosCns] = useState(editing && initial.rosterRole === 'cns');
   const [rosQ, setRosQ] = useState('');
   const [rosViewAdded, setRosViewAdded] = useState(false);
-  const rosSlot = rosterRole === 'manager' ? 'manager' : rosterRole === 'incharge' ? 'incharge' : null;
   const acctName = String(editing ? initial.username : username || '').trim().toLowerCase();
   const heldIn = (cfg, slot) => (cfg && cfg.depts || []).filter(d => d[slot] && d[slot].username === acctName).map(d => d.id);
   React.useEffect(() => {
@@ -4747,8 +4748,12 @@ function UserModal({
     };
   }, []);
   React.useEffect(() => {
-    if (rcfg) setRosSel(rosSlot ? heldIn(rcfg, rosSlot) : []);
-  }, [rcfg, rosSlot]);
+    if (!rcfg) return;
+    setRosSelIn(heldIn(rcfg, 'incharge'));
+    setRosSelMgr(heldIn(rcfg, 'manager'));
+    if (rcfg.cns && rcfg.cns.username === acctName) setRosCns(true);
+  }, [rcfg]);
+  const rosDerivedRole = () => rosCns ? 'cns' : (rosSelMgr || []).length ? 'manager' : (rosSelIn || []).length ? 'incharge' : '';
   const [ownOnly, setOwnOnly] = useState(false);
   const [copyFrom, setCopyFrom] = useState('');
   const [sec, setSec] = useState('account');
@@ -4972,6 +4977,9 @@ function UserModal({
       setSubMenus({});
       setStaffScope('self');
       setRosterRole('');
+      setRosSelIn(s => s ? [] : s);
+      setRosSelMgr(s => s ? [] : s);
+      setRosCns(false);
     } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept', 'devdays'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
   };
   const copyAccess = uname => {
@@ -5028,8 +5036,18 @@ function UserModal({
       setRosViewAdded(true);
     }
   };
+  React.useEffect(() => {
+    const placed = rosCns || (rosSelMgr || []).length || (rosSelIn || []).length;
+    if (placed && !isAdmin && !isColl && asActions(perms.roster).indexOf('view') < 0) {
+      setPerms(p => ({
+        ...p,
+        roster: PERM_ORDER.filter(a => asActions(p.roster).concat('view').indexOf(a) >= 0)
+      }));
+      setRosViewAdded(true);
+    }
+  }, [rosCns, rosSelIn, rosSelMgr]);
   const rosCfgPlan = () => {
-    if (!viewerAdmin || !rcfg || rosSel == null || isAdmin || !acctName) return null;
+    if (!viewerAdmin || !rcfg || rosSelIn == null || rosSelMgr == null || isAdmin || !acctName) return null;
     const body = {
       depts: {}
     };
@@ -5038,7 +5056,7 @@ function UserModal({
     const nm = id => ((rcfg.depts || []).find(d => d.id === id) || {}).name || id;
     ['incharge', 'manager'].forEach(slot => {
       const held = heldIn(rcfg, slot),
-        want = slot === rosSlot ? rosSel : [];
+        want = slot === 'incharge' ? rosSelIn : isColl ? [] : rosSelMgr;
       held.filter(id => want.indexOf(id) < 0).forEach(id => {
         (body.depts[id] = body.depts[id] || {})[slot] = null;
         n++;
@@ -5052,13 +5070,14 @@ function UserModal({
       });
     });
     const wasCns = !!(rcfg.cns && rcfg.cns.username === acctName);
-    if (rosterRole === 'cns' && !wasCns) {
+    const cnsNow = rosCns && !isColl;
+    if (cnsNow && !wasCns) {
       body.cns = {
         username: acctName
       };
       n++;
     }
-    if (rosterRole !== 'cns' && wasCns) {
+    if (!cnsNow && wasCns) {
       body.cns = null;
       n++;
       lost.push('the CNS');
@@ -5134,7 +5153,8 @@ function UserModal({
         perms: isAdmin || isColl ? null : granted
       };
       if (!isColl && signoffSet) payload.signoff = signoff || '';
-      if (!isAdmin && (!editing || rosterRole !== (initial.rosterRole || ''))) payload.rosterRole = isColl ? rosterRole === 'incharge' ? 'incharge' : '' : rosterRole || '';
+      const roleOut = viewerAdmin && rcfg && rosSelIn != null ? rosDerivedRole() : rosterRole;
+      if (!isAdmin && (!editing || roleOut !== (initial.rosterRole || ''))) payload.rosterRole = isColl ? roleOut === 'incharge' ? 'incharge' : '' : roleOut || '';
       if (isColl && staffLinkDirty) {
         payload.staffId = staffId !== '' ? Number(staffId) : null;
         payload.staffEmpId = linkedRec && linkedRec.emp_id ? linkedRec.emp_id : '';
@@ -5328,82 +5348,50 @@ function UserModal({
     value: x.id
   }, x.name, x.emp_id ? ' · ' + x.emp_id : '', x.current_department ? ' · ' + x.current_department : ''))));
   const rosterRoleBlock = portal => {
-    const opts = portal ? [['', 'None'], ['incharge', 'In-charge · prepares']] : [['', 'None'], ['incharge', 'In-charge · prepares'], ['manager', 'Manager · checks'], ['cns', 'CNS · approves']];
-    const list = rcfg && rcfg.depts || [];
-    const needle = rosQ.trim().toLowerCase();
-    const shown = list.filter(d => !needle || String(d.name).toLowerCase().indexOf(needle) >= 0);
-    const sel = rosSel || [];
-    const tog = id => setRosSel(s => (s || []).indexOf(id) >= 0 ? (s || []).filter(x => x !== id) : [...(s || []), id]);
-    const otherCns = rcfg && rcfg.cns && rcfg.cns.username !== acctName ? rcfg.cns : null;
-    return React.createElement("div", null, React.createElement("div", {
+    const head = React.createElement("div", {
       style: {
         fontSize: 12.5,
         fontWeight: 700,
         color: 'var(--ink)',
         marginBottom: 6
       }
-    }, "Duty roster role ", React.createElement("span", {
+    }, "Duty roster ", React.createElement("span", {
       style: {
         fontWeight: 500,
         color: 'var(--muted)',
         fontSize: 11
       }
-    }, "\xB7 their place in the roster review chain")), React.createElement("div", {
-      style: {
-        display: 'flex',
-        gap: 6,
-        flexWrap: 'wrap',
-        alignItems: 'center'
-      }
-    }, opts.map(([v, l]) => {
-      const on = rosterRole === v || portal && v === '' && rosterRole !== 'incharge';
-      return React.createElement("button", {
-        key: v || 'none',
-        type: "button",
-        onClick: () => pickRosterRole(v),
+    }, "\xB7 which units they prepare, check or approve"));
+    if (!viewerAdmin) {
+      return React.createElement("div", null, head, React.createElement("div", {
         style: {
-          font: 'inherit',
-          cursor: 'pointer',
-          padding: '5px 12px',
-          borderRadius: 16,
           fontSize: 12,
-          fontWeight: 600,
-          border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
-          background: on ? 'var(--blue-50)' : '#fff',
-          color: on ? 'var(--blue-700)' : 'var(--muted)'
+          color: 'var(--ink-2)'
         }
-      }, l);
-    })), React.createElement("div", {
+      }, {
+        incharge: 'In-charge · prepares',
+        manager: 'Manager · checks',
+        cns: 'CNS · approves'
+      }[rosterRole] || 'No place in the roster chain'), React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: 'var(--muted)',
+          marginTop: 4
+        }
+      }, "An administrator assigns their departments (Duty Roster \u2192 Setup)."));
+    }
+    const list = rcfg && rcfg.depts || [];
+    const needle = rosQ.trim().toLowerCase();
+    const shown = list.filter(d => !needle || String(d.name).toLowerCase().indexOf(needle) >= 0);
+    const otherCns = rcfg && rcfg.cns && rcfg.cns.username !== acctName ? rcfg.cns : null;
+    const both = (rosSelIn || []).filter(id => (rosSelMgr || []).indexOf(id) >= 0);
+    const nm = id => (list.find(d => d.id === id) || {}).name || id;
+    const panel = (slot, title, sub, sel, setSel, tone) => React.createElement("div", {
       style: {
-        fontSize: 10.5,
-        color: 'var(--muted)',
-        marginTop: 6,
-        lineHeight: 1.6
-      }
-    }, rosterRole === 'manager' ? 'They check the rosters of the departments ticked below, and forward each one to the CNS or return it with a note.' : rosterRole === 'cns' ? 'They give the final approval for every department.' : rosterRole === 'incharge' ? 'They prepare and send the rosters of the departments ticked below; their name fills “Prepared by”.' : 'Takes no part in the roster review.', portal && ' To make this person a Manager or the CNS, convert the account first.'), rosViewAdded && React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: '#157a43',
-        marginTop: 4
-      }
-    }, "Duty Roster view was added on Module access \u2014 they need it to open the review inbox."), rosterRole === 'cns' && viewerAdmin && rcfg && React.createElement("div", {
-      style: {
-        fontSize: 11.5,
-        marginTop: 8,
-        color: otherCns ? '#8a5a00' : '#157a43'
-      }
-    }, otherCns ? 'Saving makes them the CNS in place of ' + otherCns.name + '.' : 'They will be the CNS for every department.'), rosSlot && !viewerAdmin && React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: 'var(--muted)',
-        marginTop: 8
-      }
-    }, "An administrator assigns their departments (Duty Roster \u2192 Setup)."), rosSlot && viewerAdmin && React.createElement("div", {
-      style: {
-        marginTop: 10,
         border: '1px solid var(--line)',
         borderRadius: 10,
-        overflow: 'hidden'
+        overflow: 'hidden',
+        borderTop: '3px solid ' + tone
       }
     }, React.createElement("div", {
       style: {
@@ -5420,40 +5408,33 @@ function UserModal({
         fontSize: 12,
         color: 'var(--ink)'
       }
-    }, rosSlot === 'manager' ? 'Departments they check' : 'Departments they prepare'), React.createElement("span", {
+    }, title), React.createElement("span", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)'
+      }
+    }, sub), React.createElement("span", {
       style: {
         fontSize: 10.5,
         fontWeight: 700,
-        color: 'var(--blue-700)',
+        color: tone,
         background: '#fff',
-        border: '1px solid var(--blue-100)',
+        border: '1px solid var(--line)',
         borderRadius: 10,
         padding: '1px 8px'
       }
-    }, sel.length, " department", sel.length === 1 ? '' : 's'), React.createElement("span", {
+    }, (sel || []).length, " department", (sel || []).length === 1 ? '' : 's'), React.createElement("span", {
       style: {
         flex: 1
-      }
-    }), React.createElement("input", {
-      value: rosQ,
-      onChange: e => setRosQ(e.target.value),
-      placeholder: "Find\u2026",
-      style: {
-        padding: '4px 8px',
-        border: '1px solid var(--line)',
-        borderRadius: 6,
-        fontSize: 11.5,
-        fontFamily: 'inherit',
-        width: 130
       }
     }), React.createElement("button", {
       type: "button",
       className: "btn sm",
-      onClick: () => setRosSel(s => [...new Set([...(s || []), ...shown.map(d => d.id)])])
+      onClick: () => setSel(s => [...new Set([...(s || []), ...shown.map(d => d.id)])])
     }, "Select all"), React.createElement("button", {
       type: "button",
       className: "btn sm",
-      onClick: () => setRosSel([])
+      onClick: () => setSel([])
     }, "Clear")), !rcfg ? React.createElement("div", {
       style: {
         padding: 12,
@@ -5462,14 +5443,14 @@ function UserModal({
       }
     }, "Loading departments\u2026") : React.createElement("div", {
       style: {
-        maxHeight: 220,
+        maxHeight: 200,
         overflow: 'auto',
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill,minmax(220px,1fr))'
+        gridTemplateColumns: 'repeat(auto-fill,minmax(210px,1fr))'
       }
     }, shown.map(d => {
-      const on = sel.indexOf(d.id) >= 0;
-      const holder = d[rosSlot];
+      const on = (sel || []).indexOf(d.id) >= 0;
+      const holder = d[slot];
       const other = holder && holder.username !== acctName ? holder : null;
       return React.createElement("label", {
         key: d.id,
@@ -5486,7 +5467,7 @@ function UserModal({
       }, React.createElement("input", {
         type: "checkbox",
         checked: on,
-        onChange: () => tog(d.id),
+        onChange: () => setSel(s => (s || []).indexOf(d.id) >= 0 ? (s || []).filter(x => x !== d.id) : [...(s || []), d.id]),
         style: {
           marginTop: 2
         }
@@ -5513,7 +5494,74 @@ function UserModal({
         fontSize: 11.5,
         color: 'var(--muted)'
       }
-    }, "No departments", needle ? ' match' : '', "."))));
+    }, "No departments", needle ? ' match' : '', ".")));
+    return React.createElement("div", null, head, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        marginBottom: 8
+      }
+    }, React.createElement("input", {
+      value: rosQ,
+      onChange: e => setRosQ(e.target.value),
+      placeholder: "Find a department\u2026",
+      style: {
+        padding: '5px 9px',
+        border: '1px solid var(--line)',
+        borderRadius: 7,
+        fontSize: 12,
+        fontFamily: 'inherit',
+        width: 200
+      }
+    }), !portal && React.createElement("label", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        padding: '5px 11px',
+        borderRadius: 16,
+        border: '1px solid ' + (rosCns ? '#5b45c4' : 'var(--line)'),
+        background: rosCns ? 'rgba(106,82,212,.08)' : '#fff',
+        fontSize: 12,
+        fontWeight: 600,
+        cursor: 'pointer',
+        color: rosCns ? '#5b45c4' : 'var(--ink-2)'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: rosCns,
+      onChange: e => setRosCns(e.target.checked)
+    }), "CNS \xB7 approves every unit"), rosCns && otherCns && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#8a5a00'
+      }
+    }, "Saving makes them the CNS in place of ", otherCns.name, ".")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 10
+      }
+    }, panel('incharge', 'Prepares', 'In-charge of — they build and send these rosters', rosSelIn, setRosSelIn, '#0072a3'), !portal && panel('manager', 'Checks', 'Manager of — they check these and forward to the CNS', rosSelMgr, setRosSelMgr, '#5b45c4')), both.length > 0 && React.createElement("div", {
+      style: {
+        fontSize: 11.5,
+        color: '#157a43',
+        marginTop: 8
+      }
+    }, "They prepare and check ", both.map(nm).join(', '), " \u2014 when they send it, it goes straight to the CNS."), portal && React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginTop: 6
+      }
+    }, "To make this person a Manager or the CNS, convert the account first."), rosViewAdded && React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: '#157a43',
+        marginTop: 6
+      }
+    }, "Duty Roster view was added on Module access \u2014 they need it to open their rosters."));
   };
   const lvlColor = {
     none: 'var(--muted)',
@@ -10916,9 +10964,11 @@ function AcPerson({
   const rosterHeld = (() => {
     if (!rcfg) return '';
     if (rcfg.cns && rcfg.cns.username === u.username) return 'CNS · every department';
-    const slot = u.rosterRole === 'manager' ? 'manager' : u.rosterRole === 'incharge' ? 'incharge' : null;
-    const ds = (rcfg.depts || []).filter(d => slot && d[slot] && d[slot].username === u.username).map(d => d.name);
-    return ds.length ? ds.slice(0, 4).join(', ') + (ds.length > 4 ? ' +' + (ds.length - 4) : '') : '';
+    const names = slot => (rcfg.depts || []).filter(d => d[slot] && d[slot].username === u.username).map(d => d.name);
+    const short = ds => ds.slice(0, 3).join(', ') + (ds.length > 3 ? ' +' + (ds.length - 3) : '');
+    const pi = names('incharge'),
+      mg = names('manager');
+    return [pi.length ? 'Prepares ' + short(pi) : '', mg.length ? 'Checks ' + short(mg) : ''].filter(Boolean).join(' · ');
   })();
   const Editor = window.UserModal;
   const run = async (key, fn, msg) => {
@@ -11143,11 +11193,11 @@ function AcPerson({
     prepare: 'Prepares',
     check: 'Checks',
     approve: 'Approves'
-  }[u.signoff] || 'Takes no part'), row('Duty roster role', ({
-    incharge: 'In-charge · prepares',
-    manager: 'Manager · checks',
+  }[u.signoff] || 'Takes no part'), row('Duty roster', rosterHeld || {
+    incharge: 'In-charge',
+    manager: 'Manager',
     cns: 'CNS · approves'
-  }[u.rosterRole] || 'None') + (rosterHeld && u.rosterRole !== 'cns' ? ' — ' + rosterHeld : ''))))), K.mayUsers('edit') && React.createElement("div", {
+  }[u.rosterRole] || 'None')))), K.mayUsers('edit') && React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b",

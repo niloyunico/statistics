@@ -3506,6 +3506,80 @@ function initPriorEntries(ex) {
   }
   return [blank()];
 }
+function DropLayer({
+  anchorRef,
+  onClose,
+  maxH = 300,
+  gap = 5,
+  children
+}) {
+  const [pos, setPos] = React.useState(null);
+  React.useLayoutEffect(() => {
+    let raf = 0;
+    const place = () => {
+      raf = 0;
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect(),
+        vh = window.innerHeight;
+      const below = vh - r.bottom - gap - 8,
+        above = r.top - gap - 8;
+      const up = below < Math.min(maxH, 220) && above > below;
+      setPos({
+        left: r.left,
+        width: r.width,
+        up,
+        top: r.bottom + gap,
+        bottom: vh - r.top + gap,
+        room: Math.max(120, Math.min(maxH, up ? above : below))
+      });
+    };
+    const req = () => {
+      if (!raf) raf = requestAnimationFrame(place);
+    };
+    const key = e => {
+      if (e.key === 'Escape') onClose();
+    };
+    place();
+    window.addEventListener('scroll', req, true);
+    window.addEventListener('resize', req);
+    window.addEventListener('keydown', key);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener('scroll', req, true);
+      window.removeEventListener('resize', req);
+      window.removeEventListener('keydown', key);
+    };
+  }, []);
+  if (!pos) return null;
+  const layer = React.createElement(React.Fragment, null, React.createElement("div", {
+    onClick: onClose,
+    style: {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 7000
+    }
+  }), React.createElement("div", {
+    style: {
+      position: 'fixed',
+      left: pos.left,
+      width: pos.width,
+      zIndex: 7001,
+      ...(pos.up ? {
+        bottom: pos.bottom
+      } : {
+        top: pos.top
+      }),
+      background: '#fff',
+      border: '1px solid var(--line)',
+      borderRadius: 9,
+      boxShadow: 'var(--shadow-pop)',
+      overflow: 'hidden'
+    }
+  }, children(pos.room)));
+  const RD = window.ReactDOM;
+  return RD && RD.createPortal && typeof document !== 'undefined' ? RD.createPortal(layer, document.body) : layer;
+}
 function MultiSelectDropdown({
   value,
   onChange,
@@ -3529,11 +3603,13 @@ function MultiSelectDropdown({
     if (v && !sel.includes(v)) setSel([...sel, v]);
     setQ('');
   };
+  const anchor = React.useRef(null);
   return React.createElement("div", {
     style: {
       position: 'relative'
     }
   }, React.createElement("div", {
+    ref: anchor,
     onClick: () => setOpen(o => !o),
     style: {
       minHeight: 40,
@@ -3595,30 +3671,13 @@ function MultiSelectDropdown({
       transform: open ? 'rotate(-90deg)' : 'rotate(90deg)',
       transition: 'transform .15s'
     }
-  })), open && React.createElement(React.Fragment, null, React.createElement("div", {
-    onClick: () => {
+  })), open && React.createElement(DropLayer, {
+    anchorRef: anchor,
+    onClose: () => {
       setOpen(false);
       setQ('');
-    },
-    style: {
-      position: 'fixed',
-      inset: 0,
-      zIndex: 80
     }
-  }), React.createElement("div", {
-    style: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      top: 'calc(100% + 5px)',
-      zIndex: 81,
-      background: '#fff',
-      border: '1px solid var(--line)',
-      borderRadius: 9,
-      boxShadow: 'var(--shadow-pop)',
-      overflow: 'hidden'
-    }
-  }, React.createElement("div", {
+  }, room => React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       padding: 8,
       borderBottom: '1px solid var(--line-2)',
@@ -3659,7 +3718,7 @@ function MultiSelectDropdown({
     }
   }, "Clear")), React.createElement("div", {
     style: {
-      maxHeight: 240,
+      maxHeight: room - 48,
       overflowY: 'auto',
       padding: 4
     }
@@ -3751,11 +3810,13 @@ function SelectDropdown({
     setOpen(false);
     setQ('');
   };
+  const anchor = React.useRef(null);
   return React.createElement("div", {
     style: {
       position: 'relative'
     }
   }, React.createElement("div", {
+    ref: anchor,
     onClick: () => setOpen(o => !o),
     style: {
       minHeight: 40,
@@ -3801,30 +3862,14 @@ function SelectDropdown({
       transform: open ? 'rotate(-90deg)' : 'rotate(90deg)',
       transition: 'transform .15s'
     }
-  })), open && React.createElement(React.Fragment, null, React.createElement("div", {
-    onClick: () => {
+  })), open && React.createElement(DropLayer, {
+    anchorRef: anchor,
+    onClose: () => {
       setOpen(false);
       setQ('');
     },
-    style: {
-      position: 'fixed',
-      inset: 0,
-      zIndex: 80
-    }
-  }), React.createElement("div", {
-    style: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      top: 'calc(100% + 5px)',
-      zIndex: 81,
-      background: '#fff',
-      border: '1px solid var(--line)',
-      borderRadius: 9,
-      boxShadow: 'var(--shadow-pop)',
-      overflow: 'hidden'
-    }
-  }, React.createElement("div", {
+    maxH: 320
+  }, room => React.createElement(React.Fragment, null, React.createElement("div", {
     style: {
       padding: 8,
       borderBottom: '1px solid var(--line-2)',
@@ -3857,7 +3902,7 @@ function SelectDropdown({
     }
   })), React.createElement("div", {
     style: {
-      maxHeight: 260,
+      maxHeight: room - 48,
       overflowY: 'auto',
       padding: 4
     }
@@ -3934,11 +3979,13 @@ function ComboInput({
   const v = String(value || '');
   const q = v.trim().toLowerCase();
   const sugg = [...new Set((options || []).map(lab).filter(Boolean))].filter(l => l.toLowerCase() !== q && (!q || l.toLowerCase().includes(q))).slice(0, 8);
+  const anchor = React.useRef(null);
   return React.createElement("div", {
     style: {
       position: 'relative'
     }
   }, React.createElement("input", {
+    ref: anchor,
     value: v,
     placeholder: placeholder,
     style: style,
@@ -3950,26 +3997,14 @@ function ComboInput({
     onKeyDown: ev => {
       if (ev.key === 'Escape') setOpen(false);
     }
-  }), open && sugg.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", {
-    onClick: () => setOpen(false),
+  }), open && sugg.length > 0 && React.createElement(DropLayer, {
+    anchorRef: anchor,
+    onClose: () => setOpen(false),
+    maxH: 220,
+    gap: 4
+  }, room => React.createElement("div", {
     style: {
-      position: 'fixed',
-      inset: 0,
-      zIndex: 80
-    }
-  }), React.createElement("div", {
-    style: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      top: 'calc(100% + 4px)',
-      zIndex: 81,
-      background: '#fff',
-      border: '1px solid var(--line)',
-      borderRadius: 9,
-      boxShadow: 'var(--shadow-pop)',
-      overflow: 'hidden',
-      maxHeight: 220,
+      maxHeight: room,
       overflowY: 'auto',
       padding: 4
     }
@@ -7346,7 +7381,9 @@ function StaffForm({
   }, React.createElement("div", {
     style: {
       display: 'flex',
-      alignItems: 'center'
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      columnGap: 8
     }
   }, React.createElement("label", null, label), React.createElement("span", {
     className: "spacer",
@@ -7526,14 +7563,14 @@ function StaffForm({
   };
   const ring = (empty, node) => {
     const h = hl(empty);
-    return h ? React.createElement("div", {
-      style: {
+    return React.createElement("div", {
+      style: h ? {
         borderRadius: 8,
         outline: '1.5px solid #0090ca',
         outlineOffset: 1,
         animation: h.animation
-      }
-    }, node) : node;
+      } : undefined
+    }, node);
   };
   const row = kids => React.createElement("div", {
     style: {
@@ -7797,7 +7834,7 @@ function StaffForm({
     options: deptOpts,
     labelFn: statsDeptNames && statsDeptNames.length ? undefined : deptLabel,
     placeholder: "Select department(s)\u2026"
-  })))), cell('1 1 140px', field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date', hl(!dojOk))), '1 1 150px'), cell('1 1 150px', field('Total Experience', React.createElement("div", {
+  })))), cell('1 1 140px', field('Date of Joining', inp('doj', 'YYYY-MM-DD', 'date', hl(!dojOk))), '1 1 150px'), cell('1 1 150px', field('Total Experience', React.createElement("div", null, React.createElement("div", {
     style: {
       padding: '9px 11px',
       border: '1px dashed var(--line)',
@@ -7807,13 +7844,13 @@ function StaffForm({
       color: 'var(--ink)',
       fontWeight: 600
     }
-  }, S.fmtYM(totalY)), React.createElement("span", {
+  }, S.fmtYM(totalY)), React.createElement("div", {
     style: {
       fontSize: 11,
       color: 'var(--muted)',
-      whiteSpace: 'nowrap'
+      marginTop: 4
     }
-  }, "auto = previous + UNICO")), '1 1 150px'), chipsOf('current_department').length > 1 ? cell('1 1 240px', field('Primary Department', React.createElement(SelectDropdown, {
+  }, "Auto: previous + UNICO"))), '1 1 150px'), chipsOf('current_department').length > 1 ? cell('1 1 240px', field('Primary Department', React.createElement(SelectDropdown, {
     value: f.primary_department || '',
     onChange: v => set('primary_department', v),
     options: chipsOf('current_department'),
