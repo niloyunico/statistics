@@ -159,6 +159,8 @@ function normRoster(input, existing) {
     }()),
     rules: has(i, 'rules') ? obj(i.rules) : obj(prev.rules),
     guests: has(i, 'guests') ? normGuests(i.guests) : normGuests(prev.guests),
+    // Review marks are written only by POST /api/rosters/:id/marks — a save keeps the stored ones.
+    marks: obj(prev.marks),
     // A SAVE never changes the status: every hand-over is a transition (applyTransition),
     // which is what stamps the names and writes the history. The stored spelling is kept
     // as-is so a legacy 'submitted' row is not silently rewritten by an autosave.
@@ -403,6 +405,8 @@ async function applyTransition(req, id, action, note) {
   const actor = await actorOf(req, doc);
   const r = W.transition(doc, action, actor, { dept: cfg.depts[key] || {}, cns: cfg.cns }, { now: Date.now(), note });
   if (!r.ok) return { status: r.status, body: { ok: false, code: r.code, error: r.error } };
+  // A published roster carries no open review notes.
+  if (action === 'approve') r.set.marks = {};
   const c = await col();
   const conflict = { status: 409, body: { ok: false, code: 'conflict', conflict: true, error: 'This roster changed while you were deciding. Reload the month and look again.' } };
   if (c) {
@@ -428,6 +432,32 @@ async function applyTransition(req, id, action, note) {
     return applyTransition(req, id, 'forward', '');
   }
   return { status: 200, body: { ok: true, roster: await decorate(req, await getOne(id)) } };
+}
+
+// This request's rights on one sheet — the same answer decorate() hands the renderer.
+async function rightsFor(req, doc) {
+  const cfg = await getConfig();
+  const key = deptKeyOf(await deptIndex(), doc && doc.dept);
+  const actor = await actorOf(req, doc);
+  return { can: W.rights(actor, doc, cfg.depts[key] || {}, cfg.cns), actor };
+}
+/* One guarded write outside a save: only lands while the sheet is still in the status (and,
+   when given, at the revision) it was read in — the same guard the hand-overs use. */
+async function guardedSet(id, doc, set, entry, atRevision) {
+  const c = await col();
+  if (c) {
+    const filter = { _id: id, status: { $in: W.rawStatuses(W.effStatus(doc)) } };
+    if (atRevision) filter.revision = doc.revision == null ? null : doc.revision;
+    const upd = { $set: set }; if (entry) upd.$push = { history: { $each: [entry], $slice: -W.HISTORY_CAP } };
+    const w = await c.updateOne(filter, upd);
+    return w.matchedCount > 0;
+  }
+  const x = mem.find((m) => m.id === id);
+  if (!x || W.rawStatuses(W.effStatus(doc)).indexOf(x.status) < 0) return false;
+  if (atRevision && (x.revision || 0) !== (doc.revision || 0)) return false;
+  Object.assign(x, JSON.parse(JSON.stringify(set)));
+  if (entry) x.history = (Array.isArray(x.history) ? x.history : []).concat([entry]).slice(-W.HISTORY_CAP);
+  return true;
 }
 
 // What the renderer needs beside the sheet: per-sheet rights and the names to print.
@@ -960,6 +990,65 @@ function mount(app, opts) {
   });
 
   /* ---------------------------------------------------------------- hand-overs --- */
+
+  /* Review marks: the reviewer pins a note to one person's day ("no night after leave") for
+     the in-charge to fix; the in-charge marks it done once the sheet is back with them. */
+  app.post('/api/rosters/:id/marks', readGuard, async (req, res) => {
+    try {
+      const id = s(req.params.id, 80); const b = obj(req.body);
+      const doc = await getOne(id);
+      if (!doc) return res.status(404).json({ ok: false, error: 'Roster not found.' });
+      const { can, actor } = await rightsFor(req, doc);
+      const emp = s(b.empId, 40), day = parseInt(b.day, 10);
+      if (!emp || !(day >= 1 && day <= 31)) return res.status(400).json({ ok: false, error: 'Which cell?' });
+      const marks = JSON.parse(JSON.stringify(obj(doc.marks)));
+      if (b.remove) {
+        if (!can.markDone) return res.status(403).json({ ok: false, error: 'Only the reviewer or the in-charge can clear a review note.' });
+        if (marks[emp]) { delete marks[emp][day]; if (!Object.keys(marks[emp]).length) delete marks[emp]; }
+      } else {
+        if (!can.mark) return res.status(403).json({ ok: false, error: 'Only the reviewer this roster is waiting on can mark it.' });
+        const note = s(b.note, 200).trim();
+        if (!note) return res.status(400).json({ ok: false, error: 'Write what needs changing.' });
+        const count = Object.keys(marks).reduce((a, k) => a + Object.keys(obj(marks[k])).length, 0);
+        if (count >= 200 && !(marks[emp] && marks[emp][day])) return res.status(400).json({ ok: false, error: 'This sheet already has 200 notes.' });
+        (marks[emp] || (marks[emp] = {}))[day] = { note, code: s((obj(doc.grid)[emp] || {})[day], 8), by: actor.username, byName: actor.name, at: Date.now() };
+      }
+      if (!(await guardedSet(id, doc, { marks }, null, false))) return res.status(409).json({ ok: false, conflict: true, error: 'This roster changed meanwhile. Reload it and try again.' });
+      res.json({ ok: true, roster: await decorate(req, await getOne(id)) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not save the note.' }); }
+  });
+
+  /* The reviewer changes one shift directly instead of returning the whole sheet. Every
+     change is a history row ("Rahima · 12 Nov: N2 → OFF") the in-charge sees. */
+  app.post('/api/rosters/:id/review-edit', readGuard, async (req, res) => {
+    try {
+      const id = s(req.params.id, 80); const b = obj(req.body);
+      const doc = await getOne(id);
+      if (!doc) return res.status(404).json({ ok: false, error: 'Roster not found.' });
+      const { can, actor } = await rightsFor(req, doc);
+      if (!can.reviewEdit) return res.status(403).json({ ok: false, error: 'Only the reviewer this roster is waiting on can change a shift on it.' });
+      const current = doc.revision || 0;
+      if (b.baseRevision != null && Number(b.baseRevision) !== current) return res.status(409).json({ ok: false, conflict: true, revision: current, error: 'This roster changed since you opened it. Reload it and look again.' });
+      const emp = s(b.empId, 40), day = parseInt(b.day, 10);
+      if (!emp || !(day >= 1 && day <= 31)) return res.status(400).json({ ok: false, error: 'Which cell?' });
+      const code = s(b.code, 8).trim().toUpperCase();
+      const grid = JSON.parse(JSON.stringify(obj(doc.grid)));
+      const before = (grid[emp] || {})[day] || '';
+      if (before === code) return res.json({ ok: true, roster: await decorate(req, doc) });
+      const row = Object.assign({}, grid[emp] || {});
+      if (code) row[day] = code; else delete row[day];
+      if (Object.keys(row).length) grid[emp] = row; else delete grid[emp];
+      const extras = cellExtras({ grid }, {}, doc);
+      const now = Date.now();
+      const who_ = (obj(doc.names)[emp]) || emp;
+      const lbl = new Date(doc.year, doc.month, day).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      const entry = { at: now, by: actor.username, byName: actor.name, action: 'edit', from: W.effStatus(doc), to: W.effStatus(doc), note: who_ + ' · ' + lbl + ': ' + (before || '—') + ' → ' + (code || '—'), revision: current + 1 };
+      const set = { grid, staffIds: Object.keys(grid), oncall: extras.oncall, altLeave: extras.altLeave, revision: current + 1, updatedAt: now, updatedBy: who(req) };
+      if (!(await guardedSet(id, doc, set, entry, true))) return res.status(409).json({ ok: false, conflict: true, error: 'This roster changed meanwhile. Reload it and try again.' });
+      try { require('./activity-log').log(req, 'roster_review_edit', { target: doc.deptName || doc.dept, detail: (doc.month + 1) + '/' + doc.year + ' · ' + entry.note }); } catch (e) { /* never breaks the request */ }
+      res.json({ ok: true, roster: await decorate(req, await getOne(id)) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not change that shift.' }); }
+  });
 
   // The one decision route. Body: { action: send_manager | send_cns | forward | approve | return | reopen, note? }.
   app.post('/api/rosters/:id/transition', readGuard, async (req, res) => {

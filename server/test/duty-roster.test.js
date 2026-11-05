@@ -422,6 +422,38 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.deepEqual(ex.body.roster.oncall, { S1: { 1: 1 } });
     ex = await call('PUT', '/api/rosters', { dept: 'CCU', year: 2027, month: 4, grid: { S1: { 1: 'OFF', 3: 'CL' } }, order: ['S1'], baseRevision: 2 });
     assert.deepEqual([ex.body.roster.oncall, ex.body.roster.altLeave], [{}, {}], 'changing the cells drops their extras');
+    // Review tools: the CNS pins notes to cells and changes a shift directly; the in-charge
+    // clears notes once the sheet is back; approve leaves none open.
+    let rv = await call('PUT', '/api/rosters', { dept: 'MICU', year: 2027, month: 5, grid: { S1: { 1: 'G1', 2: 'N2' } }, order: ['S1'], baseRevision: 0 });
+    const rvId = rv.body.roster.id;
+    assert.equal((await T(rvId, 'send_cns', '', 'admin')).status, 200);
+    assert.equal((await call('POST', '/api/rosters/' + encodeURIComponent(rvId) + '/marks', { empId: 'S1', day: 2, note: 'x' }, 'rahima')).status, 403, 'the in-charge cannot mark a sheet under review');
+    rv = await call('POST', '/api/rosters/' + encodeURIComponent(rvId) + '/marks', { empId: 'S1', day: 2, note: 'No night after leave' }, 'nasrin');
+    assert.equal(rv.status, 200, JSON.stringify(rv.body));
+    assert.equal(rv.body.roster.marks.S1[2].note, 'No night after leave');
+    assert.equal(rv.body.roster.marks.S1[2].code, 'N2', 'the note remembers the code it was about');
+    const rev0 = rv.body.roster.revision;
+    assert.equal((await call('POST', '/api/rosters/' + encodeURIComponent(rvId) + '/review-edit', { empId: 'S1', day: 1, code: 'OFF', baseRevision: rev0 }, 'rahima')).status, 403, 'only the reviewer changes a shift under review');
+    assert.equal((await call('POST', '/api/rosters/' + encodeURIComponent(rvId) + '/review-edit', { empId: 'S1', day: 1, code: 'OFF', baseRevision: rev0 - 1 }, 'nasrin')).status, 409, 'a stale revision is refused');
+    rv = await call('POST', '/api/rosters/' + encodeURIComponent(rvId) + '/review-edit', { empId: 'S1', day: 1, code: 'off', baseRevision: rev0 }, 'nasrin');
+    assert.equal(rv.status, 200, JSON.stringify(rv.body));
+    assert.equal(rv.body.roster.grid.S1[1], 'OFF');
+    assert.equal(rv.body.roster.revision, rev0 + 1, 'a review edit is a new revision');
+    const lastH = rv.body.roster.history[rv.body.roster.history.length - 1];
+    assert.equal(lastH.action, 'edit'); assert.ok(/G1 → OFF/.test(lastH.note), lastH.note);
+    assert.equal(rv.body.roster.status, 'pending_cns', 'and the sheet stays with the CNS');
+    assert.equal((await T(rvId, 'return', 'see notes', 'nasrin')).status, 200);
+    rv = await call('PUT', '/api/rosters', { dept: 'MICU', year: 2027, month: 5, grid: { S1: { 1: 'OFF', 2: 'N2' } }, order: ['S1'], marks: {}, baseRevision: rev0 + 1 }, 'rahima');
+    assert.equal(rv.status, 200, JSON.stringify(rv.body));
+    assert.ok(rv.body.roster.marks.S1, 'a save never drops the review notes');
+    rv = await call('POST', '/api/rosters/' + encodeURIComponent(rvId) + '/marks', { empId: 'S1', day: 2, remove: true }, 'rahima');
+    assert.equal(rv.status, 200, JSON.stringify(rv.body));
+    assert.deepEqual(rv.body.roster.marks, {}, 'the in-charge marks a note done');
+    assert.equal((await T(rvId, 'send_cns', '', 'admin')).status, 200);
+    assert.equal((await call('POST', '/api/rosters/' + encodeURIComponent(rvId) + '/marks', { empId: 'S1', day: 1, note: 'check' }, 'nasrin')).status, 200);
+    rv = await T(rvId, 'approve', '', 'nasrin');
+    assert.equal(rv.status, 200, JSON.stringify(rv.body));
+    assert.deepEqual(rv.body.roster.marks, {}, 'approving leaves no open notes');
     // Search for staff to add: administrators only; minimal fields.
     assert.equal((await call('GET', '/api/rosters/staff-search?q=ra', null, 'nasrin')).status, 403, 'the CNS prepares no roster: no search');
     assert.equal((await call('GET', '/api/rosters/staff-search?q=ra', null, 'rahima')).status, 403, 'an in-charge may not add staff from another unit');

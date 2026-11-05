@@ -91,12 +91,20 @@ function rights(actor, doc, cfgDept, cfgCns) {
   const editable = EDITABLE.indexOf(st) >= 0;
   // Self-approval: the person who sent a sheet to the CNS must not also be the one signing it.
   const sentByMe = !!(doc && doc.sentBy && doc.sentBy === me);
+  // The reviewer the sheet is waiting on (or an administrator).
+  const reviewer = (st === 'pending_manager' && (admin || isMgr)) || (st === 'pending_cns' && (admin || isCns));
   return {
     view: admin || a.inScope === true || isCns || mgrOfUnit || inchOfUnit,
     edit: admin ? st !== 'approved' : (editor && editable),
     send: (admin || editor) && editable,
     forward: st === 'pending_manager' && (admin || isMgr),
-    return: (st === 'pending_manager' && (admin || isMgr)) || (st === 'pending_cns' && (admin || isCns)),
+    return: reviewer,
+    // While it waits on them, the reviewer may change one shift directly (logged in the
+    // history) or pin a note to a person's day for the in-charge; the in-charge may mark a
+    // pinned note done once the sheet is back with them.
+    reviewEdit: reviewer,
+    mark: reviewer,
+    markDone: reviewer || ((admin || editor) && editable),
     approve: st === 'pending_cns' && (admin || (isCns && !sentByMe)),
     reopen: admin && st === 'approved',
     selfSent: sentByMe,
