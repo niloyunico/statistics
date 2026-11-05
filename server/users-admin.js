@@ -68,7 +68,7 @@ const mirrorFailed = (e) => { try { console.error('[users] responsible mirror fa
 // cleanPerms() dropped the key. Kept in step with access.ACCESS_MODULES.
 // 'datasubmit' + 'staffapp': submitting data for chosen departments and signing in to the
 // phone staff app are MODULES on a normal account now, not portal roles (access.js).
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays'];
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays', 'kpi'];
 // My Department is read-only: it can be opened and printed, nothing else.
 const MYDEPT_ACTIONS = ['view', 'print'];
 // Does a perms map grant Data Submission? Such an account carries a data-collection scope

@@ -441,6 +441,9 @@
         const now = Date.now(), touched = {};
         MONTH_MAPS.forEach(k => { if (patch[k] && typeof patch[k] === 'object') Object.keys(patch[k]).forEach(m => { touched[m] = now; }); });
         if (Object.keys(touched).length) next.mEditedAt = Object.assign({}, prev.mEditedAt || {}, touched);
+        // ...and WHO edited it, so a report can say whose figure it shows (Nursing KPI evidence).
+        const who = (typeof window !== 'undefined' && window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username)) || '';
+        if (who && Object.keys(touched).length) next.mEditedBy = Object.assign({}, prev.mEditedBy || {}, Object.keys(touched).reduce((o, m) => { o[m] = who; return o; }, {}));
         all[indId] = next;
         return Object.assign({}, cur, { indPatches: all });
       }),

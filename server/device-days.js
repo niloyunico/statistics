@@ -556,4 +556,6 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthView, STATUSES, _mem: mem };
+// findRows / getConfig / cfgFor are read by the Nursing KPI evidence (server/kpi-evidence.js):
+// the approved device days that a CLABSI / CAUTI / VAP denominator must match.
+module.exports = { mount, monthView, findRows, getConfig, cfgFor, STATUSES, _mem: mem };

@@ -18,6 +18,8 @@
           "server/seed/**",
           "server/meds-index/**",
           "server/h360/logo.png",
+          "server/kpi/**",
+          "renderer/unico/kpi-core.js",
           "renderer/nurse-app.html",
           "renderer/admin-app.html"
         ]

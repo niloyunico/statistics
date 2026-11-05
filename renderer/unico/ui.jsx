@@ -69,6 +69,8 @@ const UNICO_MODULES = [
   // Device Days: the daily Record of Device Insertion Days, sent per department and reviewed
   // (departments set per person: deviceDepartments). Never a default.
   { id:'devdays', label:'Device Days',        short:'Devices',    icon:I.activity,home:'devDaysEntry' },
+  // Nursing KPI — the Nursing Department's KPI programme (window.KpiView, chunk 'kpi').
+  { id:'kpi',     label:'Nursing KPI',        short:'KPI',        icon:I.trend,   home:'kpiDashboard' },
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
@@ -87,6 +89,7 @@ const UNICO_MODULE_VIEWS = {
   datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory','dsHandHygiene'],
   mydept: ['myDept'],
   devdays:['devDaysEntry','devDaysReview','devDaysSummary','devDaysSettings'],
+  kpi:['kpiDashboard','kpiEntry','kpiReports','kpiManage','kpiActions','kpiSettings'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
 /* Data Submission's screens — each its own route and its own sidebar sub-item, and each
@@ -142,7 +145,7 @@ function unicoModuleOf(view){
    they are never gated here. `modules` null/absent = unrestricted (legacy accounts
    keep full access until an admin assigns modules). ---- */
 // 'staffapp' is grantable too, but it is the phone app only — it has no screen in here.
-const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp','mydept','devdays'];
+const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp','mydept','devdays','kpi'];
 // The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
 // hub, so it is gated under 'users' rather than 'stats'.
 function unicoAccessModuleOf(view){
@@ -215,7 +218,7 @@ let unicoSubMenusMemo=null;
 function unicoSubMenus(){
   if(unicoSubMenusMemo) return unicoSubMenusMemo;
   const out={};
-  const SAMPLE={ stats:'departments', quality:'quality', supervisor:'supHome', medicine:'medHome', staff:'staffHome', datacol:'dcReview', reports:'reports', devdays:'devDaysEntry' };
+  const SAMPLE={ stats:'departments', quality:'quality', supervisor:'supHome', medicine:'medHome', staff:'staffHome', datacol:'dcReview', reports:'reports', devdays:'devDaysEntry', kpi:'kpiDashboard' };
   Object.keys(SAMPLE).forEach(m=>{
     unicoWorkspaceSubAll(SAMPLE[m]).forEach(s=>{
       // Performance / Attrition / Duty Roster ride in Staff Management's list but are whole
@@ -259,7 +262,7 @@ function unicoFirstAllowedHome(){
   // 'home' is not in this list on purpose: it is ungated, so unicoCanAccessView()
   // never sends anyone here looking for a fallback. This list answers a different
   // question — which WORKSPACE to open when a restricted account needs one.
-  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings'],['mydept','myDept'],['devdays','devDaysEntry']];
+  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings'],['mydept','myDept'],['devdays','devDaysEntry'],['kpi','kpiDashboard']];
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return unicoModuleLanding(homes[i][0], homes[i][1]); }
   return null;
 }
@@ -436,6 +439,8 @@ const UNICO_WS = [
     { id:'supervisor',  label:'Supervisor Reports', icon:I.doc,  home:'supHome',     on:v=>unicoModuleOf(v)==='supervisor', badge:'sup' },
     // Badge: missed / returned days to send (senders) + days waiting for review (reviewers).
     { id:'devdays',     label:'Device Days',     icon:I.activity,home:'devDaysEntry', on:v=>unicoModuleOf(v)==='devdays', badge:'dd' },
+    // Badge: KPIs still without a figure for last month + a monthly report waiting to be finalised.
+    { id:'kpi',         label:'Nursing KPI',     icon:I.trend,  home:'kpiDashboard', on:v=>unicoModuleOf(v)==='kpi', badge:'kpi', tag:'NEW' },
     // Drug index (21.7k Bangladeshi brands / 1.7k generic monographs) + prescriptions.
     { id:'medicine',    label:'Medicine & Rx',   icon:I.syringe,home:'medHome',     on:v=>unicoModuleOf(v)==='medicine', tag:'NEW' },
   ]},
@@ -577,6 +582,14 @@ function unicoWorkspaceSubAll(view){
        H360 Scan      reading H360: start a collection, watch it run, the login
        H360 Patients  what the last scan read: the patients of every nurse station, the IPD Admission list, OPD */
   // DEVICE DAYS — Settings (tracked departments, frequency) is the administrator's alone.
+  if(mod==='kpi') return [
+    { label:'Dashboard',    view:'kpiDashboard' },
+    { label:'Data Update',  view:'kpiEntry' },
+    { label:'Reports',      view:'kpiReports' },
+    { label:'Manage KPIs',  view:'kpiManage' },
+    { label:'Action Plans', view:'kpiActions' },
+    ...(unicoUserPerms()===null ? [{ label:'Settings', view:'kpiSettings', adminOnly:true }] : []),
+  ];
   if(mod==='devdays') return [
     { label:'Daily Sheet',  view:'devDaysEntry' },
     { label:'Review',       view:'devDaysReview' },
@@ -744,6 +757,8 @@ function Sidebar({route, setRoute, collapsed, depts}){
   // Device Days: missed + returned days to send, and days waiting for review (unicoUseDevDaysAlerts).
   const ddAlerts = unicoUseDevDaysAlerts(unicoCanAccessModule('devdays'));
   const ddBadge = ddAlerts ? (ddAlerts.total||0)+(ddAlerts.pendingReview||0) : 0;
+  const kpiAlerts = unicoUseKpiAlerts(unicoCanAccessModule('kpi'));
+  const kpiBadge = kpiAlerts ? (kpiAlerts.total||0) : 0;
   // Duty Roster: rosters waiting for this person's step + their units' rosters returned to them.
   const rosPend = unicoUseRosterPending(unicoCanAccessModule('roster'));
   const rosBadge = rosPend ? (rosPend.pending||0)+(rosPend.returned||0) : 0;
@@ -792,7 +807,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
             {g.sec && <div className="sb-sec">{g.sec}</div>}
             {items.map(it=>{
               const active = it.on(view);
-              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='dd' ? ddBadge : it.badge==='ros' ? rosBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
+              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='dd' ? ddBadge : it.badge==='kpi' ? kpiBadge : it.badge==='ros' ? rosBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
               const badge = badgeN>0 ? badgeN : null;
               const auto = !!AUTO_OPEN[it.id];
               const itSub = auto && folded[it.id] ? [] : subFor(it, active);
@@ -956,6 +971,42 @@ function unicoUseRosterPending(enabled){
     window.addEventListener('unico:data-refreshed',run);
     document.addEventListener('visibilitychange',vis);
     return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:ros-refresh',run); window.removeEventListener('unico:data-refreshed',run); document.removeEventListener('visibilitychange',vis); };
+  },[enabled]);
+  return enabled?a:null;
+}
+/* Nursing KPI: KPIs without a figure for the month that just ended, and that month's report
+   waiting to be finalised (/api/kpi/missing). Every 5 minutes (it reads the quality data), on
+   focus, and when the module asks ('unico:kpi-refresh'). One gentle toast a day. */
+function unicoUseKpiAlerts(enabled){
+  const [a,setA]=React.useState(()=>window.__UNICO_KPI_ALERTS__||null);
+  React.useEffect(()=>{
+    if(!enabled) return;
+    let live=true;
+    const run=()=>{
+      if(document.visibilityState==='hidden') return;
+      fetch('/api/kpi/missing',{credentials:'same-origin',cache:'no-store'})
+        .then(r=>r.ok?r.json():null).then(j=>{
+          if(!live||!j||!j.ok) return;
+          setA(j);
+          try{ window.__UNICO_KPI_ALERTS__=j; window.dispatchEvent(new CustomEvent('unico:kpi-alerts',{detail:j})); }catch(e){}
+          if(!(j.total>0)||!window.UI||!window.UI.toast||!window.UNICO_KPI) return;
+          const key='kpi_notice_'+window.UNICO_KPI.thisMonth()+'_'+new Date().getDate();   // not 'unico_': never synced
+          let shown=false; try{ shown=!!localStorage.getItem(key); }catch(e){}
+          if(shown) return;
+          const m=window.UNICO_KPI.fmtMonthLong(j.month);
+          const parts=[];
+          if(j.missing.length) parts.push(j.missing.length+' KPI'+(j.missing.length>1?'s':'')+' still need figures for '+m);
+          if(j.reportReady) parts.push('the '+m+' report is ready to review');
+          if(parts.length) window.UI.toast('Nursing KPI — '+parts.join(' · '),'info');
+          try{ localStorage.setItem(key,'1'); }catch(e){}
+        }).catch(()=>{});
+    };
+    run();
+    const t=setInterval(run,300000);
+    const vis=()=>{ if(document.visibilityState==='visible') run(); };
+    window.addEventListener('unico:kpi-refresh',run);
+    document.addEventListener('visibilitychange',vis);
+    return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:kpi-refresh',run); document.removeEventListener('visibilitychange',vis); };
   },[enabled]);
   return enabled?a:null;
 }

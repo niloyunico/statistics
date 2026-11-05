@@ -1890,6 +1890,7 @@ const USER_MODS=[
   ['mydept','My Department','Clinical','one department, read-only · departments set below'],
   // Record of Device Insertion Days. Which departments is set per person below the grid.
   ['devdays','Device Days','Clinical','Add = enter & send · Edit = review & correct · departments set below'],
+  ['kpi','Nursing KPI','Clinical','Add = enter figures · Edit = change figures, KPIs & reports · Print = print, PDF, PowerPoint, Excel'],
   ['datacol','Data Collection','Data',''],
   ['reports','Reports','Data',''],
   ['staff','Staff Management','Administer',''],
@@ -1917,6 +1918,7 @@ const PERM_ORDER=['view','edit','add','delete','print'];
 // My Department is read-only: it can be opened and printed, nothing else (server MYDEPT_ACTIONS).
 const MYDEPT_ACTS=['view','print'];
 // What each action means in Device Days (shown on the buttons' tooltips).
+const KPI_TIPS={view:'See the KPI dashboard, figures, reports and action plans',edit:'Change saved figures (incl. the system’s), edit KPIs and action plans, comment on and finalise reports',add:'Enter figures for months that have none, add custom KPIs, generate reports',delete:'Archive a KPI, clear a month, remove a draft report (all kept in history)',print:'Print, PDF, PowerPoint and Excel — every export is logged'};
 const DEVDAYS_TIPS={view:'See the daily sheet and the summary',edit:'Review: approve or return sent days, and correct them',add:'Enter the daily figures and send them for review',delete:'Remove a day’s figures (kept in history)',print:'Print the sheet and the summary — every printout is logged'};
 const PERM_LEVEL_ORDER=['view','edit','add','delete'];
 function levelToActions(lv){ const i=['none','view','edit','add','delete'].indexOf(lv); return i<=0?[]:PERM_LEVEL_ORDER.slice(0,i); }
@@ -2359,16 +2361,16 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     // Access Control lists every account — none of those is a harmless "view".
     // Those modules are LEFT as they are (not cleared): clearing Data Submission on Save also wiped
     // the person's departments / areas and switched off their Indicator Access record.
-    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol','mydept','devdays'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
+    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol','mydept','devdays','kpi'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
   // Start from what another person holds. Copies the ticks only; their scope stays theirs.
   const copyAccess=(uname)=>{
     const src=(allUsers||[]).find(x=>x.username===uname); setCopyFrom(uname); if(!src) return;
     // My Department is never copied: it is granted to a person by hand, for their own departments.
-    if(src.role==='Administrator'){ setPerms(cur=>({...FULL_PERMS(),mydept:asActions(cur.mydept),devdays:asActions(cur.devdays)})); setSubMenus({}); return; }
+    if(src.role==='Administrator'){ setPerms(cur=>({...FULL_PERMS(),mydept:asActions(cur.mydept),devdays:asActions(cur.devdays),kpi:asActions(cur.kpi)})); setSubMenus({}); return; }
     setSubMenus(src.subMenus&&typeof src.subMenus==='object'&&!Array.isArray(src.subMenus)?{...src.subMenus}:{});
     const p={...NONE_PERMS(),...(src.perms||{})};
     // Device Days likewise: it goes with the departments picked for this person.
-    setPerms(cur=>USER_MODS.reduce((m,[k])=>(m[k]=(k==='mydept'||k==='devdays')?asActions(cur[k]):asActions(p[k]),m),{}));
+    setPerms(cur=>USER_MODS.reduce((m,[k])=>(m[k]=(k==='mydept'||k==='devdays'||k==='kpi')?asActions(cur[k]):asActions(p[k]),m),{}));
   };
   // Toggle one action for a module (independent). Granting edit/add/delete auto-adds view.
   // Data Submission exists to SEND: ticking it on from nothing grants view+edit+add, or the person
@@ -2839,7 +2841,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                   <div style={{display:'flex',gap:6,flexShrink:0,flexWrap:'wrap'}}>
                     <button onClick={()=>clearMod(id)} style={{padding:'5px 12px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(none?'var(--muted)':'var(--line)'),background:none?'var(--panel-2)':'#fff',color:none?'var(--ink)':'var(--muted)'}}>None</button>
                     {PERM_ACTS.filter(([v])=>id!=='mydept'||MYDEPT_ACTS.indexOf(v)>=0).map(([v,l])=>{ const on=acts.indexOf(v)>=0; const c=lvlColor[v]; return (
-                      <button key={v} onClick={()=>toggleAct(id,v)} title={id==='devdays'?DEVDAYS_TIPS[v]:v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':v==='delete'?'Can delete':'Can print / save as PDF — take the record out of the system on paper'}
+                      <button key={v} onClick={()=>toggleAct(id,v)} title={id==='devdays'?DEVDAYS_TIPS[v]:id==='kpi'?KPI_TIPS[v]:v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':v==='delete'?'Can delete':'Can print / save as PDF — take the record out of the system on paper'}
                         style={{display:'inline-flex',alignItems:'center',gap:6,padding:'5px 11px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?c:'var(--line)'),background:on?c:'#fff',color:on?'#fff':'var(--ink-2)'}}>
                         <span style={{width:13,height:13,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'#fff':'var(--line)'),background:on?'rgba(255,255,255,.25)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
                         {l}
@@ -3183,7 +3185,9 @@ function ActivityLog(){
     departments_changed:{l:'Departments changed',c:'#e08a1e'}, medicine_changed:{l:'Medicine data changed',c:'#6a52d4'},
     supervisor_report_saved:{l:'Supervisor report saved',c:'#0090ca'},
     role_template_created:{l:'Role created',c:'#0090ca'}, role_template_updated:{l:'Role updated',c:'#e08a1e'},
-    role_template_deleted:{l:'Role deleted',c:'#d23a52'}, role_template_applied:{l:'Role applied to members',c:'#6a52d4'} };
+    role_template_deleted:{l:'Role deleted',c:'#d23a52'}, role_template_applied:{l:'Role applied to members',c:'#6a52d4'},
+    kpi_value:{l:'KPI figure',c:'#0090ca'}, kpi_def:{l:'KPI changed',c:'#6a52d4'}, kpi_def_archive:{l:'KPI archived',c:'#d23a52'}, kpi_report:{l:'KPI report',c:'#0090ca'},
+    kpi_report_final:{l:'KPI report final',c:'#1f9d57'}, kpi_report_reopen:{l:'KPI report re-opened',c:'#e08a1e'}, kpi_export:{l:'KPI export',c:'#3ab5a7'}, kpi_print:{l:'KPI print / PDF',c:'#3ab5a7'}, kpi_config:{l:'KPI settings',c:'#6a52d4'} };
   const meta=a=>META[a]||{l:a,c:'#8a93a3'};
   const fmtTs=ts=>{ try{ return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } };
   const filtered=(rows||[]).filter(r=>{ if(!q.trim()) return true; const s=(r.username+' '+r.name+' '+meta(r.action).l+' '+r.target+' '+r.detail+' '+r.ip).toLowerCase(); return s.includes(q.trim().toLowerCase()); });

@@ -55,19 +55,26 @@ function patientRows(dept, store, months) {
 /* One indicator's month readings, the console's way (quality-store.js withoutSuperseded):
    an overlay cell wins unless an approval newer than it put a value in the database. */
 const Q_MAPS = ['months', 'mNum', 'mDen', 'mNotObserved', 'monthRemarks'];
-function qualityIndicator(base, layers, months) {
+// The month maps `maps` of one indicator over `months`, database first, overlay layers on top
+// (also used by server/kpi-link.js, with the hand-hygiene maps added).
+function mergeLayers(base, layers, months, maps) {
   const b = base || {};
   const appr = b.mApprovedAt || {};
   const pick = {};
-  Q_MAPS.forEach((k) => { pick[k] = {}; months.forEach((m) => { if (b[k] && filled(b[k][m])) pick[k][m] = b[k][m]; }); });
-  layers.filter(Boolean).forEach((l) => {
+  (maps || Q_MAPS).forEach((k) => { pick[k] = {}; months.forEach((m) => { if (b[k] && filled(b[k][m])) pick[k][m] = b[k][m]; }); });
+  (layers || []).filter(Boolean).forEach((l) => {
     const edited = l.mEditedAt || {};
-    Q_MAPS.forEach((k) => months.forEach((m) => {
+    (maps || Q_MAPS).forEach((k) => months.forEach((m) => {
       if (!l[k] || !Object.prototype.hasOwnProperty.call(l[k], m)) return;
       if (Number(appr[m]) > (Number(edited[m]) || 0) && b[k] && Object.prototype.hasOwnProperty.call(b[k], m)) return;
       if (filled(l[k][m])) pick[k][m] = l[k][m]; else delete pick[k][m];
     }));
   });
+  return pick;
+}
+function qualityIndicator(base, layers, months) {
+  const b = base || {};
+  const pick = mergeLayers(b, layers, months, Q_MAPS);
   const src = Object.assign({}, b, layers.filter(Boolean).reduce((a, l) => Object.assign(a, l), {}));
   return {
     id: b.id || src.id, name: src.name || b.name || src.id, formula: src.formula || null, unit: src.unit || '',
@@ -206,4 +213,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, patientRows, qualityIndicator, SECTIONS };
+module.exports = { mount, patientRows, qualityIndicator, mergeLayers, overlays, SECTIONS, Q_MAPS };

@@ -93,6 +93,9 @@ function start(opts) {
 
   const run = (why) => ping(why).then((r) => {
     if (!quiet && r.ok) console.log('[keepalive] database pinged (' + why + ')' + (r.sinceHours != null ? ', ' + r.sinceHours + 'h since the last one' : ''));
+    // Nursing KPI: last month's draft report, once — the PC server's equivalent of the cron hook.
+    const K = require('../renderer/unico/kpi-core.js');
+    return require('./kpi').ensureDraft(K.lastClosedMonth(), 'timer').catch(() => {});
   }).catch((e) => {
     console.warn('[keepalive] ping failed: ' + (e && e.message || e));
   });
@@ -134,6 +137,9 @@ function mount(app) {
       if (trusted) {
         try { r.monitor = await require('./monitor').runScheduled(source); }
         catch (e) { r.monitor = { ok: false, error: String((e && e.message) || e).slice(0, 160) }; }
+        // Nursing KPI: last month's draft report, once (the report's own id is the gate).
+        try { const K = require('../renderer/unico/kpi-core.js'); r.kpi = await require('./kpi').ensureDraft(K.lastClosedMonth(), source); }
+        catch (e) { r.kpi = { ok: false, error: String((e && e.message) || e).slice(0, 160) }; }
       }
       res.set('Cache-Control', 'no-store');
       res.json(r);

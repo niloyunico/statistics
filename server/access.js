@@ -41,7 +41,9 @@ const { getUsers } = require('./db');
 // for the departments an administrator picks per person (users.myDepartments). Never a default.
 // 'devdays' (Device Days): the daily Record of Device Insertion Days, sent and reviewed for the
 // departments an administrator picks per person (users.deviceDepartments, '*' = all). Never a default.
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays'];
+// 'kpi' (Nursing KPI): the Nursing Department's KPI programme — catalogue, monthly figures,
+// reports and exports (server/kpi.js). Hospital-level, so no per-person department list. Never a default.
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays', 'kpi'];
 
 // Escalating legacy level strings. The newer model stores an ARRAY of independently
 // granted actions (e.g. ['view','delete'] = delete without add); both are supported,

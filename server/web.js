@@ -1075,6 +1075,10 @@ require('./my-department').mount(app, { requireApi: [session.requireApi] });
 // (module 'devdays'; each route checks the module and the person's deviceDepartments itself).
 require('./device-days').mount(app, { requireApi: [session.requireApi] });
 
+// Nursing KPI: the Nursing Department's KPI programme — catalogue, monthly figures (filled from
+// the quality data where it exists), reports, PowerPoint / Excel export (module 'kpi').
+require('./kpi').mount(app, { requireApi: [session.requireApi] });
+
 // Medicine module: the Bangladesh drug index (21.7k brands / 1.7k generic monographs)
 // and the prescriptions written from it. Prescriptions carry patient names, UHIDs and
 // diagnoses, so the whole module is gated on 'medicine'; editing the shared drug
