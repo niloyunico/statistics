@@ -384,6 +384,7 @@ function ShiftLegend({ compact }) {
 const rosIsAdmin = () => { try { const u = window.__UNICO_USER__; return !u || u.role === 'Administrator'; } catch (e) { return false; } };
 // Corner marks on a grid cell: on call on top of the shift, and an AL whose worked date is not set.
 const ROS_OC_BADGE = { position: 'absolute', top: -5, right: -6, fontStyle: 'normal', fontSize: 7, fontWeight: 800, lineHeight: '11px', padding: '0 3px', borderRadius: 5, background: '#0d3a5c', color: '#fff', letterSpacing: .3, boxShadow: '0 1px 3px rgba(0,0,0,.25)', pointerEvents: 'none' };
+const ROS_MARK_CORNER = { position: 'absolute', top: 0, left: 0, width: 0, height: 0, borderTop: '9px solid #d23a52', borderRight: '9px solid transparent', borderTopLeftRadius: 5, pointerEvents: 'none' };
 const ROS_AL_DOT = { position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#e08a1e', boxShadow: '0 0 0 1.5px #fff', pointerEvents: 'none' };
 const rosPortal = (n) => (window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
 
@@ -552,8 +553,8 @@ function RosDecisionButtons({ status, can, onAction, busy, compact, hasManager, 
 
 // Return note. Optional by design: a reviewer may send a sheet back with or without a
 // reason, and the return is red-flagged on the sheet either way.
-function RosNoteModal({ what, busy, onCancel, onConfirm }) {
-  const [note, setNote] = useState('');
+function RosNoteModal({ what, busy, onCancel, onConfirm, initial }) {
+  const [note, setNote] = useState(initial || '');
   const presets = ['Night cover is below the minimum', 'Rule warnings are not resolved', 'Wrong staff on the sheet', 'Leave clash', 'Too many consecutive nights'];
   useEffect(() => {
     const k = (e) => { if (e.key === 'Escape') onCancel(); };
@@ -613,10 +614,10 @@ function useRosDecide() {
       return r || { ok: false };
     }).catch(() => { setBusy(false); rosToast('Could not reach the server.', 'error'); return { ok: false }; });
   };
-  const run = async ({ id, action, unit, period, warnings, selfManager }) => {
+  const run = async ({ id, action, unit, period, warnings, selfManager, note: initialNote }) => {
     const what = unit + ' · ' + period;
     if (action === 'return') {
-      const note = await new Promise((resolve) => setAsk({ what, resolve }));
+      const note = await new Promise((resolve) => setAsk({ what, resolve, initial: initialNote || '' }));
       if (note === null) return { ok: false, cancelled: true };
       return post(id, action, note);
     }
@@ -638,7 +639,7 @@ function useRosDecide() {
     }
     return post(id, action, '');
   };
-  const modal = ask ? <RosNoteModal what={ask.what} busy={busy} onCancel={() => { ask.resolve(null); setAsk(null); }} onConfirm={(n) => { ask.resolve(n); setAsk(null); }} /> : null;
+  const modal = ask ? <RosNoteModal what={ask.what} initial={ask.initial} busy={busy} onCancel={() => { ask.resolve(null); setAsk(null); }} onConfirm={(n) => { ask.resolve(n); setAsk(null); }} /> : null;
   return { run, modal, busy };
 }
 
@@ -670,6 +671,33 @@ function RosHistoryTimeline({ history, empty }) {
 }
 
 // The red flag a returned sheet carries until it is sent again.
+/* The notes a reviewer pinned to cells ("Rahima · 12 Nov — no night after leave"), listed under
+   the returned banner. Clicking one opens that cell; Done clears it (POST …/marks remove). */
+function RosMarkList({ marks, rows, year, month, canDone, onDone, onOpen }) {
+  const nameOf = {}; (rows || []).forEach((r) => { nameOf[r.empId] = r.name; });
+  const list = [];
+  Object.keys(marks || {}).forEach((emp) => Object.keys(marks[emp] || {}).forEach((d) => list.push({ emp, d: Number(d), ...marks[emp][d] })));
+  if (!list.length) return null;
+  list.sort((a, b) => a.d - b.d || String(nameOf[a.emp] || '').localeCompare(String(nameOf[b.emp] || '')));
+  const day = (d) => new Date(year, month, d).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  return (
+    <div style={{ background: '#fff', border: '1px solid rgba(210,58,82,.28)', borderRadius: 12, padding: '10px 14px', marginBottom: 14 }}>
+      <div style={{ fontSize: 12, fontWeight: 800, color: '#8c1d2a', marginBottom: 6 }}>Review notes · {list.length} cell{list.length === 1 ? '' : 's'} to fix</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {list.map((m) => (
+          <div key={m.emp + '|' + m.d} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 8px', borderRadius: 8, background: 'rgba(210,58,82,.05)' }}>
+            <span onClick={() => onOpen && onOpen(m.emp, m.d)} style={{ cursor: onOpen ? 'pointer' : 'default', flex: 1, minWidth: 0, fontSize: 12, color: '#16202e' }}>
+              <b>{nameOf[m.emp] || m.emp}</b> · {day(m.d)}{m.code ? <span style={{ fontFamily: ROS_MONO, fontWeight: 700, color: '#6c7a8c' }}> ({m.code})</span> : null} — {m.note}
+              <span style={{ color: '#8a97a8', fontSize: 10.5 }}> · {m.byName || m.by || 'reviewer'}</span>
+            </span>
+            {canDone && <button type="button" className="btn sm" onClick={() => onDone(m.emp, m.d)}>Done</button>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RosReturnedBanner({ meta }) {
   const m = meta || {};
   const by = m.returnedByName || m.returnedBy || 'the reviewer';
@@ -1339,6 +1367,8 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   // each Alternative Leave stands in for ({ empId: { day: { for: 'YYYY-MM-DD', note } } }).
   const [oncall, setOncall] = useState({});
   const [altLeave, setAltLeave] = useState({});
+  // Review notes pinned to cells by the Manager / CNS — written only through POST …/marks.
+  const [marks, setMarks] = useState({});
   const [movedOut, setMovedOut] = useState([]);
   const [addOpen, setAddOpen] = useState(false);
   const staff = useMemo(() => {
@@ -1410,6 +1440,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       setStoredNames((d && d.names) || {});
       setGuests((d && d.guests) || {});
       setOncall((d && d.oncall) || {});
+      setMarks((d && d.marks) || {});
       setAltLeave((d && d.altLeave) || {});
       setMovedOut(Array.isArray(r.movedOut) ? r.movedOut : []);
       setStatus((d && d.status) || 'draft');
@@ -1459,6 +1490,8 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   };
 
   const cellCode = (empId, d) => (grid[empId] || {})[d] || '';
+  const markDone = (empId, d) => rosApi.post('/api/rosters/' + encodeURIComponent(meta.id || rosSheetId(dept, year, month)) + '/marks', { empId, day: d, remove: true })
+    .then((r) => { if (r && r.ok) { setMarks((r.roster && r.roster.marks) || {}); rosToast('Review note marked done.'); } else rosToast((r && r.error) || 'Could not clear the note.', 'error'); });
   const ocMarked = (empId, d) => !!((oncall[empId] || {})[d]) && R.isDuty(cellCode(empId, d));
   const alOf = (empId, d) => (cellCode(empId, d) === 'AL' && (altLeave[empId] || {})[d]) || null;
   // Clicking an AL cell opens straight on its "in lieu of" details.
@@ -1869,6 +1902,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
         );
       })()}
       {stNorm === 'returned' && <RosReturnedBanner meta={meta} />}
+      <RosMarkList marks={marks} rows={rows} year={year} month={month} canDone={canEdit} onDone={markDone} />
       {!canEdit && !loadError && !conflict && ROS_EDITABLE.indexOf(stNorm) >= 0 && (
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', background: 'rgba(125,145,180,.1)', border: '1px solid rgba(125,145,180,.3)', borderRadius: 12, padding: '10px 14px', marginBottom: 14, fontSize: 12, color: '#3c4858' }}>
           <Ic d={I.lock || 'M5 11h14v10H5zM8 11V7a4 4 0 018 0v4'} s={15} />
@@ -2079,12 +2113,14 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                           const c = rowG[d] || '';
                           const sh = R.BY_CODE[c];
                           const oc = ocMarked(x.empId, d), al = c === 'AL' ? alOf(x.empId, d) : null;
+                          const mk = (marks[x.empId] || {})[d];
                           const alTxt = c !== 'AL' ? '' : (al && al.for ? ' · in lieu of ' + rosDate(al.for) : ' · in-lieu date not set — click to add') + (al && al.note ? ' · ' + al.note : '');
                           return (
                             <td key={d} style={{ padding: 2, textAlign: 'center', borderBottom: '1px solid rgba(125,145,180,.14)', background: rosIsFri(year, month, d) ? 'rgba(224,138,30,.09)' : 'transparent' }}>
                               <span onMouseDown={cellDown(x.empId, d)} onMouseEnter={cellOver(x.empId, d)} onMouseUp={cellUp(x.empId, x.name, d)}
-                                title={c ? (c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt) : 'Click to assign a shift'}
+                                title={c ? (c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt + (mk ? '\nReview note: ' + mk.note : '')) : (mk ? 'Review note: ' + mk.note : 'Click to assign a shift')}
                                 style={paintStyle(x.empId, d, c)}>{c || '·'}
+                                {mk && <i style={ROS_MARK_CORNER} />}
                                 {oc && <i style={ROS_OC_BADGE}>OC</i>}
                                 {c === 'AL' && !(al && al.for) && <i style={ROS_AL_DOT} />}</span>
                             </td>
@@ -2906,6 +2942,12 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                 <span style={{ flex: 1 }} />
                 <span className="ros-x" onClick={() => setPick(null)} style={{ cursor: 'pointer', color: '#9aa6b4', display: 'grid', placeItems: 'center', width: 20, height: 20, borderRadius: 6 }}><Ic d="M18 6L6 18M6 6l12 12" s={12} sw={2.4} /></span>
               </div>
+              {(marks[pick.empId] || {})[pick.d] && (
+                <div style={{ margin: '8px 11px 0', padding: '7px 9px', borderRadius: 8, background: 'rgba(210,58,82,.07)', border: '1px solid rgba(210,58,82,.25)', fontSize: 11, color: '#8c1d2a' }}>
+                  <b>Review note:</b> {marks[pick.empId][pick.d].note}
+                  {canEdit && <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={() => markDone(pick.empId, pick.d)}>Done</button>}
+                </div>
+              )}
               {pick.alStep ? (
                 <div style={{ padding: '11px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div style={{ fontSize: 11.5, fontWeight: 700, color: '#16202e' }}>Alternative leave — in lieu of which date?</div>
@@ -3710,5 +3752,7 @@ window.UNICO_ROSTER_KIT = {
   ROS_STATUS, ROS_ACTIONS, ROS_HIST_LABEL, ROS_EDITABLE, statusNorm: rosStatusNorm,
   RosStatusChip, RosDecisionButtons, RosHistoryTimeline, RosReturnedBanner, RosDrawer, RosSheetTable, RosSignOff, RosVersions,
   rulesOf: rosRulesOf, findingsOf: rosFindingsOf, rowsFrom: rosRowsFrom, printHtml: rosPrintHtml,
+  deptName: rosDeptName, signNames: rosSignNames, signLine: rosSignLine, RosMarkList,
+  OC_BADGE: ROS_OC_BADGE, AL_DOT: ROS_AL_DOT, MARK_CORNER: ROS_MARK_CORNER, date: rosDate,
   bColor: rosBColor, MONO: ROS_MONO,
 };
