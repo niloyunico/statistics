@@ -518,12 +518,33 @@
     return out;
   }
 
+  /* Trainee nurses are rostered as ONE unit, "Trainee Nurses", prepared by their instructor —
+     not on the ward their staff record names (they rotate). Same test as the Staff directory's
+     Trainee tab (staff-data.js staffGroupOf): a Nurse whose designation says trainee nurse.
+     server/duty-roster.js holds the same rule for the server side. */
+  var TRAINEE_UNIT = 'Trainee Nurses';
+  function isTrainee(e) {
+    if (!e) return false;
+    var role = String(e.role || 'Nurse').trim().toLowerCase();
+    var des = String(e.designation || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+    return (role === 'nurse' && /\btrainee\b/.test(des) && /\bnurs(?:e|ing)\b/.test(des)) || /^(trainee nurse|nurse trainee)$/.test(role);
+  }
+  /* Nurse Managers (and Assistant Nurse Managers — not Senior Managers) are rostered on one
+     "Nurse Managers" sheet. Nursing Supervisors are NOT a designation: an administrator picks them
+     in Duty Roster -> Setup, and they stay on their ward roster as well (see roster.jsx). */
+  var MANAGER_UNIT = 'Nurse Managers', SUPERVISOR_UNIT = 'Nursing Supervisors';
+  function isNurseManager(e) { return !!e && /\b(assistant\s+)?nurse\s*manager\b/i.test(String(e.designation || '')); }
+  // The roster unit a person is on: trainees and nurse managers have their own; everyone else their ward.
+  function unitOf(e) { return isTrainee(e) ? TRAINEE_UNIT : isNurseManager(e) ? MANAGER_UNIT : ((e && e.current_department) || 'Unassigned'); }
+
   var API = {
     SHIFTS: SHIFTS, BY_CODE: BY_CODE, BUCKETS: BUCKETS, BUCKET_COLOR: BUCKET_COLOR,
     LEAVE_CODES: LEAVE_CODES, OFF_CODES: OFF_CODES, MONTHS: MONTHS, DOW: DOW,
     DEFAULT_RULES: DEFAULT_RULES,
     bucketOf: bucketOf, hoursOf: hoursOf, isLeave: isLeave, isOff: isOff, isDuty: isDuty,
     daysIn: daysIn, totalsFor: totalsFor, coverageFor: coverageFor, checkRules: checkRules,
+    TRAINEE_UNIT: TRAINEE_UNIT, MANAGER_UNIT: MANAGER_UNIT, SUPERVISOR_UNIT: SUPERVISOR_UNIT,
+    isTrainee: isTrainee, isNurseManager: isNurseManager, unitOf: unitOf,
   };
 
   if (typeof window !== 'undefined') window.UNICO_ROSTER = API;

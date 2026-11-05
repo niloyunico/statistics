@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=46f9d4b643","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=6f2609523e","manpower":"/dist/manpower.chunk.js?v=92e4ecd57d","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=614a45bee1","reports":"/dist/reports.chunk.js?v=46f9d4b643","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=832f4405ea","manpower":"/dist/manpower.chunk.js?v=324d7e2cbf","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -8127,12 +8127,33 @@ window.QI_CORRECTIONS_BY_DEFID = {
     return out;
   }
 
+  /* Trainee nurses are rostered as ONE unit, "Trainee Nurses", prepared by their instructor —
+     not on the ward their staff record names (they rotate). Same test as the Staff directory's
+     Trainee tab (staff-data.js staffGroupOf): a Nurse whose designation says trainee nurse.
+     server/duty-roster.js holds the same rule for the server side. */
+  var TRAINEE_UNIT = 'Trainee Nurses';
+  function isTrainee(e) {
+    if (!e) return false;
+    var role = String(e.role || 'Nurse').trim().toLowerCase();
+    var des = String(e.designation || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+    return (role === 'nurse' && /\btrainee\b/.test(des) && /\bnurs(?:e|ing)\b/.test(des)) || /^(trainee nurse|nurse trainee)$/.test(role);
+  }
+  /* Nurse Managers (and Assistant Nurse Managers — not Senior Managers) are rostered on one
+     "Nurse Managers" sheet. Nursing Supervisors are NOT a designation: an administrator picks them
+     in Duty Roster -> Setup, and they stay on their ward roster as well (see roster.jsx). */
+  var MANAGER_UNIT = 'Nurse Managers', SUPERVISOR_UNIT = 'Nursing Supervisors';
+  function isNurseManager(e) { return !!e && /\b(assistant\s+)?nurse\s*manager\b/i.test(String(e.designation || '')); }
+  // The roster unit a person is on: trainees and nurse managers have their own; everyone else their ward.
+  function unitOf(e) { return isTrainee(e) ? TRAINEE_UNIT : isNurseManager(e) ? MANAGER_UNIT : ((e && e.current_department) || 'Unassigned'); }
+
   var API = {
     SHIFTS: SHIFTS, BY_CODE: BY_CODE, BUCKETS: BUCKETS, BUCKET_COLOR: BUCKET_COLOR,
     LEAVE_CODES: LEAVE_CODES, OFF_CODES: OFF_CODES, MONTHS: MONTHS, DOW: DOW,
     DEFAULT_RULES: DEFAULT_RULES,
     bucketOf: bucketOf, hoursOf: hoursOf, isLeave: isLeave, isOff: isOff, isDuty: isDuty,
     daysIn: daysIn, totalsFor: totalsFor, coverageFor: coverageFor, checkRules: checkRules,
+    TRAINEE_UNIT: TRAINEE_UNIT, MANAGER_UNIT: MANAGER_UNIT, SUPERVISOR_UNIT: SUPERVISOR_UNIT,
+    isTrainee: isTrainee, isNurseManager: isNurseManager, unitOf: unitOf,
   };
 
   if (typeof window !== 'undefined') window.UNICO_ROSTER = API;

@@ -727,6 +727,7 @@ function useRosterConfig() {
   return {
     cns: v && v.cns || null,
     depts: v && v.depts || [],
+    supervisors: v && v.supervisors || [],
     updatedAt: v && v.updatedAt,
     loading: !v,
     reload
@@ -766,7 +767,8 @@ const rosRowsFrom = (doc, staff, dept, withRegister, inchargeName) => {
   (staff || []).forEach(e => {
     all[rosKey(e)] = e;
   });
-  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => rosRowOf(e));
+  const supIds = R.SUPERVISOR_UNIT === dept ? new Set((ROS_CFG && ROS_CFG.supervisors || []).map(x => String(x.id))) : null;
+  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (supIds ? supIds.has(String(e.id)) : R.unitOf(e) === dept)).map(e => rosRowOf(e));
   const known = Object.keys(all).map(k => ({
     empId: k,
     empIdShown: all[k].emp_id || ''
@@ -1797,6 +1799,7 @@ function RosterHome({
   scope,
   setRoute
 }) {
+  const rcfg = useRosterConfig();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth());
@@ -1811,14 +1814,16 @@ function RosterHome({
   const depts = useMemo(() => {
     const m = {};
     (staffStore.staff || []).filter(e => e.is_active !== false && !e.former).forEach(e => {
-      const d = e.current_department || 'Unassigned';
+      const d = R.unitOf(e);
       m[d] = (m[d] || 0) + 1;
     });
     if (sc.scope === 'departments' && sc.units) sc.units.forEach(u => {
       if (!(u in m)) m[u] = 0;
     });
+    const supN = (rcfg.supervisors || []).length;
+    if (supN) m[R.SUPERVISOR_UNIT] = supN;
     return Object.entries(m).filter(([d]) => sc.inScope(d)).sort((a, b) => b[1] - a[1]);
-  }, [staffStore.staff, sc.units, sc.scope]);
+  }, [staffStore.staff, sc.units, sc.scope, rcfg.supervisors]);
   const byKey = useMemo(() => {
     const m = {};
     (index.rosters || []).forEach(r => {
@@ -2522,7 +2527,11 @@ function RosterGrid({
   const history = useRef([]);
   const saveTimer = useRef(null);
   const toastTimer = useRef(null);
-  const staff = useMemo(() => (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (e.current_department || 'Unassigned') === dept).map(e => rosRowOf(e)), [staffStore.staff, dept]);
+  const [members, setMembers] = useState(null);
+  const staff = useMemo(() => {
+    const mem = members ? new Set(members.map(String)) : null;
+    return (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : R.unitOf(e) === dept)).map(e => rosRowOf(e));
+  }, [staffStore.staff, dept, members]);
   const rows = useMemo(() => {
     const byId = {};
     staff.forEach(x => {
@@ -2558,7 +2567,7 @@ function RosterGrid({
   const pcaN = rows.filter(r => r.pca).length;
   const nurseN = rows.length - pcaN;
   const inScope = scope && scope.inScope || (() => true);
-  const depts = useMemo(() => [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => e.current_department || 'Unassigned'))].filter(d => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
+  const depts = useMemo(() => [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => R.unitOf(e)).concat([dept]))].filter(d => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
   const monthUrl = '/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month;
   const applyMeta = r => {
     const d = r.roster;
@@ -2568,6 +2577,7 @@ function RosterGrid({
     } : {});
     setSheetCan(d && d.can || r.can || null);
     setSigners(r.signers || {});
+    setMembers(Array.isArray(r.members) ? r.members : d && Array.isArray(d.members) ? d.members : null);
   };
   useEffect(() => {
     setLoading(true);
@@ -10171,6 +10181,8 @@ function RosterSetup() {
   const [onlyUnset, setOnlyUnset] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const store = K.useRosterStaff();
+  const [supQ, setSupQ] = useState('');
   const fromCfg = c => {
     const d = {};
     (c.depts || []).forEach(x => {
@@ -10181,7 +10193,8 @@ function RosterSetup() {
     });
     return {
       cns: c.cns && c.cns.username || '',
-      depts: d
+      depts: d,
+      supervisors: (c.supervisors || []).map(x => String(x.id))
     };
   };
   const load = () => Promise.all([K.api.get('/api/rosters/config'), K.api.get('/api/rosters/reviewers')]).then(([c, p]) => {
@@ -10291,7 +10304,8 @@ function RosterSetup() {
       cns: draft.cns ? {
         username: draft.cns
       } : null,
-      depts: {}
+      depts: {},
+      supervisors: draft.supervisors || []
     };
     Object.keys(draft.depts).forEach(id => {
       const x = draft.depts[id];
@@ -10420,7 +10434,180 @@ function RosterSetup() {
       fontSize: 11.5,
       lineHeight: 1.6
     }
-  }, "Accounts with a roster role: ", React.createElement("b", null, nRole('cns')), " CNS \xB7 ", React.createElement("b", null, nRole('manager')), " Manager \xB7 ", React.createElement("b", null, nRole('incharge')), " In-charge. Someone missing from a list? Give their account a ", React.createElement("b", null, "Duty roster role"), " under Users & Roles \u2192 Manage. People whose roster units include a department are listed first for it."))), React.createElement("div", {
+  }, "Accounts with a roster role: ", React.createElement("b", null, nRole('cns')), " CNS \xB7 ", React.createElement("b", null, nRole('manager')), " Manager \xB7 ", React.createElement("b", null, nRole('incharge')), " In-charge. Someone missing from a list? Give their account a ", React.createElement("b", null, "Duty roster role"), " under Users & Roles \u2192 Manage. People whose roster units include a department are listed first for it."))), (() => {
+    const staffAll = (store.staff || []).filter(e => e && e.id != null && e.is_active !== false && !e.former);
+    const byId = {};
+    staffAll.forEach(e => {
+      byId[String(e.id)] = e;
+    });
+    (cfg.supervisors || []).forEach(x => {
+      if (!byId[String(x.id)]) byId[String(x.id)] = x;
+    });
+    const sel = draft.supervisors || [];
+    const setSel = next => setDraft(d => ({
+      ...d,
+      supervisors: next
+    }));
+    const n = supQ.trim().toLowerCase();
+    const hits = n ? staffAll.filter(e => sel.indexOf(String(e.id)) < 0 && [e.name, e.emp_id, e.current_department, e.designation].join(' ').toLowerCase().indexOf(n) >= 0).slice(0, 8) : [];
+    return React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h",
+      style: {
+        display: 'flex',
+        gap: 10,
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("h3", {
+      style: {
+        margin: 0
+      }
+    }, "Nursing Supervisors"), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#5b45c4',
+        background: 'rgba(106,82,212,.1)',
+        borderRadius: 10,
+        padding: '2px 9px'
+      }
+    }, sel.length, " member", sel.length === 1 ? '' : 's'), React.createElement("span", {
+      className: "sub",
+      style: {
+        flex: 1,
+        minWidth: 260
+      }
+    }, "Who does supervisor duty. They stay on their ward roster and also appear on the ", React.createElement("b", null, "Nursing Supervisors"), " roster; set its In-charge in the table below.")), React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        flexWrap: 'wrap'
+      }
+    }, !sel.length && React.createElement("span", {
+      className: "sub"
+    }, "No supervisors picked yet."), sel.map(id => {
+      const e = byId[id] || {
+        name: 'Staff #' + id
+      };
+      return React.createElement("span", {
+        key: id,
+        style: {
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          border: '1px solid rgba(106,82,212,.3)',
+          background: 'rgba(106,82,212,.06)',
+          borderRadius: 16,
+          padding: '3px 6px 3px 10px',
+          fontSize: 12
+        }
+      }, React.createElement("b", {
+        style: {
+          fontWeight: 700,
+          color: '#16202e'
+        }
+      }, e.name), React.createElement("span", {
+        style: {
+          color: '#8a97a8',
+          fontSize: 11
+        }
+      }, [e.emp_id, e.current_department].filter(Boolean).join(' · ')), React.createElement("button", {
+        type: "button",
+        title: "Remove",
+        onClick: () => setSel(sel.filter(x => x !== id)),
+        style: {
+          border: 0,
+          background: 'rgba(106,82,212,.12)',
+          color: '#5b45c4',
+          borderRadius: '50%',
+          width: 18,
+          height: 18,
+          cursor: 'pointer',
+          fontSize: 12,
+          lineHeight: '18px',
+          padding: 0
+        }
+      }, "\xD7"));
+    })), React.createElement("div", {
+      style: {
+        position: 'relative',
+        maxWidth: 460
+      }
+    }, React.createElement("input", {
+      value: supQ,
+      onChange: e => setSupQ(e.target.value),
+      placeholder: "Add a supervisor \u2014 name, emp no or unit\u2026",
+      style: {
+        width: '100%',
+        boxSizing: 'border-box',
+        padding: '8px 11px',
+        borderRadius: 9,
+        border: '1px solid rgba(125,145,180,.4)',
+        fontFamily: 'inherit',
+        fontSize: 12.5
+      }
+    }), n && React.createElement("div", {
+      style: {
+        marginTop: 4,
+        border: '1px solid rgba(125,145,180,.3)',
+        borderRadius: 10,
+        background: '#fff',
+        overflow: 'hidden'
+      }
+    }, !hits.length && React.createElement("div", {
+      className: "sub",
+      style: {
+        padding: 10
+      }
+    }, "No one matches."), hits.map(e => React.createElement("div", {
+      key: e.id,
+      onClick: () => {
+        setSel(sel.concat([String(e.id)]));
+        setSupQ('');
+      },
+      style: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '7px 11px',
+        cursor: 'pointer',
+        borderBottom: '1px solid rgba(125,145,180,.1)'
+      }
+    }, React.createElement("span", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 12.5,
+        fontWeight: 600,
+        color: '#16202e'
+      }
+    }, e.name), React.createElement("span", {
+      style: {
+        display: 'block',
+        fontSize: 10.5,
+        color: '#8a97a8'
+      }
+    }, [e.emp_id, e.designation, e.current_department].filter(Boolean).join(' · '))), React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: '#5b45c4'
+      }
+    }, "+ Add")))))));
+  })(), React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-h",

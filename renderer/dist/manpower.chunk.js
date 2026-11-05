@@ -125,7 +125,7 @@
     const baseUnits = useMemo(() => {
       const by = {};
       (staffStore.staff || []).filter(e => e.is_active !== false && !e.former).forEach(e => {
-        const dept = e.current_department || 'Unassigned';
+        const dept = R.unitOf ? R.unitOf(e) : e.current_department || 'Unassigned';
         (by[dept] = by[dept] || []).push(e);
       });
       const units = Object.keys(by).sort((a, b) => a.localeCompare(b)).map(dept => {
