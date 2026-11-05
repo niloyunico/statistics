@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=b55d12daea","reports":"/dist/reports.chunk.js?v=4a957c6744","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0cd155c729","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=36a6547e49","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=b55d12daea","reports":"/dist/reports.chunk.js?v=4a957c6744","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0cd155c729","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=7d8a26cf33","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -8425,6 +8425,9 @@ window.QI_CORRECTIONS_BY_DEFID = {
     ['N11', '9:00 PM - 7:00 AM', 'N', 10],
     ['DN1', '12:00 PM - next 8:00 AM', 'N', 20],
 
+    // On call: reachable for the unit, not working on site — so it is not daily cover and has
+    // no worked hours, and it is not off or leave either (counted on its own, t.OC).
+    ['OC', 'On Call', 'O', 0],
     ['PH', 'Public Holiday', 'O', 0],
     ['DO', 'Day Off', 'O', 0],
     ['OFF', 'Off Day', 'O', 0],
@@ -8469,10 +8472,11 @@ window.QI_CORRECTIONS_BY_DEFID = {
 
   // Per-person totals for one month: counts per bucket + total paid hours.
   function totalsFor(row, days) {
-    var t = { G: 0, M: 0, E: 0, N: 0, O: 0, hours: 0, leave: 0 };
+    var t = { G: 0, M: 0, E: 0, N: 0, O: 0, OC: 0, hours: 0, leave: 0 };
     for (var d = 1; d <= days; d++) {
       var c = row && row[d];
       if (!c) continue;
+      if (c === 'OC') { t.OC++; continue; }
       var b = bucketOf(c);
       if (b) t[b]++;
       t.hours += hoursOf(c);
