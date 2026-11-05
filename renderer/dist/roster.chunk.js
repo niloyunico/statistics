@@ -5593,7 +5593,7 @@ function RosterGrid({
         flexDirection: 'column',
         gap: 10
       }
-    }, [['OFF', 'Off day'], ['DO', 'Day off'], ['AL', 'Annual leave'], ['CL', 'Casual leave'], ['EL', 'Earned leave'], ['ML', 'Maternity leave'], ['PH', 'Public holiday']].map(([code, label]) => {
+    }, [['OFF', 'Off day'], ['DO', 'Day off'], ['AL', 'Alternative leave'], ['CL', 'Casual leave'], ['EL', 'Earned leave'], ['ML', 'Maternity leave'], ['PH', 'Public holiday']].map(([code, label]) => {
       let n = 0;
       rows.forEach(x => {
         for (let d = 1; d <= days; d++) if (cellCode(x.empId, d) === code) n++;
@@ -8265,14 +8265,48 @@ const rosDate = t => t ? new Date(t).toLocaleDateString('en-GB', {
   month: 'short',
   year: 'numeric'
 }) : '';
+const rosDeptName = d => {
+  try {
+    return window.staffDeptShow && window.staffDeptShow(d) || d;
+  } catch (e) {
+    return d;
+  }
+};
+function rosSignNames(doc, signers) {
+  const sg = signers || {},
+    h = doc && doc.history || [];
+  const lastOf = acts => {
+    for (let i = h.length - 1; i >= 0; i--) if (acts.indexOf(h[i].action) >= 0) return {
+      e: h[i],
+      i
+    };
+    return null;
+  };
+  const st = rosStatusNorm(doc ? doc.status : null);
+  const inChain = st === 'pending_manager' || st === 'pending_cns' || st === 'approved';
+  const sent = inChain ? lastOf(['send_manager', 'send_cns']) : null;
+  const fwd0 = lastOf(['forward']);
+  const fwd = fwd0 && sent && fwd0.i > sent.i ? fwd0 : null;
+  const ok = st === 'approved' ? lastOf(['approve']) : null;
+  return {
+    prepared: sent && doc.preparedBy || sg.incharge && sg.incharge.name || '',
+    checked: fwd && doc.checkedBy || sg.manager && sg.manager.name || '',
+    approved: ok && doc.approvedBy || sg.cns && sg.cns.name || '',
+    sent: sent ? sent.e : null,
+    fwd: fwd ? fwd.e : null,
+    ok: ok ? ok.e : null
+  };
+}
 function rosPrintHtml({
   dept,
+  deptName,
   year,
   month,
   doc,
   rows,
   grid,
   signers,
+  signPeople,
   colour,
   summary,
   legend,
@@ -8283,18 +8317,16 @@ function rosPrintHtml({
   const ds = Array.from({
     length: days
   }, (_, i) => i + 1);
-  const st = rosStatusNorm(doc ? doc.status : null);
-  const hist = doc && doc.history || [];
-  const lastOf = acts => {
-    for (let i = hist.length - 1; i >= 0; i--) if (acts.indexOf(hist[i].action) >= 0) return hist[i];
-    return null;
-  };
-  const inChain = st === 'pending_manager' || st === 'pending_cns' || st === 'approved';
-  const sent = inChain ? lastOf(['send_manager', 'send_cns']) : null;
-  const fwd = inChain ? lastOf(['forward']) : null;
-  const ok = st === 'approved' ? lastOf(['approve']) : null;
-  const sg = signers || {};
-  const signs = [['Prepared by', doc && doc.preparedBy || sg.incharge && sg.incharge.name || '', 'In-charge, ' + dept, sent ? rosDate(sent.at) : ''], ['Checked by', fwd && doc && doc.checkedBy || sg.manager && sg.manager.name || '', 'Nurse Manager', fwd ? rosDate(fwd.at) : sent && sent.action === 'send_cns' ? 'sent directly to CNS' : ''], ['Approved by', ok && doc && doc.approvedBy || sg.cns && sg.cns.name || '', 'Chief of Nursing Services', ok ? rosDate(ok.at) : '']];
+  const dn = deptName || dept;
+  const sn = rosSignNames(doc, signers);
+  const {
+    sent,
+    fwd,
+    ok
+  } = sn;
+  const sp = signPeople || {};
+  const who = (k, role) => sp[k] ? [sp[k].name || '', sp[k].line || role] : [sn[k], role];
+  const signs = [['Prepared by', ...who('prepared', 'In-charge, ' + dn), sent ? rosDate(sent.at) : ''], ['Checked by', ...who('checked', 'Nurse Manager'), fwd ? rosDate(fwd.at) : sent && sent.action === 'send_cns' ? 'sent directly to CNS' : ''], ['Approved by', ...who('approved', 'Chief of Nursing Services'), ok ? rosDate(ok.at) : '']];
   const pill = code => {
     if (!code) return '';
     const b = R.bucketOf(code);
@@ -8352,30 +8384,163 @@ function rosPrintHtml({
   });
   const d2 = d => String(d).padStart(2, '0') + ' ' + R.MONTHS[month].slice(0, 3) + ' ' + year;
   const period = d2(1) + ' – ' + d2(days);
-  const tot = {
-    hrs: 0,
-    N: 0,
-    leave: 0,
-    shifts: 0
-  };
+  const g0 = grid || {};
+  const ids = rows.map(r => r.empId);
+  const mix = {
+      G: 0,
+      M: 0,
+      E: 0,
+      N: 0
+    },
+    offBy = {},
+    perHrs = [];
   rows.forEach(r => {
-    const row = grid && grid[r.empId] || {};
+    const row = g0[r.empId] || {};
     const tt = R.totalsFor(row, days);
-    tot.hrs += tt.hours || 0;
-    tot.N += tt.N || 0;
+    perHrs.push(tt.hours || 0);
+    ['G', 'M', 'E', 'N'].forEach(b => {
+      mix[b] += tt[b] || 0;
+    });
     ds.forEach(d => {
       const c = row[d];
-      if (!c) return;
-      if (R.isLeave(c)) tot.leave++;else if (R.bucketOf(c) && R.bucketOf(c) !== 'O') tot.shifts++;
+      if (c && (R.isLeave(c) || R.isOff(c))) offBy[c] = (offBy[c] || 0) + 1;
     });
   });
-  const tiles = [['Staff', String(rows.length), pcas.length ? nurses.length + ' nurses · ' + pcas.length + ' PCA' + (pcas.length === 1 ? '' : 's') : 'on this roster', 'b'], ['Duty shifts', String(tot.shifts), 'across ' + days + ' days', 't'], ['Total hours', String(tot.hrs), rows.length ? 'avg ' + Math.round(tot.hrs / rows.length) + ' h / person' : '', 'g'], ['Night shifts', String(tot.N), 'this month', 'v'], ['Leave days', String(tot.leave), 'annual, casual, sick …', 'a']];
+  const duty = mix.G + mix.M + mix.E + mix.N;
+  const hrs = perHrs.reduce((a, b) => a + b, 0);
+  const onDuty = ds.map(d => {
+    const c = R.coverageFor(g0, ids, d);
+    return c.G + c.M + c.E + c.N;
+  });
+  const lo = onDuty.length ? Math.min.apply(null, onDuty) : 0,
+    hi = onDuty.length ? Math.max.apply(null, onDuty) : 0;
+  const empty = onDuty.filter(n => n === 0).length;
+  const desigs = {};
+  rows.forEach(r => {
+    const k = r.desig || (r.pca ? 'PCA' : 'Staff');
+    desigs[k] = (desigs[k] || 0) + 1;
+  });
+  const desigTxt = Object.keys(desigs).sort((a, b) => desigs[b] - desigs[a] || a.localeCompare(b)).map(k => desigs[k] + ' ' + k).join(' · ');
+  const offTxt = Object.keys(offBy).sort((a, b) => offBy[b] - offBy[a] || a.localeCompare(b)).map(k => k + ' ' + offBy[k]).join(' · ');
+  const dayLbl = d => d + ' ' + R.MONTHS[month].slice(0, 3);
+  const tiles = [['Staff', String(rows.length), (pcas.length ? nurses.length + ' nursing · ' + pcas.length + ' PCA · ' : '') + (desigTxt || 'no one yet'), 'b'], ['Shift mix', String(duty), duty ? ['G', 'M', 'E', 'N'].filter(b => mix[b]).map(b => b + ' ' + mix[b]).join(' · ') : 'no duty shifts yet', 't'], ['Daily cover', duty ? lo === hi ? String(lo) : lo + '–' + hi : '0', !duty ? 'on duty per day' : empty ? '⚠ ' + empty + ' day' + (empty === 1 ? '' : 's') + ' with no one on duty' : 'on duty per day · lowest ' + dayLbl(onDuty.indexOf(lo) + 1), empty ? 'a' : 'g'], ['Off & leave', String(Object.keys(offBy).reduce((a, k) => a + offBy[k], 0)), offTxt || 'none this month', 'v'], ['Hours', hrs + ' h', perHrs.length ? Math.min.apply(null, perHrs) === Math.max.apply(null, perHrs) ? Math.min.apply(null, perHrs) + ' h each' : Math.min.apply(null, perHrs) + '–' + Math.max.apply(null, perHrs) + ' h per person' : '', 'sl']];
   const NAVY = '#0d3a5c';
-  const css = '@page{size:A4 landscape;margin:7mm 8mm 9mm;@bottom-right{content:"Page " counter(page) " of " counter(pages);font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}@bottom-left{content:"Duty Roster · ' + String(dept).replace(/["\\]/g, '') + ' · ' + R.MONTHS[month] + ' ' + year + '";font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}}' + '*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff}@media print{body{padding:0}}' + '.band{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding:5px 14px;border-radius:10px;color:#fff;' + 'background:linear-gradient(118deg,#0d3a5c 0%,#0b5f8f 48%,#1795c6 78%,#3ab5a7 100%);position:relative;overflow:hidden}' + '.band:after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.07)}' + '.band .lg0{display:inline-flex;align-items:center;background:#fff;border-radius:8px;padding:4px 9px;box-shadow:0 2px 6px rgba(0,0,0,.15)}.band img{height:25px;display:block}' + '.band .mid{text-align:center;position:relative;z-index:1}.band h1{margin:0;font-size:14pt;font-weight:800;letter-spacing:6px;line-height:1.15}' + '.band .mo{display:inline-block;margin-top:1px;font-size:8.8pt;font-weight:700;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:12px;padding:0 12px}' + '.band .pd{font-size:7pt;opacity:.85;letter-spacing:.5px;margin-top:1px}' + '.band .rt{text-align:right;position:relative;z-index:1}.band .kind{font-size:6.6pt;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;opacity:.8}.band .dp{font-size:15pt;font-weight:800;line-height:1.15}' + '.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:5px 0 3px}' + '.tile{border-radius:8px;padding:2px 10px 3px;border:1px solid #e3e9f0;border-left:4px solid var(--c);background:linear-gradient(90deg,var(--bg),#fff 85%)}' + '.tile span{display:block;font-size:6pt;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:#6b7a8d}.tile b{font-size:11pt;font-weight:800;color:var(--c);line-height:1.15}.tile i{font-style:normal;font-size:6.6pt;color:#7b8796;margin-left:6px}' + '.tile.b{--c:#0072a3;--bg:#e8f4fb}.tile.t{--c:#0f8a7e;--bg:#e6f6f3}.tile.g{--c:#1f6f43;--bg:#eaf6ee}.tile.v{--c:#5b45c4;--bg:#efecfb}.tile.a{--c:#b5670a;--bg:#fdf3e4}' + '.gt{display:flex;align-items:center;gap:8px;margin:5px 0 3px}.gt span{display:inline-block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#fff;background:linear-gradient(90deg,#0072a3,#1795c6);border-radius:10px;padding:2px 11px}' + '.gt:after{content:"";flex:1;height:1px;background:linear-gradient(90deg,#c9d9e8,transparent)}.gp .gt span{background:linear-gradient(90deg,#5b45c4,#7e6be0)}.grp.np{page-break-before:always}' + 'table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;border:1px solid #c9d6e3;border-radius:8px;overflow:hidden}thead{display:table-header-group}tr{page-break-inside:avoid}' + 'th{background:' + NAVY + ';color:#fff;font-weight:700;padding:3px 0;font-size:7pt;border-right:1px solid rgba(255,255,255,.1)}th.w{font-weight:500;font-size:6.2pt;background:#1d5c87;padding:1px 0 2px}th.fr{background:#b5670a}th.w.fr{background:#cf7d17}' + '.gp th{background:#3b2f7a}.gp th.w{background:#4d3f94}.gp th.fr{background:#b5670a}.gp th.w.fr{background:#cf7d17}' + 'td{border-right:1px solid #e6ecf2;border-bottom:1px solid #e6ecf2;text-align:center;padding:0;height:13px}tr.r:nth-child(even) td{background:#f6f9fc}' + 'td.c{padding:1px}td.fr{background:#fdf5ea!important}' + '.k{display:inline-block;min-width:88%;border-radius:4px;padding:0;font-size:6.7pt;font-weight:800;letter-spacing:.1px}.k.ko{color:#6b7a8d}' + 'td.n{color:#7b8796;font-size:6.8pt}td.e{font-size:6.6pt;color:#5b6878}td.nm{text-align:left;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{font-size:7.5pt;color:#0d1b2e}td.nm span{font-size:6.2pt;color:#7b8796}' + 'td.t{font-size:7pt;background:#f1f5f9!important;color:#3c4858}td.h{font-weight:800;color:#0d1b2e;background:#e4eef7!important}col.n{width:6mm}col.e{width:12mm}col.nm{width:52mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}' + 'tr.sum td{background:#eaf3fa!important;font-size:6.6pt;font-weight:700;color:' + NAVY + ';height:12px}tr.sum:first-of-type td{border-top:1.5px solid #9cc3de}tr.sum td.sl{text-align:right;padding-right:6px;font-weight:600;color:#3c5a74}.gp tr.sum td{background:#f0edfa!important;color:#3b2f7a}' + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lnr .notes{margin-top:0}.lgx{border:1px solid #d9e4ee;border-radius:8px;padding:4px 9px 5px;page-break-inside:avoid;background:#fbfdff}.lgh{font-size:6.4pt;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#0072a3;margin-bottom:2px}.lgn{font-size:7pt;color:#7b8796}' + '.lg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 16px;font-size:6.6pt;color:#3c4858}.lgb b{display:block;font-size:6.8pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.6px}.lgb span{display:inline-block;margin-right:8px;white-space:nowrap}' + '.lgb i{font-style:normal;font-weight:800;color:#0d1b2e;display:inline-block;min-width:18px;text-align:center;border-radius:4px;padding:0 3px;background:var(--lc,#eef2f6)}' + '.foot{page-break-inside:avoid;break-inside:avoid}' + '.notes{margin-top:6px;border-radius:8px;background:#fffaf2;border:1px solid #f1dfc2;padding:4px 9px}.nb{font-size:7pt;color:#5a4a33}.nb b{color:#b5670a}.rm{margin-top:3px;font-size:7.4pt;color:#3c4858;border-bottom:1px dotted #c9b48f;height:14px}' + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px;font-size:8pt;page-break-inside:avoid}' + '.signs>div{border:1px solid #e3e9f0;border-top:3px solid var(--sc);border-radius:9px;padding:0 11px 6px;background:linear-gradient(180deg,var(--sb),#fff 45%)}.signs>div:nth-child(1){--sc:#0072a3;--sb:#f1f8fd}.signs>div:nth-child(2){--sc:#5b45c4;--sb:#f5f3fd}.signs>div:nth-child(3){--sc:#1f6f43;--sb:#f0f8f3}' + '.signs .sp{height:28px}.signs .ln{border-top:1px solid #16202e;padding-top:4px}.signs .dt{margin-top:6px;font-size:7.4pt;color:#3c4858}' + '.signs span{display:block;font-size:6.4pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--sc)}.signs b{display:block;font-size:9pt;color:#0d1b2e}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}' + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}.cr{margin-top:3px;text-align:center;font-size:6px;color:#a3adba}' + 'body.mono .band{background:#fff;color:#0d1b2e;border:1.5px solid #0d1b2e}body.mono .band:after{display:none}body.mono .band .mo{background:#fff;border-color:#0d1b2e}body.mono .band .lg0{box-shadow:none;padding:0}' + 'body.mono .tile{--c:#0d1b2e!important;--bg:#fff!important}body.mono .gt span,body.mono .gp .gt span{background:#0d1b2e}' + 'body.mono th,body.mono .gp th{background:#2b3440!important}body.mono td.fr{background:#f2f2f2!important}body.mono .signs>div{--sc:#0d1b2e!important;--sb:#fff!important}body.mono .notes{background:#fff;border-color:#d9e2ec}body.mono .nb b{color:#0d1b2e}';
-  const html = '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>' + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>' + '<div class="rt"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dept) + '</div></div></header>' + (summary ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>') + tables + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>' + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>' + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><div class="sp"></div><div class="ln"><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + '</em>' + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>' + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>' + '<div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div></div>';
-  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dept + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + css + '</style></head><body' + (colour ? '' : ' class="mono"') + '>' + html + '</body></html>';
+  const css = '@page{size:A4 landscape;margin:7mm 8mm 9mm;@bottom-right{content:"Page " counter(page) " of " counter(pages);font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}@bottom-left{content:"Duty Roster · ' + String(dn).replace(/["\\]/g, '') + ' · ' + R.MONTHS[month] + ' ' + year + '";font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}}' + '*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff}@media print{body{padding:0}}' + '.band{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding:5px 14px;border-radius:10px;color:#fff;' + 'background:linear-gradient(118deg,#0d3a5c 0%,#0b5f8f 48%,#1795c6 78%,#3ab5a7 100%);position:relative;overflow:hidden}' + '.band:after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.07)}' + '.band .lg0{display:inline-flex;align-items:center;background:#fff;border-radius:8px;padding:4px 9px;box-shadow:0 2px 6px rgba(0,0,0,.15)}.band img{height:25px;display:block}' + '.band .mid{text-align:center;position:relative;z-index:1}.band h1{margin:0;font-size:14pt;font-weight:800;letter-spacing:6px;line-height:1.15}' + '.band .mo{display:inline-block;margin-top:1px;font-size:8.8pt;font-weight:700;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:12px;padding:0 12px}' + '.band .pd{font-size:7pt;opacity:.85;letter-spacing:.5px;margin-top:1px}' + '.band .rt{text-align:right;position:relative;z-index:1}.band .kind{font-size:6.6pt;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;opacity:.8}.band .dp{font-size:15pt;font-weight:800;line-height:1.15}' + '.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:6px 0 8px;position:relative;z-index:0}' + '.tile{border-radius:8px;padding:2px 10px 3px;border:1px solid #e3e9f0;border-left:4px solid var(--c);background:linear-gradient(90deg,var(--bg),#fff 85%)}' + '.tile span{display:block;font-size:6pt;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:#6b7a8d}.tile b{font-size:11pt;font-weight:800;color:var(--c);line-height:1.15}.tile i{font-style:normal;font-size:6.6pt;color:#7b8796;margin-left:6px}' + '.tile.b{--c:#0072a3;--bg:#e8f4fb}.tile.t{--c:#0f8a7e;--bg:#e6f6f3}.tile.g{--c:#1f6f43;--bg:#eaf6ee}.tile.v{--c:#5b45c4;--bg:#efecfb}.tile.a{--c:#b5670a;--bg:#fdf3e4}.tile.sl{--c:#334e68;--bg:#eef2f6}' + '.gt{display:flex;align-items:center;gap:8px;margin:5px 0 3px}.gt span{display:inline-block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#fff;background:linear-gradient(90deg,#0072a3,#1795c6);border-radius:10px;padding:2px 11px}' + '.gt:after{content:"";flex:1;height:1px;background:linear-gradient(90deg,#c9d9e8,transparent)}.gp .gt span{background:linear-gradient(90deg,#5b45c4,#7e6be0)}.grp.np{page-break-before:always}' + 'table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;border:1px solid #c9d6e3;border-radius:8px;overflow:hidden}thead{display:table-header-group}tr{page-break-inside:avoid}' + 'th{background:' + NAVY + ';color:#fff;font-weight:700;padding:3px 0;font-size:7pt;border-right:1px solid rgba(255,255,255,.1)}th.w{font-weight:500;font-size:6.2pt;background:#1d5c87;padding:1px 0 2px}th.fr{background:#b5670a}th.w.fr{background:#cf7d17}' + '.gp th{background:#3b2f7a}.gp th.w{background:#4d3f94}.gp th.fr{background:#b5670a}.gp th.w.fr{background:#cf7d17}' + 'td{border-right:1px solid #e6ecf2;border-bottom:1px solid #e6ecf2;text-align:center;padding:0;height:13px}tr.r:nth-child(even) td{background:#f6f9fc}' + 'td.c{padding:1px}td.fr{background:#fdf5ea!important}' + '.k{display:inline-block;min-width:88%;border-radius:4px;padding:0;font-size:6.7pt;font-weight:800;letter-spacing:.1px}.k.ko{color:#6b7a8d}' + 'td.n{color:#7b8796;font-size:6.8pt}td.e{font-size:6.6pt;color:#5b6878}td.nm{text-align:left;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{font-size:7.5pt;color:#0d1b2e}td.nm span{font-size:6.2pt;color:#7b8796}' + 'td.t{font-size:7pt;background:#f1f5f9!important;color:#3c4858}td.h{font-weight:800;color:#0d1b2e;background:#e4eef7!important}col.n{width:6mm}col.e{width:12mm}col.nm{width:52mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}' + 'tr.sum td{background:#eaf3fa!important;font-size:6.6pt;font-weight:700;color:' + NAVY + ';height:12px}tr.sum:first-of-type td{border-top:1.5px solid #9cc3de}tr.sum td.sl{text-align:right;padding-right:6px;font-weight:600;color:#3c5a74}.gp tr.sum td{background:#f0edfa!important;color:#3b2f7a}' + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lnr .notes{margin-top:0}.lgx{border:1px solid #d9e4ee;border-radius:8px;padding:4px 9px 5px;page-break-inside:avoid;background:#fbfdff}.lgh{font-size:6.4pt;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#0072a3;margin-bottom:2px}.lgn{font-size:7pt;color:#7b8796}' + '.lg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 16px;font-size:6.6pt;color:#3c4858}.lgb b{display:block;font-size:6.8pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.6px}.lgb span{display:inline-block;margin-right:8px;white-space:nowrap}' + '.lgb i{font-style:normal;font-weight:800;color:#0d1b2e;display:inline-block;min-width:18px;text-align:center;border-radius:4px;padding:0 3px;background:var(--lc,#eef2f6)}' + '.foot{page-break-inside:avoid;break-inside:avoid}' + '.notes{margin-top:6px;border-radius:8px;background:#fffaf2;border:1px solid #f1dfc2;padding:4px 9px}.nb{font-size:7pt;color:#5a4a33}.nb b{color:#b5670a}.rm{margin-top:3px;font-size:7.4pt;color:#3c4858;border-bottom:1px dotted #c9b48f;height:14px}' + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px;font-size:8pt;page-break-inside:avoid}' + '.signs>div{border:1px solid #e3e9f0;border-top:3px solid var(--sc);border-radius:9px;padding:0 11px 6px;background:linear-gradient(180deg,var(--sb),#fff 45%)}.signs>div:nth-child(1){--sc:#0072a3;--sb:#f1f8fd}.signs>div:nth-child(2){--sc:#5b45c4;--sb:#f5f3fd}.signs>div:nth-child(3){--sc:#1f6f43;--sb:#f0f8f3}' + '.signs .sp{height:28px}.signs .ln{border-top:1px solid #16202e;padding-top:4px}.signs .dt{margin-top:6px;font-size:7.4pt;color:#3c4858}' + '.signs span{display:block;font-size:6.4pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--sc)}.signs b{display:block;font-size:9pt;color:#0d1b2e}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}' + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}' + 'body.mono .band{background:#fff;color:#0d1b2e;border:1.5px solid #0d1b2e}body.mono .band:after{display:none}body.mono .band .mo{background:#fff;border-color:#0d1b2e}body.mono .band .lg0{box-shadow:none;padding:0}' + 'body.mono .tile{--c:#0d1b2e!important;--bg:#fff!important}body.mono .gt span,body.mono .gp .gt span{background:#0d1b2e}' + 'body.mono th,body.mono .gp th{background:#2b3440!important}body.mono td.fr{background:#f2f2f2!important}body.mono .signs>div{--sc:#0d1b2e!important;--sb:#fff!important}body.mono .notes{background:#fff;border-color:#d9e2ec}body.mono .nb b{color:#0d1b2e}';
+  const html = '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>' + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>' + '<div class="rt"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dn) + '</div></div></header>' + (summary ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>') + tables + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>' + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>' + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><div class="sp"></div><div class="ln"><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + '</em>' + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>' + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>' + '</div>';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + css + '</style></head><body' + (colour ? '' : ' class="mono"') + '>' + html + '</body></html>';
 }
 const ROS_PRINT_OPT_KEY = 'unico_roster_print_opts_v1';
+function RosSignPick({
+  label,
+  person,
+  staff,
+  onPick
+}) {
+  const [q, setQ] = useState(null);
+  const box = useRef(null);
+  const n = String(q || '').trim().toLowerCase();
+  const hits = n.length < 2 ? [] : (staff || []).filter(e => e && e.is_active !== false && !e.former && [e.name, e.emp_id, e.designation].join(' ').toLowerCase().indexOf(n) >= 0).slice(0, 8);
+  const r = q != null && n.length >= 2 && box.current ? box.current.getBoundingClientRect() : null;
+  return React.createElement("label", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 3,
+      flex: '1 1 210px',
+      minWidth: 190
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: 0.6,
+      textTransform: 'uppercase',
+      color: '#7d8ea8'
+    }
+  }, label), React.createElement("input", {
+    ref: box,
+    value: q == null ? person.name || '' : q,
+    placeholder: person.name || 'Search staff…',
+    onFocus: () => setQ(''),
+    onBlur: () => setQ(null),
+    onChange: e => setQ(e.target.value),
+    onKeyDown: e => {
+      if (e.key === 'Escape') e.currentTarget.blur();
+      if (e.key === 'Enter' && hits[0]) {
+        onPick(hits[0]);
+        e.currentTarget.blur();
+      }
+    },
+    style: {
+      padding: '6px 9px',
+      borderRadius: 8,
+      border: '1px solid rgba(125,145,180,.4)',
+      fontFamily: 'inherit',
+      fontSize: 12.5,
+      fontWeight: 600,
+      color: '#16202e'
+    }
+  }), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c',
+      whiteSpace: 'nowrap',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis'
+    }
+  }, person.line || '—'), r && rosPortal(React.createElement("div", {
+    style: {
+      position: 'fixed',
+      left: r.left,
+      top: r.bottom + 4,
+      width: Math.max(r.width, 280),
+      maxHeight: 300,
+      overflow: 'auto',
+      zIndex: 9500,
+      background: '#fff',
+      border: '1px solid rgba(125,145,180,.3)',
+      borderRadius: 10,
+      boxShadow: '0 14px 36px rgba(16,28,46,.2)'
+    }
+  }, !hits.length && React.createElement("div", {
+    style: {
+      padding: 10,
+      fontSize: 11.5,
+      color: '#8a97a8'
+    }
+  }, "No one matches."), hits.map(e => React.createElement("div", {
+    key: e.id,
+    onMouseDown: ev => {
+      ev.preventDefault();
+      onPick(e);
+      setQ(null);
+      if (box.current) box.current.blur();
+    },
+    style: {
+      padding: '7px 11px',
+      cursor: 'pointer',
+      borderBottom: '1px solid rgba(125,145,180,.12)'
+    },
+    onMouseEnter: ev => {
+      ev.currentTarget.style.background = 'rgba(0,144,202,.07)';
+    },
+    onMouseLeave: ev => {
+      ev.currentTarget.style.background = '';
+    }
+  }, React.createElement("b", {
+    style: {
+      display: 'block',
+      fontSize: 12.5,
+      color: '#16202e'
+    }
+  }, e.name), React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      color: '#6c7a8c'
+    }
+  }, rosSignLine(e), e.emp_id ? ' · ' + e.emp_id : ''))))));
+}
+const rosSignLine = e => [window.staffCanonDesig ? window.staffCanonDesig(e.designation) : e.designation, e.current_department ? rosDeptName(e.current_department) : ''].filter(Boolean).join(', ');
 function RosterPrint({
   staffStore,
   dept,
@@ -8424,17 +8589,46 @@ function RosterPrint({
   }, [opt]);
   const view = useMemo(() => rosRowsFrom(doc, staffStore.staff, dept, undefined, signers.incharge && signers.incharge.name), [doc, staffStore.staff, dept, signers]);
   const me = window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username) || '';
+  const deptName = rosDeptName(dept);
+  const [picks, setPicks] = useState({});
+  const signPeople = useMemo(() => {
+    const def = rosSignNames(doc, signers);
+    const people = staffStore.staff || [];
+    const byName = nm => {
+      const k = String(nm || '').trim().toLowerCase();
+      return k ? people.find(e => e && !e.former && e.is_active !== false && String(e.name || '').trim().toLowerCase() === k) : null;
+    };
+    const role = {
+      prepared: 'In-charge, ' + deptName,
+      checked: 'Nurse Manager',
+      approved: 'Chief of Nursing Services'
+    };
+    const out = {};
+    ['prepared', 'checked', 'approved'].forEach(k => {
+      const e = picks[k] || byName(def[k]);
+      out[k] = e ? {
+        name: e.name || '',
+        line: rosSignLine(e) || role[k]
+      } : {
+        name: def[k],
+        line: role[k]
+      };
+    });
+    return out;
+  }, [doc, signers, picks, staffStore.staff, deptName]);
   const html = useMemo(() => rosPrintHtml({
     dept,
+    deptName,
     year,
     month,
     doc,
     rows: view.rows,
     grid: view.grid,
     signers,
+    signPeople,
     ...opt,
     printedBy: me
-  }), [dept, year, month, doc, view, signers, opt, me]);
+  }), [dept, deptName, year, month, doc, view, signers, signPeople, opt, me]);
   const meU = String(window.__UNICO_USER__ && window.__UNICO_USER__.username || '').toLowerCase();
   const isSigner = !!meU && ['incharge', 'manager', 'cns'].some(k => signers[k] && String(signers[k].username || '').toLowerCase() === meU);
   const mayPrint = rosCan('print') || isSigner || !!(can && (can.edit || can.send || can.forward || can.approve));
@@ -8483,7 +8677,7 @@ function RosterPrint({
       const scale = 2;
       const top0 = body.getBoundingClientRect().top;
       const marks = Array.prototype.map.call(d0.querySelectorAll('tr, .gt, .lgx, .foot'), el => (el.getBoundingClientRect().bottom - top0) * scale);
-      const last = d0.querySelector('.cr') || body.lastElementChild;
+      const last = d0.querySelector('.foot') || body.lastElementChild;
       const contentH = Math.ceil((last ? last.getBoundingClientRect().bottom : body.scrollHeight) - top0 + 6);
       const canvas = await H(body, {
         scale,
@@ -8493,6 +8687,19 @@ function RosterPrint({
         width: W,
         height: contentH
       });
+      const left0 = body.getBoundingClientRect().left,
+        cg = canvas.getContext('2d');
+      cg.setTransform(1, 0, 0, 1, 0, 0);
+      for (const img of Array.prototype.slice.call(d0.querySelectorAll('img'))) {
+        try {
+          const r = img.getBoundingClientRect();
+          if (!r.width || !r.height) continue;
+          const pic = new Image();
+          pic.src = img.src;
+          await pic.decode();
+          cg.drawImage(pic, (r.left - left0) * scale, (r.top - top0) * scale, r.width * scale, r.height * scale);
+        } catch (e) {}
+      }
       const pdf = new J({
         orientation: 'landscape',
         unit: 'mm',
@@ -8526,7 +8733,7 @@ function RosterPrint({
         y = cut;
       }
       const safe = s => String(s || '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      pdf.save('Duty-Roster_' + safe(dept) + '_' + R.MONTHS[month] + '-' + year + '.pdf');
+      pdf.save('Duty-Roster_' + safe(deptName) + '_' + R.MONTHS[month] + '-' + year + '.pdf');
       rosToast('PDF downloaded.');
     } catch (e) {
       rosToast((e && e.message ? e.message + ' ' : '') + 'Use Print and choose “Save as PDF” instead.', 'error');
@@ -8596,7 +8803,7 @@ function RosterPrint({
       fontSize: 13.5,
       color: '#16202e'
     }
-  }, "Print roster \u2014 ", dept, ", ", R.MONTHS[month], " ", year), React.createElement("div", {
+  }, "Print roster \u2014 ", deptName, ", ", R.MONTHS[month], " ", year), React.createElement("div", {
     className: "sub",
     style: {
       fontSize: 11
@@ -8621,7 +8828,51 @@ function RosterPrint({
     style: {
       fontSize: 11
     }
-  }, "Printing needs Duty Roster print access."))), React.createElement("div", {
+  }, "Printing needs Duty Roster print access.")), mayPrint && React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      gap: 14,
+      alignItems: 'flex-start',
+      flexWrap: 'wrap',
+      borderTop: '1px solid rgba(125,145,180,.18)',
+      paddingTop: 10
+    }
+  }, React.createElement("div", {
+    style: {
+      minWidth: 120,
+      paddingTop: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      fontSize: 12.5,
+      color: '#16202e'
+    }
+  }, "Signatures"), React.createElement("div", {
+    className: "sub",
+    style: {
+      fontSize: 10.5
+    }
+  }, "pick from the staff list")), [['prepared', 'Prepared by'], ['checked', 'Checked by'], ['approved', 'Approved by']].map(([k, l]) => React.createElement(RosSignPick, {
+    key: k,
+    label: l,
+    person: signPeople[k],
+    staff: staffStore.staff,
+    onPick: e => setPicks(p => ({
+      ...p,
+      [k]: e
+    }))
+  })), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    style: {
+      marginTop: 17
+    },
+    disabled: !Object.keys(picks).length,
+    onClick: () => setPicks({}),
+    title: "Back to the names from Duty Roster \u2192 Setup"
+  }, "Reset"))), React.createElement("div", {
     style: {
       background: 'rgba(125,145,180,.12)',
       borderRadius: 12,

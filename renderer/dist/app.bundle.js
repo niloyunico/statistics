@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=b55d12daea","reports":"/dist/reports.chunk.js?v=4a957c6744","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0cd155c729","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=b63f83005d","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=d80a35f978"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=b55d12daea","reports":"/dist/reports.chunk.js?v=4a957c6744","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0cd155c729","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=e5afa312f0","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -8428,7 +8428,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     ['PH', 'Public Holiday', 'O', 0],
     ['DO', 'Day Off', 'O', 0],
     ['OFF', 'Off Day', 'O', 0],
-    ['AL', 'Annual Leave', 'O', 0],
+    ['AL', 'Alternative Leave', 'O', 0],
     ['CL', 'Casual Leave', 'O', 0],
     ['EL', 'Earned Leave', 'O', 0],
     ['ML', 'Maternity Leave', 'O', 0],
@@ -8452,7 +8452,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
   BUCKETS.forEach(function (b) { BUCKET_COLOR[b.id] = b.color; });
 
   // Codes that mean "away", as opposed to a rostered day off. Used by the leave view:
-  // a day off is planned rest, annual leave is absence, and they are not the same thing
+  // a day off is planned rest, leave is absence, and they are not the same thing
   // when you are checking whether a shift is covered.
   var LEAVE_CODES = ['AL', 'CL', 'EL', 'ML', 'FL', 'PH'];
   var OFF_CODES = ['DO', 'OFF'];
@@ -23357,6 +23357,16 @@ function staffDeptList(e) {
   const parts = String(e && e.current_department || '').split(',').map(x => x.trim()).filter(Boolean);
   return parts.length ? parts.map(x => staffCanonDept(x)) : [staffCanonDept(e && e.current_department)];
 }
+function staffActivities(e) {
+  const std = window.STAFF && window.STAFF.EXTRACURRICULARS || [];
+  const seen = {};
+  return String(e && e.extracurricular || '').split(/[,;]/).map(x => x.trim().replace(/\s+/g, ' ')).filter(Boolean).map(x => std.find(s => s.toLowerCase() === x.toLowerCase()) || x.charAt(0).toUpperCase() + x.slice(1)).filter(x => {
+    const k = x.toLowerCase();
+    if (seen[k]) return false;
+    seen[k] = 1;
+    return true;
+  });
+}
 function StaffDirectory({
   store,
   setRoute,
@@ -23767,6 +23777,7 @@ function ManageStaff({
   const [qual, setQual] = React.useState(M.qual || '');
   const [expB, setExpB] = React.useState(M.expB || '');
   const [training, setTraining] = React.useState(M.training || '');
+  const [activity, setActivity] = React.useState(M.activity || '');
   const [sortBy, setSortBy] = React.useState(M.sortBy || (recentDays ? 'entry' : 'name'));
   const [showInactive, setShowInactive] = React.useState(!!M.showInactive);
   const [tab, setTab] = React.useState(group === 'All' && M.tab || group);
@@ -23785,6 +23796,7 @@ function ManageStaff({
       qual,
       expB,
       training,
+      activity,
       sortBy,
       showInactive,
       tab
@@ -23876,7 +23888,8 @@ function ManageStaff({
   const staffDeptsOf = staffDeptList;
   const filtered = base.filter(e => {
     if (!matchChip(e)) return false;
-    if (q && !`${e.name} ${e.emp_id} ${e.phone || ''}`.toLowerCase().includes(q.toLowerCase())) return false;
+    if (q && !`${e.name} ${e.emp_id} ${e.phone || ''} ${staffActivities(e).join(' ')}`.toLowerCase().includes(q.toLowerCase())) return false;
+    if (activity && !staffActivities(e).some(a => a.toLowerCase() === activity)) return false;
     if (dept && staffDeptsOf(e).indexOf(dept) < 0) return false;
     if (desig && staffCanonDesig(e.designation) !== desig) return false;
     if (vacc === '__ok' && !vaccOK(e.hepatitis_b_vaccination)) return false;
@@ -23917,6 +23930,23 @@ function ManageStaff({
   const deptOpts = [...new Set(all.flatMap(e => staffDeptsOf(e)))].sort((a, b) => a.localeCompare(b));
   const desigOpts = [...new Set(all.map(e => staffCanonDesig(e.designation)).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const qualOpts = S.uniqueVals(all, 'qualification');
+  const actOpts = (() => {
+    const m = {};
+    base.forEach(e => staffActivities(e).forEach(a => {
+      const k = a.toLowerCase();
+      (m[k] || (m[k] = {
+        k,
+        label: a,
+        n: 0
+      })).n++;
+    }));
+    return Object.values(m).sort((a, b) => b.n - a.n || a.label.localeCompare(b.label));
+  })();
+  const ql = q.trim().toLowerCase();
+  const actHit = a => {
+    const k = a.toLowerCase();
+    return !!activity && k === activity || !!ql && k.includes(ql);
+  };
   const sel = {
     padding: '9px 11px',
     border: '1px solid var(--line)',
@@ -23926,7 +23956,7 @@ function ManageStaff({
     background: '#fff'
   };
   const chips = [['all', 'All'], ['fav', '★ Favorites'], ['missing', '⚠ Missing vaccination'], ['icu', 'ICU staff'], ['emergency', 'Emergency / ER'], ['otcath', 'OT / Cath Lab'], ['newhire', 'New hire']].concat(apprOn ? [['apprDue', '◷ Appraisal due'], ['apprOverdue', '⚠ Appraisal overdue']] : []);
-  const anyFilter = q || dept || desig || vacc || qual || expB || training || chip !== 'all';
+  const anyFilter = q || dept || desig || vacc || qual || expB || training || activity || chip !== 'all';
   return React.createElement("div", {
     className: "grid",
     style: {
@@ -24098,7 +24128,7 @@ function ManageStaff({
     d: I.search,
     s: 15
   }), React.createElement("input", {
-    placeholder: "Search name / Emp ID / Phone",
+    placeholder: "Search name / Emp ID / Phone / Activity",
     value: q,
     onChange: e => setQ(e.target.value),
     style: {
@@ -24166,7 +24196,26 @@ function ManageStaff({
     value: "has"
   }, "Has training"), React.createElement("option", {
     value: "none"
-  }, "No training")), React.createElement("select", {
+  }, "No training")), (actOpts.length > 0 || activity) && React.createElement("select", {
+    style: {
+      ...sel,
+      ...(activity ? {
+        borderColor: '#6a52d4',
+        color: '#6a52d4',
+        fontWeight: 600
+      } : null)
+    },
+    value: activity,
+    onChange: e => setActivity(e.target.value),
+    title: "Find staff by extracurricular activity"
+  }, React.createElement("option", {
+    value: ""
+  }, "All Activities"), actOpts.map(o => React.createElement("option", {
+    key: o.k,
+    value: o.k
+  }, o.label, " (", o.n, ")")), activity && !actOpts.some(o => o.k === activity) && React.createElement("option", {
+    value: activity
+  }, activity.charAt(0).toUpperCase() + activity.slice(1), " (0)")), React.createElement("select", {
     style: sel,
     value: sortBy,
     onChange: e => setSortBy(e.target.value)
@@ -24195,6 +24244,7 @@ function ManageStaff({
       setQual('');
       setExpB('');
       setTraining('');
+      setActivity('');
       setChip('all');
     }
   }, "Clear filters"), React.createElement(ExportMenu, {
@@ -24236,7 +24286,11 @@ function ManageStaff({
     style: {
       textAlign: 'left'
     }
-  }, "Department"), React.createElement("th", null, "Experience"), React.createElement("th", {
+  }, "Department"), React.createElement("th", {
+    style: {
+      textAlign: 'left'
+    }
+  }, "Activities"), React.createElement("th", null, "Experience"), React.createElement("th", {
     style: {
       textAlign: 'left'
     }
@@ -24363,6 +24417,50 @@ function ManageStaff({
       fontFamily: "'IBM Plex Sans'"
     }
   }, staffDeptShow(e.current_department)), React.createElement("td", {
+    style: {
+      textAlign: 'left'
+    }
+  }, (() => {
+    const acts = staffActivities(e);
+    if (!acts.length) return React.createElement("span", {
+      style: {
+        color: 'var(--faint)'
+      }
+    }, "\u2014");
+    const ord = [...acts.filter(actHit), ...acts.filter(a => !actHit(a))],
+      more = ord.length - 2;
+    return React.createElement("div", {
+      title: acts.join(', '),
+      style: {
+        display: 'flex',
+        gap: 4,
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        maxWidth: 220
+      }
+    }, ord.slice(0, 2).map(a => {
+      const hit = actHit(a);
+      return React.createElement("span", {
+        key: a,
+        style: {
+          fontSize: 11,
+          fontWeight: 600,
+          padding: '2px 8px',
+          borderRadius: 10,
+          whiteSpace: 'nowrap',
+          background: hit ? '#6a52d4' : '#f1eefb',
+          color: hit ? '#fff' : '#6a52d4',
+          border: '1px solid ' + (hit ? '#6a52d4' : '#e3dcf7')
+        }
+      }, a);
+    }), more > 0 && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        fontWeight: 700,
+        color: 'var(--muted)'
+      }
+    }, "+", more));
+  })()), React.createElement("td", {
     title: e.total_experience_text || '',
     className: "num"
   }, window.STAFF.expLabel(e)), React.createElement("td", {

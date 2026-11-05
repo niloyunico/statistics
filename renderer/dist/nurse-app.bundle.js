@@ -378,7 +378,7 @@
     ['PH', 'Public Holiday', 'O', 0],
     ['DO', 'Day Off', 'O', 0],
     ['OFF', 'Off Day', 'O', 0],
-    ['AL', 'Annual Leave', 'O', 0],
+    ['AL', 'Alternative Leave', 'O', 0],
     ['CL', 'Casual Leave', 'O', 0],
     ['EL', 'Earned Leave', 'O', 0],
     ['ML', 'Maternity Leave', 'O', 0],
@@ -402,7 +402,7 @@
   BUCKETS.forEach(function (b) { BUCKET_COLOR[b.id] = b.color; });
 
   // Codes that mean "away", as opposed to a rostered day off. Used by the leave view:
-  // a day off is planned rest, annual leave is absence, and they are not the same thing
+  // a day off is planned rest, leave is absence, and they are not the same thing
   // when you are checking whether a shift is covered.
   var LEAVE_CODES = ['AL', 'CL', 'EL', 'ML', 'FL', 'PH'];
   var OFF_CODES = ['DO', 'OFF'];
