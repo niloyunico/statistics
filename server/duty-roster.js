@@ -973,16 +973,14 @@ function mount(app, opts) {
   // One month, with the grid — plus the names to print and what this account may do with
   // it. A unit that has no sheet yet still answers with the names, so a brand-new sheet
   // opens with its sign-off block filled in.
-  /* Find anyone on the register to add to a roster from another unit. Only for an account that
-     may write at least one roster (an In-charge without the Staff module still needs names);
+  /* Find anyone on the register to add to a roster from another unit. Administrators only;
      minimal fields, at most 20, so it is not a way to read the register. */
   app.get('/api/rosters/staff-search', readGuard, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
-      const acc = require('./access');
       const a = req.access || {};
-      const writer = a.unrestricted || acc.portalMayEditRoster(a) || (!isCollector(req) && acc.can(a, 'roster', 'edit')) || (await rosterPlaceOf(req)).incharge.size > 0;
-      if (!writer) return res.status(403).json({ ok: false, error: 'Adding staff to a roster needs a roster you may prepare.' });
+      // Putting someone from another unit on a sheet is an administrator's call.
+      if (!a.unrestricted) return res.status(403).json({ ok: false, error: 'Adding staff from another unit is for administrators.' });
       const q = s(req.query.q, 60).trim().toLowerCase();
       if (q.length < 2) return res.json({ ok: true, staff: [] });
       const all = await require('./staff-roster').loadRoster({ cached: true });
@@ -1044,6 +1042,9 @@ function mount(app, opts) {
           error: 'Someone else saved this roster since you opened it. Reload the month to see their changes, then make yours again.' });
       }
       const doc = normRoster(b, existing);
+      // Who is on the sheet from another unit is an administrator's call: anyone else's save keeps
+      // the stored list as it is — nobody added, nobody taken off — whatever the request carries.
+      if (!admin) doc.guests = normGuests(existing ? existing.guests : {});
       // Keys a legacy client still sends that a save no longer honours — reported, not refused.
       const ignored = [];
       if (has(b, 'status') && s(b.status) !== doc.status && s(b.status) !== 'submitted') ignored.push('status');

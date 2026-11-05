@@ -411,8 +411,18 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/6')).body.movedOut, ['S5'], 'a moved guest is left off the home sheet that month');
     assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/5')).body.movedOut, [], 'and only that month');
     assert.deepEqual((await call('GET', '/api/rosters/CCU/2026/6')).body.movedOut, [], 'and only their home unit');
-    // Search for staff to add: only for someone who may prepare a roster; minimal fields.
+    // Search for staff to add: administrators only; minimal fields.
     assert.equal((await call('GET', '/api/rosters/staff-search?q=ra', null, 'nasrin')).status, 403, 'the CNS prepares no roster: no search');
+    assert.equal((await call('GET', '/api/rosters/staff-search?q=ra', null, 'rahima')).status, 403, 'an in-charge may not add staff from another unit');
+    // …and an in-charge's save neither adds nor removes guests, whatever the request carries.
+    let ig = await call('PUT', '/api/rosters', { dept: 'MICU', year: 2027, month: 2, grid: { S7: { 1: 'M4' } }, order: ['S7'], guests: { S7: { from: 'CCU', mode: 'both', name: 'Guest Seven' } }, baseRevision: 0 }, 'rahima');
+    assert.equal(ig.status, 200, JSON.stringify(ig.body));
+    assert.deepEqual(ig.body.roster.guests, {}, 'an in-charge cannot put a guest on the sheet');
+    ig = await call('PUT', '/api/rosters', { dept: 'MICU', year: 2027, month: 3, grid: {}, order: [], guests: { S7: { from: 'CCU', mode: 'both', name: 'Guest Seven' } }, baseRevision: 0 });
+    assert.deepEqual(Object.keys(ig.body.roster.guests), ['S7'], 'an administrator can');
+    ig = await call('PUT', '/api/rosters', { dept: 'MICU', year: 2027, month: 3, grid: {}, order: [], guests: {}, baseRevision: 1 }, 'rahima');
+    assert.equal(ig.status, 200, JSON.stringify(ig.body));
+    assert.deepEqual(Object.keys(ig.body.roster.guests), ['S7'], 'and an in-charge save cannot take them off');
     const found = (await call('GET', '/api/rosters/staff-search?q=a', null, 'admin')).body;
     assert.ok(found.ok && Array.isArray(found.staff) && found.staff.length <= 20);
     found.staff.forEach((p) => assert.deepEqual(Object.keys(p).sort(), ['current_department', 'designation', 'emp_id', 'id', 'name', 'photo', 'role', 'unit'], 'only the fields needed to pick someone'));

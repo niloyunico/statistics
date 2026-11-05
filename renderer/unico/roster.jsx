@@ -378,6 +378,10 @@ function ShiftLegend({ compact }) {
   );
 }
 
+// Putting someone from another unit on a sheet (or taking them off) is an administrator's call;
+// the server holds the same line (staff-search 403, a non-admin save keeps the stored guests).
+// No signed-in user = open local-PC mode, which the server also treats as administrator.
+const rosIsAdmin = () => { try { const u = window.__UNICO_USER__; return !u || u.role === 'Administrator'; } catch (e) { return false; } };
 const rosPortal = (n) => (window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
 
 /* ---- THE REVIEW CHAIN ----
@@ -1169,8 +1173,7 @@ function RosterAccessReview({ setRoute }) {
    once, before it is even saved. */
 /* Put someone from another unit on this sheet. "Keep on both" = they stay on their own
    unit's roster too (borrowed / floating duty); "Only on this roster" = moved here for this
-   month. Names come from /api/rosters/staff-search (minimal fields), so an In-charge without
-   the Staff module can still find people. */
+   month. Administrators only. Names come from /api/rosters/staff-search (minimal fields). */
 function RosAddStaff({ dept, year, month, onClose, onAdd, onRoster }) {
   const [q, setQ] = useState('');
   const [hits, setHits] = useState([]);
@@ -1515,7 +1518,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     }
     if (!canEdit || !v) { if (v) editBlocked(); return; }
     if (v === 'unguest') {
-      const g = guests[empId]; if (!g) return;
+      const g = guests[empId]; if (!g || !rosIsAdmin()) return;
       if (!window.confirm('Take ' + (g.name || 'this person') + ' off this roster? Their shifts on this sheet are cleared' + (g.mode === 'move' ? ' and they go back on the ' + (g.from || 'home') + ' roster.' : '.'))) return;
       setGuests((m) => { const n = { ...m }; delete n[empId]; return n; });
       setOrder((o) => o.filter((k) => k !== empId));
@@ -1912,7 +1915,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
             <h3 style={ROS_H3}>Monthly grid</h3>
             <span style={{ fontSize: 11, color: '#9aa6b4' }}>click a cell to pick · drag a shift onto another to swap · paint with a brush</span>
             <span style={{ flex: 1 }} />
-            {canEdit && (
+            {canEdit && rosIsAdmin() && (
               <button type="button" onClick={() => setAddOpen(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(0,144,202,.35)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '5px 11px', borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                 <Ic d="M12 5v14M5 12h14" s={12} sw={2.4} />Add staff from another unit
               </button>
@@ -2055,7 +2058,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                               {ROS_PATTERNS.map((p) => <option key={p[0]} value={p[0]}>{p[1]}</option>)}
                               <option value="blanks">Fill blanks OFF</option>
                               <option value="clear">Clear row</option>
-                              {guests[x.empId] && <option value="unguest">Remove from this roster</option>}
+                              {guests[x.empId] && rosIsAdmin() && <option value="unguest">Remove from this roster</option>}
                             </select>
                           </div>
                         </td>
@@ -3139,7 +3142,12 @@ function rosSignNames(doc, signers) {
   };
 }
 
-function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, signPeople, colour, summary, cards, legend, pcaNewPage, printedBy }) {
+/* Two designs. The DEFAULT is the official black-and-white sheet: it is photocopied and pinned
+   up, so it must read on any mono printer — black ink, ruled cells, plain codes, and only two
+   greys, far apart: solid for a day off, light + hatched for leave. colourDesign = the
+   letterhead band with coloured shift pills. */
+function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, signPeople, colourDesign, summary, cards, legend, pcaNewPage, printedBy }) {
+  const official = !colourDesign;
   const days = R.daysIn(year, month);
   const ds = Array.from({ length: days }, (_, i) => i + 1);
   const dn = deptName || dept;
@@ -3155,25 +3163,31 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
   ];
   const pill = (code) => {
     if (!code) return '';
+    if (official) return rosEsc(code);
     const b = R.bucketOf(code);
-    if (!colour) return '<span class="k' + (b === 'O' ? ' ko' : '') + '">' + rosEsc(code) + '</span>';
     const c = b === 'O' ? '#6b7a8d' : rosBColor(b);
     return '<span class="k" style="background:' + c + (b === 'O' ? '14' : '1c') + ';color:' + c + '">' + rosEsc(code) + '</span>';
   };
   const fri = (d) => new Date(year, month, d).getDay() === 5;
   const head1 = ds.map((d) => '<th class="d' + (fri(d) ? ' fr' : '') + '">' + d + '</th>').join('');
   const head2 = ds.map((d) => '<th class="w' + (fri(d) ? ' fr' : '') + '">' + rosEsc(String(rosDow(year, month, d)).slice(0, 2)) + '</th>').join('');
-  const sumRow = (label, fn) => '<tr class="sum"><td colspan="3" class="sl">' + label + '</td>'
-    + ds.map((d) => { const v = fn(d); return '<td class="c' + (fri(d) ? ' fr' : '') + '">' + (v || '') + '</td>'; }).join('') + '<td colspan="6"></td></tr>';
+  const sumRow = (label, fn, tail) => '<tr class="sum"><td colspan="3" class="sl">' + label + '</td>'
+    + ds.map((d) => { const v = fn(d); return '<td class="c' + (fri(d) ? ' fr' : '') + '">' + (v || '') + '</td>'; }).join('') + '<td colspan="' + tail + '"></td></tr>';
   // One table per group — nurses, then PCAs — each with its own S/N and its own daily cover.
   const tableFor = (list, title, cls) => {
+    // A G / M / E / N / O total column only when someone in this table has one — a unit that
+    // works no General shift does not print an empty G column. Hrs always.
+    const totOf = (r) => R.totalsFor((grid && grid[r.empId]) || {}, days);
+    const tb = ['G', 'M', 'E', 'N', 'O'].filter((b) => list.some((r) => totOf(r)[b] > 0));
     const body = list.map((r, i) => {
       const row = (grid && grid[r.empId]) || {};
-      const t = R.totalsFor(row, days);
-      const cells = ds.map((d) => '<td class="c' + (fri(d) ? ' fr' : '') + '">' + pill(row[d] || '') + '</td>').join('');
+      const t = totOf(r);
+      // Official sheet: a day off is a solid grey cell, leave a light hatched one.
+      const shade = (c) => (!official || !c ? '' : R.isOff(c) ? ' xo' : R.isLeave(c) ? ' xl' : '');
+      const cells = ds.map((d) => '<td class="c' + (fri(d) ? ' fr' : '') + shade(row[d]) + '">' + pill(row[d] || '') + '</td>').join('');
       return '<tr class="r"><td class="n">' + (i + 1) + '</td><td class="e">' + rosEsc(r.empIdShown || '') + '</td>'
         + '<td class="nm"><b>' + rosEsc(r.name) + '</b>' + (r.desig ? '<span> · ' + rosEsc(r.desig) + '</span>' : '') + '</td>' + cells
-        + ['G', 'M', 'E', 'N', 'O'].map((b) => '<td class="t">' + (t[b] || '') + '</td>').join('')
+        + tb.map((b) => '<td class="t">' + (t[b] || '') + '</td>').join('')
         + '<td class="t h">' + (t.hours || '') + '</td></tr>';
     }).join('');
     const ids = list.map((r) => r.empId);
@@ -3184,12 +3198,12 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     // leave this month does not print an empty line for it.
     const some = (fn) => ds.some((d) => fn(d) > 0);
     const sums = !summary ? '' : [['General on duty', (d) => cov[d].G], ['Morning on duty', (d) => cov[d].M], ['Evening on duty', (d) => cov[d].E],
-      ['Night on duty', (d) => cov[d].N], ['On leave', leaveOn]].filter(([, fn]) => some(fn)).map(([l, fn]) => sumRow(l, fn)).join('');
+      ['Night on duty', (d) => cov[d].N], ['On leave', leaveOn]].filter(([, fn]) => some(fn)).map(([l, fn]) => sumRow(l, fn, tb.length + 1)).join('');
     return '<div class="grp' + (cls ? ' ' + cls : '') + '">' + (title ? '<div class="gt"><span>' + rosEsc(title) + '</span></div>' : '')
-      + '<table><colgroup><col class="n"><col class="e"><col class="nm">' + ds.map(() => '<col class="d">').join('') + '<col class="t"><col class="t"><col class="t"><col class="t"><col class="t"><col class="h"></colgroup>'
+      + '<table class="rt"><colgroup><col class="n"><col class="e"><col class="nm">' + ds.map(() => '<col class="d">').join('') + tb.map(() => '<col class="t">').join('') + '<col class="h"></colgroup>'
       + '<thead><tr><th rowspan="2">S/N</th><th rowspan="2">Emp ID</th><th rowspan="2" style="text-align:left;padding-left:4px">Name · Designation</th>' + head1
-      + '<th rowspan="2">G</th><th rowspan="2">M</th><th rowspan="2">E</th><th rowspan="2">N</th><th rowspan="2">O</th><th rowspan="2">Hrs</th></tr><tr>' + head2 + '</tr></thead>'
-      + '<tbody>' + (body || '<tr><td colspan="' + (days + 9) + '" style="padding:14px;color:#7b8796">No staff on this roster.</td></tr>') + sums + '</tbody></table></div>';
+      + tb.map((b) => '<th rowspan="2">' + b + '</th>').join('') + '<th rowspan="2">Hrs</th></tr><tr>' + head2 + '</tr></thead>'
+      + '<tbody>' + (body || '<tr><td colspan="' + (days + 4 + tb.length) + '" style="padding:14px;color:#7b8796">No staff on this roster.</td></tr>') + sums + '</tbody></table></div>';
   };
   const nurses = rows.filter((r) => !r.pca), pcas = rows.filter((r) => r.pca);
   const tables = pcas.length
@@ -3204,8 +3218,19 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     .map((b) => ({ b, codes: R.SHIFTS.filter((s) => s.bucket === b.id && used.has(s.code)) }))
     .filter((g) => g.codes.length);
   const unknown = [...used].filter((c) => !R.BY_CODE[c]);
-  const legendHtml = !legend ? '' : (!used.size ? '<div class="lgx"><div class="lgh">Shift legend</div><div class="lgn">No shifts entered yet.</div></div>'
-    : '<div class="lgx"><div class="lgh">Shift legend</div><div class="lg">' + groups.map((g) => '<div class="lgb" style="--lc:' + (colour ? (g.b.id === 'O' ? '#6b7a8d14' : rosBColor(g.b.id) + '1c') : '#eef2f6') + '"><b style="color:' + (colour ? rosBColor(g.b.id) : '#16202e') + '">' + rosEsc(g.b.label) + '</b>'
+  // Official: a ruled schedule — Code · Shift · Time · Hours — split into side-by-side tables
+  // of up to 6 rows so a long list does not push the signatures onto another page.
+  const schedRows = [].concat(...groups.map((g) => g.codes.map((x) => g.b.id === 'O'
+    ? [x.code, x.label, '—', '—', R.isOff(x.code) ? 'xo' : R.isLeave(x.code) ? 'xl' : '']
+    : [x.code, g.b.label, x.label, x.hours ? String(x.hours) : '—', '']))).concat(unknown.map((c) => [c, '—', '—', '—', '']));
+  const per = Math.ceil(schedRows.length / Math.max(1, Math.ceil(schedRows.length / 6)));
+  const schedChunks = []; for (let i = 0; i < schedRows.length; i += per) schedChunks.push(schedRows.slice(i, i + per));
+  const officialLegend = '<div class="lgx"><div class="lgh">Shift schedule</div><div class="schs">' + schedChunks.map((ch) => '<table class="sch"><thead><tr><th>Code</th><th>Shift</th><th>Time</th><th>Hrs</th></tr></thead><tbody>'
+      + ch.map(([c, n, t, h, x]) => '<tr><td class="cd' + (x ? ' ' + x : '') + '">' + rosEsc(c) + '</td><td>' + rosEsc(n) + '</td><td>' + rosEsc(t) + '</td><td class="hr">' + rosEsc(h) + '</td></tr>').join('') + '</tbody></table>').join('') + '</div>'
+    + '<div class="key"><span><i class="sw xo"></i>Day off</span><span><i class="sw xl"></i>Leave</span><span><i class="sw"></i>On duty</span></div></div>';
+  const legendHtml = !legend ? '' : (!used.size ? '<div class="lgx"><div class="lgh">' + (official ? 'Shift schedule' : 'Shift legend') + '</div><div class="lgn">No shifts entered yet.</div></div>'
+    : official ? officialLegend
+    : '<div class="lgx"><div class="lgh">Shift legend</div><div class="lg">' + groups.map((g) => '<div class="lgb" style="--lc:' + (g.b.id === 'O' ? '#6b7a8d14' : rosBColor(g.b.id) + '1c') + '"><b style="color:' + rosBColor(g.b.id) + '">' + rosEsc(g.b.label) + '</b>'
         + g.codes.map((s) => '<span><i>' + rosEsc(s.code) + '</i> ' + rosEsc(s.label) + '</span>').join('') + '</div>').join('')
       + (unknown.length ? '<div class="lgb"><b>Other</b>' + unknown.map((c) => '<span><i>' + rosEsc(c) + '</i></span>').join('') + '</div>' : '')
       + '</div></div>');
@@ -3254,7 +3279,7 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     + '.band .mid{text-align:center;position:relative;z-index:1}.band h1{margin:0;font-size:14pt;font-weight:800;letter-spacing:6px;line-height:1.15}'
     + '.band .mo{display:inline-block;margin-top:1px;font-size:8.8pt;font-weight:700;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:12px;padding:0 12px}'
     + '.band .pd{font-size:7pt;opacity:.85;letter-spacing:.5px;margin-top:1px}'
-    + '.band .rt{text-align:right;position:relative;z-index:1}.band .kind{font-size:6.6pt;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;opacity:.8}.band .dp{font-size:15pt;font-weight:800;line-height:1.15}'
+    + '.band .rtx{text-align:right;position:relative;z-index:1}.band .kind{font-size:6.6pt;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;opacity:.8}.band .dp{font-size:15pt;font-weight:800;line-height:1.15}'
     // summary tiles
     + '.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:6px 0 8px;position:relative;z-index:0}'
     + '.tile{border-radius:8px;padding:2px 10px 3px;border:1px solid #e3e9f0;border-left:4px solid var(--c);background:linear-gradient(90deg,var(--bg),#fff 85%)}'
@@ -3283,14 +3308,57 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     + '.signs>div{border:1px solid #e3e9f0;border-top:3px solid var(--sc);border-radius:9px;padding:0 11px 6px;background:linear-gradient(180deg,var(--sb),#fff 45%)}.signs>div:nth-child(1){--sc:#0072a3;--sb:#f1f8fd}.signs>div:nth-child(2){--sc:#5b45c4;--sb:#f5f3fd}.signs>div:nth-child(3){--sc:#1f6f43;--sb:#f0f8f3}'
     + '.signs .sp{height:28px}.signs .ln{border-top:1px solid #16202e;padding-top:4px}.signs .dt{margin-top:6px;font-size:7.4pt;color:#3c4858}'
     + '.signs span{display:block;font-size:6.4pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--sc)}.signs b{display:block;font-size:9pt;color:#0d1b2e}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}'
-    + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}'
-    // Black-and-white copy (Colour off): the same layout in ink only.
-    + 'body.mono .band{background:#fff;color:#0d1b2e;border:1.5px solid #0d1b2e}body.mono .band:after{display:none}body.mono .band .mo{background:#fff;border-color:#0d1b2e}body.mono .band .lg0{box-shadow:none;padding:0}'
-    + 'body.mono .tile{--c:#0d1b2e!important;--bg:#fff!important}body.mono .gt span,body.mono .gp .gt span{background:#0d1b2e}'
-    + 'body.mono th,body.mono .gp th{background:#2b3440!important}body.mono td.fr{background:#f2f2f2!important}body.mono .signs>div{--sc:#0d1b2e!important;--sb:#fff!important}body.mono .notes{background:#fff;border-color:#d9e2ec}body.mono .nb b{color:#0d1b2e}';
-  const html = '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>'
-    + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>'
-    + '<div class="rt"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dn) + '</div></div></header>'
+    + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}';
+  // The official sheet: black ink, 0.75pt rules, two far-apart greys. Every background is kept in
+  // print (print-color-adjust), or a browser would drop the off-day shading.
+  const HATCH = 'repeating-linear-gradient(135deg,transparent 0,transparent 2.5px,rgba(0,0,0,.28) 2.5px,rgba(0,0,0,.28) 3.3px),#e0e0e0';
+  const officialCss = '@page{size:A4 landscape;margin:8mm;@bottom-right{content:"Page " counter(page) " of " counter(pages);font:7pt Arial,sans-serif;color:#000}@bottom-left{content:"Duty Roster · ' + String(dn).replace(/["\\]/g, '') + ' · ' + R.MONTHS[month] + ' ' + year + '";font:7pt Arial,sans-serif;color:#000}}'
+    + '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}'
+    + 'body{font:8pt/1.3 Arial,"Segoe UI",sans-serif;color:#000;margin:0;padding:12px;background:#fff}@media print{body{padding:0}}'
+    // letterhead
+    + '.lh{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;padding-bottom:3px}.lh img{height:32px;display:block}'
+    + '.lhm{text-align:center}.lhm .org{font-size:11.5pt;font-weight:700;letter-spacing:.4px}.lhm .dv{font-size:7.5pt;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#333}.lhm h1{margin:2px 0 0;font-size:15pt;font-weight:800;letter-spacing:5px}'
+    // Grids: one border per cell side (right + bottom) inside a framed table, never
+    // border-collapse — html2canvas (the PDF) draws collapsed borders as two lines with a gap.
+    + 'table.rt,.meta,.sch{border-collapse:separate;border-spacing:0;border-top:.75pt solid #000;border-left:.75pt solid #000}'
+    + '.rt th,.rt td,.meta th,.meta td,.sch th,.sch td{border:0;border-right:.75pt solid #000;border-bottom:.75pt solid #000}'
+    + '.lhr{justify-self:end}.meta{font-size:7.5pt}.meta th{text-align:left;font-weight:700;padding:1px 6px;background:#e0e0e0}.meta td{padding:1px 8px;font-weight:700;min-width:40mm}'
+    + '.rule{border-top:2pt solid #000;border-bottom:.6pt solid #000;height:3.5px;margin:1px 0 6px}'
+    // summary strip
+    + '.tiles{display:grid;grid-template-columns:repeat(5,1fr);border:1.25pt solid #000;margin:0 0 6px}.tile{padding:2px 7px 3px;border-left:.75pt solid #000}.tile:first-child{border-left:0}'
+    + '.tile span{display:block;font-size:6.6pt;font-weight:800;letter-spacing:1px;text-transform:uppercase}.tile b{font-size:11pt;font-weight:800;margin-right:5px}.tile i{font-style:normal;font-size:7pt;color:#333}'
+    // the roster
+    + '.gt{margin:6px 0 3px}.gt span{font-size:8pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;border-bottom:1.25pt solid #000;padding-bottom:1px}.grp.np{page-break-before:always}'
+    + 'table.rt{width:100%;table-layout:fixed;outline:.6pt solid #000}thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}'
+    + '.rt th{background:#d0d0d0;color:#000;font-weight:700;font-size:7pt;padding:2px 0}.rt th.w{font-weight:700;font-size:6.6pt;background:#e8e8e8;padding:1px 0}'
+    + '.rt th.fr{background:#000;color:#fff;font-weight:800}'
+    + '.rt td{text-align:center;padding:0;height:14px;color:#000}.rt td.c{font-size:7.5pt;font-weight:700;letter-spacing:-.1px}'
+    + '.rt td.xo{background:#b3b3b3;font-weight:800}.rt td.xl{background:' + HATCH + ';font-style:italic;font-weight:800}'
+    + 'td.n,td.e{font-size:7pt}td.nm{text-align:left;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{font-size:8pt}td.nm span{font-size:7pt;color:#333}'
+    + 'td.t{font-size:7.5pt;font-weight:600}td.h{font-weight:800}'
+    + 'col.n{width:6mm}col.e{width:12mm}col.nm{width:46mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}'
+    + 'tr.sum td{font-size:7pt;font-weight:700;height:12px}tr.sum:first-of-type td{border-top:.75pt solid #000}tr.sum td.sl{text-align:right;padding-right:6px}'
+    // schedule, notes, signatures
+    + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lgx{border:1.25pt solid #000;padding:4px 8px 5px;break-inside:avoid;page-break-inside:avoid}'
+    + '.lgh{font-size:7.5pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;margin-bottom:3px}.lgn{font-size:7.5pt}'
+    + '.schs{display:flex;gap:8px;align-items:flex-start}.sch{font-size:7pt;flex:1 1 0;min-width:0}.sch th{background:#d0d0d0;padding:1px 4px;text-align:left;font-weight:700}'
+    + '.sch td{padding:1px 4px}.sch td.cd{font-weight:800;text-align:center;width:9mm}.sch td.hr{text-align:center;width:8mm}.sch td.xo{background:#b3b3b3}.sch td.xl{background:' + HATCH + ';font-style:italic}'
+    + '.key{margin-top:4px;font-size:7pt;font-weight:700;display:flex;gap:16px;align-items:center}.sw{display:inline-block;width:15px;height:9px;border:.75pt solid #000;vertical-align:-1px;margin-right:4px;background:#fff}.sw.xo{background:#b3b3b3}.sw.xl{background:' + HATCH + '}'
+    + '.notes{border:1.25pt solid #000;padding:4px 8px}.nb{font-size:7.5pt}.rm{margin-top:4px;font-size:7.5pt;border-bottom:.75pt dotted #000;height:15px}'
+    + '.foot{page-break-inside:avoid;break-inside:avoid}'
+    + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:10px;page-break-inside:avoid;break-inside:avoid}.signs>div{padding:0 2px}.signs .sp{height:30px}'
+    + '.signs .ln{border-top:1pt solid #000;padding-top:3px}.signs span{display:block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase}.signs b{display:block;font-size:9pt}.signs em{display:block;font-style:normal;font-size:7.5pt;color:#333}.signs .dt{margin-top:5px;font-size:7.5pt}'
+    + '.end{margin-top:6px;padding-top:3px;border-top:.75pt solid #000;display:flex;justify-content:space-between;font-size:7pt}';
+  const stLabel = (ROS_STATUS[rosStatusNorm(doc ? doc.status : null)] || {}).label || 'Draft';
+  const head = official
+    ? '<header class="lh"><div><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></div>'
+      + '<div class="lhm"><div class="org">UNICO Hospitals PLC</div><div class="dv">Nursing Services</div><h1>DUTY ROSTER</h1></div>'
+      + '<div class="lhr"><table class="meta"><tr><th>Department</th><td>' + rosEsc(dn) + '</td></tr><tr><th>Month</th><td>' + rosEsc(R.MONTHS[month] + ' ' + year) + '</td></tr>'
+      + '<tr><th>Period</th><td>' + rosEsc(period) + '</td></tr><tr><th>Status</th><td>' + rosEsc(stLabel + (doc && doc.revision ? ' · Rev ' + doc.revision : '')) + '</td></tr></table></div></header><div class="rule"></div>'
+    : '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>'
+      + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>'
+      + '<div class="rtx"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dn) + '</div></div></header>';
+  const html = head
     + (cards !== false ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>')
     + tables
     // Legend and notes side by side, and kept on the same page as the signatures.
@@ -3300,7 +3368,7 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
       + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>'
     + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>'
     + '</div>';
-  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + css + '</style></head><body' + (colour ? '' : ' class="mono"') + '>' + html + '</body></html>';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + (official ? officialCss : css) + '</style></head><body>' + html + '</body></html>';
 }
 
 const ROS_PRINT_OPT_KEY = 'unico_roster_print_opts_v1';
@@ -3346,7 +3414,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [opt, setOpt] = useState(() => {
-    const d = { colour: true, summary: true, cards: true, legend: true, pcaNewPage: false };
+    const d = { colourDesign: false, summary: true, cards: true, legend: true, pcaNewPage: false };
     try { return { ...d, ...(JSON.parse(localStorage.getItem(ROS_PRINT_OPT_KEY) || '{}') || {}) }; } catch (e) { return d; }
   });
   const [busy, setBusy] = useState(false);
@@ -3476,7 +3544,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
           </div>
           <RosStatusChip st={doc ? doc.status : null} />
           <div style={{ flex: 1 }} />
-          {tog('colour', 'Colour codes')}
+          {tog('colourDesign', 'Colour version')}
           {tog('cards', 'Summary cards')}
           {tog('summary', 'Daily cover rows')}
           {tog('legend', 'Shift legend')}
