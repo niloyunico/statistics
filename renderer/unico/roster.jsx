@@ -1279,7 +1279,7 @@ function RosAddStaff({ dept, year, month, onClose, onAdd, onRoster }) {
               </div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {pill('both', 'Keep on both rosters', 'Also stays on the ' + (pick.unit || 'home') + ' roster')}
-                {pill('move', 'Only on this roster', 'Off the ' + (pick.unit || 'home') + ' roster for ' + monthName)}
+                {pill('move', 'Only on this roster', 'Off the ' + (pick.unit || 'home') + ' roster from ' + monthName + ' on')}
               </div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
                 <button type="button" className="btn sm" onClick={onClose}>Cancel</button>
@@ -1363,6 +1363,15 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   // Staff added from another unit ({ 'S<id>': { from, mode, name, desig, emp } }), and this
   // unit's people moved onto another unit's sheet this month (left off here unless they have shifts).
   const [guests, setGuests] = useState({});
+  // Added on an earlier month and still on this unit (server: carriedGuests), and the ones this
+  // sheet takes off (from this month on). On the sheet = carried − taken off + this sheet's own.
+  const [carried, setCarried] = useState({});
+  const [guestsOff, setGuestsOff] = useState([]);
+  const allGuests = useMemo(() => {
+    const out = {};
+    Object.keys(carried).forEach((k) => { if (guestsOff.indexOf(k) < 0) out[k] = carried[k]; });
+    return Object.assign(out, guests);
+  }, [carried, guestsOff, guests]);
   // Beside the codes: on-call marks on top of a duty shift ({ empId: { day: 1 } }) and the date
   // each Alternative Leave stands in for ({ empId: { day: { for: 'YYYY-MM-DD', note } } }).
   const [oncall, setOncall] = useState({});
@@ -1380,8 +1389,8 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       .map((e) => rosRowOf(e))
       .filter((r) => !moved.has(r.empId) || Object.keys(grid[r.empId] || {}).length);
     const have = new Set(home.map((r) => r.empId));
-    return home.concat(Object.keys(guests).filter((k) => !have.has(k)).map((k) => (byKey[k] ? rosRowOf(byKey[k]) : rosGuestRow(k, guests[k]))));
-  }, [staffStore.staff, dept, members, guests, movedOut, grid]);
+    return home.concat(Object.keys(allGuests).filter((k) => !have.has(k)).map((k) => (byKey[k] ? rosRowOf(byKey[k]) : rosGuestRow(k, allGuests[k]))));
+  }, [staffStore.staff, dept, members, allGuests, movedOut, grid]);
 
   const rows = useMemo(() => {
     const byId = {}; staff.forEach((x) => { byId[x.empId] = x; });
@@ -1439,6 +1448,8 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       setOrderManual(!!(d && d.rules && d.rules.orderManual));
       setStoredNames((d && d.names) || {});
       setGuests((d && d.guests) || {});
+      setCarried((r.guestsCarried && typeof r.guestsCarried === 'object') ? r.guestsCarried : {});
+      setGuestsOff((d && Array.isArray(d.guestsRemoved)) ? d.guestsRemoved : []);
       setOncall((d && d.oncall) || {});
       setMarks((d && d.marks) || {});
       setAltLeave((d && d.altLeave) || {});
@@ -1564,9 +1575,11 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     }
     if (!canEdit || !v) { if (v) editBlocked(); return; }
     if (v === 'unguest') {
-      const g = guests[empId]; if (!g || !rosIsAdmin()) return;
-      if (!window.confirm('Take ' + (g.name || 'this person') + ' off this roster? Their shifts on this sheet are cleared' + (g.mode === 'move' ? ' and they go back on the ' + (g.from || 'home') + ' roster.' : '.'))) return;
+      const g = allGuests[empId]; if (!g || !rosIsAdmin()) return;
+      if (!window.confirm('Take ' + (g.name || 'this person') + ' off this roster from this month on? Their shifts on this sheet are cleared' + (g.mode === 'move' ? ' and they go back on the ' + (g.from || 'home') + ' roster.' : '.') + ' Earlier months keep them.')) return;
       setGuests((m) => { const n = { ...m }; delete n[empId]; return n; });
+      // Added on an earlier month: taken off from this month on (earlier months keep them).
+      if (carried[empId]) setGuestsOff((l) => (l.indexOf(empId) >= 0 ? l : l.concat([empId])));
       setOrder((o) => o.filter((k) => k !== empId));
       setCells((gr) => { const n = { ...gr }; delete n[empId]; return n; });
       return;
@@ -1646,7 +1659,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const save = (nextStatus, quiet) => {
     setBusy(true);
     return rosApi.put('/api/rosters', {
-      dept, deptName: dept, year, month, grid, order: rows.map((r) => r.empId), guests, oncall, altLeave,
+      dept, deptName: dept, year, month, grid, order: rows.map((r) => r.empId), guests, guestsRemoved: guestsOff, oncall, altLeave,
       // Which revision these edits were made on: the server refuses the save if someone
       // saved since, instead of this whole grid erasing their cells.
       baseRevision: rev,
@@ -1973,9 +1986,10 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                 onAdd={(p, mode) => {
                   const k = 'S' + String(p.id);
                   setGuests((m) => ({ ...m, [k]: { from: p.unit || p.current_department || '', mode, name: p.name || '', desig: p.designation || '', emp: p.emp_id || '' } }));
+                  setGuestsOff((l) => l.filter((x) => x !== k));
                   setOrder((o) => (o.indexOf(k) >= 0 ? o : o.concat([k])));
                   setDirty(true); setAddOpen(false);
-                  rosToast((p.name || 'Staff') + ' added to ' + dept + (mode === 'move' ? ' — off the ' + (p.unit || 'home') + ' roster this month.' : '.'));
+                  rosToast((p.name || 'Staff') + ' added to ' + dept + ' from this month on' + (mode === 'move' ? ' — off the ' + (p.unit || 'home') + ' roster.' : '.'));
                 }} />
             )}
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -2105,7 +2119,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                               {ROS_PATTERNS.map((p) => <option key={p[0]} value={p[0]}>{p[1]}</option>)}
                               <option value="blanks">Fill blanks OFF</option>
                               <option value="clear">Clear row</option>
-                              {guests[x.empId] && rosIsAdmin() && <option value="unguest">Remove from this roster</option>}
+                              {allGuests[x.empId] && rosIsAdmin() && <option value="unguest">Remove from this roster</option>}
                             </select>
                           </div>
                         </td>
@@ -3490,7 +3504,13 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
   return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + (official ? officialCss : css) + '</style></head><body>' + html + '</body></html>';
 }
 
-const ROS_PRINT_OPT_KEY = 'unico_roster_print_opts_v1';
+// Per browser: a 'unico_*' key is synced to the server and shared by everyone, so one person
+// ticking "Summary cards" turned them on for the whole hospital. The cards start hidden; the
+// other choices come over once from the old shared key.
+const ROS_PRINT_OPT_KEY = 'unicoRosterPrintOpts.v2';
+const ROS_PRINT_OPT_OLD = 'unico_roster_print_opts_v1';
+// The sheet's added staff: its own plus those carried from earlier months (month GET).
+const rosSheetGuests = (r) => ({ ...((r && r.guestsCarried) || {}), ...((r && r.roster && r.roster.guests) || {}) });
 /* One sign-off box on the print page: a search over the staff register. Only a real person
    can be picked — typed text that matches no one falls back to the current pick on blur.
    The list is portalled: the toolbar is a .card, whose backdrop-filter would clip it. */
@@ -3529,12 +3549,19 @@ const rosSignLine = (e) => [window.staffCanonDesig ? window.staffCanonDesig(e.de
   .filter(Boolean).join(', ');
 function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const [doc, setDoc] = useState(null);
+  // A month not prepared yet still lists the staff carried from earlier months (and not the ones moved away).
+  const [side, setSide] = useState(null);
   const [signers, setSigners] = useState({});
   const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [opt, setOpt] = useState(() => {
-    const d = { colourDesign: false, summary: true, cards: true, legend: true, pcaNewPage: false };
-    try { return { ...d, ...(JSON.parse(localStorage.getItem(ROS_PRINT_OPT_KEY) || '{}') || {}) }; } catch (e) { return d; }
+    const d = { colourDesign: false, summary: true, cards: false, legend: true, pcaNewPage: false };
+    try {
+      const now = localStorage.getItem(ROS_PRINT_OPT_KEY);
+      if (now) return { ...d, ...(JSON.parse(now) || {}) };
+      const { cards, ...old } = JSON.parse(localStorage.getItem(ROS_PRINT_OPT_OLD) || '{}') || {};   // eslint-disable-line no-unused-vars
+      return { ...d, ...old };
+    } catch (e) { return d; }
   });
   const [busy, setBusy] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
@@ -3542,7 +3569,8 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month)
       .then((r) => {
-        setDoc(r && r.ok && r.roster ? { ...r.roster, movedOut: r.movedOut || [] } : null);
+        setDoc(r && r.ok && r.roster ? { ...r.roster, movedOut: r.movedOut || [], guests: rosSheetGuests(r) } : null);
+        setSide(r && r.ok ? { movedOut: r.movedOut || [], guests: rosSheetGuests(r) } : null);
         setSigners((r && r.ok && r.signers) || {});
         setCan((r && r.ok && ((r.roster && r.roster.can) || r.can)) || null);
         setLoading(false);
@@ -3550,7 +3578,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   }, [dept, year, month]);
   useEffect(() => { try { localStorage.setItem(ROS_PRINT_OPT_KEY, JSON.stringify(opt)); } catch (e) { /* private window */ } }, [opt]);
 
-  const view = useMemo(() => rosRowsFrom(doc, staffStore.staff, dept, undefined, signers.incharge && signers.incharge.name), [doc, staffStore.staff, dept, signers]);
+  const view = useMemo(() => rosRowsFrom(doc || side, staffStore.staff, dept, undefined, signers.incharge && signers.incharge.name), [doc, side, staffStore.staff, dept, signers]);
   const me = (window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username)) || '';
   const deptName = rosDeptName(dept);
   /* Sign-off: Setup's names (same rule as the screen) until someone is picked from the register
@@ -3751,7 +3779,7 @@ window.UNICO_ROSTER_KIT = {
   useRosterIndex, useRosterScope, useRosterStaff, useRosterConfig, loadConfig: rosLoadConfig, useRosDecide,
   ROS_STATUS, ROS_ACTIONS, ROS_HIST_LABEL, ROS_EDITABLE, statusNorm: rosStatusNorm,
   RosStatusChip, RosDecisionButtons, RosHistoryTimeline, RosReturnedBanner, RosDrawer, RosSheetTable, RosSignOff, RosVersions,
-  rulesOf: rosRulesOf, findingsOf: rosFindingsOf, rowsFrom: rosRowsFrom, printHtml: rosPrintHtml,
+  rulesOf: rosRulesOf, findingsOf: rosFindingsOf, rowsFrom: rosRowsFrom, sheetGuests: rosSheetGuests, printHtml: rosPrintHtml,
   deptName: rosDeptName, signNames: rosSignNames, signLine: rosSignLine, RosMarkList,
   OC_BADGE: ROS_OC_BADGE, AL_DOT: ROS_AL_DOT, MARK_CORNER: ROS_MARK_CORNER, date: rosDate,
   bColor: rosBColor, MONO: ROS_MONO,

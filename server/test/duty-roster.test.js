@@ -411,6 +411,29 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/6')).body.movedOut, ['S5'], 'a moved guest is left off the home sheet that month');
     assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/5')).body.movedOut, [], 'and only that month');
     assert.deepEqual((await call('GET', '/api/rosters/CCU/2026/6')).body.movedOut, [], 'and only their home unit');
+    // Added staff stay on the unit's later months until a sheet takes them off.
+    const carried = async (m) => Object.keys((await call('GET', '/api/rosters/NICU/2026/' + m)).body.guestsCarried || {});
+    assert.deepEqual(await carried(7), ['S5'], 'next month (not drafted yet) carries the added person');
+    assert.deepEqual(await carried(9), ['S5'], 'and so does a later month already drafted');
+    assert.deepEqual(await carried(5), [], 'an earlier month never does');
+    assert.deepEqual(await carried(6), [], 'the month that added them has them on the sheet, not carried');
+    assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/7')).body.movedOut, ['S5'], '"only on this roster" keeps them off the home sheet in the later months too');
+    let off = await call('PUT', '/api/rosters', { dept: 'NICU', year: 2026, month: 7, grid: {}, order: [], guests: {}, guestsRemoved: ['S5', 'junk'], baseRevision: 0 });
+    assert.equal(off.status, 200, JSON.stringify(off.body));
+    assert.deepEqual(off.body.roster.guestsRemoved, ['S5'], 'removals are cleaned');
+    assert.deepEqual([await carried(7), await carried(8)], [[], []], 'taken off in July: gone from July on');
+    assert.deepEqual(Object.keys((await call('GET', '/api/rosters/NICU/2026/6')).body.roster.guests), ['S5'], 'June keeps them');
+    assert.deepEqual((await call('GET', '/api/rosters/MICU/2026/8')).body.movedOut, [], 'and the home sheet has them back');
+    off = await call('PUT', '/api/rosters', { dept: 'NICU', year: 2026, month: 7, grid: {}, order: [], guests: {}, guestsRemoved: [], baseRevision: 1 }, 'shirin');
+    assert.equal(off.status, 200, JSON.stringify(off.body));
+    assert.deepEqual(off.body.roster.guestsRemoved, ['S5'], 'only an administrator adds or takes off: an in-charge save keeps the stored removals');
+    // The rule itself: oldest first, additions in, removals out, re-adding works.
+    const sh = (m, guests, rem) => ({ dept: 'Ward', year: 2027, month: m, guests, guestsRemoved: rem || [] });
+    const G = (mode) => ({ from: 'X', mode });
+    const cg = (list, m) => Object.keys(roster.carriedGuests(list, 'ward', 2027, m)).sort();
+    const list = [sh(3, { S9: G('both') }), sh(0, { S1: G('both'), S2: G('move') }), sh(1, {}, ['S1']), sh(2, { S1: G('move') })];
+    assert.deepEqual([cg(list, 0), cg(list, 1), cg(list, 2), cg(list, 3), cg(list, 5)], [[], ['S2'], ['S2'], ['S1', 'S2'], ['S1', 'S2', 'S9']]);
+    assert.equal(roster.carriedGuests(list, 'Ward', 2027, 4).S1.mode, 'move', 'the latest addition wins');
     // On call + Alternative-leave details travel with the sheet — only where the cell still matches.
     let ex = await call('PUT', '/api/rosters', { dept: 'CCU', year: 2027, month: 4, grid: { S1: { 1: 'G1', 2: 'OC', 3: 'AL', 4: 'AL', 5: 'M4' } }, order: ['S1'],
       oncall: { S1: { 1: 1, 2: 1, 9: 1 } }, altLeave: { S1: { 3: { for: '2027-03-16', note: 'Holiday duty' }, 4: { for: 'nonsense' }, 5: { for: '2027-03-20' } } }, baseRevision: 0 });

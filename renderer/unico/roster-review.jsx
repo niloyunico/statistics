@@ -427,12 +427,12 @@ function RiPreview({ row, year, month, staff, onBack, onDecide, busy, setRoute }
   const rulesRef = useRef(null), sheetRef = useRef(null), checkRef = useRef(null);
   const dept = row.sheetDept || row.deptName;
   const load = useCallback(() => K.api.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then((r) => {
-    if (r && r.ok) { setDoc(r.roster ? { ...r.roster, movedOut: r.movedOut || [] } : null); setExtra({ signers: r.signers || {}, can: (r.roster && r.roster.can) || r.can || null }); setErr(''); }
+    if (r && r.ok) { setDoc(r.roster ? { ...r.roster, movedOut: r.movedOut || [], guests: K.sheetGuests(r) } : null); setExtra({ signers: r.signers || {}, can: (r.roster && r.roster.can) || r.can || null }); setErr(''); }
     else setErr((r && r.error) || 'Could not load the sheet.');
   }).catch(() => setErr('Could not reach the server.')), [dept, year, month]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
   // A mark or a direct change answers with the sheet as it now stands.
-  const take = (r) => { if (r && r.ok && r.roster) { setDoc((d) => ({ ...r.roster, movedOut: (d && d.movedOut) || [] })); setExtra((e) => ({ ...e, can: r.roster.can || e.can, signers: r.roster.signers || e.signers })); return true; } K.toast((r && r.error) || 'Could not save that.', 'error'); return false; };
+  const take = (r) => { if (r && r.ok && r.roster) { setDoc((d) => ({ ...r.roster, movedOut: (d && d.movedOut) || [], guests: { ...((d && d.guests) || {}), ...(r.roster.guests || {}) } })); setExtra((e) => ({ ...e, can: r.roster.can || e.can, signers: r.roster.signers || e.signers })); return true; } K.toast((r && r.error) || 'Could not save that.', 'error'); return false; };
 
   // The snapshots taken at each hand-over — the sheet is compared with the newest one before now.
   const docId = doc && doc.id, docRev = doc ? (doc.revision || 0) : 0;
@@ -486,7 +486,7 @@ function RiPreview({ row, year, month, staff, onBack, onDecide, busy, setRoute }
       signPeople = {};
       ['prepared', 'checked', 'approved'].forEach((k) => { const e = byName(def[k]); signPeople[k] = e ? { name: e.name, line: K.signLine(e) || role[k] } : { name: def[k], line: role[k] }; });
     }
-    return K.printHtml({ dept, deptName, year, month, doc, rows: view.rows, grid: view.grid, signers: extra.signers, signPeople, colourDesign: false, summary: true, cards: true, legend: true, printedBy: me });
+    return K.printHtml({ dept, deptName, year, month, doc, rows: view.rows, grid: view.grid, signers: extra.signers, signPeople, colourDesign: false, summary: true, cards: false, legend: true, printedBy: me });
   }, [doc, view, extra, dept, deptName, year, month, me, staff]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const st = K.statusNorm(doc ? doc.status : null);

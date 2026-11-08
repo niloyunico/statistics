@@ -97,8 +97,9 @@ function normGrid(input) {
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k) && o[k] !== undefined;
 
 /* Staff from another unit put on this sheet ("guests"): `both` = also on their home roster
-   (floating / borrowed duty), `move` = on this roster only, for this month. Keyed like grid
-   rows ('S' + staff id); bounded. */
+   (floating / borrowed duty), `move` = on this roster only. Keyed like grid rows
+   ('S' + staff id); bounded. Once added they stay on the unit's later months too
+   (carriedGuests) until a later sheet takes them off (`guestsRemoved`). */
 function normGuests(v) {
   const src = obj(v), out = {};
   Object.keys(src).slice(0, 100).forEach((k) => {
@@ -107,6 +108,30 @@ function normGuests(v) {
     out[key] = { from: s(g.from, 120), mode: g.mode === 'move' ? 'move' : 'both', name: s(g.name, 120), desig: s(g.desig, 120), emp: s(g.emp, 40) };
   });
   return out;
+}
+const normGuestKeys = (v) => [...new Set((Array.isArray(v) ? v : []).map((k) => s(k, 40)).filter((k) => /^S\S+$/.test(k)))].slice(0, 200);
+const monthNo = (y, m) => Number(y) * 12 + Number(m);
+/* The staff added from another unit that a unit's month M inherits from its earlier sheets:
+   oldest first, each sheet's additions in, its removals out — then month M's own removals.
+   Month M's own additions are not in it (they are on the sheet). Pure: `sheets` is listAll(). */
+function carriedGuests(sheets, dept, year, month) {
+  const unit = String(dept || '').trim().toLowerCase();
+  const at = monthNo(year, month);
+  const mine = (sheets || []).filter((d) => d && String(d.dept || '').trim().toLowerCase() === unit);
+  const acc = {};
+  mine.filter((d) => monthNo(d.year, d.month) < at)
+    .sort((a, b) => monthNo(a.year, a.month) - monthNo(b.year, b.month))
+    .forEach((d) => {
+      const g = obj(d.guests);
+      Object.keys(g).forEach((k) => { acc[k] = g[k]; });
+      normGuestKeys(d.guestsRemoved).forEach((k) => { delete acc[k]; });
+    });
+  const self = mine.find((d) => monthNo(d.year, d.month) === at);
+  if (self) {
+    normGuestKeys(self.guestsRemoved).forEach((k) => { delete acc[k]; });
+    Object.keys(obj(self.guests)).forEach((k) => { delete acc[k]; });
+  }
+  return acc;
 }
 /* What a cell can carry beside its code: an on-call mark on top of a shift, and the date an
    Alternative Leave stands in for (+ an optional reason). Each is kept only where the cell
@@ -159,6 +184,7 @@ function normRoster(input, existing) {
     }()),
     rules: has(i, 'rules') ? obj(i.rules) : obj(prev.rules),
     guests: has(i, 'guests') ? normGuests(i.guests) : normGuests(prev.guests),
+    guestsRemoved: has(i, 'guestsRemoved') ? normGuestKeys(i.guestsRemoved) : normGuestKeys(prev.guestsRemoved),
     // Review marks are written only by POST /api/rosters/:id/marks — a save keeps the stored ones.
     marks: obj(prev.marks),
     // A SAVE never changes the status: every hand-over is a transition (applyTransition),
@@ -355,17 +381,36 @@ async function listAll() {
 }
 // This unit's people who were MOVED onto another unit's sheet for the same month — the home
 // sheet leaves them off (a guest added with "keep on both" stays on both).
-async function movedOutOf(dept, year, month) {
+async function movedOutOf(dept, year, month, sheets) {
   const home = String(dept || '').trim().toLowerCase();
   const out = new Set();
   try {
-    (await listAll()).forEach((d) => {
-      if (!d || d.year !== year || d.month !== month || String(d.dept || '').trim().toLowerCase() === home) return;
-      const g = obj(d.guests);
+    const all = sheets || await listAll();
+    // Every other unit with a sheet up to this month may carry someone forward.
+    const units = {};
+    all.forEach((d) => {
+      const u = d && String(d.dept || '').trim().toLowerCase();
+      if (!u || u === home || monthNo(d.year, d.month) > monthNo(year, month)) return;
+      units[u] = d.dept;
+    });
+    Object.keys(units).forEach((u) => {
+      const self = all.find((d) => d && String(d.dept || '').trim().toLowerCase() === u && d.year === year && d.month === month);
+      const g = Object.assign({}, carriedGuests(all, units[u], year, month), obj(self && self.guests));
       Object.keys(g).forEach((k) => { if (g[k] && g[k].mode === 'move' && String(g[k].from || '').trim().toLowerCase() === home) out.add(k); });
     });
   } catch (e) { /* no sheets */ }
   return [...out];
+}
+// carriedGuests for the month GET, without people who have since left the register.
+async function carriedFor(dept, year, month, sheets) {
+  const acc = carriedGuests(sheets || await listAll(), dept, year, month);
+  if (!Object.keys(acc).length) return acc;
+  let reg = null;
+  try { reg = await require('./staff-roster').loadRoster({ cached: true }); } catch (e) { reg = null; }
+  if (!Array.isArray(reg) || !reg.length) return acc;
+  const gone = new Set(reg.filter((p) => p && p.id != null && (p.former || p.is_active === false)).map((p) => 'S' + String(p.id)));
+  Object.keys(acc).forEach((k) => { if (gone.has(k)) delete acc[k]; });
+  return acc;
 }
 async function getOne(id) {
   const c = await col();
@@ -1121,9 +1166,13 @@ function mount(app, opts) {
       const id = rosterId(dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
       const doc = publishedOnly(req, [await getOne(id)].filter(Boolean))[0] || null;   // null when never drafted (or not published, to a collector)
       const d = await decorate(req, doc, { dept, status: 'draft', revision: 0 });
-      const movedOut = await movedOutOf(dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
-      if (!doc) return res.json({ ok: true, roster: null, signers: d.signers, can: d.can, members: d.members, movedOut });
-      res.json({ ok: true, roster: d, signers: d.signers, can: d.can, members: d.members, movedOut });
+      const yr = parseInt(req.params.year, 10), mo = parseInt(req.params.month, 10);
+      const sheets = await listAll();
+      const movedOut = await movedOutOf(dept, yr, mo, sheets);
+      // Staff added on this unit's earlier months who are still on it (until a sheet takes them off).
+      const guestsCarried = await carriedFor(dept, yr, mo, sheets);
+      if (!doc) return res.json({ ok: true, roster: null, signers: d.signers, can: d.can, members: d.members, movedOut, guestsCarried });
+      res.json({ ok: true, roster: d, signers: d.signers, can: d.can, members: d.members, movedOut, guestsCarried });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the roster.' }); }
   });
 
@@ -1160,7 +1209,10 @@ function mount(app, opts) {
       const doc = normRoster(b, existing);
       // Who is on the sheet from another unit is an administrator's call: anyone else's save keeps
       // the stored list as it is — nobody added, nobody taken off — whatever the request carries.
-      if (!admin) doc.guests = normGuests(existing ? existing.guests : {});
+      if (!admin) {
+        doc.guests = normGuests(existing ? existing.guests : {});
+        doc.guestsRemoved = normGuestKeys(existing ? existing.guestsRemoved : []);
+      }
       // Keys a legacy client still sends that a save no longer honours — reported, not refused.
       const ignored = [];
       if (has(b, 'status') && s(b.status) !== doc.status && s(b.status) !== 'submitted') ignored.push('status');
@@ -1227,7 +1279,7 @@ module.exports = {
   mount, COLL, VER_COLL, CFG_COLL, STATUSES, rosterId, normGrid,
   effStatus: W.effStatus, rawStatuses: W.rawStatuses, resumeOnEdit: W.resumeOnEdit, PENDING: W.PENDING, EDITABLE: W.EDITABLE, HISTORY_CAP: W.HISTORY_CAP,
   applyTransition, getConfig, deptIndex, deptKeyOf, getOne, decorate, actorOf, isUnitIncharge,
-  TRAINEE_UNIT, TRAINEE_ID, MANAGER_UNIT, SUPERVISOR_UNIT, isTraineeNurse, isNurseManager, rosterUnitOf, movedOutOf, normGuests,
+  TRAINEE_UNIT, TRAINEE_ID, MANAGER_UNIT, SUPERVISOR_UNIT, isTraineeNurse, isNurseManager, rosterUnitOf, movedOutOf, normGuests, carriedGuests, normGuestKeys,
   // The in-memory store, for the tests to plant a legacy row in.
   __mem: () => mem,
 };
