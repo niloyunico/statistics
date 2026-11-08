@@ -2885,7 +2885,7 @@ function RosAddStaff({
       gap: 8,
       flexWrap: 'wrap'
     }
-  }, pill('both', 'Keep on both rosters', 'Also stays on the ' + (pick.unit || 'home') + ' roster'), pill('move', 'Only on this roster', 'Off the ' + (pick.unit || 'home') + ' roster for ' + monthName)), React.createElement("div", {
+  }, pill('both', 'Keep on both rosters', 'Also stays on the ' + (pick.unit || 'home') + ' roster'), pill('move', 'Only on this roster', 'Off the ' + (pick.unit || 'home') + ' roster from ' + monthName + ' on')), React.createElement("div", {
     style: {
       display: 'flex',
       justifyContent: 'flex-end',
@@ -2968,6 +2968,15 @@ function RosterGrid({
   const toastTimer = useRef(null);
   const [members, setMembers] = useState(null);
   const [guests, setGuests] = useState({});
+  const [carried, setCarried] = useState({});
+  const [guestsOff, setGuestsOff] = useState([]);
+  const allGuests = useMemo(() => {
+    const out = {};
+    Object.keys(carried).forEach(k => {
+      if (guestsOff.indexOf(k) < 0) out[k] = carried[k];
+    });
+    return Object.assign(out, guests);
+  }, [carried, guestsOff, guests]);
   const [oncall, setOncall] = useState({});
   const [altLeave, setAltLeave] = useState({});
   const [marks, setMarks] = useState({});
@@ -2982,8 +2991,8 @@ function RosterGrid({
     });
     const home = (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : R.unitOf(e) === dept)).map(e => rosRowOf(e)).filter(r => !moved.has(r.empId) || Object.keys(grid[r.empId] || {}).length);
     const have = new Set(home.map(r => r.empId));
-    return home.concat(Object.keys(guests).filter(k => !have.has(k)).map(k => byKey[k] ? rosRowOf(byKey[k]) : rosGuestRow(k, guests[k])));
-  }, [staffStore.staff, dept, members, guests, movedOut, grid]);
+    return home.concat(Object.keys(allGuests).filter(k => !have.has(k)).map(k => byKey[k] ? rosRowOf(byKey[k]) : rosGuestRow(k, allGuests[k])));
+  }, [staffStore.staff, dept, members, allGuests, movedOut, grid]);
   const rows = useMemo(() => {
     const byId = {};
     staff.forEach(x => {
@@ -3048,6 +3057,8 @@ function RosterGrid({
       setOrderManual(!!(d && d.rules && d.rules.orderManual));
       setStoredNames(d && d.names || {});
       setGuests(d && d.guests || {});
+      setCarried(r.guestsCarried && typeof r.guestsCarried === 'object' ? r.guestsCarried : {});
+      setGuestsOff(d && Array.isArray(d.guestsRemoved) ? d.guestsRemoved : []);
       setOncall(d && d.oncall || {});
       setMarks(d && d.marks || {});
       setAltLeave(d && d.altLeave || {});
@@ -3216,9 +3227,9 @@ function RosterGrid({
       return;
     }
     if (v === 'unguest') {
-      const g = guests[empId];
+      const g = allGuests[empId];
       if (!g || !rosIsAdmin()) return;
-      if (!window.confirm('Take ' + (g.name || 'this person') + ' off this roster? Their shifts on this sheet are cleared' + (g.mode === 'move' ? ' and they go back on the ' + (g.from || 'home') + ' roster.' : '.'))) return;
+      if (!window.confirm('Take ' + (g.name || 'this person') + ' off this roster from this month on? Their shifts on this sheet are cleared' + (g.mode === 'move' ? ' and they go back on the ' + (g.from || 'home') + ' roster.' : '.') + ' Earlier months keep them.')) return;
       setGuests(m => {
         const n = {
           ...m
@@ -3226,6 +3237,7 @@ function RosterGrid({
         delete n[empId];
         return n;
       });
+      if (carried[empId]) setGuestsOff(l => l.indexOf(empId) >= 0 ? l : l.concat([empId]));
       setOrder(o => o.filter(k => k !== empId));
       setCells(gr => {
         const n = {
@@ -3329,6 +3341,7 @@ function RosterGrid({
       grid,
       order: rows.map(r => r.empId),
       guests,
+      guestsRemoved: guestsOff,
       oncall,
       altLeave,
       baseRevision: rev,
@@ -4164,10 +4177,11 @@ function RosterGrid({
           emp: p.emp_id || ''
         }
       }));
+      setGuestsOff(l => l.filter(x => x !== k));
       setOrder(o => o.indexOf(k) >= 0 ? o : o.concat([k]));
       setDirty(true);
       setAddOpen(false);
-      rosToast((p.name || 'Staff') + ' added to ' + dept + (mode === 'move' ? ' — off the ' + (p.unit || 'home') + ' roster this month.' : '.'));
+      rosToast((p.name || 'Staff') + ' added to ' + dept + ' from this month on' + (mode === 'move' ? ' — off the ' + (p.unit || 'home') + ' roster.' : '.'));
     }
   }), React.createElement("div", {
     style: {
@@ -4676,7 +4690,7 @@ function RosterGrid({
       value: "blanks"
     }, "Fill blanks OFF"), React.createElement("option", {
       value: "clear"
-    }, "Clear row"), guests[x.empId] && rosIsAdmin() && React.createElement("option", {
+    }, "Clear row"), allGuests[x.empId] && rosIsAdmin() && React.createElement("option", {
       value: "unguest"
     }, "Remove from this roster")))), Array.from({
       length: days
@@ -8825,7 +8839,12 @@ function rosPrintHtml({
   const html = head + (cards !== false ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>') + tables + alHtml + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>' + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>' + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><div class="sp"></div><div class="ln"><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + '</em>' + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>' + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>' + '</div>';
   return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + (official ? officialCss : css) + '</style></head><body>' + html + '</body></html>';
 }
-const ROS_PRINT_OPT_KEY = 'unico_roster_print_opts_v1';
+const ROS_PRINT_OPT_KEY = 'unicoRosterPrintOpts.v2';
+const ROS_PRINT_OPT_OLD = 'unico_roster_print_opts_v1';
+const rosSheetGuests = r => ({
+  ...(r && r.guestsCarried || {}),
+  ...(r && r.roster && r.roster.guests || {})
+});
 function RosSignPick({
   label,
   person,
@@ -8945,6 +8964,7 @@ function RosterPrint({
   setRoute
 }) {
   const [doc, setDoc] = useState(null);
+  const [side, setSide] = useState(null);
   const [signers, setSigners] = useState({});
   const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -8952,14 +8972,23 @@ function RosterPrint({
     const d = {
       colourDesign: false,
       summary: true,
-      cards: true,
+      cards: false,
       legend: true,
       pcaNewPage: false
     };
     try {
+      const now = localStorage.getItem(ROS_PRINT_OPT_KEY);
+      if (now) return {
+        ...d,
+        ...(JSON.parse(now) || {})
+      };
+      const {
+        cards,
+        ...old
+      } = JSON.parse(localStorage.getItem(ROS_PRINT_OPT_OLD) || '{}') || {};
       return {
         ...d,
-        ...(JSON.parse(localStorage.getItem(ROS_PRINT_OPT_KEY) || '{}') || {})
+        ...old
       };
     } catch (e) {
       return d;
@@ -8972,7 +9001,12 @@ function RosterPrint({
     rosApi.get('/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month).then(r => {
       setDoc(r && r.ok && r.roster ? {
         ...r.roster,
-        movedOut: r.movedOut || []
+        movedOut: r.movedOut || [],
+        guests: rosSheetGuests(r)
+      } : null);
+      setSide(r && r.ok ? {
+        movedOut: r.movedOut || [],
+        guests: rosSheetGuests(r)
       } : null);
       setSigners(r && r.ok && r.signers || {});
       setCan(r && r.ok && (r.roster && r.roster.can || r.can) || null);
@@ -8984,7 +9018,7 @@ function RosterPrint({
       localStorage.setItem(ROS_PRINT_OPT_KEY, JSON.stringify(opt));
     } catch (e) {}
   }, [opt]);
-  const view = useMemo(() => rosRowsFrom(doc, staffStore.staff, dept, undefined, signers.incharge && signers.incharge.name), [doc, staffStore.staff, dept, signers]);
+  const view = useMemo(() => rosRowsFrom(doc || side, staffStore.staff, dept, undefined, signers.incharge && signers.incharge.name), [doc, side, staffStore.staff, dept, signers]);
   const me = window.__UNICO_USER__ && (window.__UNICO_USER__.name || window.__UNICO_USER__.username) || '';
   const deptName = rosDeptName(dept);
   const [picks, setPicks] = useState({});
@@ -9436,6 +9470,7 @@ window.UNICO_ROSTER_KIT = {
   rulesOf: rosRulesOf,
   findingsOf: rosFindingsOf,
   rowsFrom: rosRowsFrom,
+  sheetGuests: rosSheetGuests,
   printHtml: rosPrintHtml,
   deptName: rosDeptName,
   signNames: rosSignNames,
@@ -10486,7 +10521,8 @@ function RiPreview({
     if (r && r.ok) {
       setDoc(r.roster ? {
         ...r.roster,
-        movedOut: r.movedOut || []
+        movedOut: r.movedOut || [],
+        guests: K.sheetGuests(r)
       } : null);
       setExtra({
         signers: r.signers || {},
@@ -10502,7 +10538,11 @@ function RiPreview({
     if (r && r.ok && r.roster) {
       setDoc(d => ({
         ...r.roster,
-        movedOut: d && d.movedOut || []
+        movedOut: d && d.movedOut || [],
+        guests: {
+          ...(d && d.guests || {}),
+          ...(r.roster.guests || {})
+        }
       }));
       setExtra(e => ({
         ...e,
@@ -10636,7 +10676,7 @@ function RiPreview({
       signPeople,
       colourDesign: false,
       summary: true,
-      cards: true,
+      cards: false,
       legend: true,
       printedBy: me
     });
