@@ -30,7 +30,10 @@ function cookieJar() {
 }
 
 // cookies: the sign-in of an earlier session ([name, value] pairs), used while H360 still accepts it.
-async function open(cfg, { fetchImpl, cookies } = {}) {
+// resume: { token, form } kept from that session (staff lookup) — then nothing is asked of H360
+// to open: no sign-in check, no roster page. If H360 has ended that session, the first request
+// says so ("signed us out") and the caller signs in afresh.
+async function open(cfg, { fetchImpl, cookies, resume } = {}) {
   const doFetch = fetchImpl || fetch;
   const origin = new URL(cfg.baseUrl).origin;
   const jar = cookieJar();
@@ -64,8 +67,10 @@ async function open(cfg, { fetchImpl, cookies } = {}) {
     throw new Error('H360 kept redirecting.');
   }
 
-  const first = await request(cfg.baseUrl + '/login', { headers: { Accept: 'text/html' } });
-  if (isLoginUrl(first.url)) {
+  let signedInNow = false;
+  const first = resume ? null : await request(cfg.baseUrl + '/login', { headers: { Accept: 'text/html' } });
+  if (first && isLoginUrl(first.url)) {
+    signedInNow = true;
     const form = views.loginForm(first.text);
     if (first.status !== 200 || !form.found) throw new Error(`The H360 sign-in page could not be read (status ${first.status}).`);
     const sent = new URLSearchParams({ _token: form.token, email: cfg.user, password: cfg.pass });
@@ -104,7 +109,9 @@ async function open(cfg, { fetchImpl, cookies } = {}) {
   // The Employee Search box of the Employee Roster page (staff lookup). The page is
   // opened once per session for its token and the box's hidden values; then only the
   // box's own query is sent. No other roster address is ever asked for.
-  let searchForm = null;
+  let searchForm = resume && resume.token && resume.form
+    ? { token: resume.token, params: { ...resume.form }, found: ['resumed'], mentionsSearch: true, rosterUrl: cfg.baseUrl + views.EMPLOYEE_ROSTER_PATH }
+    : null;
   async function employeeForm() {
     if (searchForm) return searchForm;
     const rosterUrl = cfg.baseUrl + views.EMPLOYEE_ROSTER_PATH;
@@ -147,6 +154,10 @@ async function open(cfg, { fetchImpl, cookies } = {}) {
       return rows;
     },
     searchFormInfo: () => (searchForm ? { found: searchForm.found, mentionsSearch: searchForm.mentionsSearch, hasToken: Boolean(searchForm.token) } : null),
+    // Did opening this session sign in (true) or reuse an earlier sign-in (false)?
+    signedInNow: () => signedInNow,
+    // What to keep so another process can resume without asking H360 again.
+    state: () => ({ cookies: jar.list(), token: searchForm ? searchForm.token : '', form: searchForm ? searchForm.params : null }),
     async stations() {
       const page = await pageOf(cfg.pageUrl, 'Nurse Station');
       csrf = views.csrfToken(page.frame) || views.csrfToken(page.body);

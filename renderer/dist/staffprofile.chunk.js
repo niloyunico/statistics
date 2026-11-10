@@ -8467,8 +8467,22 @@ async function hxApi(path, options) {
     err.status = response.status;
     throw err;
   }
+  if (body && body.signedIn === true) {
+    try {
+      window.UI && window.UI.toast && window.UI.toast('Signed in to H360 — the next checks reuse this sign-in.', 'info');
+    } catch (e) {}
+  }
   return body;
 }
+const hxAgo = v => {
+  if (!v) return '';
+  const m = Math.round((Date.now() - new Date(v).getTime()) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago';
+};
+const hxIsAdmin = () => {
+  const u = window.__UNICO_USER__;
+  return !u || u.role === 'Administrator';
+};
 const hxToast = (m, t) => {
   try {
     window.UI && window.UI.toast && window.UI.toast(m, t || 'success');
@@ -9695,7 +9709,38 @@ function StaffH360View({
     className: "hx-alert red"
   }, err), info && info.searchForm && !(info.searchForm.found || []).length && React.createElement("div", {
     className: "hx-alert amber"
-  }, "H360's Employee Search form values were not found on the Employee Roster page, so H360 may be answering every search with nobody. Treat \"Emp ID not found in H360\" with caution until this is checked (server setting H360_EMP_SEARCH_PARAMS can supply them)."), info && !info.login && React.createElement("div", {
+  }, "H360's Employee Search form values were not found on the Employee Roster page, so H360 may be answering every search with nobody. Treat \"Emp ID not found in H360\" with caution until this is checked (server setting H360_EMP_SEARCH_PARAMS can supply them)."), info && info.login && info.session && React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
+      fontSize: 12,
+      color: 'var(--muted)',
+      marginBottom: 10
+    }
+  }, React.createElement("span", {
+    style: {
+      width: 8,
+      height: 8,
+      borderRadius: '50%',
+      background: info.session.active ? '#1f9d57' : 'var(--faint)',
+      flex: '0 0 auto'
+    }
+  }), info.session.active ? React.createElement("span", null, "H360: signed in ", info.session.signedInAt ? hxWhen(info.session.signedInAt) : '', info.session.lastUsedAt ? ' · last used ' + hxAgo(info.session.lastUsedAt) : '', " \xB7 ", info.session.signInsToday, " sign-in", info.session.signInsToday === 1 ? '' : 's', " today. Checks reuse this sign-in; if H360 ends it, the next check signs in again by itself.") : React.createElement("span", null, "H360: not signed in now \u2014 the next check signs in by itself and keeps the sign-in for the checks after it."), info.session.active && hxIsAdmin() && React.createElement("button", {
+    className: "btn sm",
+    onClick: async () => {
+      try {
+        await hxApi('/api/h360-staff/session', {
+          method: 'DELETE'
+        });
+        hxToast('Signed out of H360.');
+      } catch (e) {
+        setErr(e.message);
+      }
+      reload();
+    }
+  }, "Sign out of H360")), info && !info.login && React.createElement("div", {
     className: "hx-alert amber"
   }, "No H360 login is saved on this server", info.loginElsewhere ? ' (one was saved on another server, which this one cannot open)' : '', ". An administrator saves it once in Supervisor Reports \u2192 H360 Scan; this screen then works for everyone with staff access."), tab === 'lookup' && React.createElement(HxLookup, {
     store: store,

@@ -196,6 +196,46 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
     await service.setOptions({ daily: false }, 'tester');
     ok('the daily check is off until someone turns it on, and runs once it is');
 
+    // ONE sign-in for the whole app, reused by every process until H360 ends it.
+    const count = (what) => mock.state.hits.filter((h) => h === what).length;
+    const fresh = () => staff.createStaffService({ sharedDb: async () => db, loadRegister: async () => register, stepMs: 1500 });
+    await fresh().signOut();
+    mock.state.hits.length = 0;
+    const first = fresh();
+    const t0 = Date.now();
+    await first.lookup('11809');
+    assert.strictEqual(first.signedInSince(t0), true);
+    assert.deepStrictEqual([count('POST /login'), count('GET /roster/employee-roster')], [1, 2]);
+    for (const q of ['11410', '11391', '11843', 'Akter', 'Khadija']) await fresh().lookup(q);
+    assert.deepStrictEqual([count('POST /login'), count('GET /roster/employee-roster'), count('GET /login')], [1, 2, 1], 'new processes resume the kept session without asking H360');
+    ok('first click signs in once and checks in the same go; later clicks from new processes reuse it (no sign-in, no roster page)');
+
+    await fresh().signOut();
+    mock.state.hits.length = 0;
+    const cold = fresh();
+    await Promise.all(['11809', '11410', '11391', '11843'].map((q) => cold.lookup(q)));
+    assert.strictEqual(count('POST /login'), 1, 'four searches at once share one sign-in');
+    mock.state.expired = true;
+    mock.state.hits.length = 0;
+    const later = fresh();
+    const t1 = Date.now();
+    const again = await later.lookup('11809');
+    assert.strictEqual(again.people[0].name, 'Khadija Akter Happy');
+    assert.deepStrictEqual([count('POST /login'), later.signedInSince(t1)], [1, true]);
+    ok('when H360 ends the session the click signs in again by itself, once, and still answers');
+
+    await fresh().signOut();
+    await settings.saveLogin(db, 'tester', 'wrong-pass', 'admin');
+    mock.state.hits.length = 0;
+    await assert.rejects(fresh().lookup('11809'), /Login failed/);
+    assert.strictEqual(count('POST /login'), 1, 'a wrong password is tried once, never looped');
+    await settings.saveLogin(db, 'tester', 'secret-pass', 'admin');
+    const info = await fresh().sessionInfo();
+    assert.strictEqual(info.active, false);
+    await fresh().lookup('11809');
+    assert.strictEqual((await fresh().sessionInfo()).active, true);
+    ok('a wrong H360 password fails once with the reason; sign-out clears the session and the next click signs in');
+
     const wb = await service.workbook(new Set(register.map((r) => r.id)));
     assert.deepStrictEqual(wb.worksheets.map((w) => w.name), ['Verify', 'Not in register', 'Duplicates & IDs']);
     assert.strictEqual(wb.getWorksheet('Verify').rowCount, 7);

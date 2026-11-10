@@ -23,8 +23,12 @@ async function hxApi(path, options) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) { const err = new Error((body && body.error) || 'The request failed.'); err.status = response.status; throw err; }
+  // The server signed in to H360 for this answer (first use, or H360 had ended the last session).
+  if (body && body.signedIn === true) { try { window.UI && window.UI.toast && window.UI.toast('Signed in to H360 — the next checks reuse this sign-in.', 'info'); } catch (e) {} }
   return body;
 }
+const hxAgo = (v) => { if (!v) return ''; const m = Math.round((Date.now() - new Date(v).getTime()) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago'; };
+const hxIsAdmin = () => { const u = window.__UNICO_USER__; return !u || u.role === 'Administrator'; };
 const hxToast = (m, t) => { try { window.UI && window.UI.toast && window.UI.toast(m, t || 'success'); } catch (e) {} };
 const hxCanEdit = () => { try { return !window.unicoCan || window.unicoCan('staff', 'edit'); } catch (e) { return false; } };
 const hxWhen = (v) => { try { return v ? new Date(v).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka', dateStyle: 'medium', timeStyle: 'short' }) : '—'; } catch (e) { return String(v || ''); } };
@@ -567,6 +571,14 @@ function StaffH360View({ store, setRoute }) {
               were found there, H360 may answer every search with nobody — say so rather than let
               the whole register read "not in H360". */}
           {info && info.searchForm && !(info.searchForm.found || []).length && <div className="hx-alert amber">H360's Employee Search form values were not found on the Employee Roster page, so H360 may be answering every search with nobody. Treat "Emp ID not found in H360" with caution until this is checked (server setting H360_EMP_SEARCH_PARAMS can supply them).</div>}
+          {/* The one H360 sign-in the app shares (server/h360/staff.js): reused until H360 ends it. */}
+          {info && info.login && info.session && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, color: 'var(--muted)', marginBottom: 10 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: info.session.active ? '#1f9d57' : 'var(--faint)', flex: '0 0 auto' }} />
+            {info.session.active
+              ? <span>H360: signed in {info.session.signedInAt ? hxWhen(info.session.signedInAt) : ''}{info.session.lastUsedAt ? ' · last used ' + hxAgo(info.session.lastUsedAt) : ''} · {info.session.signInsToday} sign-in{info.session.signInsToday === 1 ? '' : 's'} today. Checks reuse this sign-in; if H360 ends it, the next check signs in again by itself.</span>
+              : <span>H360: not signed in now — the next check signs in by itself and keeps the sign-in for the checks after it.</span>}
+            {info.session.active && hxIsAdmin() && <button className="btn sm" onClick={async () => { try { await hxApi('/api/h360-staff/session', { method: 'DELETE' }); hxToast('Signed out of H360.'); } catch (e) { setErr(e.message); } reload(); }}>Sign out of H360</button>}
+          </div>}
           {info && !info.login && <div className="hx-alert amber">No H360 login is saved on this server{info.loginElsewhere ? ' (one was saved on another server, which this one cannot open)' : ''}. An administrator saves it once in Supervisor Reports → H360 Scan; this screen then works for everyone with staff access.</div>}
           {tab === 'lookup' && <HxLookup store={store} setRoute={setRoute} ready={ready} />}
           {tab === 'verify' && <HxVerify store={store} setRoute={setRoute} ready={ready} info={info} reload={reload} />}

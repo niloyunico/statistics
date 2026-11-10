@@ -30,8 +30,6 @@ const match = require('./staff-match');
 const COLL = 'h360Employees';
 const baseUrl = () => (process.env.HIS_BASE_URL || 'https://his.unicohospitals.com').replace(/\/+$/, '');
 const CONCURRENCY = 4;            // H360 searches at the same time
-const PER_SESSION = 400;          // searches before signing in afresh
-const SESSION_MS = 10 * 60 * 1000;
 const SEARCH_CACHE_MS = 60 * 1000;
 const SPLIT_AT = 50;              // a sweep prefix answering this many people is searched again in tenths
 
@@ -62,7 +60,7 @@ async function pool(items, until, fn, stop = () => false, n = CONCURRENCY) {
 
 function createStaffService(deps = {}) {
   const sharedDb = deps.sharedDb || (() => require('../db').getDbHandle());
-  const openSession = deps.openSession || ((cfg, cookies) => require('./session-http').open(cfg, { cookies }));
+  const openSession = deps.openSession || ((cfg, cookies, resume) => require('./session-http').open(cfg, { cookies, resume: resume || undefined }));
   const loadRegister = deps.loadRegister || (() => require('../staff-roster').loadRoster({ cached: true }));
   const STEP_MS = deps.stepMs || Number(process.env.H360_STAFF_STEP_MS) || 20000;
   const cache = new Map();
@@ -84,18 +82,57 @@ function createStaffService(deps = {}) {
     return { baseUrl: baseUrl(), pageUrl: baseUrl() + '/roster/employee-roster', user: login.user, pass: login.pass };
   }
 
-  async function session(d) {
-    if (live && Date.now() - live.at < SESSION_MS && live.used < PER_SESSION) return live;
-    const cfg = await cfgOf(d);
-    let cookies = null;
+  /* ---------- ONE H360 sign-in for the whole app ----------
+     Signed in once; every later search — any user, any server process — reuses it until H360
+     ends it. The session (cookies + the search box's token and hidden values) is kept sealed in
+     h360Settings 'staffSession', so a new Vercel process resumes WITHOUT asking H360 anything.
+     When H360 has ended it ("signed us out" / 419 / 401) the search signs in again ONCE and is
+     repeated; a second failure is reported, never looped. Concurrent searches share one opening. */
+  let opening = null;
+  let lastSave = 0;
+  let lastSignInAt = 0;
+  const SAFETY_MS = 12 * 3600 * 1000;   // reopen a session this old even if H360 still accepts it
+
+  async function readKept(d) {
     try {
-      const kept = await settings.read(d, 'staffSession');
-      cookies = kept && kept.cookies ? JSON.parse(settings.unseal(kept.cookies)) : null;
-    } catch (err) { cookies = null; }
-    const opened = await openSession(cfg, cookies);
-    live = { session: opened, at: Date.now(), used: 0 };
-    try { await settings.write(d, 'staffSession', { cookies: settings.seal(JSON.stringify(opened.cookies())), at: new Date() }); } catch (err) { /* kept for next time only */ }
-    return live;
+      const k = await settings.read(d, 'staffSession');
+      if (!k || !k.cookies) return null;
+      return { cookies: JSON.parse(settings.unseal(k.cookies)), token: k.token ? settings.unseal(k.token) : '', form: k.form || null, doc: k };
+    } catch (err) { return null; }
+  }
+  async function keep(d, s, signedIn) {
+    const st = s.session.state ? s.session.state() : { cookies: s.session.cookies(), token: '', form: null };
+    const set = { cookies: settings.seal(JSON.stringify(st.cookies || [])), lastUsedAt: new Date() };
+    if (st.token) set.token = settings.seal(st.token);
+    if (st.form) set.form = st.form;
+    if (signedIn) {
+      const doc = (await settings.read(d, 'staffSession')) || {};
+      set.signedInAt = new Date();
+      set.signIns = (Array.isArray(doc.signIns) ? doc.signIns : []).concat([new Date()]).slice(-20);
+    }
+    await settings.write(d, 'staffSession', set);
+  }
+
+  // The live session. `after`: a search failed with "signed out" at this time — a session opened
+  // after it (by another search) is good; otherwise sign in afresh.
+  async function session(d, after) {
+    if (live && (!after ? Date.now() - live.at < SAFETY_MS : live.at > after)) return live;
+    if (opening) return opening;
+    opening = (async () => {
+      const cfg = await cfgOf(d);
+      let opened = null;
+      if (!after) {
+        const kept = await readKept(d);
+        if (kept && kept.token && kept.form) opened = await openSession(cfg, kept.cookies, { token: kept.token, form: kept.form });
+        else if (kept) opened = await openSession(cfg, kept.cookies, null);   // older copy: H360 is asked once
+      }
+      if (!opened) opened = await openSession(cfg, null, null);
+      const signedIn = opened.signedInNow ? opened.signedInNow() : !after;
+      if (signedIn) lastSignInAt = Date.now();
+      live = { session: opened, at: Date.now(), used: 0, signedIn, kept: false };
+      return live;
+    })().finally(() => { opening = null; });
+    return opening;
   }
 
   // H360's people for one search, from a 60-second memory when the same text was just asked.
@@ -106,19 +143,32 @@ function createStaffService(deps = {}) {
     const hit = cache.get(key);
     if (hit && Date.now() - hit.at < SEARCH_CACHE_MS) return hit.rows;
     let rows;
+    let failedAt = 0;
     for (let attempt = 0; ; attempt++) {
-      const s = await session(d);
+      const s = await session(d, failedAt || 0);
+      const started = Date.now();
       try {
         s.used++;
         rows = await s.session.employees(text);
         if (s.used === 1 && s.session.searchFormInfo) {
           settings.write(d, 'staffDiagnostics', { form: s.session.searchFormInfo(), notes: s.session.notes || {}, at: new Date() }).catch(() => {});
         }
+        // Keep the newest cookies for every other process: at once after a sign-in, then once a minute.
+        if (!s.kept || Date.now() - lastSave > 60000) {
+          lastSave = Date.now();
+          const first = !s.kept;
+          s.kept = true;
+          // The first save (right after opening) is waited for, so another process never misses it.
+          if (first) await keep(d, s, s.signedIn).catch(() => {});
+          else keep(d, s, false).catch(() => {});
+        }
         break;
       } catch (err) {
-        live = null;
+        if (live === s) live = null;
         if (attempt === 0 && /signed us out|token expired|status 419|status 401/i.test(err.message)) {
-          await settings.write(d, 'staffSession', {}, { cookies: '' }).catch(() => {});
+          // H360 ended the session: forget it and sign in once more, then repeat this search.
+          failedAt = started;
+          await settings.write(d, 'staffSession', {}, { cookies: '', token: '' }).catch(() => {});
           continue;
         }
         throw fail(502, 'H360: ' + err.message);
@@ -127,6 +177,25 @@ function createStaffService(deps = {}) {
     cache.set(key, { at: Date.now(), rows });
     if (cache.size > 2000) cache.delete(cache.keys().next().value);
     return rows;
+  }
+
+  // Did this process sign in to H360 since `t`? (shown as "Signed in to H360")
+  const signedInSince = (t) => lastSignInAt >= t;
+  async function sessionInfo() {
+    const d = await db();
+    const k = (await settings.read(d, 'staffSession')) || {};
+    const today = dhakaDay();
+    return {
+      active: Boolean(k.cookies), signedInAt: k.signedInAt || null, lastUsedAt: k.lastUsedAt || null,
+      signInsToday: (k.signIns || []).filter((t) => dhakaDay(new Date(t)) === today).length,
+    };
+  }
+  async function signOut() {
+    const d = await db();
+    live = null;
+    cache.clear();
+    await settings.write(d, 'staffSession', {}, { cookies: '', token: '' });
+    return sessionInfo();
   }
 
   // Keep what H360 said about Nursing Services people and anyone our register names.
@@ -416,6 +485,7 @@ function createStaffService(deps = {}) {
       sweep: { last: sweep.last || null, run: publicRun(sweep.run) },
       searchForm: diag && diag.form ? diag.form : null,
       options: await options(),
+      session: await sessionInfo(),
     };
   }
 
@@ -471,7 +541,7 @@ function createStaffService(deps = {}) {
     return wb;
   }
 
-  return { saved, options, setOptions, search, lookup, verifyOne, verifyStart, verifyStep, results, sweepStart, sweepStep, missing, info, daily, workbook, snapshot };
+  return { signedInSince, sessionInfo, signOut, saved, options, setOptions, search, lookup, verifyOne, verifyStart, verifyStep, results, sweepStart, sweepStep, missing, info, daily, workbook, snapshot };
 }
 
 /* ---------------- routes ---------------- */
@@ -505,16 +575,26 @@ function mount(app, opts = {}) {
     res.json(await service.setOptions({ daily: (req.body || {}).daily }, who(req)));
   }));
 
+  // Answers that needed a fresh H360 sign-in say so (the screen shows "Signed in to H360").
+  const withSignIn = (t0, body) => ({ ...body, signedIn: service.signedInSince(t0) });
+
+  app.delete(P + '/session', guard, route(async (req, res) => {
+    if (req.access && !req.access.unrestricted) return res.status(403).json({ error: 'Administrator access required.' });
+    res.json({ session: await service.signOut() });
+  }));
+
   app.get(P + '/search', guard, route(async (req, res) => {
     const q = String(req.query.q || '').trim().slice(0, 60);
     if (q.length < 3) return res.status(400).json({ error: 'Type at least 3 letters or digits.' });
-    res.json(await service.lookup(q, await visible(req)));
+    const t0 = Date.now();
+    res.json(withSignIn(t0, await service.lookup(q, await visible(req))));
   }));
 
   app.get(P + '/verify/:id', guard, route(async (req, res) => {
     const mine = await visible(req);
     if (!mine.some((r) => String(r.id) === String(req.params.id))) return res.status(404).json({ error: 'No such staff record.' });
-    res.json(await service.verifyOne(req.params.id));
+    const t0 = Date.now();
+    res.json(withSignIn(t0, await service.verifyOne(req.params.id)));
   }));
 
   app.get(P + '/saved/:id', guard, route(async (req, res) => {
@@ -528,7 +608,8 @@ function mount(app, opts = {}) {
     res.json({ run: await service.verifyStart({ dept: (req.body || {}).dept, by: who(req) }) });
   }));
   app.post(P + '/verify-bulk/step', guard, json, route(async (req, res) => {
-    res.json(await service.verifyStep(String((req.body || {}).id || '')));
+    const t0 = Date.now();
+    res.json(withSignIn(t0, await service.verifyStep(String((req.body || {}).id || ''))));
   }));
 
   app.get(P + '/results', guard, route(async (req, res) => {
@@ -551,7 +632,8 @@ function mount(app, opts = {}) {
     res.json({ run: await service.sweepStart(who(req)) });
   }));
   app.post(P + '/sweep/step', guard, editOnly, json, route(async (req, res) => {
-    res.json(await service.sweepStep(String((req.body || {}).id || '')));
+    const t0 = Date.now();
+    res.json(withSignIn(t0, await service.sweepStep(String((req.body || {}).id || ''))));
   }));
 
   app.get(P + '/missing', guard, route(async (req, res) => {

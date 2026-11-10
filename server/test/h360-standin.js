@@ -47,7 +47,8 @@ function standIn() {
   // state.delay (ms) slows every answer down, to watch a collection in progress.
   app.use((req, res, next) => { state.hits.push(req.method + ' ' + req.path); if (state.delay) setTimeout(next, state.delay); else next(); });
   const cookies = (req) => Object.fromEntries(String(req.headers.cookie || '').split(';').map((p) => p.trim().split('=')).filter((p) => p[0]));
-  const signedIn = (req) => cookies(req).h360_session === 'signed-in';
+  // state.expired: H360 has ended every session (its idle timeout); a new sign-in starts a fresh one.
+  const signedIn = (req) => cookies(req).h360_session === 'signed-in' && !state.expired;
   const page = (body, head = '') => `<!doctype html><html><head><meta name="csrf-token" content="csrf-123">${head}</head><body>${body}</body></html>`;
   const needLogin = (req, res, next) => (signedIn(req) ? next() : res.redirect('/login'));
 
@@ -61,6 +62,7 @@ function standIn() {
   app.post('/login', (req, res) => {
     if (req.body._token !== 'form-token-1' || cookies(req).h360_session !== 'anonymous') return res.status(419).send('Page Expired');
     if (req.body.email !== 'tester' || req.body.password !== 'secret-pass') return res.redirect('/login?failed=1');
+    state.expired = false;
     res.setHeader('Set-Cookie', 'h360_session=signed-in; path=/; httponly');
     res.redirect('/dashboard');
   });
