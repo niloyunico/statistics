@@ -7712,6 +7712,14 @@ function ActivityLog() {
     kpi_config: {
       l: 'KPI settings',
       c: '#6a52d4'
+    },
+    kpi_schedule: {
+      l: 'KPI schedule',
+      c: '#6a52d4'
+    },
+    kpi_ack: {
+      l: 'KPI check acknowledged',
+      c: '#e08a1e'
     }
   };
   const meta = a => META[a] || {

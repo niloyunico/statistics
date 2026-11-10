@@ -88,6 +88,64 @@
     a.remove();
     setTimeout(() => URL.revokeObjectURL(href), 4000);
   }
+  async function printSheets(getRoot, title, log, setCapturing) {
+    const w = window.open('', '_blank');
+    try {
+      await log();
+      if (!w) {
+        toast('Allow pop-ups for this site to print.', 'error');
+        return;
+      }
+      setCapturing(true);
+      await new Promise(r => setTimeout(r, 60));
+      const html = getRoot().innerHTML.split('src="unico/logo.svg"').join('src="' + location.origin + '/unico/logo.svg"');
+      setCapturing(false);
+      w.document.open();
+      w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>:root{--line:#dde3ec;--line-2:#eef2f6;--muted:#7b8796;--ink:#16202e;--ink-2:#3a4656;--blue-50:#eef8fd;--shadow:none}' + 'html{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;font-family:"IBM Plex Sans","Segoe UI",Arial,sans-serif;background:#fff}@page{size:A4 landscape;margin:0}' + CSS + '.kp-doc{gap:0;padding:0}.kp-sheet{box-shadow:none;page-break-after:always;break-after:page;width:297mm;height:209mm;min-height:0}.kp-sheet:last-child{page-break-after:auto}</style></head><body><div class="kp-doc">' + html + '</div><script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script></body></html>');
+      w.document.close();
+    } catch (e) {
+      if (w) w.close();
+      setCapturing(false);
+      throw e;
+    }
+  }
+  async function pdfSheets(getRoot, title, fileName, log, setCapturing) {
+    await log();
+    if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) await window.unicoLoadPdfLibs();
+    const J = window.jspdf && window.jspdf.jsPDF,
+      H = window.html2canvas;
+    if (!J || !H) throw new Error('The PDF tools could not load. Use Print and choose “Save as PDF”.');
+    setCapturing(true);
+    try {
+      await new Promise(r => setTimeout(r, 120));
+      const sheets = [...getRoot().querySelectorAll('.kp-sheet')];
+      const pdf = new J({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
+      for (let i = 0; i < sheets.length; i++) {
+        const c = await H(sheets[i], {
+          scale: 1.6,
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          logging: false,
+          windowWidth: 1200
+        });
+        if (i) pdf.addPage();
+        pdf.addImage(c.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, 297, 210);
+      }
+      pdf.setProperties({
+        title,
+        author: me()
+      });
+      pdf.save(fileName + '.pdf');
+      toast('PDF downloaded.', 'success');
+    } finally {
+      setCapturing(false);
+    }
+  }
   const CSS = `
 .kp-wrap{display:flex;flex-direction:column;gap:16px}
 .kp-card{background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
@@ -182,6 +240,14 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
 .kp-cell.missing:hover{background:#fdf0f2}
 .kp-cell.partial{border:1.5px dashed #e7c27a;color:#8a5a00}
 .kp-cell.future{opacity:.35;cursor:default}
+.kp-savebar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:10px 14px;background:#fffbea;border-top:1px solid #f0dca0;border-radius:0 0 14px 14px;z-index:4}
+@media (max-width:720px){.kp-savebar{position:static}}
+.kp-sched td{vertical-align:middle}
+.kp-cell.span{background:repeating-linear-gradient(135deg,#fafbfd,#fafbfd 7px,#f1f4f8 7px,#f1f4f8 14px);border-color:#e3e9f0}
+.kp-cell.span:hover{background:#eef8fd}
+.kp-cell.span.wait{cursor:default}
+.kp-cell.span.wait:hover{background:repeating-linear-gradient(135deg,#fafbfd,#fafbfd 7px,#f1f4f8 7px,#f1f4f8 14px);border-color:#e3e9f0}
+.kp-cell .per{font-size:9.5px;font-weight:700;color:#7b8796;white-space:nowrap}
 .kp-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
 .kp-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);align-items:center}
 .kp-legend span{display:inline-flex;gap:5px;align-items:center}
@@ -1145,6 +1211,37 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       compact: compact
     });
   }
+  const resultOf = r => r.latest ? 'latest: ' + r.latest.label : r.freqMonths > 1 && r.resultLabel ? r.resultLabel : '';
+  const ResultTag = ({
+    r
+  }) => resultOf(r) ? React.createElement("div", {
+    className: "kp-muted",
+    style: {
+      fontSize: 10.5,
+      whiteSpace: 'nowrap'
+    }
+  }, resultOf(r), r.nextDue && r.latest ? ' · next ' + K.fmtMonth(r.nextDue) : '') : null;
+  function PeriodsTable({
+    row
+  }) {
+    const list = row.periods || [];
+    if (!list.length) return React.createElement("div", {
+      className: "kp-muted"
+    }, K.freqLabel(row), " \u2014 no period has ended yet", row.nextDue ? '; the first result is due in ' + K.fmtMonthLong(row.nextDue) : '', ".");
+    return React.createElement("div", {
+      className: "kp-scroll"
+    }, React.createElement("table", {
+      className: "kp-stbl"
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Period"), row.formula !== 'direct' && React.createElement("th", null, row.numLabel || 'Numerator'), row.formula !== 'direct' && row.formula !== 'count' && React.createElement("th", null, row.denLabel || 'Denominator'), React.createElement("th", null, "Value"), React.createElement("th", null, "Target"), React.createElement("th", null, "Status"))), React.createElement("tbody", null, list.map(pp => React.createElement("tr", {
+      key: pp.to
+    }, React.createElement("td", {
+      className: "l"
+    }, React.createElement("b", null, pp.label), !pp.inReport ? React.createElement("span", {
+      className: "kp-muted"
+    }, " \xB7 before this report") : null), row.formula !== 'direct' && React.createElement("td", null, K.has(pp.num) ? pp.num : '—'), row.formula !== 'direct' && row.formula !== 'count' && React.createElement("td", null, K.has(pp.den) ? pp.den : '—'), React.createElement("td", null, React.createElement("b", null, K.fmt(row, pp.value))), React.createElement("td", null, K.has(pp.target) ? K.fmt(row, pp.target) : '—'), React.createElement("td", null, React.createElement(Pill, {
+      s: pp.status
+    })))))));
+  }
   function KpiDrawer({
     row,
     cfg,
@@ -1154,7 +1251,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     showCalc
   }) {
     const [tab, setTab] = useState(showCalc ? 'calc' : 'overview');
-    const monthsAll = Object.keys(row.cells || {});
+    const monthsAll = Object.keys(row.cells || {}).filter(m => (row.cells[m] || {}).source !== 'not-due');
     const [calcMonth, setCalcMonth] = useState(monthsAll[monthsAll.length - 1]);
     const [kind, setKind] = useState(() => lsGet('kpi_chart') || 'area');
     useEffect(() => {
@@ -1233,17 +1330,19 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         gap: 12
       }
-    }, React.createElement("div", {
+    }, monthsAll.length ? React.createElement(React.Fragment, null, React.createElement("div", {
       className: "kp-chips"
     }, monthsAll.map(m => React.createElement("button", {
       key: m,
       className: 'kp-chip' + (calcMonth === m ? ' on' : ''),
       onClick: () => setCalcMonth(m)
-    }, K.fmtMonth(m)))), React.createElement(EvidencePanel, {
+    }, row.freqMonths > 1 ? K.periodOf(row, m, cfg).label : K.fmtMonth(m)))), React.createElement(EvidencePanel, {
       def: row,
       kpiId: row.kpiId,
-      ym: calcMonth
-    })), tab === 'overview' && React.createElement("div", {
+      ym: calcMonth || monthsAll[monthsAll.length - 1]
+    })) : React.createElement("div", {
+      className: "kp-muted"
+    }, K.freqLabel(row), " \u2014 no period ends inside this report", row.latest ? '; the result shown is ' + row.latest.label + ' (open a report that includes ' + K.fmtMonth(row.latest.to) + ' to see its calculation)' : '', ".")), tab === 'overview' && React.createElement("div", {
       className: "kp-dlg-b",
       style: {
         gap: 14
@@ -1253,7 +1352,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         alignItems: 'stretch'
       }
-    }, [['Current', K.fmt(row, row.period.value), row.unit && K.unitKind(row) === 'num' ? row.unit : months.length > 1 ? months.length + ' months pooled' : K.fmtMonthLong(months[0])], ['Target', row.target != null ? K.fmt(row, row.target) : '—', row.goalDirection === 'lower_is_better' ? 'lower is better' : 'higher is better'], ['Variance', K.gapLabel(row, row.period.value, row.target), row.achievement != null ? row.achievement + '% of target' : '']].map(([l, v, s], i) => React.createElement("div", {
+    }, [['Current', K.fmt(row, row.period.value), resultOf(row) || (row.unit && K.unitKind(row) === 'num' ? row.unit : months.length > 1 ? months.length + ' months pooled' : K.fmtMonthLong(months[0]))], ['Target', row.target != null ? K.fmt(row, row.target) : '—', row.goalDirection === 'lower_is_better' ? 'lower is better' : 'higher is better'], ['Variance', K.gapLabel(row, row.period.value, row.target), row.achievement != null ? row.achievement + '% of target' : '']].map(([l, v, s], i) => React.createElement("div", {
       key: i,
       className: "kp-card kp-pad",
       style: {
@@ -1286,10 +1385,19 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }), row.linked && React.createElement("span", {
       className: "kp-muted"
     }, "\xB7 filled from the hospital's quality data")), React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        fontSize: 11.5
+      }
+    }, React.createElement("b", {
+      style: {
+        color: 'var(--ink-2)'
+      }
+    }, "Tracking:"), " ", row.schedule, row.nextDue ? ' · next result ' + K.fmtMonthLong(row.nextDue) : ''), React.createElement("div", {
       className: "kp-card"
     }, React.createElement("div", {
       className: "kp-h"
-    }, React.createElement("h3", null, "Last 12 months"), React.createElement("span", {
+    }, React.createElement("h3", null, row.freqMonths > 1 ? 'Last 12 months · one point per period' : 'Last 12 months'), React.createElement("span", {
       className: "grow"
     }), React.createElement("div", {
       className: "kp-chips"
@@ -1302,7 +1410,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }, React.createElement(KpiChart, {
       row: row,
       kind: kind
-    }))), React.createElement("div", {
+    }))), row.freqMonths > 1 ? React.createElement(PeriodsTable, {
+      row: row
+    }) : React.createElement("div", {
       className: "kp-scroll"
     }, React.createElement("table", {
       className: "kp-stbl"
@@ -1414,7 +1524,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }, [range && range.from, range && range.to]);
     const rows = rep ? rep.rows : [];
     const sum = rep ? rep.summary : null;
-    const shown = rows.filter(r => (!fPillar || r.pillar === fPillar) && (!fStatus || (fStatus === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' || r.status === 'notstarted' : r.status === fStatus)));
+    const shown = rows.filter(r => (!fPillar || r.pillar === fPillar) && (!fStatus || (fStatus === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' || r.status === 'notstarted' || r.status === 'notdue' : r.status === fStatus)));
     const pillars = cfg.pillars.filter(x => rows.some(r => r.pillar === x.id));
     const scored = shown.filter(r => r.achievement != null);
     const canEnter = meta.canAdd || meta.canEdit;
@@ -1469,7 +1579,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         lineHeight: 1.35
       }
     }, sum.scored ? sum.met + ' of ' + sum.scored + ' KPIs with a target and data are on target' : 'No KPI has both data and a target yet'))), tiles.map(([k, l]) => {
-      const n = k === 'nodata' ? sum.nodata + sum.notarget + (sum.notstarted || 0) : sum[k];
+      const n = k === 'nodata' ? sum.nodata + sum.notarget + (sum.notstarted || 0) + (sum.notdue || 0) : sum[k];
       return React.createElement("div", {
         key: k,
         className: 'kp-tile' + (fStatus === k ? ' sel' : ''),
@@ -1517,7 +1627,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         }
       }, list.length)), React.createElement("div", {
         className: "seg"
-      }, ['met', 'near', 'off', 'notarget', 'nodata', 'notstarted'].map(k => c[k] ? React.createElement("span", {
+      }, ['met', 'near', 'off', 'notarget', 'nodata', 'notstarted', 'notdue'].map(k => c[k] ? React.createElement("span", {
         key: k,
         style: {
           flex: c[k],
@@ -1590,7 +1700,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             color: ST.off.color,
             label: 'need action'
           }, {
-            value: c.nodata + c.notarget + (c.notstarted || 0),
+            value: c.nodata + c.notarget + (c.notstarted || 0) + (c.notdue || 0),
             color: ST.nodata.color,
             label: 'no data / target'
           }]
@@ -1663,7 +1773,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontSize: 11
       }
-    }, r.unit, r.linked ? ' · from quality data' : '')), React.createElement("td", null, React.createElement(Spark, {
+    }, r.unit, r.linked ? ' · from quality data' : '', r.freqMonths > 1 ? ' · ' + K.freqLabel(r, true).toLowerCase() : '')), React.createElement("td", null, React.createElement(Spark, {
       row: r
     })), React.createElement("td", {
       className: "num"
@@ -1671,7 +1781,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontSize: 14
       }
-    }, K.fmt(r, r.period.value))), React.createElement("td", {
+    }, K.fmt(r, r.period.value)), React.createElement(ResultTag, {
+      r: r
+    })), React.createElement("td", {
       className: "num"
     }, r.target != null ? K.fmt(r, r.target) : '—'), React.createElement("td", {
       style: {
@@ -1831,6 +1943,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const live = f === 'direct' ? K.has(val) ? Number(val) : null : K.computeValue(f, num, f === 'count' ? null : den);
     const target = K.targetFor(def, ym, meta.config);
     const st = K.statusOf(def, live, target, meta.config);
+    const per = K.freqOf(def) > 1 && !cell.notStarted ? K.periodOf(def, ym, meta.config) : null;
+    const when2 = per ? per.label : K.fmtMonth(ym);
     const problem = num || den || val ? K.validateEntry(def, entry) : null;
     const overriding = !!(cell.auto && K.has(cell.auto.value));
     const fillFrom = x => {
@@ -1864,7 +1978,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             baseUpdatedAt: saved ? cell.savedAt : undefined
           })
         });
-        toast(def.name + ' · ' + K.fmtMonth(ym) + ' saved: ' + K.fmt(def, j.cell.value), 'success');
+        toast(def.name + ' · ' + when2 + ' saved: ' + K.fmt(def, j.cell.value), 'success');
         onSaved(j.cell, next);
       } catch (x) {
         setBusy(false);
@@ -1889,8 +2003,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }
     async function revert() {
       const ok = await confirmBox({
-        title: cell.source === 'edited' ? 'Go back to the system figure?' : 'Clear this month?',
-        message: cell.source === 'edited' ? 'Your figure (' + K.fmt(def, cell.value) + ') is removed and ' + K.fmtMonth(ym) + ' shows the system figure again (' + K.fmt(def, cell.auto && cell.auto.value) + '). The change is kept in the history.' : 'The figure for ' + K.fmtMonth(ym) + ' is removed. It is kept in the history.',
+        title: cell.source === 'edited' ? 'Go back to the system figure?' : per ? 'Clear this period?' : 'Clear this month?',
+        message: cell.source === 'edited' ? 'Your figure (' + K.fmt(def, cell.value) + ') is removed and ' + when2 + ' shows the system figure again (' + K.fmt(def, cell.auto && cell.auto.value) + '). The change is kept in the history.' : 'The figure for ' + when2 + ' is removed. It is kept in the history.',
         confirmLabel: cell.source === 'edited' ? 'Use system figure' : 'Clear',
         danger: cell.source !== 'edited'
       });
@@ -1939,7 +2053,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }, React.createElement("div", {
       className: "kp-dlg",
       role: "dialog",
-      "aria-label": def.name + ' ' + K.fmtMonth(ym)
+      "aria-label": def.name + ' ' + when2
     }, React.createElement("div", {
       className: "kp-dlg-h"
     }, React.createElement("span", {
@@ -1948,9 +2062,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         background: K.pillarOf(meta.config, def.pillar).color,
         marginTop: 2
       }
-    }, def.code || '•'), React.createElement("div", null, React.createElement("h3", null, def.name), React.createElement("div", {
+    }, def.code || '•'), React.createElement("div", null, React.createElement("h3", null, def.name, per ? ' — ' + per.label : ''), React.createElement("div", {
       className: "kp-muted"
-    }, K.fmtMonthLong(ym), " \xB7 ", def.unit, target != null ? ' · target ' + K.fmt(def, target) : '')), React.createElement("button", {
+    }, per ? K.freqLabel(def) + ' · entered in ' + K.fmtMonthLong(ym) : K.fmtMonthLong(ym), " \xB7 ", def.unit, target != null ? ' · target ' + K.fmt(def, target) : '')), React.createElement("button", {
       className: "kp-x",
       onClick: onClose,
       "aria-label": "Close"
@@ -1960,13 +2074,15 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       className: "kp-banner info"
     }, React.createElement("div", null, "This KPI starts in ", K.fmtMonthLong(K.startOf(def, meta.config)), ". A figure for ", K.fmtMonthLong(ym), " can be kept for reference, but it is not counted in any report.", meta.canEdit && onStartHere && React.createElement(React.Fragment, null, React.createElement("br", null), React.createElement("button", {
       onClick: () => onStartHere(ym)
-    }, "Start this KPI from ", K.fmtMonthLong(ym))))), cell.auto && React.createElement("div", {
+    }, "Start this KPI from ", K.fmtMonthLong(ym))))), per && React.createElement("div", {
+      className: "kp-banner info"
+    }, React.createElement("div", null, React.createElement("b", null, "One figure for ", per.label, "."), " ", def.name, " is measured ", K.freqLabel(def, true).toLowerCase(), def.source && def.source.indId ? ' — the system figure pools the units’ monthly figures over the ' + per.months + ' months (Σ ' + (def.numLabel || 'numerator').toLowerCase() + ' ÷ Σ ' + (def.denLabel || 'denominator').toLowerCase() + ').' : ' — type the result of the period (e.g. the survey) here.')), cell.auto && React.createElement("div", {
       className: "kp-sys"
     }, React.createElement("b", null, "System figure: ", K.fmt(def, cell.auto.value)), React.createElement("span", null, K.has(cell.auto.num) ? cell.auto.num + (K.has(cell.auto.den) ? ' ÷ ' + cell.auto.den : '') : ''), React.createElement("span", {
       style: {
         opacity: 0.8
       }
-    }, srcOf(cell.auto.source).long, cell.auto.areas ? ' · ' + cell.auto.areas + ' unit(s)' : '', cell.auto.incomplete ? ' · some units have no denominator' : '', cell.auto.carriedFrom ? ' · headcount from ' + cell.auto.carriedFrom : ''), may && saved && React.createElement("button", {
+    }, srcOf(cell.auto.source).long, per && cell.auto.months ? ' · ' + cell.auto.months + ' of ' + per.months + ' months have figures' : '', cell.auto.areas ? ' · ' + cell.auto.areas + ' unit(s)' : '', cell.auto.incomplete ? ' · some units have no denominator' : '', cell.auto.carriedFrom ? ' · headcount from ' + cell.auto.carriedFrom : ''), may && saved && React.createElement("button", {
       className: "kp-icon-btn",
       onClick: () => fillFrom(cell.auto)
     }, "Copy into the form")), cell.hint && React.createElement("div", {
@@ -2187,9 +2303,26 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       value: null
     };
     const checksOf = (id, m) => vals && vals.checks && vals.checks[id] && vals.checks[id][m] || null;
-    const isGap = c => !c.notStarted && !K.has(c.value);
+    const isGap = c => !c.notStarted && c.source !== 'not-due' && !K.has(c.value);
     const last = meta.lastClosed;
-    const gaps = vals ? active.filter(d => months.indexOf(last) >= 0 && isGap(cellOf(d.id, last))) : [];
+    const dueFor = d => K.lastDue(d, last, cfg);
+    const gaps = vals ? active.filter(d => {
+      const m = dueFor(d);
+      return m && months.indexOf(m) >= 0 && isGap(cellOf(d.id, m));
+    }) : [];
+    const anyLess = active.some(d => K.freqOf(d) > 1);
+    function segmentsOf(d) {
+      const out = [];
+      months.forEach(m => {
+        const pp = K.freqOf(d) > 1 ? K.periodOf(d, m, cfg) : null;
+        const prev = out[out.length - 1];
+        if (pp && prev && prev.p && prev.p.to === pp.to) prev.months.push(m);else out.push({
+          p: pp,
+          months: [m]
+        });
+      });
+      return out;
+    }
     const errorCells = vals && vals.checks ? Object.keys(vals.checks).reduce((n, k) => n + Object.keys(vals.checks[k]).filter(m => vals.checks[k][m].level === 'error').length, 0) : 0;
     const shown = active.filter(d => (!q || (d.name + ' ' + d.code).toLowerCase().indexOf(q.toLowerCase()) >= 0) && (!only || months.some(m => m <= meta.thisMonth && (isGap(cellOf(d.id, m)) || (checksOf(d.id, m) || {}).level === 'error'))));
     const groups = cfg.pillars.map(pl => ({
@@ -2321,21 +2454,24 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontSize: 16
       }
-    }, "\u270E"), React.createElement("div", null, React.createElement("b", null, gaps.length, " KPI", gaps.length > 1 ? 's' : '', " still need", gaps.length > 1 ? '' : 's', " a figure for ", K.fmtMonthLong(last), "."), " Click one to fill it \u2014 after saving, \u201CSave & next\u201D takes you to the next gap.", React.createElement("br", null), gaps.map(d => React.createElement("button", {
-      key: d.id,
-      onClick: () => setEdit({
-        def: d,
-        ym: last,
-        cell: cellOf(d.id, last),
-        k: Date.now()
-      })
-    }, d.code, " ", d.name)))), vals && !gaps.length && months.indexOf(last) >= 0 && React.createElement("div", {
+    }, "\u270E"), React.createElement("div", null, React.createElement("b", null, gaps.length, " KPI", gaps.length > 1 ? 's' : '', " still need", gaps.length > 1 ? '' : 's', " ", anyLess ? 'their latest figure' : 'a figure for ' + K.fmtMonthLong(last), "."), " Click one to fill it \u2014 after saving, \u201CSave & next\u201D takes you to the next gap.", React.createElement("br", null), gaps.map(d => {
+      const m = dueFor(d);
+      return React.createElement("button", {
+        key: d.id,
+        onClick: () => setEdit({
+          def: d,
+          ym: m,
+          cell: cellOf(d.id, m),
+          k: Date.now()
+        })
+      }, d.code, " ", d.name, K.freqOf(d) > 1 ? ' (' + K.periodOf(d, m, cfg).label + ')' : '');
+    }))), vals && !gaps.length && months.indexOf(last) >= 0 && React.createElement("div", {
       className: "kp-banner ok"
     }, React.createElement("span", {
       style: {
         fontSize: 16
       }
-    }, "\u2713"), React.createElement("div", null, "Every KPI has a figure for ", K.fmtMonthLong(last), ".")), errorCells > 0 && React.createElement("div", {
+    }, "\u2713"), React.createElement("div", null, "Every KPI has ", anyLess ? 'its latest figure (' + K.fmtMonthLong(last) + ', or the last period for those measured less often)' : 'a figure for ' + K.fmtMonthLong(last), ".")), errorCells > 0 && React.createElement("div", {
       className: "kp-banner"
     }, React.createElement("span", {
       style: {
@@ -2443,7 +2579,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontSize: 10.5
       }
-    }, d.unit, d.source && d.source.indId ? d.autoFill === false || meta.config.autoFill === false ? ' · typed monthly (auto-fill off)' : ' · auto from quality' : ' · typed monthly'), React.createElement("button", {
+    }, d.unit, d.source && d.source.indId ? d.autoFill === false || meta.config.autoFill === false ? ' · typed (auto-fill off)' : ' · auto from quality' : ' · typed', K.freqOf(d) > 1 ? React.createElement("b", {
+      style: {
+        color: '#3f3fa8'
+      }
+    }, ' · ' + K.freqLabel(d, true).toLowerCase()) : ''), React.createElement("button", {
       onClick: () => meta.canEdit && setStartFor({
         def: d
       }),
@@ -2459,7 +2599,53 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         color: d.startMonth ? '#8a5a00' : '#0b6b8f',
         cursor: meta.canEdit ? 'pointer' : 'default'
       }
-    }, (d.startMonth ? '◷ starts ' + K.fmtMonth(d.startMonth) + ' (own)' : '◷ starts ' + K.fmtMonth(meta.config.cycleStart)) + (meta.canEdit ? ' ✎' : ''))))), months.map(m => {
+    }, (d.startMonth ? '◷ starts ' + K.fmtMonth(d.startMonth) + ' (own)' : '◷ starts ' + K.fmtMonth(meta.config.cycleStart)) + (meta.canEdit ? ' ✎' : ''))))), segmentsOf(d).map(sg => {
+      if (sg.p && K.freqOf(d) > 1) {
+        const due = sg.p.to,
+          dueIn = sg.months.indexOf(due) >= 0,
+          future = due > meta.thisMonth;
+        const c = dueIn ? cellOf(d.id, due) : null,
+          ch = dueIn ? checksOf(d.id, due) : null;
+        const open = dueIn && !future;
+        const kept = sg.months.map(x => cellOf(d.id, x).kept).filter(Boolean);
+        const cls = !open ? 'span wait' : c.source === 'partial' ? 'partial' : isGap(c) ? 'missing' : 'span';
+        const tip = sg.p.label + ' — ' + K.freqLabel(d) + ': one figure for the period, entered in ' + K.fmtMonthLong(due) + '.' + (kept.length ? '\n' + kept.length + ' monthly figure(s) saved earlier are kept but not counted.' : '') + (ch ? '\n' + ch.items.map(x => (x.level === 'error' ? '✖ ' : '▲ ') + x.text).join('\n') : '') + (c ? '\n' + (c.note || srcOf(c.source).long) : '');
+        return React.createElement("td", {
+          key: sg.months[0],
+          colSpan: sg.months.length,
+          style: {
+            position: 'relative'
+          }
+        }, React.createElement("button", {
+          className: 'kp-cell ' + cls,
+          disabled: !open,
+          onClick: () => setEdit({
+            def: d,
+            ym: due,
+            cell: c,
+            k: Date.now(),
+            checks: ch ? ch.items : []
+          }),
+          title: tip
+        }, open && (isGap(c) ? React.createElement("span", {
+          style: {
+            fontSize: 11.5,
+            fontWeight: 700
+          }
+        }, c.source === 'partial' ? '! den.' : '+ Add') : React.createElement("b", null, K.fmt(d, c.value, {
+          bare: true
+        }))), React.createElement("span", {
+          className: "per"
+        }, sg.p.label, !dueIn ? ' · result in ' + K.fmtMonth(due) : future ? ' · due ' + K.fmtMonth(due) : ''), open && !isGap(c) && React.createElement("span", {
+          className: "kp-dot",
+          style: {
+            background: srcOf(c.source).dot
+          }
+        })), ch && React.createElement("span", {
+          className: 'kp-cellmark ' + ch.level
+        }));
+      }
+      const m = sg.months[0];
       const c = cellOf(d.id, m),
         future = m > meta.thisMonth,
         ch = checksOf(d.id, m);
@@ -2598,7 +2784,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         overflow: 'hidden',
         background: '#eef2f6'
       }
-    }, ['met', 'near', 'off', 'notarget', 'nodata', 'notstarted'].map(k => s[k] ? React.createElement("span", {
+    }, ['met', 'near', 'off', 'notarget', 'nodata', 'notstarted', 'notdue'].map(k => s[k] ? React.createElement("span", {
       key: k,
       title: s[k] + ' ' + ST[k].label,
       style: {
@@ -2653,7 +2839,67 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       onClick: generate
     }, busy ? 'Preparing…' : 'Generate & save report'), React.createElement("span", {
       className: "kp-muted"
-    }, "A saved draft keeps your commentary and sign-off; its figures stay live until you finalise it. The report for the month that just ended is prepared automatically."))), err && React.createElement("div", {
+    }, "A saved draft keeps your commentary and sign-off; its figures stay live until you finalise it. The report for the month that just ended is prepared automatically."))), React.createElement("div", {
+      className: "kp-card"
+    }, React.createElement("div", {
+      className: "kp-h"
+    }, React.createElement("h3", null, "Documents"), React.createElement("span", {
+      className: "kp-muted"
+    }, "the programme itself \u2014 not a period")), React.createElement("div", {
+      className: "kp-grid2 kp-pad"
+    }, React.createElement("div", {
+      className: "kp-card kp-pad",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        boxShadow: 'none'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 14,
+        color: 'var(--ink)'
+      }
+    }, "KPI Definition document"), React.createElement("span", {
+      className: "kp-muted"
+    }, "One page per KPI: what it measures, the formula, where its figures come from, how often it is measured, its cycles and targets, and its action plan \u2014 with a cover and document control for sign-off."), React.createElement("div", null, React.createElement(Btn, {
+      pri: true,
+      onClick: () => setRoute({
+        view: 'kpiReports',
+        report: 'definitions'
+      })
+    }, "Open \xB7 Print \xB7 PDF \xB7 Word"))), React.createElement("div", {
+      className: "kp-card kp-pad",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        boxShadow: 'none'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 14,
+        color: 'var(--ink)'
+      }
+    }, "Data collection calendar"), React.createElement("span", {
+      className: "kp-muted"
+    }, "A year on one page: which KPI owes a figure in which month \u2014 monthly, every 3 or 6 months, or yearly \u2014 to hand to unit managers."), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8
+      }
+    }, React.createElement(Btn, {
+      pri: true,
+      onClick: () => setRoute({
+        view: 'kpiReports',
+        report: 'calendar-' + meta.thisMonth.slice(0, 4)
+      })
+    }, "Open ", meta.thisMonth.slice(0, 4), " \xB7 Print \xB7 PDF \xB7 Excel"), React.createElement(Btn, {
+      onClick: () => setRoute({
+        view: 'kpiReports',
+        report: 'calendar-' + (+meta.thisMonth.slice(0, 4) + 1)
+      })
+    }, +meta.thisMonth.slice(0, 4) + 1))))), err && React.createElement("div", {
       className: "kp-banner"
     }, err), React.createElement("div", {
       className: "kp-card"
@@ -2711,6 +2957,355 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         fontSize: 11
       }
     }, r.state === 'final' ? 'Finalised by ' + (r.finalizedBy || '—') + ' · ' + when(r.finalizedAt) : (r.generatedBy || '') + ' · ' + when(r.generatedAt)))))));
+  }
+  function DocView({
+    meta,
+    kind,
+    year,
+    setRoute
+  }) {
+    const cfg = meta.config;
+    const isDefs = kind === 'definitions';
+    const [y, setY] = useState(year || +meta.thisMonth.slice(0, 4));
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState('');
+    const [busy, setBusy] = useState('');
+    const [capturing, setCapturing] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+      let live = true;
+      setData(null);
+      setErr('');
+      api(isDefs ? '/api/kpi/definitions' : '/api/kpi/calendar?year=' + y).then(j => {
+        if (live) setData(j);
+      }).catch(e => live && setErr(e.message));
+      return () => {
+        live = false;
+      };
+    }, [kind, y]);
+    const sig = sigNames();
+    const title = isDefs ? 'Nursing KPI Definitions' : 'Data collection calendar ' + y;
+    const fileBase = isDefs ? 'Nursing-KPI-Definitions-' + meta.thisMonth : 'Nursing-KPI-Data-Collection-Calendar-' + y;
+    const log = k => () => api('/api/kpi/print', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: k,
+        what: title
+      })
+    });
+    async function act(k) {
+      setBusy(k);
+      try {
+        if (k === 'print') await printSheets(() => ref.current, title, log('print'), setCapturing);
+        if (k === 'pdf') await pdfSheets(() => ref.current, title, fileBase, log('pdf'), setCapturing);
+        if (k === 'docx') {
+          await download('/api/kpi/definitions.docx?sig=' + encodeURIComponent(JSON.stringify(sig)));
+          toast('Word file downloaded.', 'success');
+        }
+        if (k === 'xlsx') {
+          await download('/api/kpi/calendar.xlsx?year=' + y);
+          toast('Excel file downloaded.', 'success');
+        }
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+      setBusy('');
+    }
+    const foot = title + ' · ' + (cfg.hospitalName || '') + ' · ' + K.fmtMonthLong(meta.thisMonth);
+    let page = 0;
+    const pg = () => 'Page ' + ++page;
+    const sheets = [];
+    if (data && isDefs) {
+      const list = data.defs.slice().sort((a, b) => (K.pillarOf(cfg, a.pillar).order || 99) - (K.pillarOf(cfg, b.pillar).order || 99) || (a.order || 0) - (b.order || 0));
+      sheets.push(React.createElement(Sheet, {
+        key: "cover",
+        kicker: cfg.hospitalName,
+        title: "Nursing KPI Definitions",
+        foot: foot,
+        page: pg()
+      }, React.createElement("div", {
+        style: {
+          fontSize: 15,
+          color: '#3a4656',
+          marginBottom: 6
+        }
+      }, cfg.reportTitle, " \xB7 ", list.length, " KPIs in ", [...new Set(list.map(d => d.pillar))].length, " pillars"), React.createElement("div", {
+        style: {
+          fontSize: 13,
+          color: '#3a4656',
+          maxWidth: 820,
+          lineHeight: 1.5,
+          marginBottom: 18
+        }
+      }, "What each KPI measures, how it is calculated, where its figures come from, how often it is measured, its cycles, targets and action plan. Version: ", new Date().toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric'
+      }), me() ? ' · prepared by ' + me() : '', "."), React.createElement("div", {
+        style: {
+          fontSize: 13,
+          fontWeight: 800,
+          color: '#00293A',
+          margin: '6px 0'
+        }
+      }, "Document control"), React.createElement("table", {
+        className: "kp-stbl",
+        style: {
+          maxWidth: 820
+        }
+      }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Role"), React.createElement("th", null, "Name"), React.createElement("th", null, "Signature"), React.createElement("th", null, "Date"))), React.createElement("tbody", null, [['prepared', 'Prepared by'], ['reviewed', 'Reviewed by'], ['recommended', 'Recommended by'], ['approved', 'Approved by']].map(([k, l]) => React.createElement("tr", {
+        key: k
+      }, React.createElement("td", {
+        className: "l"
+      }, React.createElement("b", null, l)), React.createElement("td", {
+        className: "l",
+        style: {
+          height: 34
+        }
+      }, sig[k] || ''), React.createElement("td", null), React.createElement("td", null)))))));
+      sheets.push(React.createElement(Sheet, {
+        key: "toc",
+        kicker: "Nursing KPI Definitions",
+        title: "Contents",
+        foot: foot,
+        page: pg()
+      }, React.createElement("table", {
+        className: "kp-stbl"
+      }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Code"), React.createElement("th", null, "KPI"), React.createElement("th", null, "Pillar"), React.createElement("th", null, "Measured"), React.createElement("th", null, "Target"), React.createElement("th", null, "Source"))), React.createElement("tbody", null, list.map(d => React.createElement("tr", {
+        key: d.id
+      }, React.createElement("td", null, React.createElement("b", null, d.code)), React.createElement("td", {
+        className: "l"
+      }, d.name), React.createElement("td", {
+        className: "l"
+      }, K.pillarOf(cfg, d.pillar).label), React.createElement("td", null, d.doc.measured), React.createElement("td", null, d.doc.cycles.map(c => c.target).join(' → ')), React.createElement("td", null, d.source && d.source.indId ? 'Quality data' : 'Entered')))))));
+      list.forEach(d => {
+        const doc = d.doc,
+          pl = K.pillarOf(cfg, d.pillar);
+        const acts = doc.actions.slice(0, 9);
+        sheets.push(React.createElement(Sheet, {
+          key: d.id,
+          kicker: pl.label + ' · ' + doc.measured,
+          title: (doc.code ? doc.code + '  ' : '') + doc.name,
+          foot: foot,
+          page: pg()
+        }, React.createElement("div", {
+          style: {
+            display: 'grid',
+            gridTemplateColumns: '1.45fr 1fr',
+            gap: 18,
+            alignItems: 'start'
+          }
+        }, React.createElement("table", {
+          className: "kp-deck",
+          style: {
+            fontSize: 10.8
+          }
+        }, React.createElement("tbody", null, doc.facts.map(([l, v]) => React.createElement("tr", {
+          key: l
+        }, React.createElement("th", {
+          style: {
+            width: 150,
+            fontSize: 10.5,
+            padding: '5px 9px'
+          }
+        }, l), React.createElement("td", {
+          style: {
+            padding: '5px 9px'
+          }
+        }, String(v).length > 420 ? String(v).slice(0, 420) + '…' : v))))), React.createElement("div", {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10
+          }
+        }, React.createElement("div", {
+          style: {
+            fontSize: 12.5,
+            fontWeight: 800,
+            color: '#00293A'
+          }
+        }, "Cycles and targets"), React.createElement("table", {
+          className: "kp-stbl"
+        }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Cycle"), React.createElement("th", null, "Dates"), React.createElement("th", null, "Target"), React.createElement("th", null, "Results due"))), React.createElement("tbody", null, doc.cycles.map(c => React.createElement("tr", {
+          key: c.n
+        }, React.createElement("td", null, React.createElement("b", null, c.n)), React.createElement("td", {
+          className: "l"
+        }, c.dates), React.createElement("td", null, React.createElement("b", null, c.target)), React.createElement("td", null, c.results))))), React.createElement("div", {
+          style: {
+            fontSize: 11,
+            color: '#5b6878'
+          }
+        }, doc.schedule), React.createElement("div", {
+          style: {
+            fontSize: 12.5,
+            fontWeight: 800,
+            color: '#00293A'
+          }
+        }, "Action plan"), acts.length ? React.createElement("table", {
+          className: "kp-stbl",
+          style: {
+            fontSize: 10.5
+          }
+        }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "#"), React.createElement("th", null, "Action"), React.createElement("th", null, "Owner"), React.createElement("th", null, "Status"))), React.createElement("tbody", null, acts.map((a, i) => React.createElement("tr", {
+          key: i
+        }, React.createElement("td", null, i + 1), React.createElement("td", {
+          className: "l"
+        }, a.text, a.due ? React.createElement("span", {
+          style: {
+            color: '#7b8796'
+          }
+        }, " \xB7 due ", a.due) : null), React.createElement("td", {
+          className: "l"
+        }, a.owner), React.createElement("td", null, a.status))))) : React.createElement("div", {
+          className: "kp-muted"
+        }, "No action items."), doc.actions.length > acts.length && React.createElement("div", {
+          className: "kp-muted",
+          style: {
+            fontSize: 11
+          }
+        }, "+ ", doc.actions.length - acts.length, " more action items (in the Word file).")))));
+      });
+    }
+    if (data && !isDefs) {
+      const cal = data.calendar,
+        defs = data.defs;
+      const rowsOf = defs.slice().sort((a, b) => (K.pillarOf(cfg, a.pillar).order || 99) - (K.pillarOf(cfg, b.pillar).order || 99));
+      const chunks = [];
+      for (let i = 0; i < rowsOf.length; i += 20) chunks.push(rowsOf.slice(i, i + 20));
+      const mark = {
+        due: React.createElement("b", {
+          style: {
+            color: '#14713f',
+            fontSize: 15
+          }
+        }, "\u25CF"),
+        off: React.createElement("span", {
+          style: {
+            color: '#b9c2cd'
+          }
+        }, "\xB7"),
+        notstarted: React.createElement("span", {
+          style: {
+            color: '#c9d1db'
+          }
+        }, "\u2014")
+      };
+      chunks.forEach((part, ci) => sheets.push(React.createElement(Sheet, {
+        key: 'cal' + ci,
+        kicker: cfg.hospitalName + ' · Nursing KPI',
+        title: 'Data collection calendar ' + cal.year + (chunks.length > 1 ? ' (' + (ci + 1) + '/' + chunks.length + ')' : ''),
+        foot: foot,
+        page: pg()
+      }, React.createElement("table", {
+        className: "kp-stbl",
+        style: {
+          fontSize: 11
+        }
+      }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "#"), React.createElement("th", {
+        style: {
+          textAlign: 'left'
+        }
+      }, "KPI"), React.createElement("th", null, "Measured"), React.createElement("th", null, "Source"), cal.months.map(m => React.createElement("th", {
+        key: m,
+        style: {
+          padding: '6px 4px'
+        }
+      }, K.MONS[+m.slice(5) - 1])), React.createElement("th", null, "Due"))), React.createElement("tbody", null, part.map(d => React.createElement("tr", {
+        key: d.id
+      }, React.createElement("td", null, React.createElement("b", null, d.code)), React.createElement("td", {
+        className: "l"
+      }, d.name), React.createElement("td", {
+        style: {
+          whiteSpace: 'nowrap'
+        }
+      }, d.freq), React.createElement("td", {
+        style: {
+          fontSize: 10
+        }
+      }, d.linked ? d.autoFill && cfg.autoFill !== false ? 'Auto from quality' : 'Typed' : 'Typed'), cal.months.map(m => React.createElement("td", {
+        key: m,
+        style: {
+          padding: '4px 2px',
+          background: cal.byKpi[d.id][m] === 'due' ? '#e7f6ed' : undefined
+        }
+      }, mark[cal.byKpi[d.id][m]])), React.createElement("td", null, React.createElement("b", null, cal.months.filter(m => cal.byKpi[d.id][m] === 'due').length)))), ci === chunks.length - 1 && React.createElement("tr", null, React.createElement("td", null), React.createElement("td", {
+        className: "l"
+      }, React.createElement("b", null, "Figures due")), React.createElement("td", null), React.createElement("td", null), cal.dueCount.map((n, i) => React.createElement("td", {
+        key: i
+      }, React.createElement("b", null, n))), React.createElement("td", null, React.createElement("b", null, cal.dueCount.reduce((a, b) => a + b, 0)))))), React.createElement("div", {
+        style: {
+          marginTop: 12,
+          fontSize: 11,
+          color: '#5b6878',
+          display: 'flex',
+          gap: 18,
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("span", null, React.createElement("b", {
+        style: {
+          color: '#14713f'
+        }
+      }, "\u25CF"), " a figure is due (the period ends this month)"), React.createElement("span", null, React.createElement("b", null, "\xB7"), " not due"), React.createElement("span", null, React.createElement("b", null, "\u2014"), " not started yet"), React.createElement("span", null, "A KPI measured every 3 or 6 months, or yearly, owes one figure per period, entered in the period\u2019s last month.")))));
+    }
+    return React.createElement("div", {
+      className: 'kp-wrap' + (capturing ? ' kp-capturing' : '')
+    }, React.createElement("div", {
+      className: "kp-card kp-bar",
+      style: {
+        position: 'sticky',
+        top: -22,
+        zIndex: 5,
+        boxShadow: '0 6px 22px rgba(13,27,46,.10)'
+      }
+    }, React.createElement(Btn, {
+      onClick: () => setRoute({
+        view: 'kpiReports'
+      })
+    }, "\u2039 All reports"), React.createElement("b", {
+      style: {
+        fontSize: 14
+      }
+    }, title), !isDefs && React.createElement("select", {
+      className: "kp-sel",
+      value: y,
+      onChange: e => {
+        setY(+e.target.value);
+        setRoute({
+          view: 'kpiReports',
+          report: 'calendar-' + e.target.value
+        });
+      }
+    }, [-1, 0, 1, 2].map(i => +meta.thisMonth.slice(0, 4) + i).map(n => React.createElement("option", {
+      key: n,
+      value: n
+    }, n))), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), meta.canPrint && React.createElement(React.Fragment, null, React.createElement(Btn, {
+      disabled: !data || !!busy,
+      onClick: () => act('print')
+    }, busy === 'print' ? 'Preparing…' : 'Print'), React.createElement(Btn, {
+      disabled: !data || !!busy,
+      onClick: () => act('pdf')
+    }, busy === 'pdf' ? 'Making the PDF…' : 'PDF'), isDefs ? React.createElement(Btn, {
+      pri: true,
+      disabled: !data || !!busy,
+      onClick: () => act('docx')
+    }, busy === 'docx' ? 'Building…' : 'Word') : React.createElement(Btn, {
+      pri: true,
+      disabled: !data || !!busy,
+      onClick: () => act('xlsx')
+    }, busy === 'xlsx' ? 'Building…' : 'Excel'))), err && React.createElement("div", {
+      className: "kp-banner"
+    }, err), !data && !err && React.createElement("div", {
+      className: "kp-card kp-empty"
+    }, "Preparing the document\u2026"), data && React.createElement("div", {
+      className: "kp-scroll"
+    }, React.createElement("div", {
+      className: "kp-doc",
+      ref: ref
+    }, sheets)));
   }
   function Sheet({
     kicker,
@@ -3174,78 +3769,22 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }
     const title = rep && rep.title || cfg.reportTitle;
     const fileBase = 'Nursing-KPI-' + (rep ? rep.from === rep.to ? rep.from : rep.from + '-to-' + rep.to : '');
-    async function printDoc() {
-      const w = window.open('', '_blank');
-      try {
-        await api('/api/kpi/print', {
-          method: 'POST',
-          body: JSON.stringify({
-            id,
-            kind: 'print',
-            what: layout
-          })
-        });
-        if (!w) {
-          toast('Allow pop-ups for this site to print.', 'error');
-          return;
-        }
-        setCapturing(true);
-        await new Promise(r => setTimeout(r, 60));
-        const html = docRef.current.innerHTML.split('src="unico/logo.svg"').join('src="' + location.origin + '/unico/logo.svg"');
-        setCapturing(false);
-        w.document.open();
-        w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title + ' — ' + K.fmtRange(rep.from, rep.to)) + '</title><style>:root{--line:#dde3ec;--line-2:#eef2f6;--muted:#7b8796;--ink:#16202e;--ink-2:#3a4656;--blue-50:#eef8fd;--shadow:none}' + 'html{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;font-family:"IBM Plex Sans","Segoe UI",Arial,sans-serif;background:#fff}@page{size:A4 landscape;margin:0}' + CSS + '.kp-doc{gap:0;padding:0}.kp-sheet{box-shadow:none;page-break-after:always;break-after:page;width:297mm;height:209mm;min-height:0}.kp-sheet:last-child{page-break-after:auto}</style></head><body><div class="kp-doc">' + html + '</div><script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script></body></html>');
-        w.document.close();
-      } catch (e) {
-        if (w) w.close();
-        setCapturing(false);
-        throw e;
-      }
-    }
-    async function pdfDoc() {
-      await api('/api/kpi/print', {
-        method: 'POST',
-        body: JSON.stringify({
-          id,
-          kind: 'pdf',
-          what: layout
-        })
-      });
-      if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) await window.unicoLoadPdfLibs();
-      const J = window.jspdf && window.jspdf.jsPDF,
-        H = window.html2canvas;
-      if (!J || !H) throw new Error('The PDF tools could not load. Use Print and choose “Save as PDF”.');
-      setCapturing(true);
-      try {
-        await new Promise(r => setTimeout(r, 120));
-        const sheets = [...docRef.current.querySelectorAll('.kp-sheet')];
-        const pdf = new J({
-          orientation: 'landscape',
-          unit: 'mm',
-          format: 'a4',
-          compress: true
-        });
-        for (let i = 0; i < sheets.length; i++) {
-          const c = await H(sheets[i], {
-            scale: 1.6,
-            backgroundColor: '#ffffff',
-            useCORS: true,
-            logging: false,
-            windowWidth: 1200
-          });
-          if (i) pdf.addPage();
-          pdf.addImage(c.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, 297, 210);
-        }
-        pdf.setProperties({
-          title: title + ' — ' + K.fmtRange(rep.from, rep.to),
-          author: me()
-        });
-        pdf.save(fileBase + '.pdf');
-        toast('PDF downloaded.', 'success');
-      } finally {
-        setCapturing(false);
-      }
-    }
+    const printDoc = () => printSheets(() => docRef.current, title + ' — ' + K.fmtRange(rep.from, rep.to), () => api('/api/kpi/print', {
+      method: 'POST',
+      body: JSON.stringify({
+        id,
+        kind: 'print',
+        what: layout
+      })
+    }), setCapturing);
+    const pdfDoc = () => pdfSheets(() => docRef.current, title + ' — ' + K.fmtRange(rep.from, rep.to), fileBase, () => api('/api/kpi/print', {
+      method: 'POST',
+      body: JSON.stringify({
+        id,
+        kind: 'pdf',
+        what: layout
+      })
+    }), setCapturing);
     if (err) return React.createElement("div", {
       className: "kp-wrap"
     }, React.createElement("div", {
@@ -3424,7 +3963,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         textAlign: 'center',
         marginTop: 6
       }
-    }, sum.scored ? sum.met + ' of ' + sum.scored + ' scored KPIs on target' : 'no scored KPIs')), [['met', sum.met], ['near', sum.near], ['off', sum.off], ['nodata', sum.nodata + sum.notarget + (sum.notstarted || 0)]].map(([k, n]) => React.createElement("div", {
+    }, sum.scored ? sum.met + ' of ' + sum.scored + ' scored KPIs on target' : 'no scored KPIs')), [['met', sum.met], ['near', sum.near], ['off', sum.off], ['nodata', sum.nodata + sum.notarget + (sum.notstarted || 0) + (sum.notdue || 0)]].map(([k, n]) => React.createElement("div", {
       key: k,
       style: {
         borderRadius: 14,
@@ -3452,7 +3991,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         color: '#7b8796',
         marginTop: 4
       }
-    }, rows.filter(r => k === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' || r.status === 'notstarted' : r.status === k).map(r => r.code).join(' · '))))), React.createElement("div", {
+    }, rows.filter(r => k === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' || r.status === 'notstarted' || r.status === 'notdue' : r.status === k).map(r => r.code).join(' · '))))), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: '1.25fr 1fr',
@@ -3493,7 +4032,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             color: ST.off.color,
             label: 'need action'
           }, {
-            value: c.nodata + c.notarget + (c.notstarted || 0),
+            value: c.nodata + c.notarget + (c.notstarted || 0) + (c.notdue || 0),
             color: ST.nodata.color,
             label: 'no data'
           }]
@@ -3582,7 +4121,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         color: '#7b8796'
       }
-    }, r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : '—'), React.createElement("td", null, React.createElement("b", null, K.fmt(r, r.period.value))), React.createElement("td", null, r.target != null ? K.fmt(r, r.target) : '—'), React.createElement("td", {
+    }, r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : '—'), React.createElement("td", null, React.createElement("b", null, K.fmt(r, r.period.value)), React.createElement(ResultTag, {
+      r: r
+    })), React.createElement("td", null, r.target != null ? K.fmt(r, r.target) : '—'), React.createElement("td", {
       style: {
         fontSize: 11
       }
@@ -3629,7 +4170,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         }
       }, r.unit), months6.map(m => React.createElement("td", {
         key: m
-      }, K.fmt(r, (r.cells[m] || {}).value, {
+      }, (r.cells[m] || {}).source === 'not-due' ? React.createElement("span", {
+        style: {
+          color: '#b9c2cd'
+        }
+      }, "\xB7") : K.fmt(r, (r.cells[m] || {}).value, {
         bare: true
       }))), React.createElement("td", null, React.createElement("b", null, K.fmt(r, r.period.value))), React.createElement("td", null, r.target != null ? K.fmt(r, r.target) : '—'), React.createElement("td", {
         style: {
@@ -3663,7 +4208,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }
     }, React.createElement("table", {
       className: "kp-deck"
-    }, React.createElement("tbody", null, React.createElement("tr", null, React.createElement("th", null, "Objective"), React.createElement("td", null, r.objective || '—')), React.createElement("tr", null, React.createElement("th", null, "Current"), React.createElement("td", null, React.createElement("b", null, K.fmt(r, r.period.value)), " ", K.unitKind(r) === 'num' ? r.unit : '', " ", React.createElement("span", {
+    }, React.createElement("tbody", null, React.createElement("tr", null, React.createElement("th", null, "Objective"), React.createElement("td", null, r.objective || '—')), React.createElement("tr", null, React.createElement("th", null, "Current"), React.createElement("td", null, React.createElement("b", null, K.fmt(r, r.period.value)), " ", K.unitKind(r) === 'num' ? r.unit : '', resultOf(r) ? React.createElement("b", {
+      style: {
+        color: '#3f3fa8'
+      }
+    }, " \u2014 ", resultOf(r)) : null, " ", React.createElement("span", {
       style: {
         color: '#7b8796'
       }
@@ -3690,7 +4239,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontStyle: 'italic'
       }
-    }, r.formulaText || '—')), React.createElement("tr", null, React.createElement("th", null, "Tracking frequency"), React.createElement("td", null, r.frequency || 'Monthly')), React.createElement("tr", null, React.createElement("th", null, "Remarks"), React.createElement("td", {
+    }, r.formulaText || '—')), React.createElement("tr", null, React.createElement("th", null, "Tracking"), React.createElement("td", null, r.schedule || r.frequency || 'Monthly', r.trackingNote ? ' · ' + r.trackingNote : '', r.nextDue ? React.createElement("span", {
+      style: {
+        color: '#7b8796'
+      }
+    }, " \xB7 next result ", K.fmtMonthLong(r.nextDue)) : null)), React.createElement("tr", null, React.createElement("th", null, "Remarks"), React.createElement("td", {
       style: {
         whiteSpace: 'pre-wrap',
         fontSize: 11
@@ -3703,18 +4256,20 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }
     }, React.createElement("div", {
       className: "kp-lab"
-    }, "Last 12 months", r.unit ? ' · ' + r.unit : ''), React.createElement(KpiChart, {
+    }, r.freqMonths > 1 ? 'Last 12 months · one point per period' : 'Last 12 months', r.unit ? ' · ' + r.unit : ''), React.createElement(KpiChart, {
       row: r,
       kind: "area",
-      height: 210,
+      height: r.freqMonths > 1 ? 150 : 210,
       flat: true
+    }), r.freqMonths > 1 && React.createElement(PeriodsTable, {
+      row: r
     }), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: 'repeat(3,1fr)',
         gap: 8
       }
-    }, [[K.fmt(r, r.period.value), rep.months.length > 1 ? 'Period value' : 'This month', '#00293A', '#eaf6fb'], [r.target != null ? K.fmt(r, r.target) : '—', 'Target', '#00293A', '#eef7f5'], [ST[r.status].label, r.achievement != null ? r.achievement + '% of target' : 'status', ST[r.status].color, ST[r.status].bg]].map(([b, s, c, bg], i) => React.createElement("div", {
+    }, [[K.fmt(r, r.period.value), resultOf(r) || (rep.months.length > 1 ? 'Period value' : 'This month'), '#00293A', '#eaf6fb'], [r.target != null ? K.fmt(r, r.target) : '—', 'Target', '#00293A', '#eef7f5'], [ST[r.status].label, r.achievement != null ? r.achievement + '% of target' : 'status', ST[r.status].color, ST[r.status].bg]].map(([b, s, c, bg], i) => React.createElement("div", {
       key: i,
       style: {
         background: bg,
@@ -3907,6 +4462,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     numLabel: '',
     denLabel: '',
     frequency: 'Monthly for 6 months & later for another 6 months',
+    freqMonths: 1,
+    cycleMonths: null,
+    cycles: null,
     remarks: '',
     baseline: {
       value: '',
@@ -3922,6 +4480,96 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     startMonth: '',
     units: []
   };
+  const CYCLE_CHOICES = [1, 2, 3, 4, 6, 9, 12, 18, 24];
+  const cycleChoices = f => CYCLE_CHOICES.filter(n => n % f === 0);
+  const withFreq = (x, f) => Object.assign({}, x, {
+    freqMonths: f,
+    cycleMonths: x.cycleMonths && x.cycleMonths % f ? null : x.cycleMonths
+  });
+  function ScheduleBox({
+    d,
+    setD,
+    cfg,
+    can,
+    isAdmin
+  }) {
+    const f = K.freqOf(d);
+    const set = (k, v) => setD(x => Object.assign({}, x, {
+      [k]: v
+    }));
+    return React.createElement("div", {
+      className: "kp-card kp-pad",
+      style: {
+        boxShadow: 'none',
+        background: '#f8fafc',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8
+      }
+    }, React.createElement("div", {
+      className: "kp-lab"
+    }, "Schedule \u2014 how often it is measured, and its cycles", !isAdmin && React.createElement("span", {
+      style: {
+        textTransform: 'none',
+        fontWeight: 600,
+        color: '#7b8796'
+      }
+    }, " \xB7 set by an administrator (Settings \u2192 KPI schedule)")), React.createElement("div", {
+      className: "kp-row"
+    }, React.createElement("label", {
+      className: "kp-fld"
+    }, React.createElement("span", {
+      className: "kp-lab"
+    }, "Measured"), React.createElement("select", {
+      className: "kp-sel",
+      value: f,
+      disabled: !can,
+      onChange: e => setD(x => withFreq(x, +e.target.value))
+    }, K.FREQS.map(x => React.createElement("option", {
+      key: x.m,
+      value: x.m
+    }, x.label)))), React.createElement("label", {
+      className: "kp-fld"
+    }, React.createElement("span", {
+      className: "kp-lab"
+    }, "Cycle length"), React.createElement("select", {
+      className: "kp-sel",
+      value: d.cycleMonths || '',
+      disabled: !can,
+      onChange: e => set('cycleMonths', e.target.value ? +e.target.value : null)
+    }, React.createElement("option", {
+      value: ""
+    }, "Same as all KPIs (", K.cycleCfg({
+      freqMonths: f
+    }, cfg).cycleMonths, " months)"), cycleChoices(f).map(n => React.createElement("option", {
+      key: n,
+      value: n
+    }, n, " months")))), React.createElement("label", {
+      className: "kp-fld"
+    }, React.createElement("span", {
+      className: "kp-lab"
+    }, "Cycles"), React.createElement("select", {
+      className: "kp-sel",
+      value: d.cycles || '',
+      disabled: !can,
+      onChange: e => set('cycles', e.target.value ? +e.target.value : null)
+    }, React.createElement("option", {
+      value: ""
+    }, "Same as all KPIs (", K.cfgOf(cfg).cycles, ")"), [1, 2, 3, 4, 5, 6].map(n => React.createElement("option", {
+      key: n,
+      value: n
+    }, n))))), React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        fontSize: 11.5
+      }
+    }, K.scheduleText(d, cfg)), f > 1 && React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        fontSize: 11.5
+      }
+    }, "One figure per period, entered in the period\u2019s last month (", K.dueMonths(d, K.startOf(d, cfg), K.addMonth(K.startOf(d, cfg), 23), cfg).slice(0, 4).map(K.fmtMonth).join(', '), "\u2026). The months between owe nothing."));
+  }
   function KpiEditor({
     meta,
     def,
@@ -4101,19 +4749,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }), d.startMonth && may ? React.createElement("button", {
       className: "kp-icon-btn",
       onClick: () => set('startMonth', '')
-    }, "Same as all KPIs") : null), d.startMonth ? 'Counting starts ' + K.fmtMonthLong(d.startMonth) + ': cycles and targets count from here; earlier months are not counted and are never “missing”.' : 'Blank = the same as all KPIs (' + K.fmtMonthLong(cfg.cycleStart) + ', set in Settings).'), d.startMonth && K.isMonth(d.startMonth) && React.createElement("div", {
-      className: "kp-muted",
-      style: {
-        fontSize: 11.5
-      }
-    }, Array.from({
-      length: cfg.cycles
-    }, (_, i) => {
-      const r = K.cycleRange(i + 1, cfg, {
-        startMonth: d.startMonth
-      });
-      return 'Cycle ' + (i + 1) + ': ' + K.fmtRange(r.from, r.to);
-    }).join(' · ')))), tab === 'units' && React.createElement(React.Fragment, null, !linked ? React.createElement("div", {
+    }, "Same as all KPIs") : null), d.startMonth ? 'Counting starts ' + K.fmtMonthLong(d.startMonth) + ': cycles and targets count from here; earlier months are not counted and are never “missing”.' : 'Blank = the same as all KPIs (' + K.fmtMonthLong(cfg.cycleStart) + ', set in Settings).')), React.createElement(ScheduleBox, {
+      d: d,
+      setD: setD,
+      cfg: cfg,
+      can: may && meta.isAdmin,
+      isAdmin: meta.isAdmin
+    })), tab === 'units' && React.createElement(React.Fragment, null, !linked ? React.createElement("div", {
       className: "kp-banner info"
     }, "This KPI is typed monthly, so it has no reporting units. Link it to a quality indicator (Measure & data) to check which units report it.") : React.createElement(React.Fragment, null, React.createElement("div", {
       className: "kp-muted"
@@ -4354,12 +4996,12 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }
     }, "Target per cycle"), React.createElement("div", {
       className: "kp-muted"
-    }, "The programme runs ", cfg.cycles, " cycles of ", cfg.cycleMonths, " months from ", K.fmtMonth(cfg.cycleStart), ". A cycle left empty keeps the previous cycle's target."), React.createElement("div", {
+    }, "This KPI runs ", K.cycleCfg(d, cfg).cycles, " cycle(s) of ", K.cycleCfg(d, cfg).cycleMonths, " months from ", K.fmtMonth(K.startOf(d, cfg)), K.cycleCfg(d, cfg).own ? ' (its own cycles)' : '', ". A cycle left empty keeps the previous cycle's target."), React.createElement("div", {
       className: "kp-row"
     }, Array.from({
-      length: cfg.cycles
+      length: K.cycleCfg(d, cfg).cycles
     }, (_, i) => i + 1).map(c => {
-      const r = K.cycleRange(c, cfg);
+      const r = K.cycleRange(c, cfg, d);
       return fld('Cycle ' + c + ' · ' + K.fmtRange(r.from, r.to), React.createElement("input", {
         className: "kp-in",
         inputMode: "decimal",
@@ -4452,12 +5094,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         status: 'open',
         note: ''
       }]))
-    }, "+ Add an action"))), tab === 'remarks' && React.createElement(React.Fragment, null, fld('Tracking frequency', React.createElement("input", {
+    }, "+ Add an action"))), tab === 'remarks' && React.createElement(React.Fragment, null, fld('Tracking note (optional)', React.createElement("input", {
       className: "kp-in",
-      value: d.frequency,
+      value: K.trackingNote(d),
       disabled: !may,
-      onChange: e => set('frequency', e.target.value)
-    })), fld('Remarks', React.createElement("textarea", {
+      onChange: e => set('frequency', e.target.value),
+      placeholder: "e.g. survey in the first week of the period's last month"
+    }), 'Documents print the schedule (Basics → Schedule: ' + K.freqLabel(d, true).toLowerCase() + '); a note here is added after it.'), fld('Remarks', React.createElement("textarea", {
       className: "kp-in",
       rows: 9,
       value: d.remarks,
@@ -4736,7 +5379,19 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           background: '#f3f5f8',
           color: '#3a4656'
         }
-      }, "Starts ", K.fmtMonth(d.startMonth)), d.units && d.units.length > 0 && React.createElement("span", {
+      }, "Starts ", K.fmtMonth(d.startMonth)), K.freqOf(d) > 1 && React.createElement("span", {
+        className: "kp-pill",
+        style: {
+          background: '#ebebfb',
+          color: '#3f3fa8'
+        }
+      }, K.freqLabel(d, true)), K.cycleCfg(d, cfg).own && React.createElement("span", {
+        className: "kp-pill",
+        style: {
+          background: '#ebebfb',
+          color: '#3f3fa8'
+        }
+      }, K.cycleCfg(d, cfg).cycles, " \xD7 ", K.cycleCfg(d, cfg).cycleMonths, "-month cycles"), d.units && d.units.length > 0 && React.createElement("span", {
         className: "kp-pill",
         style: {
           background: '#effaf4',
@@ -4989,9 +5644,217 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }, "overdue")));
     })))));
   }
+  function ScheduleTable({
+    meta,
+    defs,
+    reload
+  }) {
+    const cfg = meta.config;
+    const list = (defs || []).filter(d => d.active !== false && !d.removedAt);
+    const [draft, setDraft] = useState({});
+    const [busy, setBusy] = useState(false);
+    const base = d => ({
+      freqMonths: K.freqOf(d),
+      cycleMonths: d.cycleMonths || null,
+      cycles: d.cycles || null,
+      startMonth: K.isMonth(d.startMonth) ? d.startMonth : null
+    });
+    const cur = d => Object.assign(base(d), draft[d.id] || {});
+    const setF = (d, patch) => setDraft(x => {
+      let n = Object.assign({}, cur(d), patch);
+      if (patch.freqMonths) n = withFreq(n, patch.freqMonths);
+      const o = Object.assign({}, x);
+      if (JSON.stringify(n) === JSON.stringify(base(d))) delete o[d.id];else o[d.id] = n;
+      return o;
+    });
+    const changed = Object.keys(draft);
+    async function save() {
+      const items = changed.map(id => Object.assign({
+        id,
+        baseUpdatedAt: (list.find(x => x.id === id) || {}).updatedAt
+      }, draft[id]));
+      setBusy(true);
+      try {
+        const dry = await api('/api/kpi/schedule', {
+          method: 'POST',
+          body: JSON.stringify({
+            dryRun: true,
+            items
+          })
+        });
+        const msg = React.createElement("div", null, React.createElement("ul", {
+          style: {
+            margin: '4px 0 8px',
+            paddingLeft: 18
+          }
+        }, dry.changes.map(x => React.createElement("li", {
+          key: x.id
+        }, React.createElement("b", null, x.code ? x.code + ' ' : '', x.name), ": ", x.from, " \u2192 ", React.createElement("b", null, x.to), x.kept ? React.createElement("div", {
+          style: {
+            color: '#8a5a00'
+          }
+        }, x.kept, " monthly figure(s) already saved in months that are no longer due are kept, but no longer counted.") : null))), "Data Update, reports and the missing-data badge follow the new schedule at once. Final reports do not change. Nothing is deleted.");
+        const ok = await confirmBox({
+          title: 'Save the KPI schedule?',
+          message: msg,
+          confirmLabel: 'Save schedule'
+        });
+        if (!ok) {
+          setBusy(false);
+          return;
+        }
+        const j = await api('/api/kpi/schedule', {
+          method: 'POST',
+          body: JSON.stringify({
+            items
+          })
+        });
+        toast(j.saved + ' KPI schedule' + (j.saved === 1 ? '' : 's') + ' saved.', 'success');
+        setDraft({});
+        refreshBadge();
+        reload();
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+      setBusy(false);
+    }
+    const groups = cfg.pillars.map(pl => ({
+      pl,
+      list: list.filter(d => d.pillar === pl.id)
+    })).filter(g => g.list.length);
+    return React.createElement("div", {
+      className: "kp-card"
+    }, React.createElement("div", {
+      className: "kp-h"
+    }, React.createElement("h3", null, "KPI schedule"), React.createElement("span", {
+      className: "kp-muted"
+    }, "How often each KPI is measured, when it starts, and its own cycles. Blank = the same as all KPIs.")), React.createElement("div", {
+      className: "kp-scroll"
+    }, React.createElement("table", {
+      className: "kp-tbl kp-sched"
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "#"), React.createElement("th", null, "KPI"), React.createElement("th", null, "Measured"), React.createElement("th", null, "Starts"), React.createElement("th", null, "Cycle length"), React.createElement("th", null, "Cycles"), React.createElement("th", null, "Periods and cycles"))), React.createElement("tbody", null, groups.map(g => [React.createElement("tr", {
+      key: 'g' + g.pl.id
+    }, React.createElement("td", {
+      colSpan: 7,
+      style: {
+        background: '#f3f6fa',
+        fontWeight: 800,
+        fontSize: 11.5
+      }
+    }, React.createElement("span", {
+      className: "kp-dot",
+      style: {
+        background: g.pl.color,
+        marginRight: 7
+      }
+    }), g.pl.label)), ...g.list.map(d => {
+      const s = cur(d),
+        dd = Object.assign({}, d, s),
+        f = s.freqMonths,
+        st = K.startOf(dd, cfg),
+        dirty = !!draft[d.id];
+      const periods = K.dueMonths(dd, st, K.addMonth(st, 11), cfg).map(m => K.periodOf(dd, m, cfg).label);
+      return React.createElement("tr", {
+        key: d.id,
+        style: {
+          cursor: 'default',
+          background: dirty ? '#fffbea' : d.disabled ? '#f6f7f9' : undefined,
+          opacity: d.disabled ? 0.65 : 1
+        }
+      }, React.createElement("td", null, React.createElement("span", {
+        className: "kp-code",
+        style: {
+          background: g.pl.color
+        }
+      }, d.code || '•')), React.createElement("td", {
+        style: {
+          minWidth: 200
+        }
+      }, React.createElement("b", {
+        style: {
+          color: 'var(--ink)'
+        }
+      }, d.name), d.disabled ? React.createElement("span", {
+        className: "kp-muted"
+      }, " \xB7 disabled") : null), React.createElement("td", null, React.createElement("select", {
+        className: "kp-sel",
+        value: f,
+        onChange: e => setF(d, {
+          freqMonths: +e.target.value
+        })
+      }, K.FREQS.map(x => React.createElement("option", {
+        key: x.m,
+        value: x.m
+      }, x.short)))), React.createElement("td", null, React.createElement("input", {
+        type: "month",
+        className: "kp-sel",
+        value: s.startMonth || '',
+        onChange: e => setF(d, {
+          startMonth: K.isMonth(e.target.value) ? e.target.value : null
+        }),
+        title: 'Blank = the same as all KPIs (' + K.fmtMonth(cfg.cycleStart) + ')',
+        style: {
+          padding: '4px 6px'
+        }
+      })), React.createElement("td", null, React.createElement("select", {
+        className: "kp-sel",
+        value: s.cycleMonths || '',
+        onChange: e => setF(d, {
+          cycleMonths: e.target.value ? +e.target.value : null
+        })
+      }, React.createElement("option", {
+        value: ""
+      }, "As all (", K.cycleCfg({
+        freqMonths: f
+      }, cfg).cycleMonths, " mo)"), cycleChoices(f).map(n => React.createElement("option", {
+        key: n,
+        value: n
+      }, n, " months")))), React.createElement("td", null, React.createElement("select", {
+        className: "kp-sel",
+        value: s.cycles || '',
+        onChange: e => setF(d, {
+          cycles: e.target.value ? +e.target.value : null
+        })
+      }, React.createElement("option", {
+        value: ""
+      }, "As all (", cfg.cycles, ")"), [1, 2, 3, 4, 5, 6].map(n => React.createElement("option", {
+        key: n,
+        value: n
+      }, n)))), React.createElement("td", {
+        className: "kp-muted",
+        style: {
+          fontSize: 11,
+          minWidth: 220
+        }
+      }, f > 1 ? React.createElement("div", null, React.createElement("b", {
+        style: {
+          color: '#3f3fa8'
+        }
+      }, periods.join(' · '))) : React.createElement("div", null, "Every month from ", K.fmtMonth(st)), React.createElement("div", null, Array.from({
+        length: K.cycleCfg(dd, cfg).cycles
+      }, (_, i) => {
+        const r = K.cycleRange(i + 1, cfg, dd);
+        return 'C' + (i + 1) + ' ' + K.spanLabel(r.from, r.to);
+      }).join(' · '))));
+    })])))), changed.length > 0 && React.createElement("div", {
+      className: "kp-savebar"
+    }, React.createElement("b", null, changed.length, " KPI schedule", changed.length > 1 ? 's' : '', " changed"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement(Btn, {
+      disabled: busy,
+      onClick: () => setDraft({})
+    }, "Discard"), React.createElement(Btn, {
+      pri: true,
+      disabled: busy,
+      onClick: save
+    }, busy ? 'Saving…' : 'Save schedule')));
+  }
   function Settings({
     meta,
-    reloadMeta
+    reloadMeta,
+    defs
   }) {
     const [c, setC] = useState(() => JSON.parse(JSON.stringify(meta.config)));
     const [busy, setBusy] = useState(false);
@@ -5093,7 +5956,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }
     }, React.createElement("b", null, "Cycle ", i + 1), React.createElement("div", {
       className: "kp-muted"
-    }, K.fmtRange(r.from, r.to)))))), React.createElement("div", {
+    }, K.fmtRange(r.from, r.to)))))), React.createElement(ScheduleTable, {
+      meta: meta,
+      defs: defs,
+      reload: reloadMeta
+    }), React.createElement("div", {
       className: "kp-card kp-pad",
       style: {
         display: 'flex',
@@ -5263,7 +6130,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         loadMeta();
         loadDefs();
       }
-    });else if (v === 'kpiReports') body = report ? React.createElement(ReportDoc, {
+    });else if (v === 'kpiReports') body = report === 'definitions' || /^calendar-\d{4}$/.test(report || '') ? React.createElement(DocView, {
+      key: report,
+      meta: meta,
+      kind: report === 'definitions' ? 'definitions' : 'calendar',
+      year: report === 'definitions' ? null : +report.slice(9),
+      setRoute: setRoute
+    }) : report ? React.createElement(ReportDoc, {
       key: report,
       meta: meta,
       id: report,
@@ -5283,6 +6156,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       focusKpi: kpi
     });else if (v === 'kpiSettings') body = meta.isAdmin ? React.createElement(Settings, {
       meta: meta,
+      defs: defs,
       reloadMeta: () => {
         loadMeta();
         loadDefs();
