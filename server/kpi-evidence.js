@@ -188,8 +188,85 @@ function deviceDaysFor(ctx, area, ind, ym, wantPatientDays) {
 /* -------------------------------------------------------------- evidence --- */
 const isPatientDays = (def) => /patient[\s-]*days?/i.test(String((def && def.denLabel) || '')) && ['fall', 'pool'].indexOf(link.ruleOf(def)) >= 0;
 
+/* A KPI measured every N months: the due month's evidence is its whole period — each month's
+   evidence (the same evidenceFor, month by month), pooled per unit. A unit "did not report" when
+   it has no figure anywhere in the period. Months that are not due owe nothing and check nothing. */
+function periodEvidence(ctx, def, ym, saved, cfg, o) {
+  const p = K.periodOf(def, ym, cfg);
+  const linked = !!(def.source && def.source.indId);
+  const autoFill = def.autoFill !== false && K.cfgOf(cfg).autoFill !== false;
+  const base = { kpiId: def.id, ym, formula: def.formula, formulaText: def.formulaText || '', rule: linked ? link.ruleOf(def) : 'manual', linked, autoFill,
+    started: !!p, startMonth: K.startOf(def, cfg), freqMonths: K.freqOf(def), period: p ? { from: p.from, to: p.to, label: p.label } : null };
+  if (!p || p.to !== ym) {
+    return Object.assign(base, { notDue: !!p, units: [], totals: { num: null, den: null, value: null, source: p ? 'not-due' : 'not-started' }, system: null, override: null,
+      sourceRecord: null, checks: [], fingerprint: fingerprint({ kpiId: def.id, notDue: ym }) });
+  }
+  const pm = K.monthsBetween(p.from, p.to);
+  const mono = Object.assign({}, def, { freqMonths: 1 });
+  const subs = pm.map((m) => evidenceFor(ctx, mono, m, null, cfg, { sub: true }));
+  const byKey = new Map();
+  subs.forEach((s, i) => s.units.forEach((u) => {
+    let a = byKey.get(u.key);
+    if (!a) { a = { key: u.key, name: u.name, deptId: u.deptId || null, indicator: u.indicator, num: null, den: null, used: false, expected: false, months: [] }; byKey.set(u.key, a); }
+    a.months.push({ ym: pm[i], num: u.num, den: u.den, value: u.value, source: u.source, used: !!u.used, approvedAt: u.approvedAt || null, submission: u.submission || null,
+      overlayEdited: u.overlayEdited || null, deviceDays: u.deviceDays || null, pending: u.pending || [] });
+    if (u.expected) a.expected = true;
+    if (u.used) { a.used = true; if (has(u.num)) a.num = (a.num || 0) + Number(u.num); if (has(u.den)) a.den = (a.den || 0) + Number(u.den); }
+  }));
+  const f = def.formula;
+  const units = [...byKey.values()].map((u) => {
+    const usedM = u.months.filter((x) => x.used);
+    const last = usedM[usedM.length - 1] || null;
+    const value = !usedM.length ? null : f === 'count' ? r4(u.num)
+      : f === 'direct' ? r4(usedM.reduce((s2, x) => s2 + Number(x.value || 0), 0) / usedM.length)
+      : (has(u.num) && Number(u.den) > 0 ? K.computeValue(f, u.num, u.den) : null);
+    const source = usedM.length ? (usedM.some((x) => x.source === 'overlay-edit') ? 'overlay-edit' : last.source)
+      : ((u.months.find((x) => x.source !== 'missing' && x.source !== 'not-observed') || u.months.find((x) => x.source === 'not-observed') || { source: 'missing' }).source);
+    return { key: u.key, name: u.name, deptId: u.deptId, indicator: u.indicator, num: r4(u.num), den: r4(u.den), value, source, used: u.used, expected: u.expected,
+      approvedAt: last ? last.approvedAt : null, submission: last ? last.submission : null, overlayEdited: (usedM.find((x) => x.overlayEdited) || {}).overlayEdited || null,
+      pending: [].concat(...u.months.map((x) => x.pending)), months: u.months, monthsUsed: usedM.length };
+  });
+  const system = linked ? link.periodSystem(ctx, def, ym, cfg) : null;
+  const live = saved && !saved.removedAt ? saved : null;
+  const cell = K.resolveCell(system, live, { autoFill });
+  const totals = { num: r4(cell.num), den: r4(cell.den), value: r4(cell.value), source: cell.source };
+  const override = live ? { by: live.updatedByName || live.updatedBy || '', at: live.updatedAt || null, note: live.note || '', autoValue: system && autoFill ? r4(system.value) : null, confirmed: !!live.confirmed } : null;
+  if (!linked && live) units.push({ key: 'entered', name: 'Entered in the KPI module', num: r4(live.num), den: r4(live.den), value: r4(live.value), source: 'manual', used: true, entered: override });
+  if (!autoFill || live) units.forEach((u) => { if (u.key !== 'entered') u.used = false; });
+
+  const checks = [];
+  const unitSubject = (u) => ({ key: u.key, num: r4(u.num), den: r4(u.den), value: r4(u.value), source: u.source });
+  const add = (code, text, u, subject) => checks.push({ code, level: K.checkLevel(code), text, unit: u ? u.key : '', unitName: u ? u.name : '',
+    fingerprint: fingerprint({ code, kpiId: def.id, ym, s: subject || (u ? unitSubject(u) : totals) }) });
+  if (linked && autoFill && !live) {
+    // each month's own unit checks, named by month (an acknowledgement belongs to that month)
+    subs.forEach((s, i) => s.checks.forEach((c) => checks.push(Object.assign({}, c, { unit: (c.unit || '') + '@' + pm[i], text: K.fmtMonth(pm[i]) + ' · ' + c.text }))));
+    units.forEach((u) => {
+      if (u.expected && !u.used && !(u.months.length && u.months.every((x) => x.source === 'not-observed'))) {
+        add('unit-missing', u.name + ' has no ' + (def.name || 'figure') + ' for ' + p.label + (u.pending.length ? ' — a figure from ' + (u.pending[0].by || 'the unit') + ' is waiting for approval.' : '.'), u);
+      }
+    });
+  }
+  if (linked && live && autoFill && system && has(system.value)) {
+    if (!String(live.note || '').trim()) add('override-no-note', 'The system figure for ' + p.label + ' was changed by ' + (override.by || 'a KPI manager') + ' without a reason.', null);
+    else add('override', 'Figure entered by ' + (override.by || 'a KPI manager') + ' instead of the system figure' + (override.autoValue != null ? ' (' + K.fmt(def, override.autoValue) + ')' : '') + ': “' + live.note + '”.', null);
+  }
+  if (!has(totals.value) && !checks.some((c) => c.level === 'error') && !(units.length && units.every((u) => u.source === 'not-observed'))) add('no-data', 'No ' + (def.name || 'figure') + ' for ' + p.label + '.', null);
+  if (has(totals.value) && def.formula === 'pct' && Number(totals.value) > 100) add('impossible', 'The period’s value is over 100%.', null);
+  if (has(totals.value) && o && o.priors) {
+    const pr = o.priors.filter(has).map(Number);
+    const med = K.medianOf(pr);
+    if (pr.length >= 3 && med > 0 && Number(totals.value) > 3 * med) add('outlier', K.fmt(def, totals.value) + ' is ' + K.round(Number(totals.value) / med, 1) + '× the usual (' + K.fmt(def, med) + ').', null, { totals, med: r4(med) });
+  }
+  const ev = Object.assign(base, { months: pm, units, totals, system: system ? { num: r4(system.num), den: r4(system.den), value: r4(system.value), source: system.source } : null,
+    override, sourceRecord: null, checks });
+  ev.fingerprint = fingerprint({ units: units.map(unitSubject), totals });
+  return ev;
+}
+
 function evidenceFor(ctx, def, ym, saved, cfg, opts) {
   const o = opts || {};
+  if (K.freqOf(def) > 1 && !o.sub) return periodEvidence(ctx, def, ym, saved, cfg, o);
   const mk = K.toMonKey(ym);
   const linked = !!(def.source && def.source.indId);
   const autoFill = def.autoFill !== false && K.cfgOf(cfg).autoFill !== false;
@@ -285,7 +362,7 @@ function evidenceFor(ctx, def, ym, saved, cfg, opts) {
       units.forEach((u) => {
         if (u.key === 'entered') return;
         const nm = u.name;
-        if (u.expected && (u.source === 'missing' || (rule === 'hh' && (u.source === 'not-audited')))) {
+        if (u.expected && !o.sub && (u.source === 'missing' || (rule === 'hh' && (u.source === 'not-audited')))) {
           add('unit-missing', nm + ' has no ' + (def.name || 'figure') + ' for ' + month + (u.pending && u.pending.length ? ' — a figure from ' + (u.pending[0].by || 'the unit') + ' is waiting for approval.' : '.'), u);
           return;
         }
@@ -319,10 +396,10 @@ function evidenceFor(ctx, def, ym, saved, cfg, opts) {
       if (!String(live.note || '').trim()) add('override-no-note', 'The system figure for ' + month + ' was changed by ' + (override.by || 'a KPI manager') + ' without a reason.', null);
       else add('override', 'Figure entered by ' + (override.by || 'a KPI manager') + ' instead of the system figure' + (override.autoValue != null ? ' (' + K.fmt(def, override.autoValue) + ')' : '') + ': “' + live.note + '”.', null);
     }
-    if (!has(totals.value) && !checks.some((c) => c.level === 'error') && !(units.length && units.every((u) => u.source === 'not-observed'))) {
+    if (!o.sub && !has(totals.value) && !checks.some((c) => c.level === 'error') && !(units.length && units.every((u) => u.source === 'not-observed'))) {
       add('no-data', 'No ' + (def.name || 'figure') + ' for ' + month + '.', null);
     }
-    if (has(totals.value) && def.formula === 'pct' && Number(totals.value) > 100) add('impossible', 'The month’s value is over 100%.', null);
+    if (!o.sub && has(totals.value) && def.formula === 'pct' && Number(totals.value) > 100) add('impossible', 'The month’s value is over 100%.', null);
     // an unusual month, against the KPI's own previous six
     if (has(totals.value) && o.priors) {
       const p = o.priors.filter(has).map(Number);
@@ -350,12 +427,15 @@ function evidenceAll(ctx, defs, yms, savedById, cfg) {
     const prevAll = K.monthsBetween(K.addMonth(yms[0], -6), K.addMonth(yms[0], -1));
     const sys = def.source && def.source.indId ? link.linkedMonthlyFrom(ctx, def, prevAll.concat(yms)) : {};
     const valueAt = (m) => { const s = savedById[def.id + ':' + m]; return K.resolveCell(sys[m], s && !s.removedAt ? s : null, { autoFill }).value; };
+    const fq = K.freqOf(def);
+    const valueAtP = (m) => { const s = savedById[def.id + ':' + m]; return K.resolveCell(def.source && def.source.indId ? link.periodSystem(ctx, def, m, cfg) : null, s && !s.removedAt ? s : null, { autoFill }).value; };
     yms.forEach((ym) => {
-      const prior = K.monthsBetween(K.addMonth(ym, -6), K.addMonth(ym, -1)).map(valueAt);
+      const prior = fq === 1 ? K.monthsBetween(K.addMonth(ym, -6), K.addMonth(ym, -1)).map(valueAt)
+        : K.isDue(def, ym, cfg) ? [4, 3, 2, 1].map((i) => K.addMonth(ym, -i * fq)).filter((m) => K.isDue(def, m, cfg)).map(valueAtP) : null;
       out[def.id][ym] = evidenceFor(ctx, def, ym, savedById[def.id + ':' + ym] || null, cfg, { priors: prior });
     });
-    // "Units expected" set by hand, but Department Setup says otherwise — once per KPI
-    const last = yms[yms.length - 1];
+    // "Units expected" set by hand, but Department Setup says otherwise — once per KPI (on its last due month)
+    const last = yms.slice().reverse().find((m) => !out[def.id][m].notDue) || yms[yms.length - 1];
     if (Array.isArray(def.units) && def.units.length && def.source && def.source.indId && K.isStarted(def, last, cfg)) {
       const mine = new Set(def.units.map(String)), setup = derivedUnits(ctx, def, last);
       const setupKeys = new Set(setup.map((u) => u.key));

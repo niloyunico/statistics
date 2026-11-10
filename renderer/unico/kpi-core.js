@@ -36,7 +36,17 @@
     notarget: { label: 'No target set', color: '#7b8796', bg: '#eef2f6', ink: '#5b6878' },
     nodata: { label: 'No data yet', color: '#a3adba', bg: '#f3f5f8', ink: '#7b8796' },
     notstarted: { label: 'Not started yet', color: '#b9c2cd', bg: '#f6f8fa', ink: '#7b8796' },
+    notdue: { label: 'First result not due yet', color: '#b9c2cd', bg: '#f6f8fa', ink: '#7b8796' },
   };
+  /* How often a KPI is measured (admin: Settings → KPI schedule). A KPI measured every 6 months
+     has ONE figure per half-year, entered in the period's last month (its "due" month); the
+     months in between owe nothing. */
+  const FREQS = [
+    { m: 1, label: 'Monthly', short: 'Monthly' },
+    { m: 3, label: 'Every 3 months (quarterly)', short: 'Every 3 months' },
+    { m: 6, label: 'Every 6 months (half-yearly)', short: 'Every 6 months' },
+    { m: 12, label: 'Yearly', short: 'Yearly' },
+  ];
   const PRESETS = [
     { id: '1m', label: 'One month', n: 1 },
     { id: '2m', label: '2 months', n: 2 },
@@ -102,24 +112,94 @@
   // A KPI that counts: not archived and not switched off (disabled KPIs stay on Manage KPIs only).
   const isLive = (d) => !!d && d.active !== false && !d.removedAt && !d.disabled;
 
+  const freqOf = (def) => { const n = parseInt(def && def.freqMonths, 10); return n === 3 || n === 6 || n === 12 ? n : 1; };
+  const freqLabel = (def, short) => { const f = FREQS.find((x) => x.m === freqOf(def)); return short ? f.short : f.label; };
+  // A cycle holds whole measuring periods: its length is a multiple of the frequency (blank = the programme's).
+  const validSchedule = (freq, cycleMonths) => !has(cycleMonths) || (Number.isInteger(+cycleMonths) && +cycleMonths >= 1 && +cycleMonths <= 24
+    && +cycleMonths % (FREQS.some((x) => x.m === +freq) ? +freq : 1) === 0);
+  /* A KPI's cycles: its own length / number when the admin set them, else the programme's —
+     the programme's length rounded up to whole periods (a yearly KPI cannot have 6-month cycles). */
+  function cycleCfg(def, cfg) {
+    const c = cfgOf(cfg);
+    if (!def) return { cycleMonths: c.cycleMonths, cycles: c.cycles, own: false };
+    const f = freqOf(def);
+    const cm = parseInt(def.cycleMonths, 10), cy = parseInt(def.cycles, 10);
+    const ownM = cm >= 1 && cm <= 24 && cm % f === 0, ownC = cy >= 1 && cy <= 6;
+    return { cycleMonths: ownM ? cm : Math.ceil(c.cycleMonths / f) * f, cycles: ownC ? cy : c.cycles, own: ownM || ownC };
+  }
+  // "Jan–Jun 2026" · "Year 2026" · "Nov 2026 – Apr 2027" · "Oct 2026".
+  function spanLabel(from, to) {
+    if (!isMonth(from) || !isMonth(to) || from === to) return fmtMonth(from);
+    if (isFullYear(from, to)) return 'Year ' + from.slice(0, 4);
+    if (from.slice(0, 4) === to.slice(0, 4)) return MONS[+from.slice(5, 7) - 1] + '–' + MONS[+to.slice(5, 7) - 1] + ' ' + to.slice(0, 4);
+    return fmtMonth(from) + ' – ' + fmtMonth(to);
+  }
+  /* The measuring period a month falls in, counted from the KPI's start: with a Jan start, a KPI
+     measured every 6 months has Jan–Jun and Jul–Dec. null before the start. */
+  function periodOf(def, ym, cfg) {
+    if (!isMonth(ym)) return null;
+    const s = startOf(def, cfg), d = monthDiff(s, ym);
+    if (d < 0) return null;
+    const f = freqOf(def);
+    const from = addMonth(s, Math.floor(d / f) * f), to = addMonth(from, f - 1);
+    return { from, to, months: f, label: spanLabel(from, to) };
+  }
+  // Is a figure owed in `ym` (the period's last month)? Every started month, for a monthly KPI.
+  const isDue = (def, ym, cfg) => { const p = periodOf(def, ym, cfg); return !!p && p.to === ym; };
+  const dueMonths = (def, from, to, cfg) => monthsBetween(from, to).filter((m) => isDue(def, m, cfg));
+  // The latest due month on or before `ym` (null when no period has ended by then).
+  function lastDue(def, ym, cfg) {
+    const p = periodOf(def, ym, cfg);
+    if (!p) return null;
+    if (p.to === ym) return ym;
+    return p.from > startOf(def, cfg) ? addMonth(p.from, -1) : null;
+  }
+  // The next due month after `ym` (the first one, before the KPI starts).
+  function nextDue(def, ym, cfg) {
+    const p = periodOf(def, ym, cfg);
+    if (!p) return addMonth(startOf(def, cfg), freqOf(def) - 1);
+    return p.to > ym ? p.to : addMonth(p.to, freqOf(def));
+  }
+  // The months a period's figure is made of.
+  const periodMonths = (def, dueYm, cfg) => { const p = periodOf(def, dueYm, cfg); return p ? monthsBetween(p.from, p.to) : []; };
+
   /* The cycle a month falls in: index 1..cycles from the start, 0 before it (the baseline
      period), and cycles+1 after the last one ends (still judged by the last target). With a
      `def`, the cycles count from that KPI's own start. */
   function cycleOf(ym, cfg, def) {
     const c = cfgOf(cfg);
+    const cc = cycleCfg(def, c);
     const s = startOf(def, c);
     const d = monthDiff(s, ym);
     if (d < 0) return { index: 0, label: def ? 'Starts ' + fmtMonth(s) : 'Baseline (before the programme)', monthNo: null, start: s };
-    const i = Math.floor(d / c.cycleMonths) + 1;
-    if (i > c.cycles) return { index: c.cycles + 1, label: 'After cycle ' + c.cycles, monthNo: null, start: s };
-    const start = addMonth(s, (i - 1) * c.cycleMonths);
-    return { index: i, label: 'Cycle ' + i, start, end: addMonth(start, c.cycleMonths - 1), monthNo: d % c.cycleMonths + 1, of: c.cycleMonths };
+    const i = Math.floor(d / cc.cycleMonths) + 1;
+    if (i > cc.cycles) return { index: cc.cycles + 1, label: 'After cycle ' + cc.cycles, monthNo: null, start: s };
+    const start = addMonth(s, (i - 1) * cc.cycleMonths);
+    return { index: i, label: 'Cycle ' + i, start, end: addMonth(start, cc.cycleMonths - 1), monthNo: d % cc.cycleMonths + 1, of: cc.cycleMonths };
   }
   function cycleRange(i, cfg, def) {
     const c = cfgOf(cfg);
-    const k = Math.min(Math.max(i, 1), c.cycles);
-    const from = addMonth(startOf(def, c), (k - 1) * c.cycleMonths);
-    return { from, to: addMonth(from, c.cycleMonths - 1) };
+    const cc = cycleCfg(def, c);
+    const k = Math.min(Math.max(i, 1), cc.cycles);
+    const from = addMonth(startOf(def, c), (k - 1) * cc.cycleMonths);
+    return { from, to: addMonth(from, cc.cycleMonths - 1) };
+  }
+  /* The sentence every document prints for a KPI's tracking, from its schedule:
+     "Every 6 months (half-yearly) · 2 cycles of 12 months from Jan 2026 · Cycle 1: Year 2026, Cycle 2: Year 2027". */
+  function scheduleText(def, cfg) {
+    const cc = cycleCfg(def, cfg);
+    const ranges = Array.from({ length: cc.cycles }, (_, i) => { const r = cycleRange(i + 1, cfg, def); return 'Cycle ' + (i + 1) + ': ' + spanLabel(r.from, r.to); });
+    return freqLabel(def) + ' · ' + cc.cycles + (cc.cycles === 1 ? ' cycle' : ' cycles') + ' of ' + cc.cycleMonths + ' months from ' + fmtMonth(startOf(def, cfg)) + ' · ' + ranges.join(', ');
+  }
+  // The free-text tracking line, only when someone wrote one (the deck's default sentence is now the schedule).
+  const trackingNote = (def) => { const s = String((def && def.frequency) || '').trim(); return /^monthly for 6 months/i.test(s) ? '' : s; };
+  /* A year's data collection calendar: per KPI and month 'due' | 'off' (not due) | 'notstarted'. */
+  function calendar(defs, year, cfg) {
+    const y = parseInt(year, 10) || +thisMonth().slice(0, 4);
+    const months = monthsBetween(y + '-01', y + '-12');
+    const byKpi = {};
+    (defs || []).forEach((d) => { byKpi[d.id] = {}; months.forEach((m) => { byKpi[d.id][m] = !isStarted(d, m, cfg) ? 'notstarted' : isDue(d, m, cfg) ? 'due' : 'off'; }); });
+    return { year: y, months, byKpi, dueCount: months.map((m) => (defs || []).filter((d) => byKpi[d.id][m] === 'due').length) };
   }
   /* A calendar year, January to December (the hospital's reporting year). `capTo` stops it at a
      month — the last closed month for a year still running ("2026 so far"); omitted = all 12. */
@@ -160,7 +240,8 @@
       }
       return null;
     }
-    const idx = Math.max(cycleOf(ym, cfg, def).index, 1);
+    // after the last cycle the last cycle's target still applies (a target stored for a cycle the KPI no longer has is ignored, kept)
+    const idx = Math.min(Math.max(cycleOf(ym, cfg, def).index, 1), cycleCfg(def, cfg).cycles);
     const sorted = list.slice().sort((a, b) => a.cycle - b.cycle);
     let hit = sorted[0];
     sorted.forEach((t) => { if (t.cycle <= idx) hit = t; });
@@ -191,6 +272,20 @@
       return { value: computeValue(f, n, d), num: round(n, 4), den: round(d, 4), months: list.length };
     }
     return { value: round(list.reduce((a, c) => a + Number(c.value), 0) / list.length), num: null, den: null, months: list.length };
+  }
+
+  /* One measuring period's system figure from its months' system figures (Σnum ÷ Σden, as
+     periodValue). null when no month has anything; 'partial' when there are events but no
+     denominator; `incomplete` when some month has events without a denominator. */
+  function periodCell(def, cells, label) {
+    const list = (cells || []).filter((c) => c && (has(c.value) || has(c.num)));
+    if (!list.length) return null;
+    const usable = list.filter((c) => has(c.value));
+    const incomplete = list.some((c) => !has(c.value));
+    if (!usable.length) return { num: round(list.reduce((a, c) => a + Number(c.num), 0), 4), den: null, value: null, source: 'partial', period: label, months: 0 };
+    const p = periodValue(def, usable);
+    const srcs = usable.map((c) => c.source).filter((x, i, a) => a.indexOf(x) === i);
+    return { num: p.num, den: p.den, value: p.value, source: srcs.length === 1 ? srcs[0] : 'pooled', period: label, months: usable.length, incomplete: incomplete || undefined };
   }
 
   const lower = (def) => !!def && def.goalDirection === 'lower_is_better';
@@ -317,7 +412,7 @@
     'not-observed': { level: 'info', title: 'Marked not observed', fix: 'The unit marked this month as not observed.' },
     'sub-unmatched': { level: 'info', title: 'Submission not traced', fix: 'The approved figure could not be matched to its submission (an older or administrator-entered figure).' },
     'no-target': { level: 'info', title: 'No target', fix: 'Set a target for this cycle in Manage KPIs.' },
-    'no-data': { level: 'error', title: 'No figure for the month', fix: 'Enter the figure in Data Update.' },
+    'no-data': { level: 'error', title: 'No figure yet', fix: 'Enter the figure in Data Update.' },
   };
   const checkLevel = (code) => (CHECK_META[code] || { level: 'info' }).level;
 
@@ -390,28 +485,56 @@
     const end = months[months.length - 1];
     return (defs || []).map((def) => {
       const cells = (cellsByKpi && cellsByKpi[def.id]) || {};
+      const f = freqOf(def);
       // Months before the KPI starts do not count: not in the period value, not in the trend.
+      // A KPI measured every N months counts only its due months (each holds the period's figure).
       const on = (m) => isStarted(def, m, cfg);
+      const due = (m) => on(m) && isDue(def, m, cfg);
       const started = months.filter(on);
-      const per = periodValue(def, started.map((m) => cells[m]));
-      const target = targetFor(def, end, cfg);
-      const trend = (trendMonths || months).map((m) => ({ m, v: on(m) && cells[m] && has(cells[m].value) ? Number(cells[m].value) : null, t: on(m) ? targetFor(def, m, cfg) : null }));
-      const status = started.length ? statusOf(def, per.value, target, cfg) : 'notstarted';
+      const dueIn = months.filter(due);
+      let per = periodValue(def, dueIn.map((m) => cells[m]));
+      let target = targetFor(def, end, cfg);
+      let latest = null;
+      // No period of a less-often KPI ended inside the report: its latest result, labelled, is used.
+      if (f > 1 && started.length && !dueIn.length) {
+        const known = Object.keys(cells).filter((m) => m <= end && due(m) && cells[m] && has(cells[m].value)).sort();
+        const m = known[known.length - 1];
+        if (m) { const p = periodOf(def, m, cfg); latest = { from: p.from, to: m, label: p.label }; per = periodValue(def, [cells[m]]); target = targetFor(def, m, cfg); }
+      }
+      const trend = (trendMonths || months).map((m) => ({ m, v: due(m) && cells[m] && has(cells[m].value) ? Number(cells[m].value) : null, t: on(m) ? targetFor(def, m, cfg) : null }));
+      const status = !started.length ? 'notstarted'
+        : (f > 1 && !dueIn.length && !latest) ? (lastDue(def, end, cfg) ? 'nodata' : 'notdue')
+        : statusOf(def, per.value, target, cfg);
+      const scored = status !== 'notstarted' && status !== 'notdue';
+      // The periods a less-often KPI's page lists: the ones in the report, else the latest few.
+      const dueKnown = Object.keys(cells).filter((m) => m <= end && due(m)).sort();
+      const periods = f === 1 ? [] : dueKnown.filter((m) => months.indexOf(m) >= 0 || dueKnown.indexOf(m) >= dueKnown.length - 4).map((m) => {
+        const p = periodOf(def, m, cfg), c = cells[m] || {}, t = targetFor(def, m, cfg);
+        return { from: p.from, to: m, label: p.label, num: has(c.num) ? c.num : null, den: has(c.den) ? c.den : null, value: has(c.value) ? c.value : null, source: c.source || 'missing',
+          target: t, status: statusOf(def, has(c.value) ? c.value : null, t, cfg), inReport: months.indexOf(m) >= 0 };
+      });
+      const resultLabel = latest ? latest.label : (f > 1 && dueIn.length ? spanLabel(periodOf(def, dueIn[0], cfg).from, dueIn[dueIn.length - 1]) : null);
       return {
         kpiId: def.id, code: def.code || '', name: def.name, pillar: def.pillar, unit: def.unit || '', formula: def.formula, goalDirection: def.goalDirection,
         decimals: def.decimals, objective: def.objective || '', formulaText: def.formulaText || '', numLabel: def.numLabel || '', denLabel: def.denLabel || '',
-        baseline: def.baseline || null, targets: def.targets || [], baselineTargetPct: def.baselineTargetPct, actions: (def.actions || []).filter((x) => x && x.text), remarks: def.remarks || '',
-        frequency: def.frequency || '', linked: !!(def.source && def.source.indId), autoFill: def.autoFill !== false,
+        baseline: def.baseline || null, targets: (def.targets || []).filter((t) => t && t.cycle <= cycleCfg(def, cfg).cycles), baselineTargetPct: def.baselineTargetPct, actions: (def.actions || []).filter((x) => x && x.text), remarks: def.remarks || '',
+        frequency: def.frequency || '', trackingNote: trackingNote(def), linked: !!(def.source && def.source.indId), autoFill: def.autoFill !== false,
         startMonth: startOf(def, cfg), ownStart: isMonth(def.startMonth), cycle: cycleOf(end, cfg, def),
-        cells: months.reduce((o, m) => { const c = cells[m]; o[m] = !on(m) ? { value: null, source: 'not-started' } : c ? { num: c.num, den: c.den, value: c.value, source: c.source } : { value: null, source: 'missing' }; return o; }, {}),
-        period: per, target, gap: status === 'notstarted' ? null : gap(def, per.value, target), status, achievement: status === 'notstarted' ? null : achievement(def, per.value, target),
+        freqMonths: f, schedule: scheduleText(def, cfg), ownCycles: cycleCfg(def, cfg).own, latest, resultLabel, periods,
+        nextDue: f > 1 && started.length ? nextDue(def, end, cfg) : null,
+        cells: months.reduce((o, m) => { const c = cells[m];
+          o[m] = !on(m) ? { value: null, source: 'not-started' }
+            : !due(m) ? { value: null, source: 'not-due', due: periodOf(def, m, cfg).to }
+            : c ? { num: c.num, den: c.den, value: c.value, source: c.source, period: f > 1 ? periodOf(def, m, cfg).label : undefined } : { value: null, source: 'missing' };
+          return o; }, {}),
+        period: per, target, gap: scored ? gap(def, per.value, target) : null, status, achievement: scored ? achievement(def, per.value, target) : null,
         trendDir: trendOf(def, trend.map((t) => t.v)), trend,
       };
     });
   }
   function summarize(rows) {
-    const out = { total: 0, met: 0, near: 0, off: 0, notarget: 0, nodata: 0, notstarted: 0, improving: 0, worsening: 0 };
-    (rows || []).forEach((r) => { out.total++; out[r.status] = (out[r.status] || 0) + 1; if (r.trendDir === 'improving') out.improving++; if (r.trendDir === 'worsening') out.worsening++; });
+    const out = { total: 0, met: 0, near: 0, off: 0, notarget: 0, nodata: 0, notstarted: 0, notdue: 0, latest: 0, improving: 0, worsening: 0 };
+    (rows || []).forEach((r) => { out.total++; out[r.status] = (out[r.status] || 0) + 1; if (r.latest) out.latest++; if (r.trendDir === 'improving') out.improving++; if (r.trendDir === 'worsening') out.worsening++; });
     out.scored = out.met + out.near + out.off;
     out.score = out.scored ? Math.round((out.met / out.scored) * 100) : null;
     return out;
@@ -427,6 +550,7 @@
   const API = {
     MONS, MONS_FULL, FORMULAS, FORMULA_LABEL, DIRECTIONS, ACTION_STATUSES, ACTION_LABEL, DEFAULT_PILLARS, DEFAULT_CFG, STATUS, PRESETS, MAX_MONTHS,
     has, isMonth, addMonth, monthDiff, monthsBetween, fmtMonth, fmtMonthLong, fmtRange, toMonKey, toYm, thisMonth, lastClosedMonth,
+    FREQS, freqOf, freqLabel, validSchedule, cycleCfg, spanLabel, periodOf, isDue, dueMonths, lastDue, nextDue, periodMonths, scheduleText, trackingNote, calendar, periodCell,
     cfgOf, pillarOf, startOf, isStarted, isLive, cycleOf, cycleRange, yearRange, isFullYear, presetRange, presetOf, targetFor, round, computeValue, periodValue, gap, statusOf, trendOf, achievement,
     resolveCell, validateEntry, medianOf, deviates, CHECK_META, checkLevel, evidenceSteps, COUNTED, unitKind, fmt, unitLabel, gapLabel, slug, newKpiId, buildRows, summarize, reportId, parseReportId,
   };

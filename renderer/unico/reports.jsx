@@ -3187,7 +3187,7 @@ function ActivityLog(){
     role_template_created:{l:'Role created',c:'#0090ca'}, role_template_updated:{l:'Role updated',c:'#e08a1e'},
     role_template_deleted:{l:'Role deleted',c:'#d23a52'}, role_template_applied:{l:'Role applied to members',c:'#6a52d4'},
     kpi_value:{l:'KPI figure',c:'#0090ca'}, kpi_def:{l:'KPI changed',c:'#6a52d4'}, kpi_def_archive:{l:'KPI archived',c:'#d23a52'}, kpi_report:{l:'KPI report',c:'#0090ca'},
-    kpi_report_final:{l:'KPI report final',c:'#1f9d57'}, kpi_report_reopen:{l:'KPI report re-opened',c:'#e08a1e'}, kpi_export:{l:'KPI export',c:'#3ab5a7'}, kpi_print:{l:'KPI print / PDF',c:'#3ab5a7'}, kpi_config:{l:'KPI settings',c:'#6a52d4'} };
+    kpi_report_final:{l:'KPI report final',c:'#1f9d57'}, kpi_report_reopen:{l:'KPI report re-opened',c:'#e08a1e'}, kpi_export:{l:'KPI export',c:'#3ab5a7'}, kpi_print:{l:'KPI print / PDF',c:'#3ab5a7'}, kpi_config:{l:'KPI settings',c:'#6a52d4'}, kpi_schedule:{l:'KPI schedule',c:'#6a52d4'}, kpi_ack:{l:'KPI check acknowledged',c:'#e08a1e'} };
   const meta=a=>META[a]||{l:a,c:'#8a93a3'};
   const fmtTs=ts=>{ try{ return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } };
   const filtered=(rows||[]).filter(r=>{ if(!q.trim()) return true; const s=(r.username+' '+r.name+' '+meta(r.action).l+' '+r.target+' '+r.detail+' '+r.ip).toLowerCase(); return s.includes(q.trim().toLowerCase()); });

@@ -8,8 +8,8 @@
 const K = require('../renderer/unico/kpi-core.js');
 
 const NAVY = 'FF00293A', ZEBRA = 'FFF4F7FA', LINE = 'FFC9D3DE';
-const ST = { met: 'FFE7F6ED', near: 'FFFFF6E0', off: 'FFFDE4E8', notarget: 'FFEEF2F6', nodata: 'FFF3F5F8', notstarted: 'FFF6F8FA' };
-const ST_INK = { met: 'FF14713F', near: 'FF8A5A00', off: 'FFA3172F', notarget: 'FF5B6878', nodata: 'FF7B8796', notstarted: 'FF7B8796' };
+const ST = { met: 'FFE7F6ED', near: 'FFFFF6E0', off: 'FFFDE4E8', notarget: 'FFEEF2F6', nodata: 'FFF3F5F8', notstarted: 'FFF6F8FA', notdue: 'FFF6F8FA' };
+const ST_INK = { met: 'FF14713F', near: 'FF8A5A00', off: 'FFA3172F', notarget: 'FF5B6878', nodata: 'FF7B8796', notstarted: 'FF7B8796', notdue: 'FF7B8796' };
 const LVL_FILL = { error: 'FFFDE4E8', warn: 'FFFFF6E0', info: 'FFEEF2F6' };
 const LVL_INK = { error: 'FFA3172F', warn: 'FF8A5A00', info: 'FF5B6878' };
 const when = (t) => (t ? new Date(t).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka', dateStyle: 'medium', timeStyle: 'short' }) : '');
@@ -50,12 +50,14 @@ async function build(report, opts) {
     { header: 'Direction', key: 'dir', width: 14 }, { header: 'Baseline', key: 'base', width: 11 }, { header: K.fmtRange(report.from, report.to), key: 'val', width: 14 },
     { header: 'Numerator', key: 'num', width: 12 }, { header: 'Denominator', key: 'den', width: 13 }, { header: 'Target', key: 'target', width: 10 },
     { header: 'Variance', key: 'gap', width: 16 }, { header: '% of target', key: 'ach', width: 11 }, { header: 'Status', key: 'status', width: 15 }, { header: 'Trend', key: 'trend', width: 12 },
-    { header: 'Source', key: 'src', width: 16 }, { header: 'Formula', key: 'formula', width: 50 },
+    { header: 'Source', key: 'src', width: 16 }, { header: 'Measured', key: 'freq', width: 15 }, { header: 'Result period', key: 'rp', width: 20 },
+    { header: 'Formula', key: 'formula', width: 50 }, { header: 'Schedule', key: 'sched', width: 60 },
   ]);
   rows.forEach((r) => {
     const row = sc.addRow({ code: r.code, pillar: pill(r.pillar), name: r.name, unit: r.unit, dir: r.goalDirection === 'lower_is_better' ? 'Lower is better' : 'Higher is better',
       base: n(r.baseline && r.baseline.value), val: n(r.period.value), num: n(r.period.num), den: n(r.period.den), target: n(r.target), gap: K.gapLabel(r, r.period.value, r.target),
-      ach: r.achievement, status: K.STATUS[r.status].label, trend: r.trendDir || '', src: r.linked ? 'Quality data' : 'Entered', formula: r.formulaText });
+      ach: r.achievement, status: K.STATUS[r.status].label, trend: r.trendDir || '', src: r.linked ? 'Quality data' : 'Entered', formula: r.formulaText,
+      freq: K.freqLabel(r, true), rp: r.latest ? 'Latest: ' + r.latest.label : (r.resultLabel || (r.freqMonths > 1 && r.nextDue ? 'Next due ' + K.fmtMonth(r.nextDue) : K.fmtRange(report.from, report.to))), sched: r.schedule || '' });
     const c = row.getCell('status');
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ST[r.status] } };
     c.font = { bold: true, color: { argb: ST_INK[r.status] } };
@@ -66,7 +68,11 @@ async function build(report, opts) {
   const mf = sheet(wb, 'Monthly figures', [{ header: '#', key: 'code', width: 6 }, { header: 'KPI', key: 'name', width: 38 }, { header: 'Figure', key: 'what', width: 13 }]
     .concat(months.map((m) => ({ header: K.fmtMonth(m), key: m, width: 11 }))));
   rows.forEach((r) => {
-    mf.addRow(Object.assign({ code: r.code, name: r.name, what: 'Value' }, months.reduce((x, m) => { x[m] = n((r.cells[m] || {}).value); return x; }, {}))).font = { bold: true };
+    // a KPI measured every N months: '·' where nothing is owed; the due month carries the period's figure
+    const vrow = mf.addRow(Object.assign({ code: r.code, name: r.name + (r.freqMonths > 1 ? ' (' + K.freqLabel(r, true).toLowerCase() + ')' : ''), what: 'Value' },
+      months.reduce((x, m) => { const c = r.cells[m] || {}; x[m] = c.source === 'not-due' ? '·' : n(c.value); return x; }, {})));
+    vrow.font = { bold: true };
+    if (r.freqMonths > 1) months.forEach((m) => { const c = r.cells[m] || {}; if (c.period && c.source !== 'not-due') vrow.getCell(m).note = 'Result for ' + c.period; });
     if (r.formula !== 'direct') mf.addRow(Object.assign({ code: '', name: r.numLabel || 'Numerator', what: 'Numerator' }, months.reduce((x, m) => { x[m] = n((r.cells[m] || {}).num); return x; }, {})));
     if (r.formula !== 'direct' && r.formula !== 'count') mf.addRow(Object.assign({ code: '', name: r.denLabel || 'Denominator', what: 'Denominator' }, months.reduce((x, m) => { x[m] = n((r.cells[m] || {}).den); return x; }, {})));
     mf.addRow(Object.assign({ code: '', name: '', what: 'Source' }, months.reduce((x, m) => { x[m] = SOURCE[(r.cells[m] || {}).source] || ''; return x; }, {}))).font = { italic: true, color: { argb: 'FF7B8796' }, size: 9 };

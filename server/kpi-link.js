@@ -195,6 +195,17 @@ function linkedMonthlyFrom(ctx, def, yms) {
   return out;
 }
 
+/* The system figure of one measuring period of a KPI measured every N months, at its due month:
+   the period's months pooled Σnum ÷ Σden (kpi-core periodCell). `monthly` = the KPI's monthly
+   system figures when already worked out. ctx must hold the period's months. */
+function periodSystem(ctx, def, dueYm, cfg, monthly) {
+  const pm = K.periodMonths(def, dueYm, cfg);
+  if (!pm.length) return null;
+  const m = monthly || linkedMonthlyFrom(ctx, def, pm);
+  const p = K.periodOf(def, dueYm, cfg);
+  return K.periodCell(def, pm.map((x) => m[x]), p && p.label);
+}
+
 async function linkedMonthly(def, yms, deps) {
   const ctx = await loadContext(yms, deps);
   return linkedMonthlyFrom(ctx, def, yms);
@@ -223,4 +234,4 @@ function indicatorCatalog(ctx) {
 const areaList = (ctx) => ctx.areas.map((a) => ({ key: a.key, name: a.name, deptId: a.deptId || null, hospital: HH.isHospital(a) }))
   .sort((x, y) => (x.hospital - y.hospital) || String(x.name).localeCompare(String(y.name)));
 
-module.exports = { loadContext, linkedMonthlyFrom, linkedMonthly, linkedMonthlyAll, indicatorCatalog, areaList, ruleOf, RULES, mergeInd, findInd, isOpd, poolMonth, carriedDen, formulaOf, norm };
+module.exports = { loadContext, linkedMonthlyFrom, periodSystem, linkedMonthly, linkedMonthlyAll, indicatorCatalog, areaList, ruleOf, RULES, mergeInd, findInd, isOpd, poolMonth, carriedDen, formulaOf, norm };

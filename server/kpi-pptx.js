@@ -16,8 +16,12 @@ const path = require('path');
 const K = require('../renderer/unico/kpi-core.js');
 
 const NAVY = '00293A', BLUE = '008FCB', TEAL = '37B4A6', INK = '16202E', MUTED = '5B6878', LINE = 'C9D3DE', ZEBRA = 'F4F7FA';
-const ST = { met: '1F9D57', near: 'E0A21E', off: 'D23A52', notarget: '7B8796', nodata: 'A3ADBA', notstarted: 'A3ADBA' };
-const ST_BG = { met: 'E7F6ED', near: 'FFF6E0', off: 'FDE4E8', notarget: 'EEF2F6', nodata: 'F3F5F8', notstarted: 'F6F8FA' };
+const ST = { met: '1F9D57', near: 'E0A21E', off: 'D23A52', notarget: '7B8796', nodata: 'A3ADBA', notstarted: 'A3ADBA', notdue: 'A3ADBA' };
+const ST_BG = { met: 'E7F6ED', near: 'FFF6E0', off: 'FDE4E8', notarget: 'EEF2F6', nodata: 'F3F5F8', notstarted: 'F6F8FA', notdue: 'F6F8FA' };
+// A KPI measured every N months: its figure says which period it is ("Jan–Jun 2026", or "latest: …").
+const resultOf = (r) => (r.latest ? 'latest: ' + r.latest.label : r.freqMonths > 1 && r.resultLabel ? r.resultLabel : '');
+// A month cell: '·' when the KPI owes nothing that month (measured less often).
+const monthTxt = (r, m, fv) => { const c = (r.cells || {})[m] || {}; return c.source === 'not-due' ? '·' : fv(r, c.value); };
 const LVL = { error: 'D23A52', warn: 'E0A21E', info: '7B8796' };
 const SRC_LABEL = { approved: 'Approved', 'overlay-edit': 'Console edit', audit: 'Audit', own: 'Own reading', covered: 'Covered by audit', 'not-audited': 'Not audited', 'not-observed': 'Not observed', missing: 'MISSING', partial: 'No denominator', 'den-zero': 'Denominator 0', 'carried-den': 'Headcount carried', manual: 'Entered' };
 const who = (x) => [x && x.reviewedBy, x && x.by].filter(Boolean)[0] || '';
@@ -115,7 +119,8 @@ function build(report, opts) {
     const body = rows.map((r) => [
       cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(r.name, 60)),
       cell(r.baseline && K.has(r.baseline.value) ? fv(r, r.baseline.value) : '—', { align: 'center', color: MUTED }),
-      cell(fv(r, r.period.value), { align: 'center', bold: true }), cell(K.has(r.target) ? fv(r, r.target) : '—', { align: 'center' }),
+      { text: [{ text: fv(r, r.period.value), options: { bold: true, breakLine: !!resultOf(r) } }].concat(resultOf(r) ? [{ text: resultOf(r), options: { fontSize: 7, color: MUTED } }] : []), options: { align: 'center', valign: 'middle', fontSize: 9.5, color: INK } },
+      cell(K.has(r.target) ? fv(r, r.target) : '—', { align: 'center' }),
       cell(K.gapLabel(r, r.period.value, r.target), { align: 'center', fontSize: 8.5 }), stCell(r.status),
       cell(trendTxt(r.trendDir), { align: 'center', fontSize: 8.5, color: r.trendDir === 'improving' ? ST.met : r.trendDir === 'worsening' ? ST.off : MUTED }),
     ]);
@@ -173,7 +178,7 @@ function build(report, opts) {
       const months = (report.months || []).slice(-6);
       const hdr = [head('#'), head('KPI', { align: 'left' }), head('Unit')].concat(months.map((m) => head(K.fmtMonth(m).replace(' 20', " '")))).concat([head('Period'), head('Target'), head('Status')]);
       const body = list.map((r) => [cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(r.name, 46)), cell(cut(r.unit, 22), { fontSize: 8, color: MUTED, align: 'center' })]
-        .concat(months.map((m) => cell(fv(r, (r.cells[m] || {}).value), { align: 'center', fontSize: 8.5 })))
+        .concat(months.map((m) => cell(monthTxt(r, m, fv), { align: 'center', fontSize: 8.5 })))
         .concat([cell(fv(r, r.period.value), { align: 'center', bold: true }), cell(K.has(r.target) ? fv(r, r.target) : '—', { align: 'center' }), stCell(r.status)]));
       const fixed = 0.5 + 1.25 + 1.1 + 1.05 + 1.15;
       const rest = 12.1 - fixed - months.length * 0.85;
@@ -212,12 +217,12 @@ function build(report, opts) {
     const label = (t) => ({ text: t, options: { fill: { color: NAVY }, color: 'FFFFFF', bold: true, fontSize: 9.5, valign: 'middle' } });
     const tbl = [
       [label('Objective'), cell(cut(r.objective, 220))],
-      [label('Current'), cell(fv(r, r.period.value) + (r.unit && K.unitKind(r) === 'num' ? '  ' + r.unit : '') + '   (baseline ' + base + ')', { bold: true })],
+      [label('Current'), cell(fv(r, r.period.value) + (r.unit && K.unitKind(r) === 'num' ? '  ' + r.unit : '') + (resultOf(r) ? '   — ' + resultOf(r) : '') + '   (baseline ' + base + ')', { bold: true })],
       [label('Target'), cell(tg)],
       [label('Variance'), cell(K.gapLabel(r, r.period.value, r.target) + '   ·   ' + K.STATUS[r.status].label, { bold: true, color: ST[r.status] })],
       [label('Action plan'), { text: actRuns, options: { fontSize: acts.length > 6 ? 7.5 : 8.5, color: INK, valign: 'top' } }],
       [label('Formula used'), cell(cut(r.formulaText, 200), { fontSize: 8.5, italic: true })],
-      [label('Tracking'), cell(r.frequency || 'Monthly', { fontSize: 8.5 })],
+      [label('Tracking'), cell(cut((r.schedule || r.frequency || 'Monthly') + (r.trackingNote ? ' · ' + r.trackingNote : '') + (r.nextDue ? ' · next result ' + K.fmtMonth(r.nextDue) : ''), 230), { fontSize: 8 })],
       [label('Remarks'), cell(cm ? cut(cm, 300) : (r.remarks ? cut(r.remarks.split(/\n+/)[0], 300) + (/\n/.test(r.remarks) || r.remarks.length > 300 ? '  (see notes)' : '') : '—'), { fontSize: 8.5 })],
     ];
     s.addTable(tbl, { x: 0.6, y: 1.45, w: 7.0, colW: [1.35, 5.65], fontFace: FONT, border: { type: 'solid', pt: 0.5, color: LINE }, margin: 0.06, valign: 'middle', rowH: [0.55, 0.36, 0.36, 0.36, Math.min(2.6, Math.max(0.9, 0.22 + acts.length * (acts.length > 6 ? 0.2 : 0.24))), 0.45, 0.32, 0.6] });
@@ -229,9 +234,9 @@ function build(report, opts) {
       const data = [{ name: 'Actual', labels, values: tr.map((t) => (t.v == null ? null : t.v)) }];
       if (tr.some((t) => t.t != null)) data.push({ name: 'Target', labels, values: tr.map((t) => (t.t == null ? null : t.t)) });
       s.addChart(pptx.ChartType.line, data, {
-        x: 7.85, y: 1.4, w: 4.95, h: 3.55, chartColors: [BLUE, TEAL], lineSize: 2.25, lineDataSymbol: 'circle', lineDataSymbolSize: 6, displayBlanksAs: 'gap',
+        x: 7.85, y: 1.4, w: 4.95, h: 3.55, chartColors: [BLUE, TEAL], lineSize: 2.25, lineDataSymbol: 'circle', lineDataSymbolSize: 6, displayBlanksAs: r.freqMonths > 1 ? 'span' : 'gap',
         showLegend: true, legendPos: 'b', legendFontSize: 9, legendFontFace: FONT, catAxisLabelFontSize: 8, valAxisLabelFontSize: 8, valGridLine: { color: 'E3E9F0', size: 0.5 },
-        showTitle: true, title: 'Last ' + tr.length + ' months' + (r.unit ? ' (' + cut(r.unit, 28) + ')' : ''), titleFontSize: 10.5, titleColor: NAVY, titleFontFace: FONT,
+        showTitle: true, title: (r.freqMonths > 1 ? 'One point per period · last ' + tr.length + ' months' : 'Last ' + tr.length + ' months') + (r.unit ? ' (' + cut(r.unit, 28) + ')' : ''), titleFontSize: 10.5, titleColor: NAVY, titleFontFace: FONT,
         valAxisMinVal: 0,
       });
     } else {
@@ -240,7 +245,7 @@ function build(report, opts) {
     // three tiles
     const tile = (x, big, small, col, bg) => s.addText([{ text: big, options: { fontSize: 17, bold: true, color: col, breakLine: true } }, { text: small, options: { fontSize: 8.5, color: MUTED } }],
       { x, y: 5.15, w: 1.55, h: 1.15, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: bg }, shape: pptx.ShapeType.roundRect, rectRadius: 0.08 });
-    tile(7.85, fv(r, r.period.value), report.months && report.months.length > 1 ? 'Period value' : 'This month', NAVY, 'EAF6FB');
+    tile(7.85, fv(r, r.period.value), resultOf(r) ? cut(resultOf(r), 24) : report.months && report.months.length > 1 ? 'Period value' : 'This month', NAVY, 'EAF6FB');
     tile(9.55, K.has(r.target) ? fv(r, r.target) : '—', 'Target', NAVY, 'EEF7F5');
     tile(11.25, K.STATUS[r.status].label, r.achievement != null ? r.achievement + '% of target' : (r.trendDir ? r.trendDir : 'status'), ST[r.status], ST_BG[r.status]);
     s.addText(r.linked ? 'Figures filled from the hospital’s quality data' : 'Figures entered by the KPI team', { x: 7.85, y: 6.42, w: 4.95, h: 0.28, fontFace: FONT, fontSize: 8, color: MUTED, italic: true });
@@ -305,10 +310,12 @@ function build(report, opts) {
       const tn = used.reduce((a, u) => a + u.num, 0), td = used.reduce((a, u) => a + u.den, 0);
       const lines = [{ text: 'Formula: ' + (r.formulaText || '—'), options: { bold: true, breakLine: true } }];
       if (r.status === 'notstarted') lines.push({ text: 'This KPI starts in ' + K.fmtMonth(r.startMonth) + ' — nothing is counted before then.', options: { breakLine: true } });
+      else if (r.status === 'notdue') lines.push({ text: 'Measured ' + K.freqLabel(r, true).toLowerCase() + ' — the first result is due in ' + K.fmtMonth(r.nextDue) + '.', options: { breakLine: true } });
       else if (r.period && K.has(r.period.num) && K.has(r.period.den)) lines.push({ text: (r.numLabel || 'Numerator') + ' ' + K.round(r.period.num, 4) + ' ÷ ' + (r.denLabel || 'denominator') + ' ' + K.round(r.period.den, 4) + ' → ' + fv(r, r.period.value) + (months.length > 1 ? '   (all ' + months.length + ' months pooled)' : ''), options: { breakLine: true } });
       else lines.push({ text: 'Value for the period: ' + fv(r, r.period.value), options: { breakLine: true } });
       if (used.length > 1) lines.push({ text: 'Sum of the units used: ' + K.round(tn, 4) + ' ÷ ' + K.round(td, 4) + '. Units are added first and divided once — not an average of their rates.', options: { breakLine: true, color: MUTED } });
-      lines.push({ text: 'Month by month: ' + months.map((m) => K.fmtMonth(m).replace(' 20', " '") + ' ' + fv(r, (r.cells[m] || {}).value)).join('  ·  '), options: { color: MUTED } });
+      if (r.freqMonths > 1) lines.push({ text: K.freqLabel(r) + ' — period by period: ' + ((r.periods || []).map((pp) => pp.label + ' ' + fv(r, pp.value)).join('  ·  ') || 'no period has ended yet'), options: { color: MUTED } });
+      else lines.push({ text: 'Month by month: ' + months.map((m) => K.fmtMonth(m).replace(' 20', " '") + ' ' + fv(r, (r.cells[m] || {}).value)).join('  ·  '), options: { color: MUTED } });
       s.addText(lines, { x: 0.6, y: 1.42, w: 12.1, h: 1.05, fontFace: FONT, fontSize: 10, color: INK, valign: 'top', paraSpaceAfter: 2 });
       const hdr = [head('Unit', { align: 'left' }), head('Expected'), head(cut(r.numLabel || 'Numerator', 22)), head(cut(r.denLabel || 'Denominator', 22)), head('Value'), head('Source'), head('Approved by', { align: 'left' })];
       const body = units.map((u) => [cell(cut(u.name, 34)), cell(u.expected ? 'Yes' : '—', { align: 'center' }), cell(u.hasNum ? K.round(u.num, 4) : '—', { align: 'center' }), cell(u.hasDen ? K.round(u.den, 4) : '—', { align: 'center' }),

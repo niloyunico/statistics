@@ -115,9 +115,12 @@ const numOrNull = (v) => (K.has(v) && isFinite(Number(v)) ? Number(v) : null);
 const stamp = (now) => now; // updatedAt is the epoch ms of the write — the lost-update token
 
 /* A KPI definition from a request body. Unknown keys are dropped; every string is capped. */
-function pickDef(b, cfg, cur) {
+function pickDef(b, cfg, cur, opts) {
   const c = K.cfgOf(cfg);
   const out = {};
+  // How often it is measured and its own cycles: an administrator's call; anyone else keeps what is there.
+  const sched = pickSchedule(opts && opts.admin ? b : {}, cur);
+  Object.assign(out, typeof sched === 'string' ? schedOfDoc(cur) : sched);
   const pillarIds = c.pillars.map((p) => p.id);
   out.name = str(b.name, 140);
   out.code = str(b.code, 8);
@@ -153,7 +156,7 @@ function pickDef(b, cfg, cur) {
   });
   return out;
 }
-const DEF_LOG_FIELDS = ['name', 'code', 'pillar', 'unit', 'formula', 'goalDirection', 'baseline', 'targets', 'baselineTargetPct', 'source', 'objective', 'formulaText', 'remarks', 'autoFill', 'startMonth', 'units'];
+const DEF_LOG_FIELDS = ['name', 'code', 'pillar', 'unit', 'formula', 'goalDirection', 'baseline', 'targets', 'baselineTargetPct', 'source', 'objective', 'formulaText', 'remarks', 'autoFill', 'startMonth', 'units', 'freqMonths', 'cycleMonths', 'cycles'];
 function defChanges(a, b) {
   const out = DEF_LOG_FIELDS.filter((k) => JSON.stringify(a ? a[k] : null) !== JSON.stringify(b[k]));
   if (JSON.stringify((a && a.actions) || []) !== JSON.stringify(b.actions || [])) out.push('action plan');
@@ -165,23 +168,73 @@ function defChanges(a, b) {
    and the quality context, so the evidence can be built from the very same reads. */
 async function valuesFor(defs, months, deps, cfg) {
   if (!months.length) return { cells: {}, savedById: {}, ctx: null };
-  const [ctx, saved] = await Promise.all([link.loadContext(months, deps), monthRows(months[0], months[months.length - 1])]);
+  // A KPI measured every N months: its due month holds the whole period's figure, so the quality
+  // data is read back to the start of the period the first month falls in.
+  let first = months[0];
+  defs.forEach((d) => { if (K.freqOf(d) > 1) { const p = K.periodOf(d, months[0], cfg); if (p && p.from < first) first = p.from; } });
+  const ctxMonths = K.monthsBetween(first, months[months.length - 1]);
+  const [ctx, saved] = await Promise.all([link.loadContext(ctxMonths, deps), monthRows(months[0], months[months.length - 1])]);
   const savedById = {};
   saved.forEach((r) => { savedById[r._id] = r; });
   const masterOn = K.cfgOf(cfg).autoFill !== false;
   const cells = {};
   defs.forEach((d) => {
-    const auto = d.source && d.source.indId ? link.linkedMonthlyFrom(ctx, d, months) : {};
+    const f = K.freqOf(d);
+    const auto = d.source && d.source.indId ? link.linkedMonthlyFrom(ctx, d, f > 1 ? ctxMonths : months) : {};
     const autoFill = masterOn && d.autoFill !== false;
     cells[d.id] = {};
     months.forEach((m) => {
-      const c = K.resolveCell(auto[m], savedById[d.id + ':' + m], { autoFill });
+      const s = savedById[d.id + ':' + m];
+      let c;
+      if (f > 1 && K.isStarted(d, m, cfg) && !K.isDue(d, m, cfg)) {
+        // Not due: owes nothing. A figure typed here earlier is kept (shown, never counted).
+        const p = K.periodOf(d, m, cfg);
+        c = { num: null, den: null, value: null, source: 'not-due', due: p.to, period: p.label, note: '', auto: null };
+        if (s && !s.removedAt) c.kept = { num: s.num, den: s.den, value: s.value, by: s.updatedByName || s.updatedBy || '', at: s.updatedAt || null };
+      } else if (f > 1 && K.isStarted(d, m, cfg)) {
+        const a = d.source && d.source.indId ? link.periodSystem(ctx, d, m, cfg, auto) : null;
+        c = K.resolveCell(a, s, { autoFill });
+        c.period = K.periodOf(d, m, cfg).label;
+      } else {
+        c = K.resolveCell(auto[m], s, { autoFill });
+      }
       if (!K.isStarted(d, m, cfg)) c.notStarted = true;
       cells[d.id][m] = c;
     });
   });
   return { cells, savedById, ctx };
 }
+
+/* The system figure a KPI uses for each month asked: the month's own, or — for a KPI measured
+   every N months — its period's, pooled, at the due month (nothing in the months between). */
+async function systemFor(def, yms, cfg, deps) {
+  if (K.freqOf(def) === 1) return link.linkedMonthly(def, yms, deps);
+  if (!(def.source && def.source.indId)) return {};
+  const need = [...new Set([].concat(...yms.map((m) => (K.isDue(def, m, cfg) ? K.periodMonths(def, m, cfg) : []))))].sort();
+  if (!need.length) return {};
+  const ctx = await link.loadContext(K.monthsBetween(need[0], need[need.length - 1]), deps);
+  const monthly = link.linkedMonthlyFrom(ctx, def, ctx.months);
+  const out = {};
+  yms.forEach((m) => { if (K.isDue(def, m, cfg)) { const c = link.periodSystem(ctx, def, m, cfg, monthly); if (c) out[m] = c; } });
+  return out;
+}
+
+/* How often a KPI is measured and its own cycles — set by an administrator only (Settings → KPI
+   schedule, or the KPI's editor). Returns {freqMonths, cycleMonths, cycles} or an error string. */
+function pickSchedule(b, cur) {
+  const pick = (k) => (b[k] !== undefined ? b[k] : cur ? cur[k] : undefined);
+  const f = K.has(pick('freqMonths')) ? parseInt(pick('freqMonths'), 10) : 1;
+  if (!K.FREQS.some((x) => x.m === f)) return 'Choose how often the KPI is measured: monthly, every 3 months, every 6 months or yearly.';
+  const cmRaw = pick('cycleMonths'), cyRaw = pick('cycles');
+  const cm = K.has(cmRaw) ? parseInt(cmRaw, 10) : null, cy = K.has(cyRaw) ? parseInt(cyRaw, 10) : null;
+  if (cm != null && !(cm >= 1 && cm <= 24)) return 'A cycle is 1 to 24 months long.';
+  if (!K.validSchedule(f, cm)) return 'A cycle must hold whole measuring periods: for a KPI measured every ' + f + ' months the cycle length must be a multiple of ' + f + '.';
+  if (cy != null && !(cy >= 1 && cy <= 6)) return 'A KPI has 1 to 6 cycles.';
+  return { freqMonths: f, cycleMonths: cm, cycles: cy };
+}
+const SCHED_FIELDS = ['freqMonths', 'cycleMonths', 'cycles', 'startMonth'];
+const schedOfDoc = (d) => ({ freqMonths: K.freqOf(d), cycleMonths: K.has(d && d.cycleMonths) ? +d.cycleMonths : null, cycles: K.has(d && d.cycles) ? +d.cycles : null, startMonth: (d && K.isMonth(d.startMonth)) ? d.startMonth : null });
+const schedWords = (s) => K.freqLabel(s, true) + (s.cycleMonths || s.cycles ? ' · ' + (s.cycles || 'programme') + ' cycle(s) of ' + (s.cycleMonths ? s.cycleMonths + ' months' : 'programme length') : '') + (s.startMonth ? ' · from ' + K.fmtMonth(s.startMonth) : '');
 const defsAsPlain = (docs) => activeDefs(docs).map((d) => Object.assign({ id: d._id }, d));
 
 /* A report's live body: rows for the period, plus 12 months of trend ending with it. With
@@ -331,7 +384,8 @@ function mount(app, opts) {
       const a = await resolve(req, res, 'add'); if (!a) return;
       const cfg = await getConfig();
       const b = body(req);
-      const d = pickDef(b, cfg, null);
+      if (a.unrestricted) { const se = pickSchedule(b, null); if (typeof se === 'string') return res.status(400).json({ ok: false, code: 'schedule', error: se }); }
+      const d = pickDef(b, cfg, null, { admin: !!a.unrestricted });
       if (!d.name) return res.status(400).json({ ok: false, error: 'Give the KPI a name.' });
       const docs = await allDocs(DEFS);
       const id = K.newKpiId(d.name, docs.map((x) => x._id));
@@ -353,7 +407,8 @@ function mount(app, opts) {
       const b = body(req);
       if (b.baseUpdatedAt !== undefined && b.baseUpdatedAt !== cur.updatedAt) return res.status(409).json({ ok: false, code: 'stale', error: 'Someone else changed this KPI while you were editing. Reload it to see their changes.', current: cleanDef(cur) });
       const cfg = await getConfig();
-      const d = pickDef(Object.assign({}, cleanDef(cur), b), cfg, cur);
+      if (a.unrestricted) { const se = pickSchedule(b, cur); if (typeof se === 'string') return res.status(400).json({ ok: false, code: 'schedule', error: se }); }
+      const d = pickDef(Object.assign({}, cleanDef(cur), b), cfg, cur, { admin: !!a.unrestricted });
       if (!d.name) return res.status(400).json({ ok: false, error: 'The KPI needs a name.' });
       const changed = defChanges(cur, d);
       const t = now();
@@ -432,6 +487,60 @@ function mount(app, opts) {
   });
 
   // Put back any deck KPI that is missing (never overwrites one that exists, archived or not).
+  /* The KPI schedule (Settings, administrators): how often each KPI is measured, its own cycles and
+     start. Everything is checked before anything is saved. `dryRun` returns what would change and
+     how many saved monthly figures would stop counting (kept, never deleted). */
+  app.post('/api/kpi/schedule', guard, async (req, res) => {
+    try {
+      const a = await resolve(req, res, 'view'); if (!a) return;
+      if (!adminOnly(a, res, 'change the KPI schedule')) return;
+      const b = body(req);
+      const items = Array.isArray(b.items) ? b.items.slice(0, 200) : [];
+      if (!items.length) return res.status(400).json({ ok: false, error: 'Nothing to save.' });
+      const cfg = await getConfig();
+      const plan = [];
+      for (const it of items) {
+        const cur = await getDoc(DEFS, String((it && it.id) || ''));
+        if (!cur || cur.removedAt || cur.active === false) return res.status(404).json({ ok: false, error: 'A KPI in the schedule no longer exists. Reload the page.' });
+        if (it.baseUpdatedAt !== undefined && it.baseUpdatedAt !== cur.updatedAt) return res.status(409).json({ ok: false, code: 'stale', error: cur.name + ' was changed by someone else meanwhile. Reload the page and set the schedule again.' });
+        const se = pickSchedule(it, cur);
+        if (typeof se === 'string') return res.status(400).json({ ok: false, code: 'schedule', error: cur.name + ': ' + se });
+        if (it.startMonth !== undefined && it.startMonth !== null && it.startMonth !== '' && !K.isMonth(it.startMonth)) return res.status(400).json({ ok: false, error: cur.name + ': choose a start month.' });
+        const next = Object.assign({}, se, { startMonth: it.startMonth !== undefined ? (K.isMonth(it.startMonth) ? it.startMonth : null) : schedOfDoc(cur).startMonth });
+        const before = schedOfDoc(cur);
+        const changes = SCHED_FIELDS.filter((k) => before[k] !== next[k]);
+        if (changes.length) plan.push({ cur, before, next, changes });
+      }
+      // Figures saved in months that stop being due: kept, shown, no longer counted.
+      const orphaned = {};
+      const lessOften = plan.filter((p) => p.next.freqMonths > 1);
+      if (lessOften.length) {
+        const rows = await monthRows('2000-01', K.thisMonth(now()));
+        lessOften.forEach((p) => {
+          const d = Object.assign({ id: p.cur._id }, p.cur, p.next);
+          const list = rows.filter((r) => r.kpiId === p.cur._id && K.isStarted(d, r.month, cfg) && !K.isDue(d, r.month, cfg)).map((r) => r.month).sort();
+          if (list.length) orphaned[p.cur._id] = list;
+        });
+      }
+      const summary = plan.map((p) => ({ id: p.cur._id, name: p.cur.name, code: p.cur.code || '', from: schedWords(p.before), to: schedWords(p.next), changes: p.changes, kept: (orphaned[p.cur._id] || []).length }));
+      if (b.dryRun === true) return res.json({ ok: true, dryRun: true, changes: summary, orphaned });
+      if (!plan.length) return res.json({ ok: true, saved: 0, changes: [] });
+      const t = now();
+      const saved = [];
+      for (const p of plan) {
+        const doc = Object.assign({}, p.cur, p.next, { updatedAt: stamp(t), updatedBy: actor(req, a), updatedByName: nameOf(req, a),
+          history: (p.cur.history || []).concat([{ at: t, by: actor(req, a), action: 'schedule', from: schedWords(p.before), to: schedWords(p.next) }]).slice(-100) });
+        if (!(await putDoc(DEFS, doc, p.cur.updatedAt))) {
+          if (saved.length) activity.log(req, 'kpi_schedule', { target: 'KPI schedule', detail: saved.map((x) => x.name + ': ' + x.to).join('; ') });
+          return res.status(409).json({ ok: false, code: 'stale', saved: saved.length, error: p.cur.name + ' was changed by someone else at the same moment' + (saved.length ? ' (' + saved.length + ' other KPI(s) were saved)' : '') + '. Reload and try again.' });
+        }
+        saved.push(summary.find((s) => s.id === p.cur._id));
+      }
+      activity.log(req, 'kpi_schedule', { target: 'KPI schedule', detail: saved.map((x) => x.name + ': ' + x.from + ' → ' + x.to + (x.kept ? ' (' + x.kept + ' earlier monthly figure(s) kept, not counted)' : '')).join('; ').slice(0, 1800) });
+      res.json({ ok: true, saved: saved.length, changes: saved, orphaned });
+    } catch (e) { fail(res, e, 'Could not save the KPI schedule.'); }
+  });
+
   app.post('/api/kpi/seed', guard, async (req, res) => {
     try {
       const a = await resolve(req, res, 'view'); if (!a) return;
@@ -545,15 +654,21 @@ function mount(app, opts) {
         return res.status(409).json({ ok: false, code: 'stale', error: 'Someone else saved this month while you were typing. Their figure is shown now — check it before saving again.', current: { num: cur.num, den: cur.den, value: cur.value, note: cur.note, updatedAt: cur.updatedAt, updatedBy: cur.updatedByName || cur.updatedBy } });
       }
       const dd = Object.assign({ id: def._id }, def);
+      const cfg = await getConfig();
+      // A KPI measured every N months owes one figure per period, in the period's last month.
+      const f = K.freqOf(dd);
+      if (f > 1 && K.isStarted(dd, ym, cfg) && !K.isDue(dd, ym, cfg)) {
+        const p = K.periodOf(dd, ym, cfg);
+        return res.status(400).json({ ok: false, code: 'not-due', due: p.to, error: dd.name + ' is measured ' + K.freqLabel(dd, true).toLowerCase() + ' — enter the ' + p.label + ' result in ' + K.fmtMonthLong(p.to) + '.' });
+      }
       const e = { num: numOrNull(b.num), den: numOrNull(b.den), value: numOrNull(b.value) };
       const err = K.validateEntry(dd, e);
       if (err) return res.status(400).json({ ok: false, code: 'invalid', error: err });
       const value = dd.formula === 'direct' ? e.value : K.computeValue(dd.formula, e.num, dd.formula === 'count' ? null : e.den);
-      const cfg = await getConfig();
       const autoFill = K.cfgOf(cfg).autoFill !== false && dd.autoFill !== false;
-      // The system figure for this month and the three before it (the latter for the deviation check).
-      const prev = K.monthsBetween(K.addMonth(ym, -3), K.addMonth(ym, -1));
-      const [sys, prevSaved] = await Promise.all([link.linkedMonthly(dd, prev.concat([ym]), deps), monthRows(prev[0], prev[prev.length - 1])]);
+      // The system figure for this month (or period) and the three before it (the latter for the deviation check).
+      const prev = [3, 2, 1].map((i) => K.addMonth(ym, -i * f));
+      const [sys, prevSaved] = await Promise.all([systemFor(dd, prev.concat([ym]), cfg, deps), monthRows(prev[0], prev[prev.length - 1])]);
       const auto = sys[ym] || null;
       const replacing = autoFill && auto && K.has(auto.value) ? auto : null;
       const note = str(b.note, 500);
@@ -597,8 +712,9 @@ function mount(app, opts) {
         history: (cur.history || []).concat([{ at: t, by: actor(req, a), action: cur.override ? 'reverted to the system figure' : 'cleared' }]).slice(-50) });
       if (!(await putDoc(MONTHS, doc, cur.updatedAt))) return res.status(409).json({ ok: false, error: 'Someone else saved this month at the same moment. Reload and try again.' });
       activity.log(req, 'kpi_value', { target: ((def && def.name) || kpiId) + ' · ' + K.fmtMonth(ym), detail: cur.override ? 'reverted to the system figure' : 'cleared' });
-      const auto = def ? (await link.linkedMonthly(Object.assign({ id: def._id }, def), [ym], deps))[ym] : null;
-      const autoFill = K.cfgOf(await getConfig()).autoFill !== false && !(def && def.autoFill === false);
+      const cfgNow = await getConfig();
+      const auto = def ? (await systemFor(Object.assign({ id: def._id }, def), [ym], cfgNow, deps))[ym] : null;
+      const autoFill = K.cfgOf(cfgNow).autoFill !== false && !(def && def.autoFill === false);
       res.json({ ok: true, cell: K.resolveCell(auto, null, { autoFill }) });
     } catch (e) { fail(res, e, 'Could not clear the figure.'); }
   });
@@ -835,6 +951,58 @@ function mount(app, opts) {
     } catch (e) { fail(res, e, 'Could not record the print.'); }
   });
 
+  /* The KPI documents that are not a period report: the KPI Definition document (Word) and the
+     year's Data collection calendar (screen, Excel). Print / PDF of both are made in the browser. */
+  const liveDefsWithNames = async () => {
+    const defs = defsAsPlain(await allDocs(DEFS));
+    let catalog = [], areas = [];
+    try { const ctx = await link.loadContext([K.lastClosedMonth(now())], deps); catalog = link.indicatorCatalog(ctx); areas = link.areaList(ctx); } catch (e) { catalog = []; }
+    const indName = (id) => { const x = catalog.find((c) => String(c.id) === String(id)); return x ? x.name : null; };
+    const unitName = (k) => { const x = areas.find((a) => String(a.key) === String(k)); return x ? x.name : String(k); };
+    return defs.map((d) => Object.assign({}, d, { indicatorName: d.source && d.source.indId ? (d.source.indName || indName(d.source.indId) || d.source.indId) : null,
+      unitNames: (d.units || []).map(unitName) }));
+  };
+  app.get('/api/kpi/calendar', guard, async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const a = await resolve(req, res, 'view'); if (!a) return;
+      const cfg = await getConfig();
+      const defs = defsAsPlain(await allDocs(DEFS));
+      const cal = K.calendar(defs, req.query.year, cfg);
+      res.json({ ok: true, calendar: cal, defs: defs.map((d) => ({ id: d.id, code: d.code || '', name: d.name, pillar: d.pillar, freqMonths: K.freqOf(d), freq: K.freqLabel(d, true),
+        linked: !!(d.source && d.source.indId), autoFill: d.autoFill !== false, units: (d.units || []).length, startMonth: K.startOf(d, cfg), schedule: K.scheduleText(d, cfg) })) });
+    } catch (e) { fail(res, e, 'Could not build the data collection calendar.'); }
+  });
+  const docFile = (kind) => async (req, res) => {
+    try {
+      const a = await resolve(req, res, 'print'); if (!a) return;
+      const cfg = K.cfgOf(await getConfig());
+      const year = parseInt(req.query.year, 10) || +K.thisMonth(now()).slice(0, 4);
+      activity.log(req, 'kpi_export', { target: kind === 'docx' ? 'KPI Definition document' : 'Data collection calendar ' + year, detail: kind === 'docx' ? 'Word' : 'Excel' });
+      const D = require('./kpi-docs');
+      const defs = await liveDefsWithNames();
+      const opts = { cfg, by: nameOf(req, a), now: now(), signoff: (() => { try { const x = JSON.parse(String(req.query.sig || "{}")); return x && typeof x === "object" ? { prepared: str(x.prepared, 80), reviewed: str(x.reviewed, 80), recommended: str(x.recommended, 80), approved: str(x.approved, 80) } : null; } catch (e) { return null; } })() };
+      // the whole file first, then the headers (see exportFile)
+      const buf = kind === 'docx' ? await D.definitionsDocx(defs, opts) : await D.calendarXlsx(defs, year, opts);
+      res.set('Cache-Control', 'no-store');
+      res.set('Content-Type', kind === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.set('Content-Disposition', 'attachment; filename="' + (kind === 'docx' ? 'Nursing-KPI-Definitions-' + K.thisMonth(now()) + '.docx' : 'Nursing-KPI-Data-Collection-Calendar-' + year + '.xlsx') + '"');
+      res.end(buf);
+    } catch (e) { fail(res, e, kind === 'docx' ? 'Could not build the Word file.' : 'Could not build the Excel file.'); }
+  };
+  app.get('/api/kpi/definitions.docx', guard, docFile('docx'));
+  app.get('/api/kpi/calendar.xlsx', guard, docFile('xlsx'));
+  // the definitions as data, for the browser's print / PDF of the same document
+  app.get('/api/kpi/definitions', guard, async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const a = await resolve(req, res, 'view'); if (!a) return;
+      const cfg = await getConfig();
+      const defs = await liveDefsWithNames();
+      res.json({ ok: true, defs: defs.map((d) => Object.assign(cleanDef(Object.assign({ _id: d.id }, d)), { indicatorName: d.indicatorName, doc: require('./kpi-docs').defFacts(d, K.cfgOf(cfg)) })) });
+    } catch (e) { fail(res, e, 'Could not load the KPI definitions.'); }
+  });
+
   /* ------------------------------------------------------------ badge / gaps */
   app.get('/api/kpi/missing', guard, async (req, res) => {
     res.set('Cache-Control', 'no-store');
@@ -844,13 +1012,20 @@ function mount(app, opts) {
       const docs = await allDocs(DEFS);
       const cfg = await getConfig();
       const defs = defsAsPlain(docs);
-      const cells = (await valuesFor(defs, [ym], deps, cfg)).cells;
+      // Each KPI owes its latest due month on or before `ym`: the month itself for a monthly KPI,
+      // the last ended period for one measured less often. A KPI not started yet owes nothing.
+      const dueOf = new Map(defs.map((d) => [d.id, K.lastDue(d, ym, cfg)]));
+      const dues = [...dueOf.values()].filter(Boolean).sort();
+      const cells = dues.length ? (await valuesFor(defs, K.monthsBetween(dues[0], ym), deps, cfg)).cells : {};
       const missing = [], partial = [];
       defs.forEach((d) => {
-        const c = cells[d.id][ym];
-        if (c.notStarted) return; // a KPI that has not started yet owes nothing
-        if (c.source === 'partial') partial.push({ id: d.id, code: d.code, name: d.name });
-        else if (!K.has(c.value)) missing.push({ id: d.id, code: d.code, name: d.name, linked: !!(d.source && d.source.indId) });
+        const due = dueOf.get(d.id);
+        if (!due) return;
+        const c = cells[d.id][due];
+        if (!c || c.notStarted) return;
+        const at = { month: due, period: K.freqOf(d) > 1 ? K.periodOf(d, due, cfg).label : null };
+        if (c.source === 'partial') partial.push(Object.assign({ id: d.id, code: d.code, name: d.name }, at));
+        else if (!K.has(c.value)) missing.push(Object.assign({ id: d.id, code: d.code, name: d.name, linked: !!(d.source && d.source.indId) }, at));
       });
       const rep = await getDoc(REPORTS, K.reportId(ym, ym));
       const report = rep && !rep.removedAt ? { id: rep._id, state: rep.state } : null;

@@ -47,6 +47,46 @@
     setTimeout(() => URL.revokeObjectURL(href), 4000);
   }
 
+  /* Print a set of A4 sheets in their own window. The window is opened first — before any await —
+     so a pop-up blocker allows it; `log` records the print on the server before anything is shown. */
+  async function printSheets(getRoot, title, log, setCapturing) {
+    const w = window.open('', '_blank');
+    try {
+      await log();
+      if (!w) { toast('Allow pop-ups for this site to print.', 'error'); return; }
+      setCapturing(true);
+      await new Promise((r) => setTimeout(r, 60));
+      const html = getRoot().innerHTML.split('src="unico/logo.svg"').join('src="' + location.origin + '/unico/logo.svg"');
+      setCapturing(false);
+      w.document.open();
+      w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title) + '</title><style>:root{--line:#dde3ec;--line-2:#eef2f6;--muted:#7b8796;--ink:#16202e;--ink-2:#3a4656;--blue-50:#eef8fd;--shadow:none}' +
+        'html{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;font-family:"IBM Plex Sans","Segoe UI",Arial,sans-serif;background:#fff}@page{size:A4 landscape;margin:0}' + CSS +
+        '.kp-doc{gap:0;padding:0}.kp-sheet{box-shadow:none;page-break-after:always;break-after:page;width:297mm;height:209mm;min-height:0}.kp-sheet:last-child{page-break-after:auto}</style></head><body><div class="kp-doc">' + html + '</div><script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script></body></html>');
+      w.document.close();
+    } catch (e) { if (w) w.close(); setCapturing(false); throw e; }
+  }
+  // The same sheets as a PDF (one A4 landscape page per sheet), logged first.
+  async function pdfSheets(getRoot, title, fileName, log, setCapturing) {
+    await log();
+    if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) await window.unicoLoadPdfLibs();
+    const J = window.jspdf && window.jspdf.jsPDF, H = window.html2canvas;
+    if (!J || !H) throw new Error('The PDF tools could not load. Use Print and choose “Save as PDF”.');
+    setCapturing(true);
+    try {
+      await new Promise((r) => setTimeout(r, 120));
+      const sheets = [...getRoot().querySelectorAll('.kp-sheet')];
+      const pdf = new J({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
+      for (let i = 0; i < sheets.length; i++) {
+        const c = await H(sheets[i], { scale: 1.6, backgroundColor: '#ffffff', useCORS: true, logging: false, windowWidth: 1200 });
+        if (i) pdf.addPage();
+        pdf.addImage(c.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, 297, 210);
+      }
+      pdf.setProperties({ title, author: me() });
+      pdf.save(fileName + '.pdf');
+      toast('PDF downloaded.', 'success');
+    } finally { setCapturing(false); }
+  }
+
   /* ================================================================== styles === */
   const CSS = `
 .kp-wrap{display:flex;flex-direction:column;gap:16px}
@@ -142,6 +182,14 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
 .kp-cell.missing:hover{background:#fdf0f2}
 .kp-cell.partial{border:1.5px dashed #e7c27a;color:#8a5a00}
 .kp-cell.future{opacity:.35;cursor:default}
+.kp-savebar{position:sticky;bottom:0;display:flex;gap:8px;align-items:center;padding:10px 14px;background:#fffbea;border-top:1px solid #f0dca0;border-radius:0 0 14px 14px;z-index:4}
+@media (max-width:720px){.kp-savebar{position:static}}
+.kp-sched td{vertical-align:middle}
+.kp-cell.span{background:repeating-linear-gradient(135deg,#fafbfd,#fafbfd 7px,#f1f4f8 7px,#f1f4f8 14px);border-color:#e3e9f0}
+.kp-cell.span:hover{background:#eef8fd}
+.kp-cell.span.wait{cursor:default}
+.kp-cell.span.wait:hover{background:repeating-linear-gradient(135deg,#fafbfd,#fafbfd 7px,#f1f4f8 7px,#f1f4f8 14px);border-color:#e3e9f0}
+.kp-cell .per{font-size:9.5px;font-weight:700;color:#7b8796;white-space:nowrap}
 .kp-dot{width:7px;height:7px;border-radius:50%;display:inline-block}
 .kp-legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--muted);align-items:center}
 .kp-legend span{display:inline-flex;gap:5px;align-items:center}
@@ -531,9 +579,25 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     return <EvidenceView def={def} ev={j.evidence} steps={j.steps} compact={compact} />;
   }
 
+  // A KPI measured every N months: which period its figure is ("Jan–Jun 2026", or "latest: …").
+  const resultOf = (r) => (r.latest ? 'latest: ' + r.latest.label : r.freqMonths > 1 && r.resultLabel ? r.resultLabel : '');
+  const ResultTag = ({ r }) => (resultOf(r) ? <div className="kp-muted" style={{ fontSize: 10.5, whiteSpace: 'nowrap' }}>{resultOf(r)}{r.nextDue && r.latest ? ' · next ' + K.fmtMonth(r.nextDue) : ''}</div> : null);
+  // The periods of a less-often KPI, as a small table (screen and report).
+  function PeriodsTable({ row }) {
+    const list = row.periods || [];
+    if (!list.length) return <div className="kp-muted">{K.freqLabel(row)} — no period has ended yet{row.nextDue ? '; the first result is due in ' + K.fmtMonthLong(row.nextDue) : ''}.</div>;
+    return (
+      <div className="kp-scroll"><table className="kp-stbl"><thead><tr><th>Period</th>{row.formula !== 'direct' && <th>{row.numLabel || 'Numerator'}</th>}{row.formula !== 'direct' && row.formula !== 'count' && <th>{row.denLabel || 'Denominator'}</th>}<th>Value</th><th>Target</th><th>Status</th></tr></thead>
+        <tbody>{list.map((pp) => <tr key={pp.to}><td className="l"><b>{pp.label}</b>{!pp.inReport ? <span className="kp-muted"> · before this report</span> : null}</td>
+          {row.formula !== 'direct' && <td>{K.has(pp.num) ? pp.num : '—'}</td>}{row.formula !== 'direct' && row.formula !== 'count' && <td>{K.has(pp.den) ? pp.den : '—'}</td>}
+          <td><b>{K.fmt(row, pp.value)}</b></td><td>{K.has(pp.target) ? K.fmt(row, pp.target) : '—'}</td><td><Pill s={pp.status} /></td></tr>)}</tbody></table></div>
+    );
+  }
+
   function KpiDrawer({ row, cfg, onClose, setRoute, canEnter, showCalc }) {
     const [tab, setTab] = useState(showCalc ? 'calc' : 'overview');
-    const monthsAll = Object.keys(row.cells || {});
+    // the months that carry a figure (a less-often KPI: its due months only)
+    const monthsAll = Object.keys(row.cells || {}).filter((m) => (row.cells[m] || {}).source !== 'not-due');
     const [calcMonth, setCalcMonth] = useState(monthsAll[monthsAll.length - 1]);
     const [kind, setKind] = useState(() => lsGet('kpi_chart') || 'area');
     useEffect(() => { lsSet('kpi_chart', kind); }, [kind]);
@@ -555,13 +619,14 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           <div className="kp-tabs">{[['overview', 'Overview'], ['calc', 'How it is calculated']].map(([k, l]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}</div>
           {tab === 'calc' && (
             <div className="kp-dlg-b" style={{ gap: 12 }}>
-              <div className="kp-chips">{monthsAll.map((m) => <button key={m} className={'kp-chip' + (calcMonth === m ? ' on' : '')} onClick={() => setCalcMonth(m)}>{K.fmtMonth(m)}</button>)}</div>
-              <EvidencePanel def={row} kpiId={row.kpiId} ym={calcMonth} />
+              {monthsAll.length ? <><div className="kp-chips">{monthsAll.map((m) => <button key={m} className={'kp-chip' + (calcMonth === m ? ' on' : '')} onClick={() => setCalcMonth(m)}>{row.freqMonths > 1 ? K.periodOf(row, m, cfg).label : K.fmtMonth(m)}</button>)}</div>
+                <EvidencePanel def={row} kpiId={row.kpiId} ym={calcMonth || monthsAll[monthsAll.length - 1]} /></>
+                : <div className="kp-muted">{K.freqLabel(row)} — no period ends inside this report{row.latest ? '; the result shown is ' + row.latest.label + ' (open a report that includes ' + K.fmtMonth(row.latest.to) + ' to see its calculation)' : ''}.</div>}
             </div>
           )}
           {tab === 'overview' && <div className="kp-dlg-b" style={{ gap: 14 }}>
             <div className="kp-row" style={{ alignItems: 'stretch' }}>
-              {[['Current', K.fmt(row, row.period.value), row.unit && K.unitKind(row) === 'num' ? row.unit : (months.length > 1 ? months.length + ' months pooled' : K.fmtMonthLong(months[0]))],
+              {[['Current', K.fmt(row, row.period.value), resultOf(row) || (row.unit && K.unitKind(row) === 'num' ? row.unit : (months.length > 1 ? months.length + ' months pooled' : K.fmtMonthLong(months[0])))],
                 ['Target', row.target != null ? K.fmt(row, row.target) : '—', row.goalDirection === 'lower_is_better' ? 'lower is better' : 'higher is better'],
                 ['Variance', K.gapLabel(row, row.period.value, row.target), row.achievement != null ? row.achievement + '% of target' : ''],
               ].map(([l, v, s], i) => (
@@ -574,16 +639,17 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             </div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}><Pill s={row.status} /><Trend d={row.trendDir} />
               {row.linked && <span className="kp-muted">· filled from the hospital's quality data</span>}</div>
+            <div className="kp-muted" style={{ fontSize: 11.5 }}><b style={{ color: 'var(--ink-2)' }}>Tracking:</b> {row.schedule}{row.nextDue ? ' · next result ' + K.fmtMonthLong(row.nextDue) : ''}</div>
             <div className="kp-card">
-              <div className="kp-h"><h3>Last 12 months</h3><span className="grow" />
+              <div className="kp-h"><h3>{row.freqMonths > 1 ? 'Last 12 months · one point per period' : 'Last 12 months'}</h3><span className="grow" />
                 <div className="kp-chips">{CHARTS.map(([k, l]) => <button key={k} className={'kp-chip' + (kind === k ? ' on' : '')} onClick={() => setKind(k)}>{l}</button>)}</div></div>
               <div className="kp-pad"><KpiChart row={row} kind={kind} /></div>
             </div>
-            <div className="kp-scroll"><table className="kp-stbl"><thead><tr><th>Month</th>{months.map((m) => <th key={m}>{K.fmtMonth(m)}</th>)}</tr></thead>
+            {row.freqMonths > 1 ? <PeriodsTable row={row} /> : <div className="kp-scroll"><table className="kp-stbl"><thead><tr><th>Month</th>{months.map((m) => <th key={m}>{K.fmtMonth(m)}</th>)}</tr></thead>
               <tbody><tr><td className="l"><b>Value</b></td>{months.map((m) => <td key={m}><b>{K.fmt(row, row.cells[m].value)}</b></td>)}</tr>
                 {row.formula !== 'direct' && <tr><td className="l">{row.numLabel || 'Numerator'}</td>{months.map((m) => <td key={m}>{K.has(row.cells[m].num) ? row.cells[m].num : '—'}</td>)}</tr>}
                 {row.formula !== 'direct' && row.formula !== 'count' && <tr><td className="l">{row.denLabel || 'Denominator'}</td>{months.map((m) => <td key={m}>{K.has(row.cells[m].den) ? row.cells[m].den : '—'}</td>)}</tr>}
-                <tr><td className="l kp-muted">Source</td>{months.map((m) => <td key={m}><Src s={row.cells[m].source} /></td>)}</tr></tbody></table></div>
+                <tr><td className="l kp-muted">Source</td>{months.map((m) => <td key={m}><Src s={row.cells[m].source} /></td>)}</tr></tbody></table></div>}
             <div><span className="kp-lab">Formula</span><div style={{ fontSize: 12.5, fontStyle: 'italic' }}>{row.formulaText || '—'}</div></div>
             <div><span className="kp-lab">Action plan ({(row.actions || []).length})</span>
               {(row.actions || []).length ? row.actions.map((a) => <div className="kp-act" key={a.id}><span className="kp-pill" style={{ background: a.status === 'done' ? '#e7f6ed' : a.status === 'progress' ? '#e1f1fa' : '#f3f5f8', color: a.status === 'done' ? '#14713f' : a.status === 'progress' ? '#0b4f6c' : '#5b6878', fontSize: 10 }}>{K.ACTION_LABEL[a.status]}</span>
@@ -618,7 +684,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }, [range && range.from, range && range.to]);
     const rows = rep ? rep.rows : [];
     const sum = rep ? rep.summary : null;
-    const shown = rows.filter((r) => (!fPillar || r.pillar === fPillar) && (!fStatus || (fStatus === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' || r.status === 'notstarted' : r.status === fStatus)));
+    const shown = rows.filter((r) => (!fPillar || r.pillar === fPillar) && (!fStatus || (fStatus === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' || r.status === 'notstarted' || r.status === 'notdue' : r.status === fStatus)));
     const pillars = cfg.pillars.filter((x) => rows.some((r) => r.pillar === x.id));
     const scored = shown.filter((r) => r.achievement != null);
     const canEnter = meta.canAdd || meta.canEdit;
@@ -636,7 +702,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               <div style={{ minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 800 }}>KPI score</div><div style={{ fontSize: 11.5, opacity: 0.8, marginTop: 3, lineHeight: 1.35 }}>{sum.scored ? sum.met + ' of ' + sum.scored + ' KPIs with a target and data are on target' : 'No KPI has both data and a target yet'}</div></div>
             </div>
             {tiles.map(([k, l]) => {
-              const n = k === 'nodata' ? sum.nodata + sum.notarget + (sum.notstarted || 0) : sum[k];
+              const n = k === 'nodata' ? sum.nodata + sum.notarget + (sum.notstarted || 0) + (sum.notdue || 0) : sum[k];
               return (
                 <div key={k} className={'kp-tile' + (fStatus === k ? ' sel' : '')} onClick={() => setFStatus(fStatus === k ? '' : k)} title="Click to show only these">
                   <span className="ring" style={{ background: ST[k].color }} />
@@ -654,7 +720,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               return (
                 <div key={pl.id} className={'kp-pillar' + (fPillar === pl.id ? ' sel' : '')} onClick={() => setFPillar(fPillar === pl.id ? '' : pl.id)}>
                   <div className="top" style={{ background: 'linear-gradient(120deg,' + pl.color + ',' + shade(pl.color, 40) + ')' }}><b>{pl.label}</b><span style={{ fontSize: 22, fontWeight: 800 }}>{list.length}</span></div>
-                  <div className="seg">{['met', 'near', 'off', 'notarget', 'nodata', 'notstarted'].map((k) => (c[k] ? <span key={k} style={{ flex: c[k], background: ST[k].color }} /> : null))}</div>
+                  <div className="seg">{['met', 'near', 'off', 'notarget', 'nodata', 'notstarted', 'notdue'].map((k) => (c[k] ? <span key={k} style={{ flex: c[k], background: ST[k].color }} /> : null))}</div>
                   <ul>{list.map((r) => <li key={r.kpiId} onClick={(e) => { e.stopPropagation(); setOpen(r); }}><i style={{ background: ST[r.status].color }} /><span>{r.code} {r.name}</span><b style={{ fontVariantNumeric: 'tabular-nums' }}>{K.fmt(r, r.period.value)}</b></li>)}</ul>
                 </div>
               );
@@ -669,7 +735,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             </div>
             <div className="kp-card">
               <div className="kp-h"><h3>Status by pillar</h3></div>
-              <div className="kp-pad"><Iso3DStack groups={pillars.map((pl) => { const c = K.summarize(rows.filter((r) => r.pillar === pl.id)); return { id: pl.id, label: pl.label, parts: [{ value: c.met, color: ST.met.color, label: 'on target' }, { value: c.near, color: ST.near.color, label: 'close' }, { value: c.off, color: ST.off.color, label: 'need action' }, { value: c.nodata + c.notarget + (c.notstarted || 0), color: ST.nodata.color, label: 'no data / target' }] }; })} onPick={(g) => setFPillar(fPillar === g.id ? '' : g.id)} />
+              <div className="kp-pad"><Iso3DStack groups={pillars.map((pl) => { const c = K.summarize(rows.filter((r) => r.pillar === pl.id)); return { id: pl.id, label: pl.label, parts: [{ value: c.met, color: ST.met.color, label: 'on target' }, { value: c.near, color: ST.near.color, label: 'close' }, { value: c.off, color: ST.off.color, label: 'need action' }, { value: c.nodata + c.notarget + (c.notstarted || 0) + (c.notdue || 0), color: ST.nodata.color, label: 'no data / target' }] }; })} onPick={(g) => setFPillar(fPillar === g.id ? '' : g.id)} />
                 <div className="kp-legend" style={{ justifyContent: 'center', marginTop: 6 }}>{[['met', 'On target'], ['near', 'Close'], ['off', 'Needs action'], ['nodata', 'No data / target']].map(([k, l]) => <span key={k}><i className="kp-dot" style={{ background: ST[k].color }} />{l}</span>)}</div></div>
             </div>
           </div>
@@ -684,9 +750,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                 <tbody>{shown.map((r) => (
                   <tr key={r.kpiId} onClick={() => setOpen(r)}>
                     <td><Code r={r} cfg={cfg} /></td>
-                    <td><div style={{ fontWeight: 700, color: 'var(--ink)' }}>{r.name}</div><div className="kp-muted" style={{ fontSize: 11 }}>{r.unit}{r.linked ? ' · from quality data' : ''}</div></td>
+                    <td><div style={{ fontWeight: 700, color: 'var(--ink)' }}>{r.name}</div><div className="kp-muted" style={{ fontSize: 11 }}>{r.unit}{r.linked ? ' · from quality data' : ''}{r.freqMonths > 1 ? ' · ' + K.freqLabel(r, true).toLowerCase() : ''}</div></td>
                     <td><Spark row={r} /></td>
-                    <td className="num"><b style={{ fontSize: 14 }}>{K.fmt(r, r.period.value)}</b></td>
+                    <td className="num"><b style={{ fontSize: 14 }}>{K.fmt(r, r.period.value)}</b><ResultTag r={r} /></td>
                     <td className="num">{r.target != null ? K.fmt(r, r.target) : '—'}</td>
                     <td style={{ fontSize: 12, color: ST[r.status].ink, whiteSpace: 'nowrap' }}>{K.gapLabel(r, r.period.value, r.target)}</td>
                     <td><Pill s={r.status} /></td>
@@ -763,6 +829,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const live = f === 'direct' ? (K.has(val) ? Number(val) : null) : K.computeValue(f, num, f === 'count' ? null : den);
     const target = K.targetFor(def, ym, meta.config);
     const st = K.statusOf(def, live, target, meta.config);
+    // A KPI measured every N months: this figure is the whole period's, entered in its last month.
+    const per = K.freqOf(def) > 1 && !cell.notStarted ? K.periodOf(def, ym, meta.config) : null;
+    const when2 = per ? per.label : K.fmtMonth(ym);
     const problem = (num || den || val) ? K.validateEntry(def, entry) : null;
     // Typing over a figure the quality data produced: the reason is required (and printed).
     const overriding = !!(cell.auto && K.has(cell.auto.value));
@@ -774,7 +843,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       setBusy(true); setErr('');
       try {
         const j = await api('/api/kpi/values/' + encodeURIComponent(def.id) + '/' + ym, { method: 'PUT', body: JSON.stringify({ num, den, value: val, note, confirm: confirmed === true ? true : undefined, baseUpdatedAt: saved ? cell.savedAt : undefined }) });
-        toast(def.name + ' · ' + K.fmtMonth(ym) + ' saved: ' + K.fmt(def, j.cell.value), 'success');
+        toast(def.name + ' · ' + when2 + ' saved: ' + K.fmt(def, j.cell.value), 'success');
         onSaved(j.cell, next);
       } catch (x) {
         setBusy(false);
@@ -790,7 +859,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }
     }
     async function revert() {
-      const ok = await confirmBox({ title: cell.source === 'edited' ? 'Go back to the system figure?' : 'Clear this month?', message: cell.source === 'edited' ? 'Your figure (' + K.fmt(def, cell.value) + ') is removed and ' + K.fmtMonth(ym) + ' shows the system figure again (' + K.fmt(def, cell.auto && cell.auto.value) + '). The change is kept in the history.' : 'The figure for ' + K.fmtMonth(ym) + ' is removed. It is kept in the history.', confirmLabel: cell.source === 'edited' ? 'Use system figure' : 'Clear', danger: cell.source !== 'edited' });
+      const ok = await confirmBox({ title: cell.source === 'edited' ? 'Go back to the system figure?' : per ? 'Clear this period?' : 'Clear this month?', message: cell.source === 'edited' ? 'Your figure (' + K.fmt(def, cell.value) + ') is removed and ' + when2 + ' shows the system figure again (' + K.fmt(def, cell.auto && cell.auto.value) + '). The change is kept in the history.' : 'The figure for ' + when2 + ' is removed. It is kept in the history.', confirmLabel: cell.source === 'edited' ? 'Use system figure' : 'Clear', danger: cell.source !== 'edited' });
       if (!ok) return;
       setBusy(true);
       try { const j = await api('/api/kpi/values/' + encodeURIComponent(def.id) + '/' + ym, { method: 'DELETE' }); toast('Done.', 'success'); onSaved(j.cell); }
@@ -804,19 +873,20 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     );
     return (
       <div className="kp-back" onMouseDown={(e) => e.target === e.currentTarget && onClose()} onKeyDown={onKey}>
-        <div className="kp-dlg" role="dialog" aria-label={def.name + ' ' + K.fmtMonth(ym)}>
+        <div className="kp-dlg" role="dialog" aria-label={def.name + ' ' + when2}>
           <div className="kp-dlg-h">
             <span className="kp-code" style={{ background: K.pillarOf(meta.config, def.pillar).color, marginTop: 2 }}>{def.code || '•'}</span>
-            <div><h3>{def.name}</h3><div className="kp-muted">{K.fmtMonthLong(ym)} · {def.unit}{target != null ? ' · target ' + K.fmt(def, target) : ''}</div></div>
+            <div><h3>{def.name}{per ? ' — ' + per.label : ''}</h3><div className="kp-muted">{per ? K.freqLabel(def) + ' · entered in ' + K.fmtMonthLong(ym) : K.fmtMonthLong(ym)} · {def.unit}{target != null ? ' · target ' + K.fmt(def, target) : ''}</div></div>
             <button className="kp-x" onClick={onClose} aria-label="Close">×</button>
           </div>
           <div className="kp-dlg-b">
             {cell.notStarted && <div className="kp-banner info"><div>This KPI starts in {K.fmtMonthLong(K.startOf(def, meta.config))}. A figure for {K.fmtMonthLong(ym)} can be kept for reference, but it is not counted in any report.
               {meta.canEdit && onStartHere && <><br /><button onClick={() => onStartHere(ym)}>Start this KPI from {K.fmtMonthLong(ym)}</button></>}</div></div>}
+            {per && <div className="kp-banner info"><div><b>One figure for {per.label}.</b> {def.name} is measured {K.freqLabel(def, true).toLowerCase()}{def.source && def.source.indId ? ' — the system figure pools the units’ monthly figures over the ' + per.months + ' months (Σ ' + (def.numLabel || 'numerator').toLowerCase() + ' ÷ Σ ' + (def.denLabel || 'denominator').toLowerCase() + ').' : ' — type the result of the period (e.g. the survey) here.'}</div></div>}
             {cell.auto && (
               <div className="kp-sys"><b>System figure: {K.fmt(def, cell.auto.value)}</b>
                 <span>{K.has(cell.auto.num) ? cell.auto.num + (K.has(cell.auto.den) ? ' ÷ ' + cell.auto.den : '') : ''}</span>
-                <span style={{ opacity: 0.8 }}>{srcOf(cell.auto.source).long}{cell.auto.areas ? ' · ' + cell.auto.areas + ' unit(s)' : ''}{cell.auto.incomplete ? ' · some units have no denominator' : ''}{cell.auto.carriedFrom ? ' · headcount from ' + cell.auto.carriedFrom : ''}</span>
+                <span style={{ opacity: 0.8 }}>{srcOf(cell.auto.source).long}{per && cell.auto.months ? ' · ' + cell.auto.months + ' of ' + per.months + ' months have figures' : ''}{cell.auto.areas ? ' · ' + cell.auto.areas + ' unit(s)' : ''}{cell.auto.incomplete ? ' · some units have no denominator' : ''}{cell.auto.carriedFrom ? ' · headcount from ' + cell.auto.carriedFrom : ''}</span>
                 {may && saved && <button className="kp-icon-btn" onClick={() => fillFrom(cell.auto)}>Copy into the form</button>}
               </div>
             )}
@@ -907,10 +977,24 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const months = vals ? vals.months : [];
     const cellOf = (id, m) => (vals && vals.values[id] && vals.values[id][m]) || { source: 'missing', value: null };
     const checksOf = (id, m) => (vals && vals.checks && vals.checks[id] && vals.checks[id][m]) || null;
-    // A month before the KPI starts is never a gap.
-    const isGap = (c) => !c.notStarted && !K.has(c.value);
+    // A month before the KPI starts, or one a less-often KPI owes nothing for, is never a gap.
+    const isGap = (c) => !c.notStarted && c.source !== 'not-due' && !K.has(c.value);
     const last = meta.lastClosed;
-    const gaps = vals ? active.filter((d) => months.indexOf(last) >= 0 && isGap(cellOf(d.id, last))) : [];
+    // Each KPI owes its latest due month: the last closed month, or a less-often KPI's last ended period.
+    const dueFor = (d) => K.lastDue(d, last, cfg);
+    const gaps = vals ? active.filter((d) => { const m = dueFor(d); return m && months.indexOf(m) >= 0 && isGap(cellOf(d.id, m)); }) : [];
+    const anyLess = active.some((d) => K.freqOf(d) > 1);
+    // A KPI measured every N months: the months of one period share one cell (the due month's).
+    function segmentsOf(d) {
+      const out = [];
+      months.forEach((m) => {
+        const pp = K.freqOf(d) > 1 ? K.periodOf(d, m, cfg) : null;
+        const prev = out[out.length - 1];
+        if (pp && prev && prev.p && prev.p.to === pp.to) prev.months.push(m);
+        else out.push({ p: pp, months: [m] });
+      });
+      return out;
+    }
     const errorCells = vals && vals.checks ? Object.keys(vals.checks).reduce((n, k) => n + Object.keys(vals.checks[k]).filter((m) => vals.checks[k][m].level === 'error').length, 0) : 0;
     const shown = active.filter((d) => (!q || (d.name + ' ' + d.code).toLowerCase().indexOf(q.toLowerCase()) >= 0) && (!only || months.some((m) => m <= meta.thisMonth && (isGap(cellOf(d.id, m)) || (checksOf(d.id, m) || {}).level === 'error'))));
     const groups = cfg.pillars.map((pl) => ({ pl, list: shown.filter((d) => d.pillar === pl.id) })).filter((g) => g.list.length);
@@ -953,10 +1037,10 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         </div>
         {gaps.length > 0 && (meta.canAdd || meta.canEdit) && (
           <div className="kp-banner" role="status"><span style={{ fontSize: 16 }}>✎</span>
-            <div><b>{gaps.length} KPI{gaps.length > 1 ? 's' : ''} still need{gaps.length > 1 ? '' : 's'} a figure for {K.fmtMonthLong(last)}.</b> Click one to fill it — after saving, “Save & next” takes you to the next gap.<br />
-              {gaps.map((d) => <button key={d.id} onClick={() => setEdit({ def: d, ym: last, cell: cellOf(d.id, last), k: Date.now() })}>{d.code} {d.name}</button>)}</div></div>
+            <div><b>{gaps.length} KPI{gaps.length > 1 ? 's' : ''} still need{gaps.length > 1 ? '' : 's'} {anyLess ? 'their latest figure' : 'a figure for ' + K.fmtMonthLong(last)}.</b> Click one to fill it — after saving, “Save & next” takes you to the next gap.<br />
+              {gaps.map((d) => { const m = dueFor(d); return <button key={d.id} onClick={() => setEdit({ def: d, ym: m, cell: cellOf(d.id, m), k: Date.now() })}>{d.code} {d.name}{K.freqOf(d) > 1 ? ' (' + K.periodOf(d, m, cfg).label + ')' : ''}</button>; })}</div></div>
         )}
-        {vals && !gaps.length && months.indexOf(last) >= 0 && <div className="kp-banner ok"><span style={{ fontSize: 16 }}>✓</span><div>Every KPI has a figure for {K.fmtMonthLong(last)}.</div></div>}
+        {vals && !gaps.length && months.indexOf(last) >= 0 && <div className="kp-banner ok"><span style={{ fontSize: 16 }}>✓</span><div>Every KPI has {anyLess ? 'its latest figure (' + K.fmtMonthLong(last) + ', or the last period for those measured less often)' : 'a figure for ' + K.fmtMonthLong(last)}.</div></div>}
         {errorCells > 0 && <div className="kp-banner"><span style={{ fontSize: 16 }}>⚑</span><div><b>{errorCells} month{errorCells > 1 ? 's have' : ' has'} a data error</b> (red corner) — a unit that did not report, a missing denominator, Device Days that do not match, or a changed figure without a reason. Click the cell to see it. A report cannot be finalised until each is fixed or acknowledged with a reason.</div></div>}
         {meta.config.autoFill === false && <div className="kp-banner info"><span style={{ fontSize: 16 }}>⏸</span><div><b>Auto-fill from the quality data is OFF</b> for every KPI (Settings). Each figure is typed here; the system figure is offered as a hint.</div></div>}
         {err && <div className="kp-banner">{err}</div>}
@@ -975,12 +1059,31 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                   <tr key={d.id} id={'kp-row-' + d.id} className={focusKpi === d.id ? 'hi' : ''}>
                     <td className="k"><div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><span className="kp-code" style={{ background: g.pl.color }}>{d.code || '•'}</span>
                       <div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, color: 'var(--ink)', lineHeight: 1.25 }}>{d.name}</div><div className="kp-muted" style={{ fontSize: 10.5 }}>{d.unit}
-                        {d.source && d.source.indId ? (d.autoFill === false || meta.config.autoFill === false ? ' · typed monthly (auto-fill off)' : ' · auto from quality') : ' · typed monthly'}
+                        {d.source && d.source.indId ? (d.autoFill === false || meta.config.autoFill === false ? ' · typed (auto-fill off)' : ' · auto from quality') : ' · typed'}
+                        {K.freqOf(d) > 1 ? <b style={{ color: '#3f3fa8' }}>{' · ' + K.freqLabel(d, true).toLowerCase()}</b> : ''}
                         </div>
                         <button onClick={() => meta.canEdit && setStartFor({ def: d })} disabled={!meta.canEdit} title={meta.canEdit ? 'Change when this KPI starts counting' : ''}
                           style={{ border: 0, background: 'transparent', padding: 0, font: 'inherit', fontSize: 10.5, fontWeight: 700, color: d.startMonth ? '#8a5a00' : '#0b6b8f', cursor: meta.canEdit ? 'pointer' : 'default' }}>
                           {(d.startMonth ? '◷ starts ' + K.fmtMonth(d.startMonth) + ' (own)' : '◷ starts ' + K.fmtMonth(meta.config.cycleStart)) + (meta.canEdit ? ' ✎' : '')}</button></div></div></td>
-                    {months.map((m) => {
+                    {segmentsOf(d).map((sg) => {
+                      if (sg.p && K.freqOf(d) > 1) {
+                        // one cell for the whole period; only its due (last) month takes a figure
+                        const due = sg.p.to, dueIn = sg.months.indexOf(due) >= 0, future = due > meta.thisMonth;
+                        const c = dueIn ? cellOf(d.id, due) : null, ch = dueIn ? checksOf(d.id, due) : null;
+                        const open = dueIn && !future;
+                        const kept = sg.months.map((x) => cellOf(d.id, x).kept).filter(Boolean);
+                        const cls = !open ? 'span wait' : c.source === 'partial' ? 'partial' : isGap(c) ? 'missing' : 'span';
+                        const tip = sg.p.label + ' — ' + K.freqLabel(d) + ': one figure for the period, entered in ' + K.fmtMonthLong(due) + '.'
+                          + (kept.length ? '\n' + kept.length + ' monthly figure(s) saved earlier are kept but not counted.' : '')
+                          + (ch ? '\n' + ch.items.map((x) => (x.level === 'error' ? '✖ ' : '▲ ') + x.text).join('\n') : '') + (c ? '\n' + (c.note || srcOf(c.source).long) : '');
+                        return <td key={sg.months[0]} colSpan={sg.months.length} style={{ position: 'relative' }}>
+                          <button className={'kp-cell ' + cls} disabled={!open} onClick={() => setEdit({ def: d, ym: due, cell: c, k: Date.now(), checks: ch ? ch.items : [] })} title={tip}>
+                            {open && (isGap(c) ? <span style={{ fontSize: 11.5, fontWeight: 700 }}>{c.source === 'partial' ? '! den.' : '+ Add'}</span> : <b>{K.fmt(d, c.value, { bare: true })}</b>)}
+                            <span className="per">{sg.p.label}{!dueIn ? ' · result in ' + K.fmtMonth(due) : future ? ' · due ' + K.fmtMonth(due) : ''}</span>
+                            {open && !isGap(c) && <span className="kp-dot" style={{ background: srcOf(c.source).dot }} />}
+                          </button>{ch && <span className={'kp-cellmark ' + ch.level} />}</td>;
+                      }
+                      const m = sg.months[0];
                       const c = cellOf(d.id, m), future = m > meta.thisMonth, ch = checksOf(d.id, m);
                       const pre = !future && c.notStarted;
                       const cls = future ? 'future' : pre ? 'future' : c.source === 'partial' ? 'partial' : isGap(c) ? 'missing' : '';
@@ -1019,7 +1122,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       setBusy(false);
     }
     const canGen = meta.canAdd || meta.canEdit;
-    const SumBar = ({ s }) => (s ? <div style={{ display: 'flex', height: 8, borderRadius: 99, overflow: 'hidden', background: '#eef2f6' }}>{['met', 'near', 'off', 'notarget', 'nodata', 'notstarted'].map((k) => (s[k] ? <span key={k} title={s[k] + ' ' + ST[k].label} style={{ flex: s[k], background: ST[k].color }} /> : null))}</div> : null);
+    const SumBar = ({ s }) => (s ? <div style={{ display: 'flex', height: 8, borderRadius: 99, overflow: 'hidden', background: '#eef2f6' }}>{['met', 'near', 'off', 'notarget', 'nodata', 'notstarted', 'notdue'].map((k) => (s[k] ? <span key={k} title={s[k] + ' ' + ST[k].label} style={{ flex: s[k], background: ST[k].color }} /> : null))}</div> : null);
     return (
       <div className="kp-wrap">
         <div className="kp-card kp-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1029,6 +1132,22 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             <Btn onClick={() => setRoute({ view: 'kpiReports', report: K.reportId(range.from, range.to) })}>Preview</Btn>
             {canGen && <Btn pri disabled={busy} onClick={generate}>{busy ? 'Preparing…' : 'Generate & save report'}</Btn>}
             <span className="kp-muted">A saved draft keeps your commentary and sign-off; its figures stay live until you finalise it. The report for the month that just ended is prepared automatically.</span>
+          </div>
+        </div>
+        <div className="kp-card">
+          <div className="kp-h"><h3>Documents</h3><span className="kp-muted">the programme itself — not a period</span></div>
+          <div className="kp-grid2 kp-pad">
+            <div className="kp-card kp-pad" style={{ display: 'flex', flexDirection: 'column', gap: 8, boxShadow: 'none' }}>
+              <b style={{ fontSize: 14, color: 'var(--ink)' }}>KPI Definition document</b>
+              <span className="kp-muted">One page per KPI: what it measures, the formula, where its figures come from, how often it is measured, its cycles and targets, and its action plan — with a cover and document control for sign-off.</span>
+              <div><Btn pri onClick={() => setRoute({ view: 'kpiReports', report: 'definitions' })}>Open · Print · PDF · Word</Btn></div>
+            </div>
+            <div className="kp-card kp-pad" style={{ display: 'flex', flexDirection: 'column', gap: 8, boxShadow: 'none' }}>
+              <b style={{ fontSize: 14, color: 'var(--ink)' }}>Data collection calendar</b>
+              <span className="kp-muted">A year on one page: which KPI owes a figure in which month — monthly, every 3 or 6 months, or yearly — to hand to unit managers.</span>
+              <div style={{ display: 'flex', gap: 8 }}><Btn pri onClick={() => setRoute({ view: 'kpiReports', report: 'calendar-' + meta.thisMonth.slice(0, 4) })}>Open {meta.thisMonth.slice(0, 4)} · Print · PDF · Excel</Btn>
+                <Btn onClick={() => setRoute({ view: 'kpiReports', report: 'calendar-' + (+meta.thisMonth.slice(0, 4) + 1) })}>{+meta.thisMonth.slice(0, 4) + 1}</Btn></div>
+            </div>
           </div>
         </div>
         {err && <div className="kp-banner">{err}</div>}
@@ -1048,6 +1167,109 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             </div>
           ))}</div>}
         </div>
+      </div>
+    );
+  }
+
+  /* The programme's documents: the KPI Definition document and a year's Data collection calendar.
+     Same sheets and the same print / PDF as a report; Word and Excel come from the server
+     (server/kpi-docs.js), built from the same facts (defFacts). */
+  function DocView({ meta, kind, year, setRoute }) {
+    const cfg = meta.config;
+    const isDefs = kind === 'definitions';
+    const [y, setY] = useState(year || +meta.thisMonth.slice(0, 4));
+    const [data, setData] = useState(null);
+    const [err, setErr] = useState('');
+    const [busy, setBusy] = useState('');
+    const [capturing, setCapturing] = useState(false);
+    const ref = useRef(null);
+    useEffect(() => {
+      let live = true; setData(null); setErr('');
+      api(isDefs ? '/api/kpi/definitions' : '/api/kpi/calendar?year=' + y).then((j) => { if (live) setData(j); }).catch((e) => live && setErr(e.message));
+      return () => { live = false; };
+    }, [kind, y]);
+    const sig = sigNames();
+    const title = isDefs ? 'Nursing KPI Definitions' : 'Data collection calendar ' + y;
+    const fileBase = isDefs ? 'Nursing-KPI-Definitions-' + meta.thisMonth : 'Nursing-KPI-Data-Collection-Calendar-' + y;
+    const log = (k) => () => api('/api/kpi/print', { method: 'POST', body: JSON.stringify({ kind: k, what: title }) });
+    async function act(k) {
+      setBusy(k);
+      try {
+        if (k === 'print') await printSheets(() => ref.current, title, log('print'), setCapturing);
+        if (k === 'pdf') await pdfSheets(() => ref.current, title, fileBase, log('pdf'), setCapturing);
+        if (k === 'docx') { await download('/api/kpi/definitions.docx?sig=' + encodeURIComponent(JSON.stringify(sig))); toast('Word file downloaded.', 'success'); }
+        if (k === 'xlsx') { await download('/api/kpi/calendar.xlsx?year=' + y); toast('Excel file downloaded.', 'success'); }
+      } catch (e) { toast(e.message, 'error'); }
+      setBusy('');
+    }
+    const foot = title + ' · ' + (cfg.hospitalName || '') + ' · ' + K.fmtMonthLong(meta.thisMonth);
+    let page = 0;
+    const pg = () => 'Page ' + (++page);
+    const sheets = [];
+    if (data && isDefs) {
+      const list = data.defs.slice().sort((a, b) => ((K.pillarOf(cfg, a.pillar).order || 99) - (K.pillarOf(cfg, b.pillar).order || 99)) || ((a.order || 0) - (b.order || 0)));
+      sheets.push(<Sheet key="cover" kicker={cfg.hospitalName} title="Nursing KPI Definitions" foot={foot} page={pg()}>
+        <div style={{ fontSize: 15, color: '#3a4656', marginBottom: 6 }}>{cfg.reportTitle} · {list.length} KPIs in {[...new Set(list.map((d) => d.pillar))].length} pillars</div>
+        <div style={{ fontSize: 13, color: '#3a4656', maxWidth: 820, lineHeight: 1.5, marginBottom: 18 }}>What each KPI measures, how it is calculated, where its figures come from, how often it is measured, its cycles, targets and action plan. Version: {new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}{me() ? ' · prepared by ' + me() : ''}.</div>
+        <div style={{ fontSize: 13, fontWeight: 800, color: '#00293A', margin: '6px 0' }}>Document control</div>
+        <table className="kp-stbl" style={{ maxWidth: 820 }}><thead><tr><th>Role</th><th>Name</th><th>Signature</th><th>Date</th></tr></thead>
+          <tbody>{[['prepared', 'Prepared by'], ['reviewed', 'Reviewed by'], ['recommended', 'Recommended by'], ['approved', 'Approved by']].map(([k, l]) => <tr key={k}><td className="l"><b>{l}</b></td><td className="l" style={{ height: 34 }}>{sig[k] || ''}</td><td /><td /></tr>)}</tbody></table>
+      </Sheet>);
+      sheets.push(<Sheet key="toc" kicker="Nursing KPI Definitions" title="Contents" foot={foot} page={pg()}>
+        <table className="kp-stbl"><thead><tr><th>Code</th><th>KPI</th><th>Pillar</th><th>Measured</th><th>Target</th><th>Source</th></tr></thead>
+          <tbody>{list.map((d) => <tr key={d.id}><td><b>{d.code}</b></td><td className="l">{d.name}</td><td className="l">{K.pillarOf(cfg, d.pillar).label}</td><td>{d.doc.measured}</td><td>{d.doc.cycles.map((c) => c.target).join(' → ')}</td><td>{d.source && d.source.indId ? 'Quality data' : 'Entered'}</td></tr>)}</tbody></table>
+      </Sheet>);
+      list.forEach((d) => {
+        const doc = d.doc, pl = K.pillarOf(cfg, d.pillar);
+        const acts = doc.actions.slice(0, 9);
+        sheets.push(<Sheet key={d.id} kicker={pl.label + ' · ' + doc.measured} title={(doc.code ? doc.code + '  ' : '') + doc.name} foot={foot} page={pg()}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.45fr 1fr', gap: 18, alignItems: 'start' }}>
+            <table className="kp-deck" style={{ fontSize: 10.8 }}><tbody>{doc.facts.map(([l, v]) => <tr key={l}><th style={{ width: 150, fontSize: 10.5, padding: '5px 9px' }}>{l}</th><td style={{ padding: '5px 9px' }}>{String(v).length > 420 ? String(v).slice(0, 420) + '…' : v}</td></tr>)}</tbody></table>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 800, color: '#00293A' }}>Cycles and targets</div>
+              <table className="kp-stbl"><thead><tr><th>Cycle</th><th>Dates</th><th>Target</th><th>Results due</th></tr></thead>
+                <tbody>{doc.cycles.map((c) => <tr key={c.n}><td><b>{c.n}</b></td><td className="l">{c.dates}</td><td><b>{c.target}</b></td><td>{c.results}</td></tr>)}</tbody></table>
+              <div style={{ fontSize: 11, color: '#5b6878' }}>{doc.schedule}</div>
+              <div style={{ fontSize: 12.5, fontWeight: 800, color: '#00293A' }}>Action plan</div>
+              {acts.length ? <table className="kp-stbl" style={{ fontSize: 10.5 }}><thead><tr><th>#</th><th>Action</th><th>Owner</th><th>Status</th></tr></thead>
+                <tbody>{acts.map((a, i) => <tr key={i}><td>{i + 1}</td><td className="l">{a.text}{a.due ? <span style={{ color: '#7b8796' }}> · due {a.due}</span> : null}</td><td className="l">{a.owner}</td><td>{a.status}</td></tr>)}</tbody></table>
+                : <div className="kp-muted">No action items.</div>}
+              {doc.actions.length > acts.length && <div className="kp-muted" style={{ fontSize: 11 }}>+ {doc.actions.length - acts.length} more action items (in the Word file).</div>}
+            </div>
+          </div>
+        </Sheet>);
+      });
+    }
+    if (data && !isDefs) {
+      const cal = data.calendar, defs = data.defs;
+      const rowsOf = defs.slice().sort((a, b) => ((K.pillarOf(cfg, a.pillar).order || 99) - (K.pillarOf(cfg, b.pillar).order || 99)));
+      const chunks = []; for (let i = 0; i < rowsOf.length; i += 20) chunks.push(rowsOf.slice(i, i + 20));
+      const mark = { due: <b style={{ color: '#14713f', fontSize: 15 }}>●</b>, off: <span style={{ color: '#b9c2cd' }}>·</span>, notstarted: <span style={{ color: '#c9d1db' }}>—</span> };
+      chunks.forEach((part, ci) => sheets.push(<Sheet key={'cal' + ci} kicker={cfg.hospitalName + ' · Nursing KPI'} title={'Data collection calendar ' + cal.year + (chunks.length > 1 ? ' (' + (ci + 1) + '/' + chunks.length + ')' : '')} foot={foot} page={pg()}>
+        <table className="kp-stbl" style={{ fontSize: 11 }}><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>KPI</th><th>Measured</th><th>Source</th>{cal.months.map((m) => <th key={m} style={{ padding: '6px 4px' }}>{K.MONS[+m.slice(5) - 1]}</th>)}<th>Due</th></tr></thead>
+          <tbody>{part.map((d) => <tr key={d.id}><td><b>{d.code}</b></td><td className="l">{d.name}</td><td style={{ whiteSpace: 'nowrap' }}>{d.freq}</td><td style={{ fontSize: 10 }}>{d.linked ? (d.autoFill && cfg.autoFill !== false ? 'Auto from quality' : 'Typed') : 'Typed'}</td>
+            {cal.months.map((m) => <td key={m} style={{ padding: '4px 2px', background: cal.byKpi[d.id][m] === 'due' ? '#e7f6ed' : undefined }}>{mark[cal.byKpi[d.id][m]]}</td>)}
+            <td><b>{cal.months.filter((m) => cal.byKpi[d.id][m] === 'due').length}</b></td></tr>)}
+            {ci === chunks.length - 1 && <tr><td /><td className="l"><b>Figures due</b></td><td /><td />{cal.dueCount.map((n, i) => <td key={i}><b>{n}</b></td>)}<td><b>{cal.dueCount.reduce((a, b) => a + b, 0)}</b></td></tr>}</tbody></table>
+        <div style={{ marginTop: 12, fontSize: 11, color: '#5b6878', display: 'flex', gap: 18, flexWrap: 'wrap' }}><span><b style={{ color: '#14713f' }}>●</b> a figure is due (the period ends this month)</span><span><b>·</b> not due</span><span><b>—</b> not started yet</span>
+          <span>A KPI measured every 3 or 6 months, or yearly, owes one figure per period, entered in the period’s last month.</span></div>
+      </Sheet>));
+    }
+    return (
+      <div className={'kp-wrap' + (capturing ? ' kp-capturing' : '')}>
+        <div className="kp-card kp-bar" style={{ position: 'sticky', top: -22, zIndex: 5, boxShadow: '0 6px 22px rgba(13,27,46,.10)' }}>
+          <Btn onClick={() => setRoute({ view: 'kpiReports' })}>‹ All reports</Btn>
+          <b style={{ fontSize: 14 }}>{title}</b>
+          {!isDefs && <select className="kp-sel" value={y} onChange={(e) => { setY(+e.target.value); setRoute({ view: 'kpiReports', report: 'calendar-' + e.target.value }); }}>{[-1, 0, 1, 2].map((i) => +meta.thisMonth.slice(0, 4) + i).map((n) => <option key={n} value={n}>{n}</option>)}</select>}
+          <span style={{ flex: 1 }} />
+          {meta.canPrint && <><Btn disabled={!data || !!busy} onClick={() => act('print')}>{busy === 'print' ? 'Preparing…' : 'Print'}</Btn>
+            <Btn disabled={!data || !!busy} onClick={() => act('pdf')}>{busy === 'pdf' ? 'Making the PDF…' : 'PDF'}</Btn>
+            {isDefs ? <Btn pri disabled={!data || !!busy} onClick={() => act('docx')}>{busy === 'docx' ? 'Building…' : 'Word'}</Btn>
+              : <Btn pri disabled={!data || !!busy} onClick={() => act('xlsx')}>{busy === 'xlsx' ? 'Building…' : 'Excel'}</Btn>}</>}
+        </div>
+        {err && <div className="kp-banner">{err}</div>}
+        {!data && !err && <div className="kp-card kp-empty">Preparing the document…</div>}
+        {data && <div className="kp-scroll"><div className="kp-doc" ref={ref}>{sheets}</div></div>}
       </div>
     );
   }
@@ -1222,42 +1444,10 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const title = (rep && rep.title) || cfg.reportTitle;
     const fileBase = 'Nursing-KPI-' + (rep ? (rep.from === rep.to ? rep.from : rep.from + '-to-' + rep.to) : '');
     // Print: the same sheets in their own window, logged by the server first.
-    async function printDoc() {
-      const w = window.open('', '_blank');
-      try {
-        await api('/api/kpi/print', { method: 'POST', body: JSON.stringify({ id, kind: 'print', what: layout }) });
-        if (!w) { toast('Allow pop-ups for this site to print.', 'error'); return; }
-        setCapturing(true);
-        await new Promise((r) => setTimeout(r, 60));
-        const html = docRef.current.innerHTML.split('src="unico/logo.svg"').join('src="' + location.origin + '/unico/logo.svg"');
-        setCapturing(false);
-        w.document.open();
-        w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(title + ' — ' + K.fmtRange(rep.from, rep.to)) + '</title><style>:root{--line:#dde3ec;--line-2:#eef2f6;--muted:#7b8796;--ink:#16202e;--ink-2:#3a4656;--blue-50:#eef8fd;--shadow:none}' +
-          'html{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;font-family:"IBM Plex Sans","Segoe UI",Arial,sans-serif;background:#fff}@page{size:A4 landscape;margin:0}' + CSS +
-          '.kp-doc{gap:0;padding:0}.kp-sheet{box-shadow:none;page-break-after:always;break-after:page;width:297mm;height:209mm;min-height:0}.kp-sheet:last-child{page-break-after:auto}</style></head><body><div class="kp-doc">' + html + '</div><script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script></body></html>');
-        w.document.close();
-      } catch (e) { if (w) w.close(); setCapturing(false); throw e; }
-    }
-    async function pdfDoc() {
-      await api('/api/kpi/print', { method: 'POST', body: JSON.stringify({ id, kind: 'pdf', what: layout }) });
-      if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) await window.unicoLoadPdfLibs();
-      const J = window.jspdf && window.jspdf.jsPDF, H = window.html2canvas;
-      if (!J || !H) throw new Error('The PDF tools could not load. Use Print and choose “Save as PDF”.');
-      setCapturing(true);
-      try {
-        await new Promise((r) => setTimeout(r, 120));
-        const sheets = [...docRef.current.querySelectorAll('.kp-sheet')];
-        const pdf = new J({ orientation: 'landscape', unit: 'mm', format: 'a4', compress: true });
-        for (let i = 0; i < sheets.length; i++) {
-          const c = await H(sheets[i], { scale: 1.6, backgroundColor: '#ffffff', useCORS: true, logging: false, windowWidth: 1200 });
-          if (i) pdf.addPage();
-          pdf.addImage(c.toDataURL('image/jpeg', 0.85), 'JPEG', 0, 0, 297, 210);
-        }
-        pdf.setProperties({ title: title + ' — ' + K.fmtRange(rep.from, rep.to), author: me() });
-        pdf.save(fileBase + '.pdf');
-        toast('PDF downloaded.', 'success');
-      } finally { setCapturing(false); }
-    }
+    const printDoc = () => printSheets(() => docRef.current, title + ' — ' + K.fmtRange(rep.from, rep.to),
+      () => api('/api/kpi/print', { method: 'POST', body: JSON.stringify({ id, kind: 'print', what: layout }) }), setCapturing);
+    const pdfDoc = () => pdfSheets(() => docRef.current, title + ' — ' + K.fmtRange(rep.from, rep.to), fileBase,
+      () => api('/api/kpi/print', { method: 'POST', body: JSON.stringify({ id, kind: 'pdf', what: layout }) }), setCapturing);
 
     if (err) return <div className="kp-wrap"><div className="kp-banner">{err}</div><div><Btn onClick={() => setRoute({ view: 'kpiReports' })}>‹ All reports</Btn></div></div>;
     if (!rep) return <div className="kp-card kp-empty">Preparing the report…</div>;
@@ -1306,11 +1496,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               <div style={{ borderRadius: 14, padding: 12, background: 'linear-gradient(140deg,#00293A,#0c6f7d)', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
                 <ScoreRing score={sum.score} size={104} flat />
                 <div style={{ fontSize: 11, opacity: 0.85, textAlign: 'center', marginTop: 6 }}>{sum.scored ? sum.met + ' of ' + sum.scored + ' scored KPIs on target' : 'no scored KPIs'}</div></div>
-              {[['met', sum.met], ['near', sum.near], ['off', sum.off], ['nodata', sum.nodata + sum.notarget + (sum.notstarted || 0)]].map(([k, n]) => (
+              {[['met', sum.met], ['near', sum.near], ['off', sum.off], ['nodata', sum.nodata + sum.notarget + (sum.notstarted || 0) + (sum.notdue || 0)]].map(([k, n]) => (
                 <div key={k} style={{ borderRadius: 14, padding: '14px 16px', background: ST[k].bg, border: '1px solid ' + ST[k].color + '55' }}>
                   <div style={{ fontSize: 36, fontWeight: 800, color: ST[k].color, lineHeight: 1 }}>{n}</div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: ST[k].ink, marginTop: 6 }}>{k === 'nodata' ? 'No data / no target' : ST[k].label}</div>
-                  <div style={{ fontSize: 11, color: '#7b8796', marginTop: 4 }}>{rows.filter((r) => (k === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' || r.status === 'notstarted' : r.status === k)).map((r) => r.code).join(' · ')}</div>
+                  <div style={{ fontSize: 11, color: '#7b8796', marginTop: 4 }}>{rows.filter((r) => (k === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' || r.status === 'notstarted' || r.status === 'notdue' : r.status === k)).map((r) => r.code).join(' · ')}</div>
                 </div>
               ))}
             </div>
@@ -1318,7 +1508,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               <div><div className="kp-lab">Achievement against target (100 = on target)</div>
                 <Iso3D items={rows.filter((r) => r.achievement != null).map((r) => ({ label: r.code || r.name, value: r.achievement, color: ST[r.status].color }))} max={150} refLine={100} refLabel="On target" height={250} flat={flatCharts} /></div>
               <div><div className="kp-lab">Status by pillar</div>
-                <Iso3DStack height={250} flat={flatCharts} groups={pillars.map((pl) => { const c = K.summarize(rows.filter((r) => r.pillar === pl.id)); return { label: pl.label, parts: [{ value: c.met, color: ST.met.color, label: 'on target' }, { value: c.near, color: ST.near.color, label: 'close' }, { value: c.off, color: ST.off.color, label: 'need action' }, { value: c.nodata + c.notarget + (c.notstarted || 0), color: ST.nodata.color, label: 'no data' }] }; })} /></div>
+                <Iso3DStack height={250} flat={flatCharts} groups={pillars.map((pl) => { const c = K.summarize(rows.filter((r) => r.pillar === pl.id)); return { label: pl.label, parts: [{ value: c.met, color: ST.met.color, label: 'on target' }, { value: c.near, color: ST.near.color, label: 'close' }, { value: c.off, color: ST.off.color, label: 'need action' }, { value: c.nodata + c.notarget + (c.notstarted || 0) + (c.notdue || 0), color: ST.nodata.color, label: 'no data' }] }; })} /></div>
             </div>
             {/* the two lists a meeting starts with */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginTop: 14 }}>
@@ -1338,7 +1528,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           <Sheet kicker={period} title="KPI scorecard" foot={foot} page={pg()}>
             <table className="kp-stbl"><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>KPI</th><th>Baseline</th><th>{rep.months.length > 1 ? 'Period' : 'Current'}</th><th>Target</th><th>Variance</th><th>Status</th><th>Trend</th><th>12 months</th></tr></thead>
               <tbody>{rows.map((r) => <tr key={r.kpiId}><td><b style={{ color: '#00293A' }}>{r.code}</b></td><td className="l">{r.name}</td>
-                <td style={{ color: '#7b8796' }}>{r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : '—'}</td><td><b>{K.fmt(r, r.period.value)}</b></td>
+                <td style={{ color: '#7b8796' }}>{r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : '—'}</td><td><b>{K.fmt(r, r.period.value)}</b><ResultTag r={r} /></td>
                 <td>{r.target != null ? K.fmt(r, r.target) : '—'}</td><td style={{ fontSize: 11 }}>{K.gapLabel(r, r.period.value, r.target)}</td>
                 <td style={{ background: ST[r.status].bg, color: ST[r.status].ink, fontWeight: 700 }}>{ST[r.status].label}</td><td><Trend d={r.trendDir} /></td><td><Spark row={r} w={96} h={22} /></td></tr>)}</tbody></table>
           </Sheet>
@@ -1348,7 +1538,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               <Sheet key={pl.id} kicker="Pillar" title={pl.label} foot={foot} page={pg()}>
                 <table className="kp-stbl"><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>KPI</th><th>Unit</th>{months6.map((m) => <th key={m}>{K.fmtMonth(m)}</th>)}<th>Period</th><th>Target</th><th>Status</th></tr></thead>
                   <tbody>{list.map((r) => <tr key={r.kpiId}><td><b style={{ color: '#00293A' }}>{r.code}</b></td><td className="l">{r.name}</td><td style={{ fontSize: 10, color: '#7b8796' }}>{r.unit}</td>
-                    {months6.map((m) => <td key={m}>{K.fmt(r, (r.cells[m] || {}).value, { bare: true })}</td>)}
+                    {months6.map((m) => <td key={m}>{(r.cells[m] || {}).source === 'not-due' ? <span style={{ color: '#b9c2cd' }}>·</span> : K.fmt(r, (r.cells[m] || {}).value, { bare: true })}</td>)}
                     <td><b>{K.fmt(r, r.period.value)}</b></td><td>{r.target != null ? K.fmt(r, r.target) : '—'}</td><td style={{ background: ST[r.status].bg, color: ST[r.status].ink, fontWeight: 700 }}>{ST[r.status].label}</td></tr>)}</tbody></table>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', gap: 10, marginTop: 14 }}>
                   {list.map((r) => ((editable && !capturing) || rep.commentary[r.kpiId]) ? <div key={r.kpiId}><div className="kp-lab">{r.code} {r.name} — comment</div>{commentBox(r.kpiId, rep.commentary[r.kpiId], 'What happened this period and what is being done')}</div> : null)}
@@ -1361,19 +1551,20 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 18 }}>
                 <table className="kp-deck"><tbody>
                   <tr><th>Objective</th><td>{r.objective || '—'}</td></tr>
-                  <tr><th>Current</th><td><b>{K.fmt(r, r.period.value)}</b> {K.unitKind(r) === 'num' ? r.unit : ''} <span style={{ color: '#7b8796' }}>(baseline {r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : 'not measured yet'})</span></td></tr>
+                  <tr><th>Current</th><td><b>{K.fmt(r, r.period.value)}</b> {K.unitKind(r) === 'num' ? r.unit : ''}{resultOf(r) ? <b style={{ color: '#3f3fa8' }}> — {resultOf(r)}</b> : null} <span style={{ color: '#7b8796' }}>(baseline {r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : 'not measured yet'})</span></td></tr>
                   <tr><th>Target</th><td>{(r.targets || []).length ? r.targets.map((t) => (r.targets.length > 1 ? 'Cycle ' + t.cycle + ': ' : '') + K.fmt(r, t.value)).join('  ·  ') : (r.target != null ? K.fmt(r, r.target) : 'Not set yet')}</td></tr>
                   <tr><th>Variance</th><td style={{ color: ST[r.status].color, fontWeight: 700 }}>{K.gapLabel(r, r.period.value, r.target)} · {ST[r.status].label}</td></tr>
                   <tr><th>Action plan</th><td>{(r.actions || []).length ? <ul>{r.actions.slice(0, 10).map((a) => <li key={a.id}>{a.text}{a.status !== 'open' ? <b style={{ color: a.status === 'done' ? '#1f9d57' : '#008FCB' }}> [{K.ACTION_LABEL[a.status]}]</b> : null}{a.owner ? <span style={{ color: '#7b8796' }}> — {a.owner}</span> : null}</li>)}{r.actions.length > 10 && <li style={{ color: '#7b8796' }}>+ {r.actions.length - 10} more</li>}</ul> : '—'}</td></tr>
                   <tr><th>Formula used</th><td style={{ fontStyle: 'italic' }}>{r.formulaText || '—'}</td></tr>
-                  <tr><th>Tracking frequency</th><td>{r.frequency || 'Monthly'}</td></tr>
+                  <tr><th>Tracking</th><td>{r.schedule || r.frequency || 'Monthly'}{r.trackingNote ? ' · ' + r.trackingNote : ''}{r.nextDue ? <span style={{ color: '#7b8796' }}> · next result {K.fmtMonthLong(r.nextDue)}</span> : null}</td></tr>
                   <tr><th>Remarks</th><td style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{r.remarks || '—'}</td></tr>
                 </tbody></table>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div className="kp-lab">Last 12 months{r.unit ? ' · ' + r.unit : ''}</div>
-                  <KpiChart row={r} kind="area" height={210} flat />
+                  <div className="kp-lab">{r.freqMonths > 1 ? 'Last 12 months · one point per period' : 'Last 12 months'}{r.unit ? ' · ' + r.unit : ''}</div>
+                  <KpiChart row={r} kind="area" height={r.freqMonths > 1 ? 150 : 210} flat />
+                  {r.freqMonths > 1 && <PeriodsTable row={r} />}
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                    {[[K.fmt(r, r.period.value), rep.months.length > 1 ? 'Period value' : 'This month', '#00293A', '#eaf6fb'], [r.target != null ? K.fmt(r, r.target) : '—', 'Target', '#00293A', '#eef7f5'], [ST[r.status].label, r.achievement != null ? r.achievement + '% of target' : 'status', ST[r.status].color, ST[r.status].bg]].map(([b, s, c, bg], i) => (
+                    {[[K.fmt(r, r.period.value), resultOf(r) || (rep.months.length > 1 ? 'Period value' : 'This month'), '#00293A', '#eaf6fb'], [r.target != null ? K.fmt(r, r.target) : '—', 'Target', '#00293A', '#eef7f5'], [ST[r.status].label, r.achievement != null ? r.achievement + '% of target' : 'status', ST[r.status].color, ST[r.status].bg]].map(([b, s, c, bg], i) => (
                       <div key={i} style={{ background: bg, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}><div style={{ fontSize: 17, fontWeight: 800, color: c }}>{b}</div><div style={{ fontSize: 10.5, color: '#7b8796' }}>{s}</div></div>))}
                   </div>
                   <div><div className="kp-lab">Comment for this period</div>{commentBox(r.kpiId, rep.commentary[r.kpiId], 'What happened this period, and what is being done') || <div className="kp-muted">—</div>}</div>
@@ -1429,7 +1620,37 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   }
 
   /* ============================================================ manage KPIs === */
-  const BLANK = { name: '', code: '', pillar: 'safety', objective: '', unit: '%', formula: 'pct', goalDirection: 'higher_is_better', decimals: '', formulaText: '', numLabel: '', denLabel: '', frequency: 'Monthly for 6 months & later for another 6 months', remarks: '', baseline: { value: '', note: '' }, targets: [], baselineTargetPct: '', source: { indId: null }, actions: [], autoFill: true, startMonth: '', units: [] };
+  const BLANK = { name: '', code: '', pillar: 'safety', objective: '', unit: '%', formula: 'pct', goalDirection: 'higher_is_better', decimals: '', formulaText: '', numLabel: '', denLabel: '', frequency: 'Monthly for 6 months & later for another 6 months', freqMonths: 1, cycleMonths: null, cycles: null, remarks: '', baseline: { value: '', note: '' }, targets: [], baselineTargetPct: '', source: { indId: null }, actions: [], autoFill: true, startMonth: '', units: [] };
+  /* How often a KPI is measured and its cycles — an administrator's setting (the server ignores it
+     from anyone else). Shared by the KPI editor; Settings → KPI schedule edits the same fields. */
+  const CYCLE_CHOICES = [1, 2, 3, 4, 6, 9, 12, 18, 24];
+  const cycleChoices = (f) => CYCLE_CHOICES.filter((n) => n % f === 0);
+  // a new frequency drops an own cycle length that no longer holds whole periods
+  const withFreq = (x, f) => Object.assign({}, x, { freqMonths: f, cycleMonths: x.cycleMonths && x.cycleMonths % f ? null : x.cycleMonths });
+  function ScheduleBox({ d, setD, cfg, can, isAdmin }) {
+    const f = K.freqOf(d);
+    const set = (k, v) => setD((x) => Object.assign({}, x, { [k]: v }));
+    return (
+      <div className="kp-card kp-pad" style={{ boxShadow: 'none', background: '#f8fafc', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div className="kp-lab">Schedule — how often it is measured, and its cycles{!isAdmin && <span style={{ textTransform: 'none', fontWeight: 600, color: '#7b8796' }}> · set by an administrator (Settings → KPI schedule)</span>}</div>
+        <div className="kp-row">
+          <label className="kp-fld"><span className="kp-lab">Measured</span>
+            <select className="kp-sel" value={f} disabled={!can} onChange={(e) => setD((x) => withFreq(x, +e.target.value))}>{K.FREQS.map((x) => <option key={x.m} value={x.m}>{x.label}</option>)}</select></label>
+          <label className="kp-fld"><span className="kp-lab">Cycle length</span>
+            <select className="kp-sel" value={d.cycleMonths || ''} disabled={!can} onChange={(e) => set('cycleMonths', e.target.value ? +e.target.value : null)}>
+              <option value="">Same as all KPIs ({K.cycleCfg({ freqMonths: f }, cfg).cycleMonths} months)</option>
+              {cycleChoices(f).map((n) => <option key={n} value={n}>{n} months</option>)}</select></label>
+          <label className="kp-fld"><span className="kp-lab">Cycles</span>
+            <select className="kp-sel" value={d.cycles || ''} disabled={!can} onChange={(e) => set('cycles', e.target.value ? +e.target.value : null)}>
+              <option value="">Same as all KPIs ({K.cfgOf(cfg).cycles})</option>
+              {[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
+        </div>
+        <div className="kp-muted" style={{ fontSize: 11.5 }}>{K.scheduleText(d, cfg)}</div>
+        {f > 1 && <div className="kp-muted" style={{ fontSize: 11.5 }}>One figure per period, entered in the period’s last month ({K.dueMonths(d, K.startOf(d, cfg), K.addMonth(K.startOf(d, cfg), 23), cfg).slice(0, 4).map(K.fmtMonth).join(', ')}…). The months between owe nothing.</div>}
+      </div>
+    );
+  }
+
   function KpiEditor({ meta, def, onClose, onSaved }) {
     const cfg = meta.config;
     const isNew = !def;
@@ -1483,8 +1704,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               <div className="kp-row" style={{ alignItems: 'flex-end' }}>
                 {fld('This KPI starts on', <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}><input type="month" className="kp-in" value={d.startMonth || ''} disabled={!may} onChange={(e) => set('startMonth', e.target.value)} />{d.startMonth && may ? <button className="kp-icon-btn" onClick={() => set('startMonth', '')}>Same as all KPIs</button> : null}</div>,
                   d.startMonth ? 'Counting starts ' + K.fmtMonthLong(d.startMonth) + ': cycles and targets count from here; earlier months are not counted and are never “missing”.' : 'Blank = the same as all KPIs (' + K.fmtMonthLong(cfg.cycleStart) + ', set in Settings).')}
-                {d.startMonth && K.isMonth(d.startMonth) && <div className="kp-muted" style={{ fontSize: 11.5 }}>{Array.from({ length: cfg.cycles }, (_, i) => { const r = K.cycleRange(i + 1, cfg, { startMonth: d.startMonth }); return 'Cycle ' + (i + 1) + ': ' + K.fmtRange(r.from, r.to); }).join(' · ')}</div>}
               </div>
+              <ScheduleBox d={d} setD={setD} cfg={cfg} can={may && meta.isAdmin} isAdmin={meta.isAdmin} />
             </>}
             {tab === 'units' && <>
               {!linked ? <div className="kp-banner info">This KPI is typed monthly, so it has no reporting units. Link it to a quality indicator (Measure & data) to check which units report it.</div> : <>
@@ -1551,8 +1772,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               </div>
               <div className="kp-card kp-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <b style={{ fontSize: 13 }}>Target per cycle</b>
-                <div className="kp-muted">The programme runs {cfg.cycles} cycles of {cfg.cycleMonths} months from {K.fmtMonth(cfg.cycleStart)}. A cycle left empty keeps the previous cycle's target.</div>
-                <div className="kp-row">{Array.from({ length: cfg.cycles }, (_, i) => i + 1).map((c) => { const r = K.cycleRange(c, cfg); return fld('Cycle ' + c + ' · ' + K.fmtRange(r.from, r.to), <input className="kp-in" inputMode="decimal" value={tgt(c)} disabled={!may} onChange={(e) => setTgt(c, e.target.value.replace(/[^0-9.\-]/g, ''))} placeholder={c > 1 && tgt(c - 1) ? 'same as cycle ' + (c - 1) : 'Not set'} />); })}</div>
+                <div className="kp-muted">This KPI runs {K.cycleCfg(d, cfg).cycles} cycle(s) of {K.cycleCfg(d, cfg).cycleMonths} months from {K.fmtMonth(K.startOf(d, cfg))}{K.cycleCfg(d, cfg).own ? ' (its own cycles)' : ''}. A cycle left empty keeps the previous cycle's target.</div>
+                <div className="kp-row">{Array.from({ length: K.cycleCfg(d, cfg).cycles }, (_, i) => i + 1).map((c) => { const r = K.cycleRange(c, cfg, d); return fld('Cycle ' + c + ' · ' + K.fmtRange(r.from, r.to), <input className="kp-in" inputMode="decimal" value={tgt(c)} disabled={!may} onChange={(e) => setTgt(c, e.target.value.replace(/[^0-9.\-]/g, ''))} placeholder={c > 1 && tgt(c - 1) ? 'same as cycle ' + (c - 1) : 'Not set'} />); })}</div>
                 <div className="kp-row" style={{ alignItems: 'flex-end' }}>
                   {fld('Or: a target relative to the baseline (%)', <input className="kp-in" inputMode="decimal" value={d.baselineTargetPct == null ? '' : d.baselineTargetPct} disabled={!may} onChange={(e) => set('baselineTargetPct', e.target.value.replace(/[^0-9.\-]/g, ''))} placeholder="e.g. -5 = 5% below the baseline" />, 'Used only when no cycle target is set (Consumables: 5% below the existing cost).')}
                 </div>
@@ -1576,7 +1797,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               {may && <div><Btn onClick={() => set('actions', d.actions.concat([{ id: '', text: '', owner: '', due: '', status: 'open', note: '' }]))}>+ Add an action</Btn></div>}
             </>}
             {tab === 'remarks' && <>
-              {fld('Tracking frequency', <input className="kp-in" value={d.frequency} disabled={!may} onChange={(e) => set('frequency', e.target.value)} />)}
+              {fld('Tracking note (optional)', <input className="kp-in" value={K.trackingNote(d)} disabled={!may} onChange={(e) => set('frequency', e.target.value)} placeholder="e.g. survey in the first week of the period's last month" />,
+                'Documents print the schedule (Basics → Schedule: ' + K.freqLabel(d, true).toLowerCase() + '); a note here is added after it.')}
               {fld('Remarks', <textarea className="kp-in" rows={9} value={d.remarks} disabled={!may} onChange={(e) => set('remarks', e.target.value)} placeholder="Anything readers of the report should know. One point per line shows as a list." />, 'Shown on the KPI page of every report and in the deck (long remarks get a notes slide).')}
             </>}
             {err && <div className="kp-err">{err}</div>}
@@ -1646,6 +1868,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                     <span className="kp-pill" style={{ background: '#eef7f5', color: '#0d5e55' }}>Target {(d.targets || []).length ? d.targets.map((t) => K.fmt(d, t.value)).join(' → ') : (K.has(d.baselineTargetPct) ? d.baselineTargetPct + '% vs baseline' : '—')}</span>
                     <span className="kp-pill" style={d.source && d.source.indId && d.autoFill !== false ? { background: '#e1f1fa', color: '#0b4f6c' } : { background: '#ebebfb', color: '#3f3fa8' }}>{d.source && d.source.indId ? (d.autoFill !== false ? 'Auto from quality' : 'Typed (auto-fill off)') : 'Typed monthly'}</span>
                     {d.startMonth && <span className="kp-pill" style={{ background: '#f3f5f8', color: '#3a4656' }}>Starts {K.fmtMonth(d.startMonth)}</span>}
+                    {K.freqOf(d) > 1 && <span className="kp-pill" style={{ background: '#ebebfb', color: '#3f3fa8' }}>{K.freqLabel(d, true)}</span>}
+                    {K.cycleCfg(d, cfg).own && <span className="kp-pill" style={{ background: '#ebebfb', color: '#3f3fa8' }}>{K.cycleCfg(d, cfg).cycles} × {K.cycleCfg(d, cfg).cycleMonths}-month cycles</span>}
                     {d.units && d.units.length > 0 && <span className="kp-pill" style={{ background: '#effaf4', color: '#14713f' }}>{d.units.length} unit(s) expected</span>}
                     <span className="kp-pill" style={{ background: '#fff6e0', color: '#8a5a00' }}>{(d.actions || []).length} actions</span>
                   </div>
@@ -1725,7 +1949,73 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   }
 
   /* =============================================================== settings === */
-  function Settings({ meta, reloadMeta }) {
+  /* Settings → KPI schedule (administrators): every KPI in one grid — how often it is measured, when
+     it starts, its own cycle length and number of cycles. Edits are drafted; Save shows what changes
+     (and which saved monthly figures stop counting — kept, never deleted) before anything is saved. */
+  function ScheduleTable({ meta, defs, reload }) {
+    const cfg = meta.config;
+    const list = (defs || []).filter((d) => d.active !== false && !d.removedAt);
+    const [draft, setDraft] = useState({});
+    const [busy, setBusy] = useState(false);
+    const base = (d) => ({ freqMonths: K.freqOf(d), cycleMonths: d.cycleMonths || null, cycles: d.cycles || null, startMonth: K.isMonth(d.startMonth) ? d.startMonth : null });
+    const cur = (d) => Object.assign(base(d), draft[d.id] || {});
+    const setF = (d, patch) => setDraft((x) => {
+      let n = Object.assign({}, cur(d), patch);
+      if (patch.freqMonths) n = withFreq(n, patch.freqMonths);
+      const o = Object.assign({}, x);
+      if (JSON.stringify(n) === JSON.stringify(base(d))) delete o[d.id]; else o[d.id] = n;
+      return o;
+    });
+    const changed = Object.keys(draft);
+    async function save() {
+      const items = changed.map((id) => Object.assign({ id, baseUpdatedAt: (list.find((x) => x.id === id) || {}).updatedAt }, draft[id]));
+      setBusy(true);
+      try {
+        const dry = await api('/api/kpi/schedule', { method: 'POST', body: JSON.stringify({ dryRun: true, items }) });
+        const msg = <div><ul style={{ margin: '4px 0 8px', paddingLeft: 18 }}>{dry.changes.map((x) => <li key={x.id}><b>{x.code ? x.code + ' ' : ''}{x.name}</b>: {x.from} → <b>{x.to}</b>
+          {x.kept ? <div style={{ color: '#8a5a00' }}>{x.kept} monthly figure(s) already saved in months that are no longer due are kept, but no longer counted.</div> : null}</li>)}</ul>
+          Data Update, reports and the missing-data badge follow the new schedule at once. Final reports do not change. Nothing is deleted.</div>;
+        const ok = await confirmBox({ title: 'Save the KPI schedule?', message: msg, confirmLabel: 'Save schedule' });
+        if (!ok) { setBusy(false); return; }
+        const j = await api('/api/kpi/schedule', { method: 'POST', body: JSON.stringify({ items }) });
+        toast(j.saved + ' KPI schedule' + (j.saved === 1 ? '' : 's') + ' saved.', 'success');
+        setDraft({}); refreshBadge(); reload();
+      } catch (e) { toast(e.message, 'error'); }
+      setBusy(false);
+    }
+    const groups = cfg.pillars.map((pl) => ({ pl, list: list.filter((d) => d.pillar === pl.id) })).filter((g) => g.list.length);
+    return (
+      <div className="kp-card">
+        <div className="kp-h"><h3>KPI schedule</h3><span className="kp-muted">How often each KPI is measured, when it starts, and its own cycles. Blank = the same as all KPIs.</span></div>
+        <div className="kp-scroll"><table className="kp-tbl kp-sched"><thead><tr><th>#</th><th>KPI</th><th>Measured</th><th>Starts</th><th>Cycle length</th><th>Cycles</th><th>Periods and cycles</th></tr></thead>
+          <tbody>{groups.map((g) => [
+            <tr key={'g' + g.pl.id}><td colSpan={7} style={{ background: '#f3f6fa', fontWeight: 800, fontSize: 11.5 }}><span className="kp-dot" style={{ background: g.pl.color, marginRight: 7 }} />{g.pl.label}</td></tr>,
+            ...g.list.map((d) => {
+              const s = cur(d), dd = Object.assign({}, d, s), f = s.freqMonths, st = K.startOf(dd, cfg), dirty = !!draft[d.id];
+              const periods = K.dueMonths(dd, st, K.addMonth(st, 11), cfg).map((m) => K.periodOf(dd, m, cfg).label);
+              return (
+                <tr key={d.id} style={{ cursor: 'default', background: dirty ? '#fffbea' : d.disabled ? '#f6f7f9' : undefined, opacity: d.disabled ? 0.65 : 1 }}>
+                  <td><span className="kp-code" style={{ background: g.pl.color }}>{d.code || '•'}</span></td>
+                  <td style={{ minWidth: 200 }}><b style={{ color: 'var(--ink)' }}>{d.name}</b>{d.disabled ? <span className="kp-muted"> · disabled</span> : null}</td>
+                  <td><select className="kp-sel" value={f} onChange={(e) => setF(d, { freqMonths: +e.target.value })}>{K.FREQS.map((x) => <option key={x.m} value={x.m}>{x.short}</option>)}</select></td>
+                  <td><input type="month" className="kp-sel" value={s.startMonth || ''} onChange={(e) => setF(d, { startMonth: K.isMonth(e.target.value) ? e.target.value : null })} title={'Blank = the same as all KPIs (' + K.fmtMonth(cfg.cycleStart) + ')'} style={{ padding: '4px 6px' }} /></td>
+                  <td><select className="kp-sel" value={s.cycleMonths || ''} onChange={(e) => setF(d, { cycleMonths: e.target.value ? +e.target.value : null })}>
+                    <option value="">As all ({K.cycleCfg({ freqMonths: f }, cfg).cycleMonths} mo)</option>{cycleChoices(f).map((n) => <option key={n} value={n}>{n} months</option>)}</select></td>
+                  <td><select className="kp-sel" value={s.cycles || ''} onChange={(e) => setF(d, { cycles: e.target.value ? +e.target.value : null })}>
+                    <option value="">As all ({cfg.cycles})</option>{[1, 2, 3, 4, 5, 6].map((n) => <option key={n} value={n}>{n}</option>)}</select></td>
+                  <td className="kp-muted" style={{ fontSize: 11, minWidth: 220 }}>{f > 1 ? <div><b style={{ color: '#3f3fa8' }}>{periods.join(' · ')}</b></div> : <div>Every month from {K.fmtMonth(st)}</div>}
+                    <div>{Array.from({ length: K.cycleCfg(dd, cfg).cycles }, (_, i) => { const r = K.cycleRange(i + 1, cfg, dd); return 'C' + (i + 1) + ' ' + K.spanLabel(r.from, r.to); }).join(' · ')}</div></td>
+                </tr>
+              );
+            }),
+          ])}</tbody></table></div>
+        {changed.length > 0 && <div className="kp-savebar"><b>{changed.length} KPI schedule{changed.length > 1 ? 's' : ''} changed</b><span style={{ flex: 1 }} />
+          <Btn disabled={busy} onClick={() => setDraft({})}>Discard</Btn><Btn pri disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save schedule'}</Btn></div>}
+      </div>
+    );
+  }
+
+  function Settings({ meta, reloadMeta, defs }) {
     const [c, setC] = useState(() => JSON.parse(JSON.stringify(meta.config)));
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
@@ -1752,6 +2042,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           </div>
           <div style={{ display: 'flex', gap: 6 }}>{cycles.map((r, i) => <div key={i} style={{ flex: 1, padding: '10px 12px', borderRadius: 10, background: i % 2 ? '#e1f1fa' : '#dff5f1', fontSize: 12.5 }}><b>Cycle {i + 1}</b><div className="kp-muted">{K.fmtRange(r.from, r.to)}</div></div>)}</div>
         </div>
+        <ScheduleTable meta={meta} defs={defs} reload={reloadMeta} />
         <div className="kp-card kp-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>Figures from the quality data</h3>
           <label className={'kp-switch light' + (c.autoFill !== false ? ' on' : '')} onClick={() => set('autoFill', c.autoFill === false)}><i /><span>{c.autoFill !== false ? 'Auto-fill ON — linked KPIs fill themselves from the quality data and the hand hygiene audit' : 'Auto-fill OFF — every figure is typed in Data Update; the system figure is shown as a hint'}</span></label>
@@ -1804,10 +2095,12 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const doneN = cyc.index === 0 ? 0 : cyc.index > cfg.cycles ? segs.length : (cyc.index - 1) * cfg.cycleMonths + (cyc.monthNo || 0);
     let body;
     if (v === 'kpiEntry') body = <DataEntry meta={meta} defs={defs} focusKpi={kpi} showCalc={showCalc} reload={() => { loadMeta(); loadDefs(); }} />;
-    else if (v === 'kpiReports') body = report ? <ReportDoc key={report} meta={meta} id={report} setRoute={setRoute} showCalc={showCalc} /> : <ReportsHome meta={meta} setRoute={setRoute} />;
+    else if (v === 'kpiReports') body = report === 'definitions' || /^calendar-\d{4}$/.test(report || '')
+      ? <DocView key={report} meta={meta} kind={report === 'definitions' ? 'definitions' : 'calendar'} year={report === 'definitions' ? null : +report.slice(9)} setRoute={setRoute} />
+      : report ? <ReportDoc key={report} meta={meta} id={report} setRoute={setRoute} showCalc={showCalc} /> : <ReportsHome meta={meta} setRoute={setRoute} />;
     else if (v === 'kpiManage') body = <ManageKpis meta={meta} defs={defs} reload={loadDefs} />;
     else if (v === 'kpiActions') body = <ActionBoard meta={meta} defs={defs} reload={loadDefs} focusKpi={kpi} />;
-    else if (v === 'kpiSettings') body = meta.isAdmin ? <Settings meta={meta} reloadMeta={() => { loadMeta(); loadDefs(); }} /> : <div className="kp-card kp-empty">Only an administrator can change the Nursing KPI settings.</div>;
+    else if (v === 'kpiSettings') body = meta.isAdmin ? <Settings meta={meta} defs={defs} reloadMeta={() => { loadMeta(); loadDefs(); }} /> : <div className="kp-card kp-empty">Only an administrator can change the Nursing KPI settings.</div>;
     else body = <Dashboard meta={meta} setRoute={setRoute} showCalc={showCalc} />;
     return (
       <div className="kp-wrap">

@@ -427,5 +427,96 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   assert.equal(r.body.config.cycleStart, '2026-10');
   assert.deepEqual(r.body.config.pillars.map((p) => p.id), ['safety', 'infection-control']);
 
+  /* ---- schedule: how often a KPI is measured, and its own cycles ---- */
+  {
+    const c = { cycleStart: '2026-09', cycleMonths: 6, cycles: 2 };
+    const sat = { id: 'x', freqMonths: 6, startMonth: '2026-01', cycleMonths: 12, cycles: 2, goalDirection: 'higher_is_better', targets: [{ cycle: 1, value: 97 }, { cycle: 2, value: 98 }] };
+    assert.deepEqual(K.periodOf(sat, '2026-03', c), { from: '2026-01', to: '2026-06', months: 6, label: 'Jan–Jun 2026' });
+    assert.deepEqual(K.dueMonths(sat, '2026-01', '2026-12', c), ['2026-06', '2026-12']);
+    assert.deepEqual(K.dueMonths({ freqMonths: 3, startMonth: '2026-09' }, '2026-09', '2027-08', c), ['2026-11', '2027-02', '2027-05', '2027-08'], 'quarters from a Sep start');
+    assert.deepEqual(K.dueMonths({ freqMonths: 12, startMonth: '2026-01' }, '2026-01', '2027-12', c), ['2026-12', '2027-12']);
+    assert.deepEqual([K.lastDue(sat, '2026-10', c), K.nextDue(sat, '2026-10', c), K.lastDue(sat, '2026-05', c)], ['2026-06', '2026-12', null]);
+    assert.deepEqual([K.cycleOf('2026-11', c, sat).index, K.cycleOf('2027-01', c, sat).index], [1, 2], 'the KPI’s own 12-month cycles');
+    assert.equal(K.targetFor(sat, '2027-03', c), 98);
+    assert.equal(K.targetFor(Object.assign({}, sat, { cycles: 1 }), '2027-03', c), 97, 'a target for a cycle the KPI no longer has is ignored (kept)');
+    assert.deepEqual([K.validSchedule(6, 3), K.validSchedule(6, 12), K.validSchedule(3, null)], [false, true, true]);
+    assert.equal(K.cycleCfg({ freqMonths: 12 }, c).cycleMonths, 12, 'a yearly KPI on 6-month programme cycles gets 12-month cycles');
+    assert.equal(K.cycleCfg({}, c).cycleMonths, 6);
+    assert.equal(K.scheduleText(sat, c), 'Every 6 months (half-yearly) · 2 cycles of 12 months from Jan 2026 · Cycle 1: Year 2026, Cycle 2: Year 2027');
+    const cal = K.calendar([sat, { id: 'm', startMonth: '2026-03' }], 2026, c);
+    assert.deepEqual([cal.byKpi.x['2026-06'], cal.byKpi.x['2026-07'], cal.byKpi.m['2026-02'], cal.dueCount[5]], ['due', 'off', 'notstarted', 2]);
+    // an October report: the latest half-year, labelled, scored
+    const rows = K.buildRows([sat], { x: { '2026-06': { num: 95, den: 100, value: 95, source: 'manual' } } }, ['2026-10'], K.monthsBetween('2025-11', '2026-10'), c);
+    assert.deepEqual([rows[0].status, rows[0].latest.label, rows[0].nextDue, rows[0].cells['2026-10'].source], ['near', 'Jan–Jun 2026', '2026-12', 'not-due']);
+    assert.equal(K.summarize(rows).scored, 1);
+    assert.equal(K.buildRows([Object.assign({}, sat, { startMonth: '2026-08' })], { x: {} }, ['2026-10'], ['2026-10'], c)[0].status, 'notdue', 'first period not ended: not scored');
+    assert.equal(K.buildRows([sat], { x: {} }, ['2026-06'], ['2026-06'], c)[0].status, 'nodata', 'a due period without a figure is missing — never an older result');
+  }
+  const SAT = 'kpi-nurse-satisfaction';
+  const satDef = async () => (await call('GET /api/kpi/defs', manager, { query: { all: '1' } })).body.defs.find((d) => d.id === SAT);
+  assert.equal((await call('POST /api/kpi/schedule', manager, { body: { items: [{ id: SAT, freqMonths: 6 }] } })).status, 403, 'the schedule is the administrator’s');
+  assert.equal((await call('POST /api/kpi/schedule', admin, { body: { items: [{ id: SAT, freqMonths: 6, cycleMonths: 3 }] } })).body.code, 'schedule', 'a cycle holds whole periods');
+  assert.equal((await call('POST /api/kpi/schedule', admin, { body: { items: [{ id: SAT, freqMonths: 6, baseUpdatedAt: 1 }] } })).status, 409, 'stale');
+  r = await call('PUT /api/kpi/defs/:id', manager, { params: { id: SAT }, body: { freqMonths: 12 } });
+  assert.equal(r.status, 200); assert.ok(!r.body.def.freqMonths || r.body.def.freqMonths === 1, 'a KPI manager cannot change the schedule through the editor');
+  // monthly figures typed before the change
+  for (const m of ['2026-08', '2026-09']) assert.equal((await call('PUT /api/kpi/values/:kpi/:month', manager, { params: { kpi: SAT, month: m }, body: { num: 90, den: 100 } })).status, 200);
+  const item = { id: SAT, freqMonths: 6, startMonth: '2026-05', cycleMonths: 12, cycles: 1, baseUpdatedAt: (await satDef()).updatedAt };
+  r = await call('POST /api/kpi/schedule', admin, { body: { dryRun: true, items: [item] } });
+  assert.deepEqual(r.body.orphaned[SAT], ['2026-08', '2026-09'], 'figures in months that stop being due are listed');
+  assert.equal(r.body.changes[0].kept, 2);
+  assert.notEqual((await satDef()).freqMonths, 6, 'a dry run saves nothing');
+  r = await call('POST /api/kpi/schedule', admin, { body: { items: [item] } });
+  assert.equal(r.body.saved, 1);
+  assert.equal(logged.pop().action, 'kpi_schedule');
+  assert.ok(!kpi._mem.kpiMonths.get(SAT + ':2026-09').removedAt, 'kept, never deleted');
+  r = await call('PUT /api/kpi/values/:kpi/:month', manager, { params: { kpi: SAT, month: '2026-08' }, body: { num: 90, den: 100 } });
+  assert.equal(r.body.code, 'not-due');
+  assert.match(r.body.error, /May–Oct 2026 result in October 2026/);
+  assert.equal((await call('PUT /api/kpi/values/:kpi/:month', manager, { params: { kpi: SAT, month: '2026-10' }, body: { num: 95, den: 100 } })).status, 200, 'the due month takes the half-year');
+  r = await call('GET /api/kpi/values', viewer, { query: { from: '2026-08', to: '2026-10' } });
+  assert.deepEqual([r.body.values[SAT]['2026-09'].source, r.body.values[SAT]['2026-09'].kept.value, r.body.values[SAT]['2026-10'].value, r.body.values[SAT]['2026-10'].period], ['not-due', 90, 95, 'May–Oct 2026']);
+  r = await call('GET /api/kpi/report/:id', viewer, { params: { id: '2026-07_2026-10' } });
+  let sr = r.body.report.rows.find((x) => x.kpiId === SAT);
+  assert.deepEqual([sr.period.value, sr.resultLabel, sr.freqMonths, sr.periods.length], [95, 'May–Oct 2026', 6, 1]);
+  assert.match(sr.schedule, /^Every 6 months/);
+  r = await call('GET /api/kpi/report/:id', viewer, { params: { id: '2026-09_2026-09' } });
+  assert.equal(r.body.report.rows.find((x) => x.kpiId === SAT).status, 'notdue', 'before the first half-year ends');
+  // the badge owes the latest ended period only
+  assert.ok(!(await call('GET /api/kpi/missing', manager, { query: { month: '2026-10' } })).body.missing.some((x) => x.id === SAT));
+  await call('DELETE /api/kpi/values/:kpi/:month', manager, { params: { kpi: SAT, month: '2026-10' } });
+  r = await call('GET /api/kpi/missing', manager, { query: { month: '2026-10' } });
+  assert.deepEqual(r.body.missing.filter((x) => x.id === SAT).map((x) => [x.month, x.period]), [['2026-10', 'May–Oct 2026']]);
+  assert.ok(!(await call('GET /api/kpi/missing', manager, { query: { month: '2026-09' } })).body.missing.some((x) => x.id === SAT), 'no period ended yet: owes nothing');
+  // a linked KPI measured every 3 months: the quarter pooled Σnum ÷ Σden, evidence over the quarter
+  const cl = (await call('GET /api/kpi/defs', manager, { query: { all: '1' } })).body.defs.find((d) => d.id === 'kpi-clabsi');
+  assert.equal((await call('POST /api/kpi/schedule', admin, { body: { items: [{ id: 'kpi-clabsi', freqMonths: 3, startMonth: '2026-08', baseUpdatedAt: cl.updatedAt }] } })).status, 200);
+  r = await call('GET /api/kpi/values', viewer, { query: { from: '2026-10', to: '2026-10' } });
+  const q = r.body.values['kpi-clabsi']['2026-10'];
+  assert.deepEqual([q.num, q.den, q.value, q.period], [2, 1150, 1.74, 'Aug–Oct 2026'], 'Sep 0/400 + Oct 2/750 pooled');
+  const cl2 = (await call('GET /api/kpi/defs', manager, { query: { all: '1' } })).body.defs.find((d) => d.id === 'kpi-clabsi');
+  assert.equal((await call('PUT /api/kpi/defs/:id', manager, { params: { id: 'kpi-clabsi' }, body: { units: ['MICU', 'SICU', 'CCU'], baseUpdatedAt: cl2.updatedAt } })).status, 200);
+  assert.equal((await call('GET /api/kpi/defs', manager, { query: { all: '1' } })).body.defs.find((d) => d.id === 'kpi-clabsi').freqMonths, 3, 'an editor save keeps the admin’s schedule');
+  r = await call('GET /api/kpi/evidence/:kpi/:month', viewer, { params: { kpi: 'kpi-clabsi', month: '2026-10' } });
+  const qev = r.body.evidence;
+  assert.equal(qev.period.label, 'Aug–Oct 2026');
+  assert.ok(qev.checks.some((x) => x.code === 'unit-missing' && x.unit === 'CCU' && /Aug–Oct 2026/.test(x.text)), 'a unit with nothing in the whole quarter');
+  assert.ok(qev.checks.some((x) => x.code === 'partial' && x.unit === 'SICU@2026-09'), 'month checks named by month');
+  assert.equal(qev.units.find((u) => u.key === 'MICU').monthsUsed, 2);
+  r = await call('GET /api/kpi/evidence/:kpi/:month', viewer, { params: { kpi: 'kpi-clabsi', month: '2026-09' } });
+  assert.deepEqual([r.body.evidence.notDue, r.body.evidence.checks.length], [true, 0], 'a month that is not due checks nothing');
+  // documents
+  r = await call('GET /api/kpi/calendar', viewer, { query: { year: '2026' } });
+  assert.equal(r.body.calendar.byKpi['kpi-clabsi']['2026-10'], 'due');
+  assert.equal(r.body.calendar.byKpi[SAT]['2026-09'], 'off');
+  assert.equal((await call('GET /api/kpi/definitions.docx', viewer)).status, 403, 'documents need Print');
+  r = await call('GET /api/kpi/definitions.docx', manager, { query: { sig: JSON.stringify({ prepared: 'Nurse In-charge' }) } });
+  assert.equal(r.status, 200); assert.equal(r.body.slice(0, 2).toString(), 'PK'); assert.deepEqual(r.order.slice(-1), ['end']);
+  assert.equal(logged.pop().action, 'kpi_export');
+  r = await call('GET /api/kpi/calendar.xlsx', manager, { query: { year: '2026' } });
+  assert.equal(r.body.slice(0, 2).toString(), 'PK');
+  r = await call('GET /api/kpi/definitions', viewer);
+  assert.ok(r.body.defs.find((d) => d.id === SAT).doc.facts.some(([l, v]) => l === 'Measured' && /^Every 6 months/.test(v)));
+
   console.log('Nursing KPI checks passed.');
 })().catch((e) => { console.error(e); process.exit(1); });
