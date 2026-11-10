@@ -130,18 +130,38 @@ function compareRecord(rec, byId, others) {
   if (!exact.length) return { ...base, status: 'not_in_h360', h360: null, fields: [], suggestions };
   // Two H360 people with one code would be H360's own problem; the closer name is used.
   const h = exact.slice().sort((x, y) => nameScore(rec.name, y.name) - nameScore(rec.name, x.name))[0];
-  const score = nameScore(rec.name, h.name);
-  if (score < SIMILAR_NAME) {
+  // "Keep our spelling": a person confirmed this H360 spelling is the same name (h360_name_accepted).
+  const accepted = sameText(rec.h360_name_accepted, h.name);
+  const score = accepted ? 1 : nameScore(rec.name, h.name);
+  // Same emp ID AND the same phone (or the same joining date with a name that is at least
+  // close): the same person, and the name is a spelling difference ("Armicka" / "Arnika"),
+  // not somebody else's ID.
+  const evidence = samePersonEvidence(rec, h, score);
+  if (score < SIMILAR_NAME && !evidence.length) {
     return { ...base, status: 'id_other_person', h360: h, nameScore: round(score), fields: fieldsOf(rec, h, score), suggestions: suggestions.filter((s) => s.code !== empId) };
   }
   const fields = fieldsOf(rec, h, score);
+  const nameField = fields.find((f) => f.key === 'name');
+  if (nameField && nameField.ok === false) Object.assign(nameField, { spelling: true, suggested: h.name, evidence });
   // Valid first: emp ID (found above), name and designation. Then the other details.
   // A field blank on our side ("missing") is something to fill, not a disagreement.
   const key = fields.filter((f) => (f.key === 'name' || f.key === 'designation') && !f.missing);
   const valid = key.every((f) => f.ok !== false);
   const otherDiffs = fields.filter((f) => COPYABLE.has(f.key) && f.ok === false && (f.key !== 'designation' || f.missing));
   const status = !valid ? 'field_diff' : otherDiffs.length ? 'valid_diff' : 'match';
-  return { ...base, status, valid, h360: h, nameScore: round(score), fields, suggestions: [] };
+  return { ...base, status, valid, h360: h, nameScore: round(score), fields, suggestions: [], ...(nameField && nameField.spelling ? { nameSuggestion: { name: h.name, evidence } } : {}) };
+}
+const sameText = (a, b) => Boolean(a) && String(a).trim().toLowerCase().replace(/\s+/g, ' ') === String(b || '').trim().toLowerCase().replace(/\s+/g, ' ');
+// What, besides the emp ID, says this H360 person is our record's person.
+function samePersonEvidence(rec, h, score) {
+  const out = [];
+  // A wholly different name is not a spelling mistake, whatever else agrees.
+  if (score < 0.3) return out;
+  const ours = phoneKeys(rec.phone), theirs = phoneKeys(h.phones);
+  if (ours.length && ours.some((p) => theirs.includes(p))) out.push('same phone');
+  // Many people join on the same day: the date counts only beside a name that is at least close.
+  if (rec.doj && h.joinDate && String(rec.doj).slice(0, 10) === h.joinDate && score >= 0.4) out.push('same joining date');
+  return out;
 }
 const round = (n) => Math.round(n * 100) / 100;
 

@@ -8762,11 +8762,52 @@ function HxCompare({
     setDone(n);
     onChanged && onChanged();
   };
+  const ns = result.nameSuggestion;
+  const ourName = rec ? rec.name : result.name;
   return React.createElement("div", {
     style: {
       marginTop: 8
     }
-  }, can && total > 0 && React.createElement("div", {
+  }, ns && !done.name && !done.h360_name_accepted && React.createElement("div", {
+    className: "hx-alert amber"
+  }, React.createElement("b", null, "Same person, name spelt differently \u2014 spelling mistake?"), " ", (() => {
+    const ev = ['emp ID'].concat((ns.evidence || []).map(e => e.replace(/^same /, '')));
+    return 'The ' + (ev.length > 1 ? ev.slice(0, -1).join(', ') + ' and ' + ev[ev.length - 1] : ev[0]) + (ev.length > 1 ? ' match' : ' matches') + ' H360.';
+  })(), React.createElement("div", {
+    style: {
+      marginTop: 6
+    }
+  }, "H360: ", React.createElement("b", null, ns.name), " \xB7 our record: ", React.createElement("b", null, ourName)), can && React.createElement("div", {
+    style: {
+      marginTop: 9,
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    className: "btn pri sm",
+    onClick: () => apply([{
+      field: 'name',
+      value: ns.name,
+      label: 'Name'
+    }], 'Name changed to ' + ns.name + '.')
+  }, "Use H360 spelling: ", ns.name), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => apply([{
+      field: 'h360_name_accepted',
+      value: ns.name,
+      label: 'H360 spelling accepted'
+    }], 'Our spelling kept — H360 "' + ns.name + '" accepted as the same name.')
+  }, "Keep our spelling: ", ourName))), done.h360_name_accepted && React.createElement("div", {
+    className: "hx-alert info"
+  }, "Our spelling kept; H360's \u201C", ns && ns.name, "\u201D is accepted as the same name. ", React.createElement("a", {
+    style: {
+      cursor: 'pointer',
+      color: 'var(--blue)',
+      marginLeft: 6
+    },
+    onClick: () => undo('h360_name_accepted')
+  }, "Undo")), can && total > 0 && React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -9747,7 +9788,7 @@ function StaffH360Card({
     className: "hx-alert red"
   }, "H360 has nobody with emp ID ", res.empId, "."), res.status === 'no_emp_id' && React.createElement("div", {
     className: "hx-alert amber"
-  }, "This record has no emp ID."), res.status === 'field_diff' && React.createElement("div", {
+  }, "This record has no emp ID."), res.status === 'field_diff' && !res.nameSuggestion && React.createElement("div", {
     className: "hx-alert amber"
   }, "The emp ID is in H360, but the name or designation does not match \u2014 confirm which is right."), res.status === 'valid_diff' && React.createElement("div", {
     className: "hx-alert info"

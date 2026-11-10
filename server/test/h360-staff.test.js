@@ -84,6 +84,16 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
   const dept = blank.fields.find((f) => f.key === 'current_department');
   assert.deepStrictEqual([dept.missing, dept.fill, dept.ok, dept.copyable], [true, true, null, false]);
   assert.strictEqual(match.compareRecord({ ...reg[0], designation: '' }, H('11809'), []).status, 'valid_diff');
+  // Spelling, not another person: same emp ID + same phone / joining date ("Armicka" vs "Arnika").
+  const arnika = { code: '11696', name: 'Arnika Barai', phones: ['01724641388', '01568982140'], joinDate: '2026-07-15', designation: 'Staff Nurse - IPD', dept: 'Nursing Services - Cabin (L-9)', gender: 'Female' };
+  const armicka = { id: 50, emp_id: '11696', name: 'Armicka Barai', phone: '01724641388', doj: '2026-07-15', designation: 'Staff Nurse', gender: 'Female', current_department: 'Level-10' };
+  const sp = match.compareRecord(armicka, [arnika], []);
+  assert.strictEqual(sp.status, 'field_diff');
+  assert.deepStrictEqual(sp.nameSuggestion, { name: 'Arnika Barai', evidence: ['same phone', 'same joining date'] });
+  assert.strictEqual(match.compareRecord({ ...armicka, h360_name_accepted: 'Arnika Barai' }, [arnika], []).status, 'match');
+  assert.strictEqual(match.compareRecord({ ...armicka, phone: '01999999999', doj: '2020-01-01' }, [arnika], []).status, 'id_other_person');
+  assert.strictEqual(match.compareRecord({ ...armicka, name: 'Somebody Else Entirely' }, [arnika], []).status, 'id_other_person', 'a wholly different name is never a spelling mistake');
+  ok('a spelling difference with the same emp ID and phone / joining date is the same person (name suggested), not "another person"; "keep our spelling" makes it valid');
   ok('valid first: emp ID + name + designation = valid; other details only add a note; department is never compared; name and department are never copyable');
   const other = match.compareRecord(reg[3], H('11391'), []);
   assert.strictEqual(other.status, 'id_other_person');

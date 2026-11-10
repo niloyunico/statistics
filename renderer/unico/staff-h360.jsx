@@ -183,8 +183,20 @@ function HxCompare({ result, store, onChanged }) {
     apply(list, list.length + ' field' + (list.length === 1 ? '' : 's') + ' updated from H360.');
   };
   const undo = (key) => { hxUndo(store, rec.id, done[key]); const n = { ...done }; delete n[key]; setDone(n); onChanged && onChanged(); };
+  const ns = result.nameSuggestion;
+  const ourName = rec ? rec.name : result.name;
   return (
     <div style={{ marginTop: 8 }}>
+      {/* Same emp ID + same phone / joining date, name spelt differently: suggest H360's spelling. */}
+      {ns && !done.name && !done.h360_name_accepted && <div className="hx-alert amber">
+        <b>Same person, name spelt differently — spelling mistake?</b> {(() => { const ev = ['emp ID'].concat((ns.evidence || []).map((e) => e.replace(/^same /, ''))); return 'The ' + (ev.length > 1 ? ev.slice(0, -1).join(', ') + ' and ' + ev[ev.length - 1] : ev[0]) + (ev.length > 1 ? ' match' : ' matches') + ' H360.'; })()}
+        <div style={{ marginTop: 6 }}>H360: <b>{ns.name}</b> · our record: <b>{ourName}</b></div>
+        {can && <div style={{ marginTop: 9, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn pri sm" onClick={() => apply([{ field: 'name', value: ns.name, label: 'Name' }], 'Name changed to ' + ns.name + '.')}>Use H360 spelling: {ns.name}</button>
+          <button className="btn sm" onClick={() => apply([{ field: 'h360_name_accepted', value: ns.name, label: 'H360 spelling accepted' }], 'Our spelling kept — H360 "' + ns.name + '" accepted as the same name.')}>Keep our spelling: {ourName}</button>
+        </div>}
+      </div>}
+      {done.h360_name_accepted && <div className="hx-alert info">Our spelling kept; H360's “{ns && ns.name}” is accepted as the same name. <a style={{ cursor: 'pointer', color: 'var(--blue)', marginLeft: 6 }} onClick={() => undo('h360_name_accepted')}>Undo</a></div>}
       {can && total > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
         <button className="btn pri sm" onClick={updateAll}><Ic d={I.download || I.check} s={12} c="#fff" />Update from H360 ({total})</button>
         <span className="hx-muted">fills / copies {pending.map((f) => f.label.toLowerCase()).concat(deptSuggest ? ['department (' + deptSuggest + ')'] : []).join(', ')}</span>
@@ -605,7 +617,7 @@ function StaffH360Card({ emp, store }) {
           {res.status === 'id_other_person' && <div className="hx-alert red">H360 gives emp ID {res.empId} to {(res.h360 && res.h360.name) || (res.other && res.other.name) || 'another person'}, not to {res.name}. Either our emp ID is wrong or H360's record is.</div>}
           {res.status === 'not_in_h360' && <div className="hx-alert red">H360 has nobody with emp ID {res.empId}.</div>}
           {res.status === 'no_emp_id' && <div className="hx-alert amber">This record has no emp ID.</div>}
-          {res.status === 'field_diff' && <div className="hx-alert amber">The emp ID is in H360, but the name or designation does not match — confirm which is right.</div>}
+          {res.status === 'field_diff' && !res.nameSuggestion && <div className="hx-alert amber">The emp ID is in H360, but the name or designation does not match — confirm which is right.</div>}
           {res.status === 'valid_diff' && <div className="hx-alert info">Valid: emp ID, name and designation match H360. Some other details differ — “Update from H360” brings them in line.</div>}
           {res.duplicateOf && <div className="hx-alert red">Emp ID {res.empId} is also on record(s) #{res.duplicateOf.join(', #')}.</div>}
           {res.status !== 'id_other_person' && <HxCompare result={res} store={store} onChanged={() => { setTimeout(load, 2500); setTimeout(load, 6000); }} />}
