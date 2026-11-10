@@ -76,6 +76,14 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
   assert.strictEqual(match.compareRecord({ ...reg[1], id: 9, emp_id: '11410', name: 'Md. Ashraf Ali Munna', current_department: 'OPD', doj: '2025-07-06' }, H('11410'), []).status, 'valid_diff');
   assert.strictEqual(match.compareRecord({ ...reg[0], designation: 'Patient Care Assistant' }, H('11809'), []).status, 'field_diff');
   assert.deepStrictEqual(match.compareRecord(reg[0], H('11809'), []).fields.filter((f) => f.copyable).map((f) => f.key).sort(), ['designation', 'doj', 'gender', 'phone']);
+  // Missing on our side, present in H360: offered as a fill; still valid.
+  const blank = match.compareRecord({ ...reg[0], doj: '', current_department: 'Unassigned' }, H('11809'), []);
+  assert.strictEqual(blank.status, 'valid_diff');
+  const doj = blank.fields.find((f) => f.key === 'doj');
+  assert.deepStrictEqual([doj.missing, doj.ok, doj.copyable], [true, false, true]);
+  const dept = blank.fields.find((f) => f.key === 'current_department');
+  assert.deepStrictEqual([dept.missing, dept.fill, dept.ok, dept.copyable], [true, true, null, false]);
+  assert.strictEqual(match.compareRecord({ ...reg[0], designation: '' }, H('11809'), []).status, 'valid_diff');
   ok('valid first: emp ID + name + designation = valid; other details only add a note; department is never compared; name and department are never copyable');
   const other = match.compareRecord(reg[3], H('11391'), []);
   assert.strictEqual(other.status, 'id_other_person');

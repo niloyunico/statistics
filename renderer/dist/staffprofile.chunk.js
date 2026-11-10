@@ -8651,6 +8651,64 @@ function hxValueOf(key, h) {
   return '';
 }
 const hxPending = result => result && result.h360 ? (result.fields || []).filter(f => f.ok === false && f.copyable && hxValueOf(f.key, result.h360)) : [];
+function hxOurDepts(store) {
+  let names = null;
+  try {
+    if (window.buildDepts) {
+      const m = window.buildDepts(JSON.parse(localStorage.getItem('unico_store_v3') || '{}') || {});
+      if (Array.isArray(m) && m.length) names = m.map(d => d.name).filter(Boolean);
+    }
+  } catch (e) {
+    names = null;
+  }
+  const base = window.STAFF && window.STAFF.DEPARTMENTS || [];
+  const used = (store && store.staff || []).map(e => String(e.current_department || '').trim()).filter(d => d && !/^unassigned$/i.test(d) && d.indexOf(',') < 0);
+  return [...new Set(names && names.length ? names : base.concat(used))].sort((a, b) => a.localeCompare(b));
+}
+function hxDeptFor(h360Dept, ours) {
+  const core = String(h360Dept || '').replace(/^\s*nursing\s+services?\s*[-–:]\s*/i, '').trim();
+  if (!core) return '';
+  const lc = x => String(x || '').toLowerCase();
+  const canonOf = x => window.staffCanonDept ? window.staffCanonDept(x) : x;
+  const canon = canonOf(core);
+  const label = window.staffDeptLabel ? window.staffDeptLabel(canon) : canon;
+  return ours.find(d => lc(d) === lc(canon)) || ours.find(d => lc(d) === lc(core)) || ours.find(d => lc(d) === lc(label)) || ours.find(d => lc(canonOf(d)) === lc(canon) && lc(canon) !== lc(core)) || '';
+}
+function HxDeptFill({
+  h,
+  ours,
+  onSet
+}) {
+  const suggested = hxDeptFor(h.dept, ours);
+  const [pick, setPick] = useState(suggested);
+  return React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      gap: 6,
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      justifyContent: 'flex-end'
+    }
+  }, React.createElement("select", {
+    className: "hx-input",
+    style: {
+      padding: '4px 8px',
+      fontSize: 12,
+      maxWidth: 210
+    },
+    value: pick,
+    onChange: e => setPick(e.target.value)
+  }, React.createElement("option", {
+    value: ""
+  }, "Choose our department\u2026"), ours.map(d => React.createElement("option", {
+    key: d,
+    value: d
+  }, d))), React.createElement("button", {
+    className: "btn sm",
+    disabled: !pick,
+    onClick: () => onSet(pick)
+  }, suggested && pick === suggested ? 'Use ' + suggested : 'Set department'));
+}
 function HxCompare({
   result,
   store,
@@ -8660,17 +8718,13 @@ function HxCompare({
   const h = result.h360;
   const can = hxCanEdit() && rec && !rec.former && rec.is_active !== false;
   const [done, setDone] = useState({});
+  const ours = useMemo(() => hxOurDepts(store), [store && store.staff]);
   if (!h) return null;
+  const deptField = (result.fields || []).find(f => f.key === 'current_department' && f.fill);
+  const deptSuggest = deptField && !done.current_department ? hxDeptFor(h.dept, ours) : '';
   const pending = hxPending(result).filter(f => !done[f.key]);
-  const updateAll = () => {
-    const list = pending.map(f => ({
-      field: f.key,
-      value: hxValueOf(f.key, h),
-      label: f.label,
-      from: f.ours
-    }));
-    const lines = list.map(c => c.label + ': ' + (c.from || '(blank)') + '  →  ' + c.value).join('\n');
-    if (!window.confirm('Update ' + rec.name + ' from H360 (' + h.code + ')?\n\n' + lines + '\n\nThe old values are kept on the record.')) return;
+  const total = pending.length + (deptSuggest ? 1 : 0);
+  const apply = (list, label) => {
     const log = hxWrite(store, rec, list, h);
     const next = {
       ...done
@@ -8679,14 +8733,40 @@ function HxCompare({
       next[c.field] = log.filter(l => l.field === c.field);
     });
     setDone(next);
-    hxToast(list.length + ' field' + (list.length === 1 ? '' : 's') + ' updated from H360.');
+    hxToast(label);
+    onChanged && onChanged();
+  };
+  const updateAll = () => {
+    const list = pending.map(f => ({
+      field: f.key,
+      value: hxValueOf(f.key, h),
+      label: f.label,
+      from: f.ours
+    }));
+    if (deptSuggest) list.push({
+      field: 'current_department',
+      value: deptSuggest,
+      label: 'Department',
+      from: rec.current_department
+    });
+    const lines = list.map(c => c.label + ': ' + (c.from || '(blank)') + '  →  ' + c.value).join('\n');
+    if (!window.confirm('Update ' + rec.name + ' from H360 (' + h.code + ')?\n\n' + lines + '\n\nThe old values are kept on the record.')) return;
+    apply(list, list.length + ' field' + (list.length === 1 ? '' : 's') + ' updated from H360.');
+  };
+  const undo = key => {
+    hxUndo(store, rec.id, done[key]);
+    const n = {
+      ...done
+    };
+    delete n[key];
+    setDone(n);
     onChanged && onChanged();
   };
   return React.createElement("div", {
     style: {
       marginTop: 8
     }
-  }, can && pending.length > 0 && React.createElement("div", {
+  }, can && total > 0 && React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -8701,38 +8781,43 @@ function HxCompare({
     d: I.download || I.check,
     s: 12,
     c: "#fff"
-  }), "Update from H360 (", pending.length, ")"), React.createElement("span", {
+  }), "Update from H360 (", total, ")"), React.createElement("span", {
     className: "hx-muted"
-  }, "copies ", pending.map(f => f.label.toLowerCase()).join(', '), " \xB7 our department is never changed")), React.createElement("div", {
+  }, "fills / copies ", pending.map(f => f.label.toLowerCase()).concat(deptSuggest ? ['department (' + deptSuggest + ')'] : []).join(', '))), React.createElement("div", {
     className: "hx-scroll"
   }, React.createElement("table", {
     className: "hx-t"
   }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Field"), React.createElement("th", null, "Our record"), React.createElement("th", null, "H360"), React.createElement("th", null))), React.createElement("tbody", null, (result.fields || []).map(f => {
     const value = hxValueOf(f.key, h);
-    const color = f.info ? 'var(--ink-2)' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
+    const color = f.info ? 'var(--ink-2)' : f.missing ? '#9a5a06' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
     let action;
-    if (f.info) action = React.createElement("span", {
-      className: "hx-muted"
-    }, "not compared");else if (done[f.key]) action = React.createElement("span", null, React.createElement("b", {
+    if (done[f.key]) action = React.createElement("span", null, React.createElement("b", {
       style: {
         color: '#13703d'
       }
-    }, "updated"), React.createElement("a", {
+    }, f.missing ? 'filled' : 'updated'), React.createElement("a", {
       style: {
         cursor: 'pointer',
         color: 'var(--blue)',
         marginLeft: 8
       },
-      onClick: () => {
-        hxUndo(store, rec.id, done[f.key]);
-        const n = {
-          ...done
-        };
-        delete n[f.key];
-        setDone(n);
-        onChanged && onChanged();
+      onClick: () => undo(f.key)
+    }, "Undo"));else if (f.fill && can) action = React.createElement(HxDeptFill, {
+      h: h,
+      ours: ours,
+      onSet: d => apply([{
+        field: 'current_department',
+        value: d,
+        label: 'Department'
+      }], 'Department set to ' + d + '.')
+    });else if (f.fill) action = React.createElement("span", {
+      style: {
+        color: '#9a5a06',
+        fontWeight: 700
       }
-    }, "Undo"));else if (f.ok === true) action = React.createElement("span", {
+    }, "missing");else if (f.info) action = React.createElement("span", {
+      className: "hx-muted"
+    }, "not compared");else if (f.ok === true) action = React.createElement("span", {
       style: {
         color: '#13703d',
         fontWeight: 700
@@ -8741,25 +8826,18 @@ function HxCompare({
       className: "hx-muted"
     }, "not compared");else if (can && f.copyable && value) action = React.createElement("button", {
       className: "btn sm",
-      onClick: () => {
-        const log = hxWrite(store, rec, [{
-          field: f.key,
-          value,
-          label: f.label
-        }], h);
-        setDone({
-          ...done,
-          [f.key]: log
-        });
-        hxToast(f.label + ' updated from H360.');
-        onChanged && onChanged();
-      }
-    }, "Use H360 value");else action = React.createElement("span", {
+      onClick: () => apply([{
+        field: f.key,
+        value,
+        label: f.label
+      }], f.label + (f.missing ? ' filled from H360.' : ' updated from H360.'))
+    }, f.missing ? 'Fill from H360' : 'Use H360 value');else action = React.createElement("span", {
       style: {
-        color: '#b42339',
+        color: f.missing ? '#9a5a06' : '#b42339',
         fontWeight: 700
       }
-    }, "differs");
+    }, f.missing ? 'missing' : 'differs');
+    const oursShown = f.ours && !(f.fill && /^unassigned$/i.test(f.ours)) ? f.ours : '';
     return React.createElement("tr", {
       key: f.key
     }, React.createElement("td", {
@@ -8767,9 +8845,12 @@ function HxCompare({
         fontWeight: 700,
         color: 'var(--ink)'
       }
-    }, f.label), React.createElement("td", null, f.ours || React.createElement("span", {
-      className: "hx-muted"
-    }, "blank"), f.info && React.createElement("div", {
+    }, f.label), React.createElement("td", null, oursShown || React.createElement("span", {
+      style: {
+        color: f.missing ? '#9a5a06' : 'var(--muted)',
+        fontSize: 12
+      }
+    }, f.missing ? 'missing' : 'blank'), f.info && !f.fill && React.createElement("div", {
       className: "hx-muted",
       style: {
         fontSize: 10.5

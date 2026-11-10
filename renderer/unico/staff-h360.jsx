@@ -110,33 +110,84 @@ function hxValueOf(key, h) {
   if (key === 'designation') return h.designation || '';
   return '';
 }
-// What "Update from H360" would copy: every differing field H360 may set (joining date, phone, gender, designation).
+// What "Update from H360" would copy: every differing or missing field H360 may set
+// (joining date, phone, gender, designation).
 const hxPending = (result) => (result && result.h360 ? (result.fields || []).filter((f) => f.ok === false && f.copyable && hxValueOf(f.key, result.h360)) : []);
 
-// Our record beside H360's person, field by field, with the direct updates.
+// Our departments — the list the staff form offers: Statistics' live names, else the staff list.
+function hxOurDepts(store) {
+  let names = null;
+  try {
+    if (window.buildDepts) {
+      const m = window.buildDepts(JSON.parse(localStorage.getItem('unico_store_v3') || '{}') || {});
+      if (Array.isArray(m) && m.length) names = m.map((d) => d.name).filter(Boolean);
+    }
+  } catch (e) { names = null; }
+  const base = (window.STAFF && window.STAFF.DEPARTMENTS) || [];
+  const used = ((store && store.staff) || []).map((e) => String(e.current_department || '').trim()).filter((d) => d && !/^unassigned$/i.test(d) && d.indexOf(',') < 0);
+  return [...new Set(names && names.length ? names : base.concat(used))].sort((a, b) => a.localeCompare(b));
+}
+// H360's "Nursing Services - MICU" as one of OUR departments, or '' when none fits (then a
+// person picks one: H360's own unit names are never written into our register).
+function hxDeptFor(h360Dept, ours) {
+  const core = String(h360Dept || '').replace(/^\s*nursing\s+services?\s*[-–:]\s*/i, '').trim();
+  if (!core) return '';
+  const lc = (x) => String(x || '').toLowerCase();
+  const canonOf = (x) => (window.staffCanonDept ? window.staffCanonDept(x) : x);
+  const canon = canonOf(core);
+  const label = window.staffDeptLabel ? window.staffDeptLabel(canon) : canon;
+  return ours.find((d) => lc(d) === lc(canon)) || ours.find((d) => lc(d) === lc(core)) || ours.find((d) => lc(d) === lc(label))
+    || ours.find((d) => lc(canonOf(d)) === lc(canon) && lc(canon) !== lc(core)) || '';
+}
+
+// Department row: choose ours (pre-picked when H360's unit maps onto one of ours).
+function HxDeptFill({ h, ours, onSet }) {
+  const suggested = hxDeptFor(h.dept, ours);
+  const [pick, setPick] = useState(suggested);
+  return (
+    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <select className="hx-input" style={{ padding: '4px 8px', fontSize: 12, maxWidth: 210 }} value={pick} onChange={(e) => setPick(e.target.value)}>
+        <option value="">Choose our department…</option>
+        {ours.map((d) => <option key={d} value={d}>{d}</option>)}
+      </select>
+      <button className="btn sm" disabled={!pick} onClick={() => onSet(pick)}>{suggested && pick === suggested ? 'Use ' + suggested : 'Set department'}</button>
+    </span>
+  );
+}
+
+// Our record beside H360's person, field by field, with the direct updates and the fills.
 function HxCompare({ result, store, onChanged }) {
   const rec = store && store.get ? store.get(result.id) : null;
   const h = result.h360;
   const can = hxCanEdit() && rec && !rec.former && rec.is_active !== false;
   const [done, setDone] = useState({});   // field -> its change log, for Undo
+  const ours = useMemo(() => hxOurDepts(store), [store && store.staff]);
   if (!h) return null;
+  const deptField = (result.fields || []).find((f) => f.key === 'current_department' && f.fill);
+  const deptSuggest = deptField && !done.current_department ? hxDeptFor(h.dept, ours) : '';
   const pending = hxPending(result).filter((f) => !done[f.key]);
-  const updateAll = () => {
-    const list = pending.map((f) => ({ field: f.key, value: hxValueOf(f.key, h), label: f.label, from: f.ours }));
-    const lines = list.map((c) => c.label + ': ' + (c.from || '(blank)') + '  →  ' + c.value).join('\n');
-    if (!window.confirm('Update ' + rec.name + ' from H360 (' + h.code + ')?\n\n' + lines + '\n\nThe old values are kept on the record.')) return;
+  const total = pending.length + (deptSuggest ? 1 : 0);
+  const apply = (list, label) => {
     const log = hxWrite(store, rec, list, h);
     const next = { ...done };
     list.forEach((c) => { next[c.field] = log.filter((l) => l.field === c.field); });
     setDone(next);
-    hxToast(list.length + ' field' + (list.length === 1 ? '' : 's') + ' updated from H360.');
+    hxToast(label);
     onChanged && onChanged();
   };
+  const updateAll = () => {
+    const list = pending.map((f) => ({ field: f.key, value: hxValueOf(f.key, h), label: f.label, from: f.ours }));
+    if (deptSuggest) list.push({ field: 'current_department', value: deptSuggest, label: 'Department', from: rec.current_department });
+    const lines = list.map((c) => c.label + ': ' + (c.from || '(blank)') + '  →  ' + c.value).join('\n');
+    if (!window.confirm('Update ' + rec.name + ' from H360 (' + h.code + ')?\n\n' + lines + '\n\nThe old values are kept on the record.')) return;
+    apply(list, list.length + ' field' + (list.length === 1 ? '' : 's') + ' updated from H360.');
+  };
+  const undo = (key) => { hxUndo(store, rec.id, done[key]); const n = { ...done }; delete n[key]; setDone(n); onChanged && onChanged(); };
   return (
     <div style={{ marginTop: 8 }}>
-      {can && pending.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-        <button className="btn pri sm" onClick={updateAll}><Ic d={I.download || I.check} s={12} c="#fff" />Update from H360 ({pending.length})</button>
-        <span className="hx-muted">copies {pending.map((f) => f.label.toLowerCase()).join(', ')} · our department is never changed</span>
+      {can && total > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <button className="btn pri sm" onClick={updateAll}><Ic d={I.download || I.check} s={12} c="#fff" />Update from H360 ({total})</button>
+        <span className="hx-muted">fills / copies {pending.map((f) => f.label.toLowerCase()).concat(deptSuggest ? ['department (' + deptSuggest + ')'] : []).join(', ')}</span>
       </div>}
       <div className="hx-scroll">
         <table className="hx-t">
@@ -144,18 +195,21 @@ function HxCompare({ result, store, onChanged }) {
           <tbody>
             {(result.fields || []).map((f) => {
               const value = hxValueOf(f.key, h);
-              const color = f.info ? 'var(--ink-2)' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
+              const color = f.info ? 'var(--ink-2)' : f.missing ? '#9a5a06' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
               let action;
-              if (f.info) action = <span className="hx-muted">not compared</span>;
-              else if (done[f.key]) action = <span><b style={{ color: '#13703d' }}>updated</b><a style={{ cursor: 'pointer', color: 'var(--blue)', marginLeft: 8 }} onClick={() => { hxUndo(store, rec.id, done[f.key]); const n = { ...done }; delete n[f.key]; setDone(n); onChanged && onChanged(); }}>Undo</a></span>;
+              if (done[f.key]) action = <span><b style={{ color: '#13703d' }}>{f.missing ? 'filled' : 'updated'}</b><a style={{ cursor: 'pointer', color: 'var(--blue)', marginLeft: 8 }} onClick={() => undo(f.key)}>Undo</a></span>;
+              else if (f.fill && can) action = <HxDeptFill h={h} ours={ours} onSet={(d) => apply([{ field: 'current_department', value: d, label: 'Department' }], 'Department set to ' + d + '.')} />;
+              else if (f.fill) action = <span style={{ color: '#9a5a06', fontWeight: 700 }}>missing</span>;
+              else if (f.info) action = <span className="hx-muted">not compared</span>;
               else if (f.ok === true) action = <span style={{ color: '#13703d', fontWeight: 700 }}>✓</span>;
               else if (f.ok === null) action = <span className="hx-muted">not compared</span>;
-              else if (can && f.copyable && value) action = <button className="btn sm" onClick={() => { const log = hxWrite(store, rec, [{ field: f.key, value, label: f.label }], h); setDone({ ...done, [f.key]: log }); hxToast(f.label + ' updated from H360.'); onChanged && onChanged(); }}>Use H360 value</button>;
-              else action = <span style={{ color: '#b42339', fontWeight: 700 }}>differs</span>;
+              else if (can && f.copyable && value) action = <button className="btn sm" onClick={() => apply([{ field: f.key, value, label: f.label }], f.label + (f.missing ? ' filled from H360.' : ' updated from H360.'))}>{f.missing ? 'Fill from H360' : 'Use H360 value'}</button>;
+              else action = <span style={{ color: f.missing ? '#9a5a06' : '#b42339', fontWeight: 700 }}>{f.missing ? 'missing' : 'differs'}</span>;
+              const oursShown = f.ours && !(f.fill && /^unassigned$/i.test(f.ours)) ? f.ours : '';
               return (
                 <tr key={f.key}>
                   <td style={{ fontWeight: 700, color: 'var(--ink)' }}>{f.label}</td>
-                  <td>{f.ours || <span className="hx-muted">blank</span>}{f.info && <div className="hx-muted" style={{ fontSize: 10.5 }}>assigned by us</div>}</td>
+                  <td>{oursShown || <span style={{ color: f.missing ? '#9a5a06' : 'var(--muted)', fontSize: 12 }}>{f.missing ? 'missing' : 'blank'}</span>}{f.info && !f.fill && <div className="hx-muted" style={{ fontSize: 10.5 }}>assigned by us</div>}</td>
                   <td style={{ color }}>{f.h360 || <span className="hx-muted">—</span>}{f.info && <div className="hx-muted" style={{ fontSize: 10.5 }}>H360 record, kept</div>}</td>
                   <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>{action}</td>
                 </tr>

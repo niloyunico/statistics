@@ -136,9 +136,10 @@ function compareRecord(rec, byId, others) {
   }
   const fields = fieldsOf(rec, h, score);
   // Valid first: emp ID (found above), name and designation. Then the other details.
-  const key = fields.filter((f) => f.key === 'name' || f.key === 'designation');
+  // A field blank on our side ("missing") is something to fill, not a disagreement.
+  const key = fields.filter((f) => (f.key === 'name' || f.key === 'designation') && !f.missing);
   const valid = key.every((f) => f.ok !== false);
-  const otherDiffs = fields.filter((f) => COPYABLE.has(f.key) && f.key !== 'designation' && f.ok === false);
+  const otherDiffs = fields.filter((f) => COPYABLE.has(f.key) && f.ok === false && (f.key !== 'designation' || f.missing));
   const status = !valid ? 'field_diff' : otherDiffs.length ? 'valid_diff' : 'match';
   return { ...base, status, valid, h360: h, nameScore: round(score), fields, suggestions: [] };
 }
@@ -147,9 +148,14 @@ const round = (n) => Math.round(n * 100) / 100;
 // What a Staff editor may copy from H360 into our record (user 2026-11-10). Never the
 // name, never the department.
 const COPYABLE = new Set(['doj', 'phone', 'gender', 'designation']);
+const blankDept = (v) => { const s = String(v || '').trim(); return !s || /^unassigned$/i.test(s); };
 function fieldsOf(rec, h, score) {
   const out = [];
-  const add = (key, label, ours, theirs, ok, copyable, info) => out.push({ key, label, ours: ours || '', h360: theirs || '', ok, copyable: Boolean(copyable) && COPYABLE.has(key), ...(info ? { info: true } : {}) });
+  const add = (key, label, ours, theirs, ok, copyable, info) => {
+    // Ours blank, H360 has it: MISSING — offered as a fill (ok:false so "Update from H360" takes it).
+    const missing = !String(ours || '').trim() && Boolean(String(theirs || '').trim()) && COPYABLE.has(key);
+    out.push({ key, label, ours: ours || '', h360: theirs || '', ok: missing ? false : ok, copyable: Boolean(copyable || missing) && COPYABLE.has(key), ...(missing ? { missing: true } : {}), ...(info ? { info: true } : {}) });
+  };
   add('name', 'Name', rec.name, h.name, score >= SAME_NAME, false);
   const ourPhones = phoneKeys(rec.phone), theirPhones = phoneKeys(h.phones);
   add('phone', 'Phone', rec.phone, (h.phones || []).join(', '), !ourPhones.length || !theirPhones.length ? null : ourPhones.some((p) => theirPhones.includes(p)), theirPhones.length > 0);
@@ -159,6 +165,9 @@ function fieldsOf(rec, h, score) {
   add('designation', 'Designation', rec.designation, h.designation, desigAgrees(rec.designation, h.designation), Boolean(h.designation));
   // Ours is assigned by us; H360's is kept for reference and never counts as a difference.
   add('current_department', 'Department', rec.current_department, h.dept, null, false, true);
+  // Our department blank / Unassigned while H360 names one: offered as a fill (mapped onto OUR
+  // department list in the browser). Still never compared, never counted in the status.
+  if (blankDept(rec.current_department) && String(h.dept || '').trim()) Object.assign(out[out.length - 1], { missing: true, fill: true });
   return out;
 }
 
