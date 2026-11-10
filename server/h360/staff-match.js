@@ -183,8 +183,15 @@ function fieldsOf(rec, h, score) {
     out.push({ key, label, ours: ours || '', h360: theirs || '', ok: missing ? false : ok, copyable: Boolean(copyable || missing) && COPYABLE.has(key), ...(missing ? { missing: true } : {}), ...(info ? { info: true } : {}) });
   };
   add('name', 'Name', rec.name, h.name, score >= SAME_NAME, false);
-  const ourPhones = phoneKeys(rec.phone), theirPhones = phoneKeys(h.phones);
+  // Our main phone AND the alternative phone (custom field) both count: H360 holding either is a match.
+  const alt = String((rec.custom && rec.custom.cf_alternative_phone_number) || '').trim();
+  const ourPhones = phoneKeys([rec.phone, alt].join(',')), theirPhones = phoneKeys(h.phones);
   add('phone', 'Phone', rec.phone, (h.phones || []).join(', '), !ourPhones.length || !theirPhones.length ? null : ourPhones.some((p) => theirPhones.includes(p)), theirPhones.length > 0);
+  const phoneField = out[out.length - 1];
+  if (alt) { phoneField.alt = alt; if (!String(rec.phone || '').trim()) Object.assign(phoneField, { missing: false, ok: ourPhones.some((p) => theirPhones.includes(p)) }); }
+  // H360 numbers we hold nowhere: offered as an alternative number (keeps both; the status is not affected).
+  const extra = (h.phones || []).filter((p) => { const k = phoneKeys(p)[0]; return k && !ourPhones.includes(k); });
+  if (extra.length && ourPhones.length) phoneField.extraPhones = extra;
   const g1 = normGender(rec.gender), g2 = normGender(h.gender);
   add('gender', 'Gender', g1, g2, !g1 || !g2 ? null : g1 === g2, Boolean(g2));
   add('doj', 'Joining date', rec.doj, h.joinDate, !rec.doj || !h.joinDate ? null : String(rec.doj).slice(0, 10) === h.joinDate, Boolean(h.joinDate));

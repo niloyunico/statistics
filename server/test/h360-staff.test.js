@@ -100,6 +100,14 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
   assert.deepStrictEqual([wr.status, wr.nameSuggestion && wr.nameSuggestion.kind, wr.nameSuggestion && wr.nameSuggestion.name], ['valid_diff', 'written', 'Arpana Rani Das']);
   assert.strictEqual(match.compareRecord({ ...arp, name: 'arpana  rani das ' }, [arpH], []).status, 'match');
   assert.strictEqual(match.compareRecord({ ...arp, h360_name_accepted: 'Arpana Rani Das' }, [arpH], []).status, 'match');
+  // Phones: our main AND alternative number count; numbers H360 has that we hold nowhere are offered.
+  const two = { ...arpH, name: 'Arpana', phones: ['01608087556', '01859877095'] };
+  const phoneOf = (r) => match.compareRecord(r, [two], []).fields.find((f) => f.key === 'phone');
+  assert.deepStrictEqual([phoneOf(arp).ok, phoneOf(arp).extraPhones], [true, ['01859877095']]);
+  assert.deepStrictEqual([phoneOf({ ...arp, phone: '01711111111' }).ok, phoneOf({ ...arp, phone: '01711111111' }).extraPhones.length], [false, 2]);
+  const viaAlt = phoneOf({ ...arp, phone: '01711111111', custom: { cf_alternative_phone_number: '01859877095' } });
+  assert.deepStrictEqual([viaAlt.ok, viaAlt.alt, viaAlt.extraPhones], [true, '01859877095', ['01608087556']]);
+  assert.strictEqual(phoneOf({ ...arp, custom: { cf_alternative_phone_number: '01859877095' } }).extraPhones, undefined);
   ok('a spelling difference with the same emp ID and phone / joining date is the same person (name suggested), not "another person"; "keep our spelling" makes it valid');
   ok('valid first: emp ID + name + designation = valid; other details only add a note; department is never compared; name and department are never copyable');
   const other = match.compareRecord(reg[3], H('11391'), []);

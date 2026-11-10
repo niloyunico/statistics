@@ -8616,11 +8616,22 @@ function hxWrite(store, rec, changes, h360) {
   const me = window.__UNICO_USER__ || {};
   const at = new Date().toISOString();
   const patch = {};
+  const oldOf = f => {
+    if (f.indexOf('custom.') === 0) {
+      const v = (rec.custom || {})[f.slice(7)];
+      return v == null ? '' : String(v);
+    }
+    return rec[f] == null ? '' : String(rec[f]);
+  };
   const log = changes.map(c => {
-    patch[c.field] = c.value;
+    const old = oldOf(c.field);
+    if (c.field.indexOf('custom.') === 0) patch.custom = {
+      ...(patch.custom || rec.custom || {}),
+      [c.field.slice(7)]: c.value
+    };else patch[c.field] = c.value;
     return {
       field: c.field,
-      old: rec[c.field] == null ? '' : String(rec[c.field]),
+      old,
       new: c.value,
       at,
       by: me.name || me.username || '',
@@ -8663,6 +8674,51 @@ function hxValueOf(key, h) {
   if (key === 'gender') return h.gender || '';
   if (key === 'designation') return h.designation || '';
   return '';
+}
+const HX_ALT = 'custom.cf_alternative_phone_number';
+const hxDigits = v => String(v || '').replace(/\D/g, '').slice(-10);
+function hxAltWith(rec, add) {
+  const now = String(rec.custom && rec.custom.cf_alternative_phone_number || '').split(/[,/;]+/).map(x => x.trim()).filter(Boolean);
+  add.forEach(n => {
+    if (n && !now.some(x => hxDigits(x) === hxDigits(n)) && hxDigits(n) !== hxDigits(rec.phone)) now.push(n);
+  });
+  return now.join(', ');
+}
+function hxPhoneChanges(kind, rec, h, f) {
+  const theirs = h.phones || [];
+  if (kind === 'fill') {
+    const list = [{
+      field: 'phone',
+      value: theirs[0],
+      label: 'Phone'
+    }];
+    const alt = hxAltWith(rec, theirs.slice(1));
+    if (alt !== String((rec.custom || {}).cf_alternative_phone_number || '')) list.push({
+      field: HX_ALT,
+      value: alt,
+      label: 'Alternative phone'
+    });
+    return list;
+  }
+  if (kind === 'keep') return [{
+    field: HX_ALT,
+    value: hxAltWith(rec, f && f.extraPhones || theirs),
+    label: 'Alternative phone'
+  }];
+  const main = theirs[0];
+  const alt = hxAltWith({
+    ...rec,
+    phone: main
+  }, [rec.phone].concat(theirs.slice(1)));
+  return [{
+    field: 'phone',
+    value: main,
+    label: 'Phone'
+  }, {
+    field: HX_ALT,
+    value: alt,
+    label: 'Alternative phone'
+  }];
 }
 const hxPending = result => result && result.h360 ? (result.fields || []).filter(f => f.ok === false && f.copyable && hxValueOf(f.key, result.h360)) : [];
 function hxOurDepts(store) {
@@ -8746,17 +8802,24 @@ function HxCompare({
     list.forEach(c => {
       next[c.field] = log.filter(l => l.field === c.field);
     });
+    if (list.some(c => c.field === HX_ALT || c.field === 'phone')) next.phone = log.filter(l => l.field === 'phone' || l.field === HX_ALT);
     setDone(next);
     hxToast(label);
     onChanged && onChanged();
   };
   const updateAll = () => {
-    const list = pending.map(f => ({
-      field: f.key,
-      value: hxValueOf(f.key, h),
-      label: f.label,
-      from: f.ours
-    }));
+    const list = [];
+    pending.forEach(f => {
+      if (f.key === 'phone') hxPhoneChanges(f.missing ? 'fill' : 'h360main', rec, h, f).forEach(c => list.push({
+        ...c,
+        from: c.field === 'phone' ? rec.phone : (rec.custom || {}).cf_alternative_phone_number
+      }));else list.push({
+        field: f.key,
+        value: hxValueOf(f.key, h),
+        label: f.label,
+        from: f.ours
+      });
+    });
     if (deptSuggest) list.push({
       field: 'current_department',
       value: deptSuggest,
@@ -8884,7 +8947,35 @@ function HxCompare({
       }
     }, "\u2713");else if (f.ok === null) action = React.createElement("span", {
       className: "hx-muted"
-    }, "not compared");else if (can && f.copyable && value) action = React.createElement("button", {
+    }, "not compared");else if (f.key === 'phone' && can && f.ok === false && !f.missing) action = React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        gap: 6,
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end'
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      title: "Our number stays the main phone; H360's is added as the alternative phone",
+      onClick: () => apply(hxPhoneChanges('keep', rec, h, f), 'Both kept — H360 number added as alternative phone.')
+    }, "Keep both"), React.createElement("button", {
+      className: "btn sm",
+      title: "H360's number becomes the main phone; ours moves to the alternative phone",
+      onClick: () => apply(hxPhoneChanges('h360main', rec, h, f), 'H360 number is now the main phone; ours kept as alternative.')
+    }, "H360's as main"));else if (f.key === 'phone' && can && f.missing) action = React.createElement("button", {
+      className: "btn sm",
+      onClick: () => apply(hxPhoneChanges('fill', rec, h, f), 'Phone filled from H360.')
+    }, "Fill from H360");else if (f.key === 'phone' && can && f.ok === true && (f.extraPhones || []).length) action = React.createElement("span", null, React.createElement("span", {
+      style: {
+        color: '#13703d',
+        fontWeight: 700,
+        marginRight: 8
+      }
+    }, "\u2713"), React.createElement("button", {
+      className: "btn sm",
+      title: "H360 has another number we do not hold",
+      onClick: () => apply(hxPhoneChanges('keep', rec, h, f), 'Added as alternative phone.')
+    }, "Add ", f.extraPhones.join(', '), " as alternative"));else if (can && f.copyable && value) action = React.createElement("button", {
       className: "btn sm",
       onClick: () => apply([{
         field: f.key,
@@ -8905,7 +8996,12 @@ function HxCompare({
         fontWeight: 700,
         color: 'var(--ink)'
       }
-    }, f.label), React.createElement("td", null, oursShown || React.createElement("span", {
+    }, f.label), React.createElement("td", null, f.key === 'phone' && f.alt ? React.createElement("span", null, oursShown || '—', React.createElement("div", {
+      className: "hx-muted",
+      style: {
+        fontSize: 10.5
+      }
+    }, "alternative: ", f.alt)) : oursShown || React.createElement("span", {
       style: {
         color: f.missing ? '#9a5a06' : 'var(--muted)',
         fontSize: 12
