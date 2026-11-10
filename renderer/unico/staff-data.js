@@ -524,7 +524,7 @@
       // (11410, 11520), and an emp_id fallback stamped one nurse's photo and BNMC licence
       // onto the other, which the next staff save then made permanent.
       const byId={};
-      src.forEach(x=>{ if(!x||!(x.licence_verified||x.photo)) return;
+      src.forEach(x=>{ if(!x||!(x.licence_verified||x.photo||x.h360_verified)) return;
         if(x.id!=null) byId[String(x.id)]=x; });
       if(!Object.keys(byId).length) return list;
       return list.map(e=>{
@@ -545,6 +545,11 @@
             out.licence_program=e.licence_program||srv.licence_program;
             changed=true;
           }
+        }
+        // H360 record (server/h360/staff.js): the server copy wins unless ours is newer.
+        if(srv.h360_verified){
+          const mine=e.h360_verified&&e.h360_verified.at, theirs=srv.h360_verified.at;
+          if(!(mine&&theirs&&String(mine)>=String(theirs))){ out.h360_verified=srv.h360_verified; changed=true; }
         }
         // Portrait: restore ONLY when this row has none. Never overwrite a picture the
         // overlay already carries — that may be one just chosen and not yet synced. A

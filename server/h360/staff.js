@@ -165,6 +165,30 @@ function createStaffService(deps = {}) {
     return slim(res);
   }
 
+  /* ---------- H360's values kept on our records (staff document `h360_verified`) ----------
+     Like a BNMC verification: evidence from outside, written by RECORD ID onto the staff
+     document (never by emp ID — those are shared), restored onto the row by resolveRoster and
+     merged over the browser copy by staff-data.js. None of our own fields are touched. */
+  const bumpStaff = deps.bumpStaff || (async () => { try { await require('../cache').bump('staff'); } catch (err) { /* best effort */ } });
+  const idFilter = (id) => { const or = [{ _id: String(id) }]; const n = Number(id); if (Number.isFinite(n)) or.unshift({ id: n }); return { $or: or }; };
+  async function keepOnRecords(d, list) {
+    const col = d.collection('staff');
+    let n = 0;
+    for (const res of list || []) {
+      if (!res || res.id == null || res.status === 'error') continue;
+      const at = res.at || new Date().toISOString();
+      // An ID that is somebody else's in H360: only that fact is kept, never the other person's details.
+      const snap = res.status === 'id_other_person'
+        ? { code: '', status: res.status, at, other: res.h360 ? { code: res.h360.code, name: res.h360.name } : null }
+        : match.snapshotOf(res) || { code: '', status: res.status, at };
+      const r = await col.updateOne(idFilter(res.id), { $set: { h360_verified: snap } });
+      if (!r.matchedCount) await col.updateOne({ id: res.id }, { $set: { h360_verified: snap } }, { upsert: true });
+      n++;
+    }
+    if (n) await bumpStaff();
+    return n;
+  }
+
   /* ---------- one record / live lookup ---------- */
   async function verifyOne(recordId) {
     const d = await db();
@@ -173,7 +197,23 @@ function createStaffService(deps = {}) {
     if (!rec) throw fail(404, 'No such staff record.');
     const res = match.markDuplicates([await checkRecord(d, rec, register)], register)[0];
     await settings.write(d, 'staffVerifyOne', { ['byId.' + rec.id]: res });
+    await keepOnRecords(d, [res]);
     return res;
+  }
+
+  // The profile's H360 view from what the last check saved on the record — no H360 request.
+  // Judged against the record as it is now, so an update shows at once.
+  async function saved(recordId) {
+    const register = await loadRegister();
+    const rec = register.find((r) => String(r.id) === String(recordId));
+    if (!rec) throw fail(404, 'No such staff record.');
+    const snap = rec.h360_verified;
+    if (!snap) return null;
+    if (!snap.code || snap.status === 'id_other_person') {
+      return { id: rec.id, empId: rec.emp_id || '', name: rec.name, status: snap.status, at: snap.at, h360: null, other: snap.other || null, fields: [], suggestions: [], saved: true };
+    }
+    const res = match.compareRecord(rec, [snap], []);
+    return { ...match.markDuplicates([res], register)[0], at: snap.at, saved: true, idChanged: String(rec.emp_id || '').trim() !== snap.code };
   }
 
   async function lookup(q, visible) {
@@ -182,11 +222,13 @@ function createStaffService(deps = {}) {
     const rows = await search(d, q);
     await remember(d, rows, codesOf(register));
     const mine = visible || register;
+    const kept = [];
     const people = rows.slice(0, 80).map((h) => {
       const byCode = mine.filter((r) => String(r.emp_id || '').trim() === h.code);
       const phones = match.phoneKeys(h.phones);
       const possible = mine.filter((r) => !byCode.includes(r) && ((phones.length && match.phoneKeys(r.phone).some((p) => phones.includes(p))) || match.nameScore(r.name, h.name) >= match.SAME_NAME));
-      const checks = match.markDuplicates(byCode.map((r) => match.compareRecord(r, [h], [])), register);
+      const checks = match.markDuplicates(byCode.map((r) => slim(match.compareRecord(r, [h], []))), register);
+      kept.push(...checks.filter((c) => !mine.find((r) => r.id === c.id && r.former)));
       return {
         ...h,
         nursing: match.isNursing(h),
@@ -194,6 +236,7 @@ function createStaffService(deps = {}) {
         possible: possible.slice(0, 5).map((r) => ({ id: r.id, name: r.name, empId: r.emp_id || '', dept: r.current_department || '', former: Boolean(r.former || r.is_active === false) })),
       };
     });
+    await keepOnRecords(d, kept).catch(() => 0);
     return { q, count: rows.length, people };
   }
 
@@ -229,11 +272,13 @@ function createStaffService(deps = {}) {
     let error = null;
     const results = { ...(run.results || {}) };
     const answered = new Set();
+    const fresh = [];
     await pool(queue, until, async (rid) => {
       const rec = byId.get(rid);
       if (!rec) { answered.add(rid); return; }
       try {
         results[rid] = await checkRecord(d, rec, register);
+        fresh.push(results[rid]);
         answered.add(rid);
       } catch (err) {
         // No login / no database: stop here and say so; anything else is this record's own problem.
@@ -243,6 +288,7 @@ function createStaffService(deps = {}) {
       }
     }, () => Boolean(error));
     const rest = queue.filter((rid) => !answered.has(rid));
+    await keepOnRecords(d, fresh).catch(() => 0);
     if (rest.length) {
       await settings.write(d, 'staffVerify', { 'run.queue': rest, 'run.results': results, 'run.lockedAt': null, 'run.error': error });
       return { run: publicRun({ ...run, queue: rest, error }), last: lastInfo(doc) };
@@ -265,7 +311,19 @@ function createStaffService(deps = {}) {
     const one = ((await settings.read(d, 'staffVerifyOne')) || {}).byId || {};
     const list = (doc.last && doc.last.results ? doc.last.results : []).map((r) => (one[r.id] && one[r.id].at > (r.at || '') ? one[r.id] : r));
     for (const [rid, r] of Object.entries(one)) if (!list.some((x) => String(x.id) === rid)) list.push(r);
-    return { list, last: lastInfo(doc), previous: doc.previous ? { finishedAt: doc.previous.finishedAt, statusById: doc.previous.statusById } : null, run: publicRun(doc.run) };
+    // Re-judged against the register as it is NOW (an "Update from H360" shows at once) and by
+    // the current rule, from the H360 person the check found. A record whose emp ID changed
+    // since keeps its old answer until it is checked again.
+    const register = await loadRegister();
+    const byId = new Map(register.map((r) => [String(r.id), r]));
+    const now = list.map((r) => {
+      const rec = byId.get(String(r.id));
+      if (!rec || !r.h360 || r.status === 'error' || String(rec.emp_id || '').trim() !== r.h360.code) return { ...r, duplicateOf: undefined };
+      const c = match.compareRecord(rec, [r.h360], []);
+      return { ...c, at: r.at, suggestions: c.suggestions.length ? c.suggestions : r.suggestions || [] };
+    });
+    const judged = match.markDuplicates(now, register).map((r) => { if (!r.duplicateOf) delete r.duplicateOf; return r; });
+    return { list: judged, summary: match.summary(judged), last: lastInfo(doc), previous: doc.previous ? { finishedAt: doc.previous.finishedAt, statusById: doc.previous.statusById } : null, run: publicRun(doc.run) };
   }
 
   /* ---------- sweep: who is in H360 but not in our register ---------- */
@@ -398,9 +456,11 @@ function createStaffService(deps = {}) {
     };
     const mine = res.list.filter((r) => !visibleIds || visibleIds.has(r.id));
     const diffs = (r) => (r.fields || []).filter((f) => f.ok === false).map((f) => `${f.label}: ours "${f.ours}" / H360 "${f.h360}"`).join('; ');
-    sheet('Verify', [['Status', 'status', 34], ['Emp ID', 'empId', 10], ['Name (ours)', 'name', 28], ['Name (H360)', 'h360Name', 28], ['Department (ours)', 'dept', 20], ['Department (H360)', 'h360Dept', 28], ['Differences', 'diffs', 70], ['Suggested H360 ID', 'suggest', 30], ['Checked', 'at', 20]],
+    sheet('Verify', [['Status', 'status', 34], ['Emp ID', 'empId', 10], ['Name (ours)', 'name', 28], ['Name (H360)', 'h360Name', 28], ['Department (ours)', 'dept', 20], ['Department (H360)', 'h360Dept', 28], ['Designation (H360)', 'h360Desig', 24], ['Joined (H360)', 'h360Join', 12], ['Phone (H360)', 'h360Phone', 24], ['Gender (H360)', 'h360Gender', 10], ['Marital (H360)', 'h360Marital', 10], ['Age (H360)', 'h360Age', 8], ['Service (H360)', 'h360Service', 14], ['Differences', 'diffs', 70], ['Suggested H360 ID', 'suggest', 30], ['Checked', 'at', 20]],
       mine.sort((a, b) => match.STATUS_ORDER.indexOf(a.status) - match.STATUS_ORDER.indexOf(b.status)).map((r) => ({
         status: match.STATUS_LABEL[r.status] || r.status, empId: r.empId, name: r.name, h360Name: r.h360 ? r.h360.name : '', dept: r.dept, h360Dept: r.h360 ? r.h360.dept : '',
+        h360Desig: r.h360 ? r.h360.designation : '', h360Join: r.h360 ? r.h360.joinDate : '', h360Phone: r.h360 ? (r.h360.phones || []).join(', ') : '',
+        h360Gender: r.h360 ? r.h360.gender : '', h360Marital: r.h360 ? r.h360.marital : '', h360Age: r.h360 ? r.h360.age : '', h360Service: r.h360 ? r.h360.service : '',
         diffs: [diffs(r), r.duplicateOf ? 'also on record(s) ' + r.duplicateOf.join(', ') : '', r.error || ''].filter(Boolean).join('; '),
         suggest: (r.suggestions || []).map((s) => `${s.code} ${s.name} (${s.why})`).join('; '), at: String(r.at || '').replace('T', ' ').slice(0, 16),
       })));
@@ -411,14 +471,16 @@ function createStaffService(deps = {}) {
     return wb;
   }
 
-  return { options, setOptions, search, lookup, verifyOne, verifyStart, verifyStep, results, sweepStart, sweepStep, missing, info, daily, workbook, snapshot };
+  return { saved, options, setOptions, search, lookup, verifyOne, verifyStart, verifyStep, results, sweepStart, sweepStep, missing, info, daily, workbook, snapshot };
 }
 
 /* ---------------- routes ---------------- */
 function mount(app, opts = {}) {
-  const guard = opts.requireApi || ((req, res, next) => next());
-  const service = opts.service || createStaffService(opts.deps);
   const access = require('../access');
+  // Administrators, and anyone given the "H360 Check" sub-menu tick (opt-in; staff access alone is not enough).
+  const h360Only = (req, res, next) => (!req.access || access.h360StaffOk(req.access) ? next() : res.status(403).json({ error: 'H360 staff data needs the "H360 Check" permission (Access Control → Staff Management).' }));
+  const guard = [].concat(opts.requireApi || ((req, res, next) => next()), h360Only);
+  const service = opts.service || createStaffService(opts.deps);
   const json = express.json({ limit: '100kb' });
   const who = (req) => (req.user && (req.user.name || req.user.sub)) || '';
   const canEdit = (req) => !req.access || access.can(req.access, 'staff', 'edit');
@@ -453,6 +515,13 @@ function mount(app, opts = {}) {
     const mine = await visible(req);
     if (!mine.some((r) => String(r.id) === String(req.params.id))) return res.status(404).json({ error: 'No such staff record.' });
     res.json(await service.verifyOne(req.params.id));
+  }));
+
+  app.get(P + '/saved/:id', guard, route(async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const mine = await visible(req);
+    if (!mine.some((r) => String(r.id) === String(req.params.id))) return res.status(404).json({ error: 'No such staff record.' });
+    res.json({ result: await service.saved(req.params.id) });
   }));
 
   app.post(P + '/verify-bulk', guard, json, route(async (req, res) => {

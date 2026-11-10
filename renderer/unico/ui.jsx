@@ -205,13 +205,22 @@ function unicoCanAccessView(view){ if(view==='profile'||view==='home'||view==='d
    listed there shows only those sub-menus; a module NOT listed shows all of them (every
    account saved before the ticks existed). Ids are the sidebar items' views. Data Submission
    is not here — its screens are dsScreens (unicoDsScreens above). */
+/* OPT-IN sub-menus: hidden unless explicitly ticked for the person (administrators always
+   have them). "No key = all" does NOT include these. H360 Check shows H360's employee data,
+   which the user wants admin-only unless granted (server/access.js h360StaffOk checks again). */
+const UNICO_SUB_OPT_IN={ staff:['staffH360'] };
+function unicoSubOptIn(mod, view){ return (UNICO_SUB_OPT_IN[mod]||[]).indexOf(view)>=0; }
 function unicoSubMenuOk(mod, view){
   const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
   if(!u || u.role==='Administrator' || mod==='datasubmit') return true;
   const s=u.subMenus;
+  if(unicoSubOptIn(mod, view)) return !!(s && typeof s==='object' && Array.isArray(s[mod]) && s[mod].indexOf(view)>=0);
   if(!s || typeof s!=='object' || !Array.isArray(s[mod])) return true;
   return s[mod].indexOf(view)>=0;
 }
+// May this person see H360 staff data (the H360 Check screen, the profile card, the badges)?
+function unicoH360Ok(){ try{ return (!window.unicoCan||window.unicoCan('staff','view')) && unicoSubMenuOk('staff','staffH360'); }catch(e){ return false; } }
+if(typeof window!=='undefined'){ window.unicoH360Ok=unicoH360Ok; window.UNICO_SUB_OPT_IN=UNICO_SUB_OPT_IN; }
 // Every module's grantable sub-menus, from the sidebar's own list: { mod: [[view,label,match]] }.
 // Built on first use (the sidebar tables are declared further down this file).
 let unicoSubMenusMemo=null;

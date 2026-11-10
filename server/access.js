@@ -361,6 +361,17 @@ function cleanSubMenus(v) {
   });
   return Object.keys(out).length ? out : null;
 }
+/* Staff Management → H360 Check (server/h360/staff.js): H360's employee data is OPT-IN.
+   Administrators have it; anyone else only when their Staff sub-menus explicitly list
+   'staffH360' (Access Control tick). "No sub-menu key = all" does NOT grant it, and staff
+   access alone does not either (user 2026-11-10: without the H360 permission, no view). */
+function h360StaffOk(access) {
+  if (!access) return false;
+  if (access.unrestricted) return true;
+  if (isPortal(access) || !can(access, 'staff', 'view')) return false;
+  const s = access.subMenus;
+  return !!(s && Array.isArray(s.staff) && s.staff.indexOf('staffH360') >= 0);
+}
 function hhScreenOn(access) {
   if (!access) return false;
   if (access.unrestricted || access.allQualityAreas === true) return true;
@@ -994,6 +1005,7 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent, rawBase) {
 }
 
 module.exports = {
+  h360StaffOk,
   PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster, MYDEPT_STAFF_FIELDS, myDeptIds, deviceDeptIds,
   LEGACY_SUBMIT_ROLES, submitsData, dataScoped, isUnitLead, phoneRoleOf, CONSOLE_MODULES,
   SUBMIT_KINDS, cleanSubmitKinds, maySubmitKind,

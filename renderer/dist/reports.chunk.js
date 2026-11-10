@@ -4802,15 +4802,18 @@ function UserModal({
   const [subMenus, setSubMenus] = useState(() => editing && initial.subMenus && typeof initial.subMenus === 'object' && !Array.isArray(initial.subMenus) ? {
     ...initial.subMenus
   } : {});
-  const subOn = (mid, v) => !Array.isArray(subMenus[mid]) || subMenus[mid].indexOf(v) >= 0;
+  const SUB_OPT = window.UNICO_SUB_OPT_IN || {};
+  const subOptIn = (mid, v) => (SUB_OPT[mid] || []).indexOf(v) >= 0;
+  const subOn = (mid, v) => subOptIn(mid, v) ? Array.isArray(subMenus[mid]) && subMenus[mid].indexOf(v) >= 0 : !Array.isArray(subMenus[mid]) || subMenus[mid].indexOf(v) >= 0;
   const toggleSub = (mid, v) => setSubMenus(s => {
     const all = (SUBS[mid] || []).map(x => x[0]);
-    const cur = Array.isArray(s[mid]) ? s[mid].filter(x => all.indexOf(x) >= 0) : all;
+    const regular = all.filter(x => !subOptIn(mid, x));
+    const cur = Array.isArray(s[mid]) ? s[mid].filter(x => all.indexOf(x) >= 0) : regular;
     const next = cur.indexOf(v) >= 0 ? cur.filter(x => x !== v) : all.filter(x => x === v || cur.indexOf(x) >= 0);
     const n = {
       ...s
     };
-    if (next.length === all.length) delete n[mid];else n[mid] = next;
+    if (!next.some(x => subOptIn(mid, x)) && regular.every(x => next.indexOf(x) >= 0)) delete n[mid];else n[mid] = next;
     return n;
   });
   const [appRole, setAppRole] = useState(editing && (initial.role === 'pca' || initial.appRole === 'pca') ? 'pca' : 'nurse');
@@ -6449,7 +6452,7 @@ function UserModal({
           disabled: locked,
           "aria-pressed": on,
           onClick: () => ds ? toggleScreen(v) : toggleSub(id, v),
-          title: locked ? 'Included with hospital-wide access (they enter the audit)' : on ? 'Shown in their sidebar — click to hide' : 'Hidden — click to show in their sidebar',
+          title: locked ? 'Included with hospital-wide access (they enter the audit)' : !ds && subOptIn(id, v) ? on ? 'Given — they can see H360 employee data. Click to take it away' : 'Off unless ticked — shows H360 employee data (H360 Check screen, profile card, badges)' : on ? 'Shown in their sidebar — click to hide' : 'Hidden — click to show in their sidebar',
           style: {
             display: 'inline-flex',
             alignItems: 'center',

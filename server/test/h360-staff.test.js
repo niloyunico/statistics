@@ -66,7 +66,17 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
   ];
   const H = (code) => views.employeeRows(JSON.stringify(standIn().state.employees)).filter((r) => r.code === code);
   assert.strictEqual(match.compareRecord(reg[0], H('11809'), []).status, 'match');
-  assert.strictEqual(match.compareRecord({ ...reg[0], doj: '2026-10-02' }, H('11809'), []).status, 'field_diff');
+  // Valid first: emp ID + name + designation. Joining date / phone / gender are details.
+  assert.strictEqual(match.compareRecord({ ...reg[0], doj: '2026-10-02' }, H('11809'), []).status, 'valid_diff');
+  // Department is ours (assigned by us): never a difference, even when H360's is another unit.
+  const ownDept = match.compareRecord({ ...reg[0], current_department: 'OPD' }, H('11809'), []);
+  assert.strictEqual(ownDept.status, 'match');
+  assert.strictEqual(ownDept.fields.find((f) => f.key === 'current_department').ok, null);
+  // Aklima's case: same name, ID and designation; own department; different joining date.
+  assert.strictEqual(match.compareRecord({ ...reg[1], id: 9, emp_id: '11410', name: 'Md. Ashraf Ali Munna', current_department: 'OPD', doj: '2025-07-06' }, H('11410'), []).status, 'valid_diff');
+  assert.strictEqual(match.compareRecord({ ...reg[0], designation: 'Patient Care Assistant' }, H('11809'), []).status, 'field_diff');
+  assert.deepStrictEqual(match.compareRecord(reg[0], H('11809'), []).fields.filter((f) => f.copyable).map((f) => f.key).sort(), ['designation', 'doj', 'gender', 'phone']);
+  ok('valid first: emp ID + name + designation = valid; other details only add a note; department is never compared; name and department are never copyable');
   const other = match.compareRecord(reg[3], H('11391'), []);
   assert.strictEqual(other.status, 'id_other_person');
   assert.strictEqual(other.h360.name, 'Akram Hossain');
@@ -122,6 +132,27 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
     assert.strictEqual(one.status, 'id_other_person');
     ok('one record: Bipasa under 11391 is reported as "emp ID belongs to another person" (Akram Hossain)');
 
+    const kept1 = await db.collection('staff').findOne({ id: 4 });
+    assert.strictEqual(kept1.h360_verified.status, 'id_other_person');
+    assert.strictEqual(kept1.h360_verified.other.name, 'Akram Hossain');
+    assert.ok(!kept1.h360_verified.name, "the other person's details are not stored on our record");
+    await service.verifyOne(1);
+    const kept2 = await db.collection('staff').findOne({ id: 1 });
+    assert.deepStrictEqual([kept2.h360_verified.code, kept2.h360_verified.dept, kept2.h360_verified.marital, kept2.h360_verified.age], ['11809', 'Nursing Services - MICU', 'Single', '24']);
+    // The profile opens from what was saved — register changed since, judged as it is now.
+    register[0].h360_verified = kept2.h360_verified;
+    register[0].current_department = 'OPD';
+    const view = await service.saved(1);
+    assert.deepStrictEqual([view.saved, view.status, view.h360.dept], [true, 'match', 'Nursing Services - MICU']);
+    delete register[0].h360_verified;
+    register[0].current_department = 'MICU';
+    const roster = require('../staff-roster').resolveRoster({ unico_staff_v3: JSON.stringify([{ id: 1, name: 'x' }]) }, [kept2]);
+    assert.strictEqual(roster[0].h360_verified.code, '11809');
+    const merge = require('../staff-merge');
+    const baseRow = JSON.stringify([{ id: 1, name: 'x', h360_verified: kept2.h360_verified }]);
+    assert.doesNotThrow(() => merge.mergeStaffChanges(baseRow, JSON.stringify([{ id: 1, name: 'y', h360_verified: kept2.h360_verified }]), JSON.stringify([{ id: 1, name: 'x' }])));
+    ok('every check keeps the H360 values on the record (staff document, by record id); the profile view comes from that, with no H360 request; register saves never 409 on it');
+
     let state = { run: await service.verifyStart({ by: 'tester' }) };
     assert.strictEqual(state.run.total, 6);
     for (let i = 0; state.run && i < 30; i++) state = await service.verifyStep(state.run.id);
@@ -160,6 +191,24 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
     assert.strictEqual((await fetch(base + '/api/h360-staff/search?q=ab')).status, 400);
     const status = await (await fetch(base + '/api/h360-staff/status')).json();
     assert.strictEqual(status.byId[4].s, 'id_other_person');
+
+    // Opt-in permission: staff access alone is not enough; admins and the "H360 Check" tick are.
+    const gated = express();
+    let who = null;
+    gated.use((req, res, next) => { req.access = who; next(); });
+    staff.mount(gated, { service, loadRegister: async () => register });
+    const gServer = await listen(gated);
+    const gBase = 'http://127.0.0.1:' + gServer.address().port;
+    const codeFor = async (acc, path) => { who = acc; return (await fetch(gBase + path)).status; };
+    const viewer = { unrestricted: false, role: 'User', perms: { staff: ['view'] }, staffScope: 'all', subMenus: null };
+    assert.strictEqual(await codeFor({ unrestricted: true }, '/api/h360-staff/status'), 200);
+    assert.strictEqual(await codeFor(viewer, '/api/h360-staff/status'), 403);
+    assert.strictEqual(await codeFor(viewer, '/api/h360-staff/search?q=11809'), 403);
+    assert.strictEqual(await codeFor(viewer, '/api/h360-staff/saved/1'), 403);
+    assert.strictEqual(await codeFor({ ...viewer, subMenus: { staff: ['staffAll', 'staffH360'] } }, '/api/h360-staff/status'), 200);
+    assert.strictEqual(await codeFor({ ...viewer, perms: { staff: [] }, subMenus: { staff: ['staffH360'] } }, '/api/h360-staff/status'), 403);
+    gServer.close();
+    ok('H360 data is admin-only unless the "H360 Check" tick is given (staff view access alone gets 403)');
     ok('routes: the cron refuses a caller that is not the cron; short searches refused; badges come from the last check');
 
     const allowed = new Set(['GET /login', 'POST /login', 'GET /dashboard', 'GET /roster/employee-roster', 'POST /doctor-info-autocomplete']);

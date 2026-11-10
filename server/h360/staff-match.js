@@ -10,21 +10,29 @@
  *   duplicate_id     two of our active records share the emp ID /
  *                    one H360 person is matched by two of our records       red
  *   no_emp_id        we have no emp ID (H360's suggestion shown)            amber
- *   field_diff       right person, but some fields differ                   amber
- *   match            everything compared agrees                             green
+ *   field_diff       emp ID found, but the name is only similar or the
+ *                    designation differs: confirm before calling it valid  amber
+ *   valid_diff       VALID (emp ID + name + designation agree) but the
+ *                    joining date, phone or gender differ                  green, with a note
+ *   match            VALID and every other compared field agrees            green
+ *
+ * Valid first (user rule 2026-11-10): emp ID, name and designation agreeing make the record
+ * valid; the rest are details to bring in line. Department is NEVER compared — we assign
+ * our own departments; H360's is only kept and shown.
  */
 
-const STATUS_ORDER = ['id_other_person', 'not_in_h360', 'duplicate_id', 'no_emp_id', 'field_diff', 'match', 'error'];
+const STATUS_ORDER = ['id_other_person', 'not_in_h360', 'duplicate_id', 'no_emp_id', 'field_diff', 'valid_diff', 'match', 'error'];
 const STATUS_LABEL = {
   id_other_person: 'Emp ID belongs to another person in H360',
   not_in_h360: 'Emp ID not found in H360',
   duplicate_id: 'Emp ID used twice',
   no_emp_id: 'No emp ID in our record',
-  field_diff: 'Same person — some details differ',
-  match: 'Matches H360',
+  field_diff: 'Same person — name or designation to confirm',
+  valid_diff: 'Valid — other details differ',
+  match: 'Valid — matches H360',
   error: 'Could not check',
 };
-const STATUS_LEVEL = { id_other_person: 'red', not_in_h360: 'red', duplicate_id: 'red', no_emp_id: 'amber', field_diff: 'amber', match: 'green', error: 'grey' };
+const STATUS_LEVEL = { id_other_person: 'red', not_in_h360: 'red', duplicate_id: 'red', no_emp_id: 'amber', field_diff: 'amber', valid_diff: 'green', match: 'green', error: 'grey' };
 const worst = (a, b) => (STATUS_ORDER.indexOf(a) <= STATUS_ORDER.indexOf(b) ? a : b);
 
 /* ---------- names ---------- */
@@ -127,22 +135,30 @@ function compareRecord(rec, byId, others) {
     return { ...base, status: 'id_other_person', h360: h, nameScore: round(score), fields: fieldsOf(rec, h, score), suggestions: suggestions.filter((s) => s.code !== empId) };
   }
   const fields = fieldsOf(rec, h, score);
-  const differs = fields.some((f) => f.ok === false);
-  return { ...base, status: differs ? 'field_diff' : 'match', h360: h, nameScore: round(score), fields, suggestions: [] };
+  // Valid first: emp ID (found above), name and designation. Then the other details.
+  const key = fields.filter((f) => f.key === 'name' || f.key === 'designation');
+  const valid = key.every((f) => f.ok !== false);
+  const otherDiffs = fields.filter((f) => COPYABLE.has(f.key) && f.key !== 'designation' && f.ok === false);
+  const status = !valid ? 'field_diff' : otherDiffs.length ? 'valid_diff' : 'match';
+  return { ...base, status, valid, h360: h, nameScore: round(score), fields, suggestions: [] };
 }
 const round = (n) => Math.round(n * 100) / 100;
 
+// What a Staff editor may copy from H360 into our record (user 2026-11-10). Never the
+// name, never the department.
+const COPYABLE = new Set(['doj', 'phone', 'gender', 'designation']);
 function fieldsOf(rec, h, score) {
   const out = [];
-  const add = (key, label, ours, theirs, ok, copyable) => out.push({ key, label, ours: ours || '', h360: theirs || '', ok, copyable: Boolean(copyable) });
-  add('name', 'Name', rec.name, h.name, score >= SAME_NAME, true);
+  const add = (key, label, ours, theirs, ok, copyable, info) => out.push({ key, label, ours: ours || '', h360: theirs || '', ok, copyable: Boolean(copyable) && COPYABLE.has(key), ...(info ? { info: true } : {}) });
+  add('name', 'Name', rec.name, h.name, score >= SAME_NAME, false);
   const ourPhones = phoneKeys(rec.phone), theirPhones = phoneKeys(h.phones);
   add('phone', 'Phone', rec.phone, (h.phones || []).join(', '), !ourPhones.length || !theirPhones.length ? null : ourPhones.some((p) => theirPhones.includes(p)), theirPhones.length > 0);
   const g1 = normGender(rec.gender), g2 = normGender(h.gender);
   add('gender', 'Gender', g1, g2, !g1 || !g2 ? null : g1 === g2, Boolean(g2));
   add('doj', 'Joining date', rec.doj, h.joinDate, !rec.doj || !h.joinDate ? null : String(rec.doj).slice(0, 10) === h.joinDate, Boolean(h.joinDate));
   add('designation', 'Designation', rec.designation, h.designation, desigAgrees(rec.designation, h.designation), Boolean(h.designation));
-  add('current_department', 'Department', rec.current_department, h.dept, deptAgrees(rec.current_department, h.dept), false);
+  // Ours is assigned by us; H360's is kept for reference and never counts as a difference.
+  add('current_department', 'Department', rec.current_department, h.dept, null, false, true);
   return out;
 }
 
@@ -218,7 +234,19 @@ function summary(results) {
   return counts;
 }
 
+// The H360 values kept on our record (staff document field `h360_verified`), as one check saw them.
+function snapshotOf(res) {
+  const h = res && res.h360;
+  if (!h) return null;
+  return {
+    code: h.code, name: h.name, gender: h.gender || '', marital: h.marital || '', age: h.age || '', phones: h.phones || [],
+    dept: h.dept || '', designation: h.designation || '', joinDate: h.joinDate || '', service: h.service || '',
+    specialization: h.specialization || '', h360Id: h.h360Id || '', status: res.status, at: res.at || new Date().toISOString(),
+  };
+}
+
 module.exports = {
+  COPYABLE, snapshotOf,
   STATUS_ORDER, STATUS_LABEL, STATUS_LEVEL, SAME_NAME, SIMILAR_NAME,
   nameScore, nameTokens, phoneKeys, normGender, deptAgrees, desigAgrees, isNursing,
   compareRecord, markDuplicates, missingFromRegister, summary, worst,

@@ -35,11 +35,13 @@ const HX_STATUS = {
   not_in_h360: { label: 'Emp ID not found in H360', short: 'Not in H360', c: '#b42339', bg: '#fdf0f2', br: '#f2c4cd' },
   duplicate_id: { label: 'Emp ID used twice', short: 'Duplicate', c: '#b42339', bg: '#fdf0f2', br: '#f2c4cd' },
   no_emp_id: { label: 'No emp ID in our record', short: 'No emp ID', c: '#9a5a06', bg: '#fff5e6', br: '#f6dcb0' },
-  field_diff: { label: 'Same person, some details differ', short: 'Details differ', c: '#9a5a06', bg: '#fff5e6', br: '#f6dcb0' },
-  match: { label: 'Matches H360', short: 'Matches', c: '#13703d', bg: '#eaf7ef', br: '#c4e6d1' },
+  field_diff: { label: 'Same person — name or designation to confirm', short: 'To confirm', c: '#9a5a06', bg: '#fff5e6', br: '#f6dcb0' },
+  valid_diff: { label: 'Valid — other details differ', short: 'Valid · details differ', c: '#13703d', bg: '#eaf7ef', br: '#c4e6d1', note: true },
+  match: { label: 'Valid — matches H360', short: 'Valid', c: '#13703d', bg: '#eaf7ef', br: '#c4e6d1' },
   error: { label: 'Could not check', short: 'Error', c: '#5b6676', bg: '#f1f3f6', br: '#dde3ec' },
 };
-const HX_ORDER = ['id_other_person', 'not_in_h360', 'duplicate_id', 'no_emp_id', 'field_diff', 'match', 'error'];
+const HX_ORDER = ['id_other_person', 'not_in_h360', 'duplicate_id', 'no_emp_id', 'field_diff', 'valid_diff', 'match', 'error'];
+const hxValid = (status) => status === 'match' || status === 'valid_diff';
 window.UNICO_H360_STATUS = HX_STATUS;
 
 const HX_CSS = `
@@ -71,19 +73,34 @@ function HxStyle() { return <style>{HX_CSS}</style>; }
 
 function HxPill({ status, small }) {
   const m = HX_STATUS[status] || HX_STATUS.error;
-  return <span className="hx-pill" style={{ color: m.c, background: m.bg, borderColor: m.br }}>{status === 'match' ? '✓' : status === 'field_diff' || status === 'no_emp_id' ? '!' : '⚠'} {small ? m.short : m.label}</span>;
+  return <span className="hx-pill" style={{ color: m.c, background: m.bg, borderColor: m.br }}>{hxValid(status) ? '✓' : status === 'field_diff' || status === 'no_emp_id' ? '!' : '⚠'} {small ? m.short : m.label}</span>;
 }
 
-// One field change copied from H360 into our record, through the normal staff save.
-function hxApply(store, rec, field, value, h360, label) {
-  if (!store || !rec) return false;
-  const old = rec[field] == null ? '' : String(rec[field]);
-  if (!window.confirm(`Change ${label} of ${rec.name || 'this record'}\n\nfrom: ${old || '(blank)'}\nto:   ${value}\n\n(the value H360 holds for ${h360.code} ${h360.name})`)) return false;
+// Copy H360 values into our record through the normal staff save. Every change is kept on the
+// record (h360_changes: old value, new value, who, when). `changes` = [{ field, value, label }].
+function hxWrite(store, rec, changes, h360) {
+  if (!store || !rec || !changes.length) return null;
   const me = window.__UNICO_USER__ || {};
-  const change = { field, old, new: value, at: new Date().toISOString(), by: me.name || me.username || '', person_code: h360.code };
-  store.update(rec.id, { [field]: value, h360_changes: (Array.isArray(rec.h360_changes) ? rec.h360_changes : []).concat([change]), updated_at: Date.now() });
-  hxToast(`${label} updated from H360 — the old value is kept on the record.`);
-  return true;
+  const at = new Date().toISOString();
+  const patch = {};
+  const log = changes.map((c) => { patch[c.field] = c.value; return { field: c.field, old: rec[c.field] == null ? '' : String(rec[c.field]), new: c.value, at, by: me.name || me.username || '', person_code: (h360 && h360.code) || '' }; });
+  store.update(rec.id, { ...patch, h360_changes: (Array.isArray(rec.h360_changes) ? rec.h360_changes : []).concat(log), updated_at: Date.now() });
+  return log;
+}
+// Put back what one update replaced (logged as an undo).
+function hxUndo(store, recId, log) {
+  const rec = store && store.get ? store.get(recId) : null;
+  if (!rec || !log || !log.length) return;
+  hxWrite(store, rec, log.map((l) => ({ field: l.field, value: l.old, label: l.field })), { code: 'undo' });
+  hxToast('Put back as it was.');
+}
+// One field, on request — "Use this emp ID" asks first.
+function hxApply(store, rec, field, value, h360, label, ask) {
+  if (!store || !rec) return null;
+  if (ask && !window.confirm('Set ' + label + ' of ' + (rec.name || 'this record') + ' to ' + value + '?\n\n(the value H360 holds for ' + h360.code + ' ' + h360.name + ')')) return null;
+  const log = hxWrite(store, rec, [{ field, value, label }], h360);
+  hxToast(label + ' updated from H360 — the old value is kept on the record.');
+  return log;
 }
 // The value of an H360 field in the shape our register stores it.
 function hxValueOf(key, h) {
@@ -91,44 +108,72 @@ function hxValueOf(key, h) {
   if (key === 'doj') return h.joinDate || '';
   if (key === 'gender') return h.gender || '';
   if (key === 'designation') return h.designation || '';
-  if (key === 'name') return h.name || '';
   return '';
 }
+// What "Update from H360" would copy: every differing field H360 may set (joining date, phone, gender, designation).
+const hxPending = (result) => (result && result.h360 ? (result.fields || []).filter((f) => f.ok === false && f.copyable && hxValueOf(f.key, result.h360)) : []);
 
-// Our record beside H360's person, field by field.
+// Our record beside H360's person, field by field, with the direct updates.
 function HxCompare({ result, store, onChanged }) {
   const rec = store && store.get ? store.get(result.id) : null;
   const h = result.h360;
   const can = hxCanEdit() && rec && !rec.former && rec.is_active !== false;
-  const [done, setDone] = useState({});
+  const [done, setDone] = useState({});   // field -> its change log, for Undo
   if (!h) return null;
+  const pending = hxPending(result).filter((f) => !done[f.key]);
+  const updateAll = () => {
+    const list = pending.map((f) => ({ field: f.key, value: hxValueOf(f.key, h), label: f.label, from: f.ours }));
+    const lines = list.map((c) => c.label + ': ' + (c.from || '(blank)') + '  →  ' + c.value).join('\n');
+    if (!window.confirm('Update ' + rec.name + ' from H360 (' + h.code + ')?\n\n' + lines + '\n\nThe old values are kept on the record.')) return;
+    const log = hxWrite(store, rec, list, h);
+    const next = { ...done };
+    list.forEach((c) => { next[c.field] = log.filter((l) => l.field === c.field); });
+    setDone(next);
+    hxToast(list.length + ' field' + (list.length === 1 ? '' : 's') + ' updated from H360.');
+    onChanged && onChanged();
+  };
   return (
-    <div className="hx-scroll" style={{ marginTop: 8 }}>
-      <table className="hx-t">
-        <thead><tr><th>Field</th><th>Our record</th><th>H360</th><th></th></tr></thead>
-        <tbody>
-          {(result.fields || []).map((f) => {
-            const value = hxValueOf(f.key, h);
-            const color = f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
-            return (
-              <tr key={f.key}>
-                <td style={{ fontWeight: 700, color: 'var(--ink)' }}>{f.label}</td>
-                <td>{f.ours || <span className="hx-muted">blank</span>}</td>
-                <td style={{ color }}>{f.h360 || <span className="hx-muted">—</span>}</td>
-                <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-                  {f.ok === true && <span style={{ color: '#13703d', fontWeight: 700 }}>✓</span>}
-                  {f.ok === null && <span className="hx-muted">not compared</span>}
-                  {f.ok === false && (done[f.key] ? <span style={{ color: '#13703d', fontWeight: 700 }}>updated</span>
-                    : can && f.copyable && value ? <button className="btn sm" onClick={() => { if (hxApply(store, rec, f.key, value, h, f.label)) { setDone({ ...done, [f.key]: true }); onChanged && onChanged(); } }}>Use H360 value</button>
-                      : <span style={{ color: '#b42339', fontWeight: 700 }}>differs</span>)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+    <div style={{ marginTop: 8 }}>
+      {can && pending.length > 0 && <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+        <button className="btn pri sm" onClick={updateAll}><Ic d={I.download || I.check} s={12} c="#fff" />Update from H360 ({pending.length})</button>
+        <span className="hx-muted">copies {pending.map((f) => f.label.toLowerCase()).join(', ')} · our department is never changed</span>
+      </div>}
+      <div className="hx-scroll">
+        <table className="hx-t">
+          <thead><tr><th>Field</th><th>Our record</th><th>H360</th><th></th></tr></thead>
+          <tbody>
+            {(result.fields || []).map((f) => {
+              const value = hxValueOf(f.key, h);
+              const color = f.info ? 'var(--ink-2)' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
+              let action;
+              if (f.info) action = <span className="hx-muted">not compared</span>;
+              else if (done[f.key]) action = <span><b style={{ color: '#13703d' }}>updated</b><a style={{ cursor: 'pointer', color: 'var(--blue)', marginLeft: 8 }} onClick={() => { hxUndo(store, rec.id, done[f.key]); const n = { ...done }; delete n[f.key]; setDone(n); onChanged && onChanged(); }}>Undo</a></span>;
+              else if (f.ok === true) action = <span style={{ color: '#13703d', fontWeight: 700 }}>✓</span>;
+              else if (f.ok === null) action = <span className="hx-muted">not compared</span>;
+              else if (can && f.copyable && value) action = <button className="btn sm" onClick={() => { const log = hxWrite(store, rec, [{ field: f.key, value, label: f.label }], h); setDone({ ...done, [f.key]: log }); hxToast(f.label + ' updated from H360.'); onChanged && onChanged(); }}>Use H360 value</button>;
+              else action = <span style={{ color: '#b42339', fontWeight: 700 }}>differs</span>;
+              return (
+                <tr key={f.key}>
+                  <td style={{ fontWeight: 700, color: 'var(--ink)' }}>{f.label}</td>
+                  <td>{f.ours || <span className="hx-muted">blank</span>}{f.info && <div className="hx-muted" style={{ fontSize: 10.5 }}>assigned by us</div>}</td>
+                  <td style={{ color }}>{f.h360 || <span className="hx-muted">—</span>}{f.info && <div className="hx-muted" style={{ fontSize: 10.5 }}>H360 record, kept</div>}</td>
+                  <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>{action}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
+}
+
+// Every value H360 gives for a person.
+function HxAllFields({ h }) {
+  if (!h) return null;
+  const items = [['H360 ID', h.code], ['H360 name', h.name], ['Designation', h.designation], ['Department (H360)', h.dept], ['Joined', h.joinDate ? hxDate(h.joinDate) : ''], ['Length of service', h.service],
+    ['Phone', (h.phones || []).join(', ')], ['Gender', h.gender], ['Marital status', h.marital], ['Age', h.age], ['Specialization', h.specialization], ['H360 record no.', h.h360Id]].filter(([, v]) => v);
+  return <div className="hx-pairs">{items.map(([k, v]) => <div key={k}><span>{k}</span>{v}</div>)}</div>;
 }
 
 // H360 people who may be this record (when our ID is missing or wrong).
@@ -144,7 +189,7 @@ function HxSuggestions({ result, store }) {
           <b style={{ fontFamily: 'var(--mono)' }}>{s.code}</b><span>{s.name}</span>
           <span className="hx-muted">{[s.designation, s.dept, s.joinDate && 'joined ' + hxDate(s.joinDate)].filter(Boolean).join(' · ')}</span>
           <span className="tag">{s.why}</span>
-          {can && !String(rec.emp_id || '').trim() && <button className="btn sm" onClick={() => hxApply(store, rec, 'emp_id', s.code, s, 'Emp ID')}>Use this emp ID</button>}
+          {can && !String(rec.emp_id || '').trim() && <button className="btn sm" onClick={() => hxApply(store, rec, 'emp_id', s.code, s, 'Emp ID', true)}>Use this emp ID</button>}
         </div>
       ))}
     </div>
@@ -183,7 +228,7 @@ function HxLookup({ store, setRoute, ready }) {
             {!p.nursing && <span className="tag">not Nursing Services</span>}
           </div>
           <div className="hx-pairs">
-            {[['Gender', p.gender], ['Marital status', p.marital], ['Age', p.age], ['Phone', (p.phones || []).join(', ')], ['Joined', hxDate(p.joinDate)], ['Service', p.service]].map(([k, v]) => <div key={k}><span>{k}</span>{v || '—'}</div>)}
+            {[['Gender', p.gender], ['Marital status', p.marital], ['Age', p.age], ['Phone', (p.phones || []).join(', ')], ['Joined', hxDate(p.joinDate)], ['Length of service', p.service], ['Specialization', p.specialization], ['H360 record no.', p.h360Id]].filter(([, v]) => v).map(([k, v]) => <div key={k}><span>{k}</span>{v}</div>)}
           </div>
           {p.records.length ? p.records.map((r) => (
             <div key={r.id} style={{ borderTop: '1px dashed var(--line)', paddingTop: 9, marginTop: 6 }}>
@@ -260,10 +305,10 @@ function HxVerify({ store, setRoute, ready, info, reload }) {
   const pending = info && info.verify && info.verify.run;
   const list = (data && data.list) || [];
   const prev = (data && data.previous && data.previous.statusById) || null;
-  const isNew = (r) => prev && r.status !== 'match' && prev[r.id] !== r.status;
+  const isNew = (r) => prev && !hxValid(r.status) && prev[r.id] !== r.status;
   const counts = {}; list.forEach((r) => { counts[r.status] = (counts[r.status] || 0) + 1; });
   const needle = text.trim().toLowerCase();
-  const shown = list.filter((r) => (filter === 'all' || (filter === 'problems' ? r.status !== 'match' : r.status === filter)) && (!onlyNew || isNew(r))
+  const shown = list.filter((r) => (filter === 'all' || (filter === 'problems' ? !hxValid(r.status) : filter === 'valid' ? hxValid(r.status) : r.status === filter)) && (!onlyNew || isNew(r))
     && (!needle || [r.empId, r.name, r.dept, r.h360 && r.h360.name].some((v) => String(v || '').toLowerCase().includes(needle))))
     .sort((a, b) => HX_ORDER.indexOf(a.status) - HX_ORDER.indexOf(b.status) || String(a.name).localeCompare(String(b.name)));
   const differs = (r) => (r.fields || []).filter((f) => f.ok === false).map((f) => f.label).join(', ');
@@ -295,10 +340,10 @@ function HxVerify({ store, setRoute, ready, info, reload }) {
       {!list.length && !run && <div className="hx-alert info">No check yet. Press “Verify with H360” to compare every active staff record with H360.</div>}
       {list.length > 0 && <React.Fragment>
         <div className="hx-tiles" style={{ marginBottom: 12 }}>
-          {['problems', ...HX_ORDER.filter((s) => counts[s]), 'all'].map((s) => {
-            const n = s === 'all' ? list.length : s === 'problems' ? list.filter((r) => r.status !== 'match').length : counts[s];
-            const m = HX_STATUS[s];
-            return <button key={s} className={'hx-tile' + (filter === s ? ' on' : '')} onClick={() => setFilter(s)}><b style={{ color: m ? m.c : 'var(--ink)' }}>{n}</b><span>{s === 'all' ? 'All checked' : s === 'problems' ? 'Need attention' : m.label}</span></button>;
+          {['problems', 'valid', ...HX_ORDER.filter((s) => counts[s]), 'all'].map((s) => {
+            const n = s === 'all' ? list.length : s === 'problems' ? list.filter((r) => !hxValid(r.status)).length : s === 'valid' ? list.filter((r) => hxValid(r.status)).length : counts[s];
+            const m = s === 'valid' ? HX_STATUS.match : HX_STATUS[s];
+            return <button key={s} className={'hx-tile' + (filter === s ? ' on' : '')} onClick={() => setFilter(s)}><b style={{ color: m ? m.c : 'var(--ink)' }}>{n}</b><span>{s === 'all' ? 'All checked' : s === 'problems' ? 'Not valid yet' : s === 'valid' ? 'Valid (emp ID + name + designation)' : m.label}</span></button>;
           })}
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
@@ -326,7 +371,8 @@ function HxVerify({ store, setRoute, ready, info, reload }) {
                       <button className="btn sm" onClick={() => setRoute({ view: 'staffProfile', emp: r.id })}>Open profile</button>
                     </div>
                     {r.status === 'id_other_person' && r.h360 && <div className="hx-alert red" style={{ marginTop: 8, marginBottom: 0 }}>H360 gives emp ID {r.empId} to {r.h360.name} ({[r.h360.designation, r.h360.dept].filter(Boolean).join(', ')}), not to {r.name}.</div>}
-                    {r.status !== 'id_other_person' && <HxCompare result={r} store={store} />}
+                    {r.status !== 'id_other_person' && <HxAllFields h={r.h360} />}
+                    {r.status !== 'id_other_person' && <HxCompare result={r} store={store} onChanged={() => setTimeout(load, 1500)} />}
                     <HxSuggestions result={r} store={store} />
                   </td></tr>}
                 </React.Fragment>
@@ -466,39 +512,49 @@ function StaffH360View({ store, setRoute }) {
   );
 }
 
-/* ---------------- profile card ---------------- */
+/* ---------------- profile card ----------------
+   Opens on the H360 record SAVED by the last check (h360_verified on the record, judged against
+   the record as it is now — no H360 request). "Check now" asks H360 again and saves the answer. */
 function StaffH360Card({ emp, store }) {
   const [res, setRes] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const known = window.__UNICO_H360__ && window.__UNICO_H360__.byId ? window.__UNICO_H360__.byId[emp.id] : null;
+  const load = () => hxApi('/api/h360-staff/saved/' + encodeURIComponent(emp.id)).then((j) => { setRes(j.result || null); setLoaded(true); }).catch((e) => { setErr(e.message); setLoaded(true); });
+  // Re-judged whenever the record itself changes (an "Update from H360" turns it Valid at once).
+  const stamp = [emp.emp_id, emp.name, emp.phone, emp.gender, emp.doj, emp.designation, emp.current_department, emp.h360_verified && emp.h360_verified.at].join('|');
+  useEffect(() => { load(); }, [emp.id, stamp]);
   const check = async () => {
     setBusy(true); setErr('');
-    try { setRes(await hxApi('/api/h360-staff/verify/' + encodeURIComponent(emp.id))); window.__UNICO_H360__ = null; }
+    try { setRes(await hxApi('/api/h360-staff/verify/' + encodeURIComponent(emp.id))); window.__UNICO_H360__ = null; hxToast('H360 record checked and saved.'); }
     catch (e) { setErr(e.message); }
     setBusy(false);
   };
-  const status = res ? res.status : known ? known.s : null;
+  const status = res ? res.status : null;
   const m = status ? HX_STATUS[status] : null;
   return (
     <div className="card" style={{ borderLeft: '4px solid ' + (m ? m.c : 'var(--line)') }}>
       <HxStyle />
       <div className="card-h" style={{ flexWrap: 'wrap' }}>
-        <h3>H360 record</h3><span className="sub">the hospital system's employee list</span>
+        <h3>H360 record</h3><span className="sub">{res && res.at ? 'saved from H360 · checked ' + hxWhen(res.at) : "the hospital system's employee list"}</span>
         <span className="spacer" />
         {status && <HxPill status={status} />}
         <button className="btn sm" onClick={check} disabled={busy}>{busy ? 'Checking…' : 'Check now'}</button>
       </div>
       <div className="card-b">
         {err && <div className="hx-alert red">{err}</div>}
-        {!res && <div className="hx-muted">{known ? `Last checked ${hxWhen(known.at)}${known.h ? ' · H360 name: ' + known.h : ''}. Press “Check now” for the details.` : 'Not checked yet. Press “Check now” to compare this record with H360.'}</div>}
+        {loaded && !res && !err && <div className="hx-muted">Not checked yet. Press “Check now” to compare this record with H360 — the answer is then saved here.</div>}
+        {!loaded && <div className="hx-muted">Loading the saved H360 record…</div>}
         {res && <React.Fragment>
-          {res.h360 && <div className="hx-pairs">{[['H360 ID', res.h360.code], ['H360 name', res.h360.name], ['Designation', res.h360.designation], ['Department', res.h360.dept], ['Joined', hxDate(res.h360.joinDate)], ['Service', res.h360.service], ['Phone', (res.h360.phones || []).join(', ')], ['Gender', res.h360.gender]].map(([k, v]) => <div key={k}><span>{k}</span>{v || '—'}</div>)}</div>}
-          {res.status === 'id_other_person' && <div className="hx-alert red">H360 gives emp ID {res.empId} to {res.h360.name}, not to {res.name}. Either our emp ID is wrong or H360's record is.</div>}
+          <HxAllFields h={res.h360} />
+          {res.idChanged && <div className="hx-alert amber">The emp ID on this record changed since H360 was checked. Press “Check now”.</div>}
+          {res.status === 'id_other_person' && <div className="hx-alert red">H360 gives emp ID {res.empId} to {(res.h360 && res.h360.name) || (res.other && res.other.name) || 'another person'}, not to {res.name}. Either our emp ID is wrong or H360's record is.</div>}
           {res.status === 'not_in_h360' && <div className="hx-alert red">H360 has nobody with emp ID {res.empId}.</div>}
           {res.status === 'no_emp_id' && <div className="hx-alert amber">This record has no emp ID.</div>}
+          {res.status === 'field_diff' && <div className="hx-alert amber">The emp ID is in H360, but the name or designation does not match — confirm which is right.</div>}
+          {res.status === 'valid_diff' && <div className="hx-alert info">Valid: emp ID, name and designation match H360. Some other details differ — “Update from H360” brings them in line.</div>}
           {res.duplicateOf && <div className="hx-alert red">Emp ID {res.empId} is also on record(s) #{res.duplicateOf.join(', #')}.</div>}
-          {res.status !== 'id_other_person' && <HxCompare result={res} store={store} />}
+          {res.status !== 'id_other_person' && <HxCompare result={res} store={store} onChanged={() => { setTimeout(load, 2500); setTimeout(load, 6000); }} />}
           <HxSuggestions result={res} store={store} />
         </React.Fragment>}
       </div>

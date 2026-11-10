@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=e838bbfe1d","reports":"/dist/reports.chunk.js?v=0f166657ff","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=65d770e321","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=3d62a22430","reports":"/dist/reports.chunk.js?v=52c64e35db","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=65d770e321","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -2235,7 +2235,7 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
       // (11410, 11520), and an emp_id fallback stamped one nurse's photo and BNMC licence
       // onto the other, which the next staff save then made permanent.
       const byId={};
-      src.forEach(x=>{ if(!x||!(x.licence_verified||x.photo)) return;
+      src.forEach(x=>{ if(!x||!(x.licence_verified||x.photo||x.h360_verified)) return;
         if(x.id!=null) byId[String(x.id)]=x; });
       if(!Object.keys(byId).length) return list;
       return list.map(e=>{
@@ -2256,6 +2256,11 @@ window.STAFF_SEED = (typeof window !== 'undefined' && Array.isArray(window.__UNI
             out.licence_program=e.licence_program||srv.licence_program;
             changed=true;
           }
+        }
+        // H360 record (server/h360/staff.js): the server copy wins unless ours is newer.
+        if(srv.h360_verified){
+          const mine=e.h360_verified&&e.h360_verified.at, theirs=srv.h360_verified.at;
+          if(!(mine&&theirs&&String(mine)>=String(theirs))){ out.h360_verified=srv.h360_verified; changed=true; }
         }
         // Portrait: restore ONLY when this row has none. Never overwrite a picture the
         // overlay already carries — that may be one just chosen and not yet synced. A
@@ -11096,12 +11101,30 @@ function unicoCanAccessView(view) {
   if (!unicoSubViewOk(view)) return false;
   return unicoCanAccessModule(unicoAccessModuleOf(view));
 }
+const UNICO_SUB_OPT_IN = {
+  staff: ['staffH360']
+};
+function unicoSubOptIn(mod, view) {
+  return (UNICO_SUB_OPT_IN[mod] || []).indexOf(view) >= 0;
+}
 function unicoSubMenuOk(mod, view) {
   const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
   if (!u || u.role === 'Administrator' || mod === 'datasubmit') return true;
   const s = u.subMenus;
+  if (unicoSubOptIn(mod, view)) return !!(s && typeof s === 'object' && Array.isArray(s[mod]) && s[mod].indexOf(view) >= 0);
   if (!s || typeof s !== 'object' || !Array.isArray(s[mod])) return true;
   return s[mod].indexOf(view) >= 0;
+}
+function unicoH360Ok() {
+  try {
+    return (!window.unicoCan || window.unicoCan('staff', 'view')) && unicoSubMenuOk('staff', 'staffH360');
+  } catch (e) {
+    return false;
+  }
+}
+if (typeof window !== 'undefined') {
+  window.unicoH360Ok = unicoH360Ok;
+  window.UNICO_SUB_OPT_IN = UNICO_SUB_OPT_IN;
 }
 let unicoSubMenusMemo = null;
 function unicoSubMenus() {
@@ -23896,8 +23919,9 @@ function ManageStaff({
   recentDays = 0,
   recentKind = 'entry'
 }) {
-  const [h360, setH360] = React.useState(() => window.__UNICO_H360__ || null);
+  const [h360, setH360] = React.useState(() => window.unicoH360Ok && window.unicoH360Ok() && window.__UNICO_H360__ || null);
   React.useEffect(() => {
+    if (!window.unicoH360Ok || !window.unicoH360Ok()) return;
     const c = window.__UNICO_H360__;
     if (c && Date.now() - c.t < 300000) {
       setH360(c);
@@ -24552,7 +24576,8 @@ function ManageStaff({
   })() : null, h360 && h360.byId && h360.byId[e.id] ? (() => {
     const v = h360.byId[e.id],
       M = (window.UNICO_H360_STATUS || {})[v.s],
-      c = v.s === 'match' ? '#13703d' : v.s === 'field_diff' || v.s === 'no_emp_id' ? '#9a5a06' : v.s === 'error' ? '#5b6676' : '#b42339';
+      ok = v.s === 'match' || v.s === 'valid_diff',
+      c = ok ? '#13703d' : v.s === 'field_diff' || v.s === 'no_emp_id' ? '#9a5a06' : v.s === 'error' ? '#5b6676' : '#b42339';
     return React.createElement("span", {
       title: 'H360: ' + (v.why || M && M.label || v.s) + (v.h ? ' · H360 name ' + v.h : '') + ' · checked ' + String(v.at || '').slice(0, 10),
       style: {
@@ -24566,7 +24591,7 @@ function ManageStaff({
         color: c,
         lineHeight: 1.3
       }
-    }, v.s === 'match' ? '✓ H360' : c === '#b42339' ? '⚠ H360' : '! H360');
+    }, ok ? '✓ H360' : c === '#b42339' ? '⚠ H360' : '! H360');
   })() : null), e.qualification && React.createElement("div", {
     style: {
       fontSize: 10.5,

@@ -906,8 +906,10 @@ function StaffCompliance({store, setRoute, role='Nurse'}){
 const DIR_MEMO = {};
 function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKind='entry'}){
   // Last H360 check per record (badges beside the names); one small request, kept 5 minutes.
-  const [h360,setH360]=React.useState(()=>window.__UNICO_H360__||null);
+  const [h360,setH360]=React.useState(()=>(window.unicoH360Ok&&window.unicoH360Ok()&&window.__UNICO_H360__)||null);
   React.useEffect(()=>{
+    // H360 staff data is opt-in (admins, or the "H360 Check" tick): nobody else asks for it.
+    if(!window.unicoH360Ok||!window.unicoH360Ok()) return;
     const c=window.__UNICO_H360__; if(c&&Date.now()-c.t<300000){ setH360(c); return; }
     let live=true;
     fetch('/api/h360-staff/status',{headers:{accept:'application/json'}}).then(r=>r.ok?r.json():null)
@@ -1110,10 +1112,10 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
                     {/* H360 badge: the last check of this record against the hospital's H360
                         employee list (Staff Management → H360 Check). Never checked = nothing. */}
                     {h360&&h360.byId&&h360.byId[e.id]?(()=>{const v=h360.byId[e.id],M=(window.UNICO_H360_STATUS||{})[v.s],
-                      c=v.s==='match'?'#13703d':(v.s==='field_diff'||v.s==='no_emp_id')?'#9a5a06':v.s==='error'?'#5b6676':'#b42339';
+                      ok=v.s==='match'||v.s==='valid_diff',c=ok?'#13703d':(v.s==='field_diff'||v.s==='no_emp_id')?'#9a5a06':v.s==='error'?'#5b6676':'#b42339';
                       return <span title={'H360: '+(v.why||(M&&M.label)||v.s)+(v.h?' · H360 name '+v.h:'')+' · checked '+String(v.at||'').slice(0,10)}
                         style={{flex:'0 0 auto',fontSize:9,fontWeight:800,letterSpacing:.3,padding:'1px 5px',borderRadius:4,border:'1px solid '+c,color:c,lineHeight:1.3}}>
-                        {v.s==='match'?'✓ H360':c==='#b42339'?'⚠ H360':'! H360'}</span>;})():null}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
+                        {ok?'✓ H360':c==='#b42339'?'⚠ H360':'! H360'}</span>;})():null}</div>{e.qualification&&<div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification}</div>}</div></div></td>
                   {recentDays>0&&<td className="num" style={{textAlign:'left',whiteSpace:'nowrap'}}>{updates?new Date(recentTime(e)).toLocaleString('en-GB',{timeZone:'Asia/Dhaka',dateStyle:'short',timeStyle:'short'}):new Date(recentTime(e)).toLocaleDateString('en-GB',{timeZone:'Asia/Dhaka'})}</td>}
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffDeptShow(e.current_department)}</td>

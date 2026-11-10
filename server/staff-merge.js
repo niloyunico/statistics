@@ -17,13 +17,13 @@ const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 // (staff-roster.js resolveRoster): a browser's baseline can carry them while the stored
 // row does not. That difference is not anybody's edit. Treating it as one made every
 // delete, photo change or re-verification of such a person fail with a 409 forever.
-const RESTORED = new Set(['photo', 'licence_verified', 'licence_no', 'licence_program']);
+const RESTORED = new Set(['photo', 'licence_verified', 'licence_no', 'licence_program', 'h360_verified']);
 const absent = (v) => v === undefined || v === null || v === '';
 function restoredOnly(field, live, before) {
   if (!RESTORED.has(field) || absent(before)) return false;
   if (absent(live)) return true;
   // resolveRoster also swaps in a NEWER server verification over an older stored one.
-  return field === 'licence_verified' && String((live && live.at) || '') < String((before && before.at) || '');
+  return (field === 'licence_verified' || field === 'h360_verified') && String((live && live.at) || '') < String((before && before.at) || '');
 }
 function sameRow(live, before) {
   for (const k of new Set([...Object.keys(live), ...Object.keys(before)])) {

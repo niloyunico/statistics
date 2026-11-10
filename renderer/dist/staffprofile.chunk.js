@@ -2463,7 +2463,21 @@ function StaffProfile({
     style: {
       gridColumn: '1 / -1'
     }
-  }, lbl('Department(s)'), deptChipRow(e.current_department), e.primary_department ? React.createElement("div", {
+  }, lbl('Department(s)'), deptChipRow(e.current_department), e.h360_verified && e.h360_verified.dept && window.unicoH360Ok && window.unicoH360Ok() ? React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      marginTop: 5
+    }
+  }, "H360: ", React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, e.h360_verified.dept), e.h360_verified.designation ? ' · ' + e.h360_verified.designation : '', " ", React.createElement("span", {
+    style: {
+      color: 'var(--faint)'
+    }
+  }, "(checked ", String(e.h360_verified.at || '').slice(0, 10).split('-').reverse().join('/'), ")")) : null, e.primary_department ? React.createElement("div", {
     style: {
       fontSize: 11,
       color: 'var(--muted)',
@@ -2735,7 +2749,7 @@ function StaffProfile({
         marginTop: 9
       }
     }, "Recorded from bncdb.bnmc.gov.bd on ", String(v.at || '').slice(0, 10), v.programName ? ' · searched under ' + v.programName : '', ". Re-check from Edit profile.")));
-  })() : null, window.StaffH360Card ? React.createElement(window.StaffH360Card, {
+  })() : null, window.StaffH360Card && window.unicoH360Ok && window.unicoH360Ok() ? React.createElement(window.StaffH360Card, {
     emp: e,
     store: store
   }) : null, React.createElement("div", {
@@ -8509,15 +8523,23 @@ const HX_STATUS = {
     br: '#f6dcb0'
   },
   field_diff: {
-    label: 'Same person, some details differ',
-    short: 'Details differ',
+    label: 'Same person — name or designation to confirm',
+    short: 'To confirm',
     c: '#9a5a06',
     bg: '#fff5e6',
     br: '#f6dcb0'
   },
+  valid_diff: {
+    label: 'Valid — other details differ',
+    short: 'Valid · details differ',
+    c: '#13703d',
+    bg: '#eaf7ef',
+    br: '#c4e6d1',
+    note: true
+  },
   match: {
-    label: 'Matches H360',
-    short: 'Matches',
+    label: 'Valid — matches H360',
+    short: 'Valid',
     c: '#13703d',
     bg: '#eaf7ef',
     br: '#c4e6d1'
@@ -8530,7 +8552,8 @@ const HX_STATUS = {
     br: '#dde3ec'
   }
 };
-const HX_ORDER = ['id_other_person', 'not_in_h360', 'duplicate_id', 'no_emp_id', 'field_diff', 'match', 'error'];
+const HX_ORDER = ['id_other_person', 'not_in_h360', 'duplicate_id', 'no_emp_id', 'field_diff', 'valid_diff', 'match', 'error'];
+const hxValid = status => status === 'match' || status === 'valid_diff';
 window.UNICO_H360_STATUS = HX_STATUS;
 const HX_CSS = `
 .hx-pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
@@ -8572,37 +8595,62 @@ function HxPill({
       background: m.bg,
       borderColor: m.br
     }
-  }, status === 'match' ? '✓' : status === 'field_diff' || status === 'no_emp_id' ? '!' : '⚠', " ", small ? m.short : m.label);
+  }, hxValid(status) ? '✓' : status === 'field_diff' || status === 'no_emp_id' ? '!' : '⚠', " ", small ? m.short : m.label);
 }
-function hxApply(store, rec, field, value, h360, label) {
-  if (!store || !rec) return false;
-  const old = rec[field] == null ? '' : String(rec[field]);
-  if (!window.confirm(`Change ${label} of ${rec.name || 'this record'}\n\nfrom: ${old || '(blank)'}\nto:   ${value}\n\n(the value H360 holds for ${h360.code} ${h360.name})`)) return false;
+function hxWrite(store, rec, changes, h360) {
+  if (!store || !rec || !changes.length) return null;
   const me = window.__UNICO_USER__ || {};
-  const change = {
-    field,
-    old,
-    new: value,
-    at: new Date().toISOString(),
-    by: me.name || me.username || '',
-    person_code: h360.code
-  };
+  const at = new Date().toISOString();
+  const patch = {};
+  const log = changes.map(c => {
+    patch[c.field] = c.value;
+    return {
+      field: c.field,
+      old: rec[c.field] == null ? '' : String(rec[c.field]),
+      new: c.value,
+      at,
+      by: me.name || me.username || '',
+      person_code: h360 && h360.code || ''
+    };
+  });
   store.update(rec.id, {
-    [field]: value,
-    h360_changes: (Array.isArray(rec.h360_changes) ? rec.h360_changes : []).concat([change]),
+    ...patch,
+    h360_changes: (Array.isArray(rec.h360_changes) ? rec.h360_changes : []).concat(log),
     updated_at: Date.now()
   });
-  hxToast(`${label} updated from H360 — the old value is kept on the record.`);
-  return true;
+  return log;
+}
+function hxUndo(store, recId, log) {
+  const rec = store && store.get ? store.get(recId) : null;
+  if (!rec || !log || !log.length) return;
+  hxWrite(store, rec, log.map(l => ({
+    field: l.field,
+    value: l.old,
+    label: l.field
+  })), {
+    code: 'undo'
+  });
+  hxToast('Put back as it was.');
+}
+function hxApply(store, rec, field, value, h360, label, ask) {
+  if (!store || !rec) return null;
+  if (ask && !window.confirm('Set ' + label + ' of ' + (rec.name || 'this record') + ' to ' + value + '?\n\n(the value H360 holds for ' + h360.code + ' ' + h360.name + ')')) return null;
+  const log = hxWrite(store, rec, [{
+    field,
+    value,
+    label
+  }], h360);
+  hxToast(label + ' updated from H360 — the old value is kept on the record.');
+  return log;
 }
 function hxValueOf(key, h) {
   if (key === 'phone') return (h.phones || [])[0] || '';
   if (key === 'doj') return h.joinDate || '';
   if (key === 'gender') return h.gender || '';
   if (key === 'designation') return h.designation || '';
-  if (key === 'name') return h.name || '';
   return '';
 }
+const hxPending = result => result && result.h360 ? (result.fields || []).filter(f => f.ok === false && f.copyable && hxValueOf(f.key, result.h360)) : [];
 function HxCompare({
   result,
   store,
@@ -8613,16 +8661,105 @@ function HxCompare({
   const can = hxCanEdit() && rec && !rec.former && rec.is_active !== false;
   const [done, setDone] = useState({});
   if (!h) return null;
+  const pending = hxPending(result).filter(f => !done[f.key]);
+  const updateAll = () => {
+    const list = pending.map(f => ({
+      field: f.key,
+      value: hxValueOf(f.key, h),
+      label: f.label,
+      from: f.ours
+    }));
+    const lines = list.map(c => c.label + ': ' + (c.from || '(blank)') + '  →  ' + c.value).join('\n');
+    if (!window.confirm('Update ' + rec.name + ' from H360 (' + h.code + ')?\n\n' + lines + '\n\nThe old values are kept on the record.')) return;
+    const log = hxWrite(store, rec, list, h);
+    const next = {
+      ...done
+    };
+    list.forEach(c => {
+      next[c.field] = log.filter(l => l.field === c.field);
+    });
+    setDone(next);
+    hxToast(list.length + ' field' + (list.length === 1 ? '' : 's') + ' updated from H360.');
+    onChanged && onChanged();
+  };
   return React.createElement("div", {
-    className: "hx-scroll",
     style: {
       marginTop: 8
     }
+  }, can && pending.length > 0 && React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 8
+    }
+  }, React.createElement("button", {
+    className: "btn pri sm",
+    onClick: updateAll
+  }, React.createElement(Ic, {
+    d: I.download || I.check,
+    s: 12,
+    c: "#fff"
+  }), "Update from H360 (", pending.length, ")"), React.createElement("span", {
+    className: "hx-muted"
+  }, "copies ", pending.map(f => f.label.toLowerCase()).join(', '), " \xB7 our department is never changed")), React.createElement("div", {
+    className: "hx-scroll"
   }, React.createElement("table", {
     className: "hx-t"
   }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Field"), React.createElement("th", null, "Our record"), React.createElement("th", null, "H360"), React.createElement("th", null))), React.createElement("tbody", null, (result.fields || []).map(f => {
     const value = hxValueOf(f.key, h);
-    const color = f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
+    const color = f.info ? 'var(--ink-2)' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
+    let action;
+    if (f.info) action = React.createElement("span", {
+      className: "hx-muted"
+    }, "not compared");else if (done[f.key]) action = React.createElement("span", null, React.createElement("b", {
+      style: {
+        color: '#13703d'
+      }
+    }, "updated"), React.createElement("a", {
+      style: {
+        cursor: 'pointer',
+        color: 'var(--blue)',
+        marginLeft: 8
+      },
+      onClick: () => {
+        hxUndo(store, rec.id, done[f.key]);
+        const n = {
+          ...done
+        };
+        delete n[f.key];
+        setDone(n);
+        onChanged && onChanged();
+      }
+    }, "Undo"));else if (f.ok === true) action = React.createElement("span", {
+      style: {
+        color: '#13703d',
+        fontWeight: 700
+      }
+    }, "\u2713");else if (f.ok === null) action = React.createElement("span", {
+      className: "hx-muted"
+    }, "not compared");else if (can && f.copyable && value) action = React.createElement("button", {
+      className: "btn sm",
+      onClick: () => {
+        const log = hxWrite(store, rec, [{
+          field: f.key,
+          value,
+          label: f.label
+        }], h);
+        setDone({
+          ...done,
+          [f.key]: log
+        });
+        hxToast(f.label + ' updated from H360.');
+        onChanged && onChanged();
+      }
+    }, "Use H360 value");else action = React.createElement("span", {
+      style: {
+        color: '#b42339',
+        fontWeight: 700
+      }
+    }, "differs");
     return React.createElement("tr", {
       key: f.key
     }, React.createElement("td", {
@@ -8632,47 +8769,40 @@ function HxCompare({
       }
     }, f.label), React.createElement("td", null, f.ours || React.createElement("span", {
       className: "hx-muted"
-    }, "blank")), React.createElement("td", {
+    }, "blank"), f.info && React.createElement("div", {
+      className: "hx-muted",
+      style: {
+        fontSize: 10.5
+      }
+    }, "assigned by us")), React.createElement("td", {
       style: {
         color
       }
     }, f.h360 || React.createElement("span", {
       className: "hx-muted"
-    }, "\u2014")), React.createElement("td", {
+    }, "\u2014"), f.info && React.createElement("div", {
+      className: "hx-muted",
+      style: {
+        fontSize: 10.5
+      }
+    }, "H360 record, kept")), React.createElement("td", {
       style: {
         whiteSpace: 'nowrap',
         textAlign: 'right'
       }
-    }, f.ok === true && React.createElement("span", {
-      style: {
-        color: '#13703d',
-        fontWeight: 700
-      }
-    }, "\u2713"), f.ok === null && React.createElement("span", {
-      className: "hx-muted"
-    }, "not compared"), f.ok === false && (done[f.key] ? React.createElement("span", {
-      style: {
-        color: '#13703d',
-        fontWeight: 700
-      }
-    }, "updated") : can && f.copyable && value ? React.createElement("button", {
-      className: "btn sm",
-      onClick: () => {
-        if (hxApply(store, rec, f.key, value, h, f.label)) {
-          setDone({
-            ...done,
-            [f.key]: true
-          });
-          onChanged && onChanged();
-        }
-      }
-    }, "Use H360 value") : React.createElement("span", {
-      style: {
-        color: '#b42339',
-        fontWeight: 700
-      }
-    }, "differs"))));
-  }))));
+    }, action));
+  })))));
+}
+function HxAllFields({
+  h
+}) {
+  if (!h) return null;
+  const items = [['H360 ID', h.code], ['H360 name', h.name], ['Designation', h.designation], ['Department (H360)', h.dept], ['Joined', h.joinDate ? hxDate(h.joinDate) : ''], ['Length of service', h.service], ['Phone', (h.phones || []).join(', ')], ['Gender', h.gender], ['Marital status', h.marital], ['Age', h.age], ['Specialization', h.specialization], ['H360 record no.', h.h360Id]].filter(([, v]) => v);
+  return React.createElement("div", {
+    className: "hx-pairs"
+  }, items.map(([k, v]) => React.createElement("div", {
+    key: k
+  }, React.createElement("span", null, k), v)));
 }
 function HxSuggestions({
   result,
@@ -8711,7 +8841,7 @@ function HxSuggestions({
     className: "tag"
   }, s.why), can && !String(rec.emp_id || '').trim() && React.createElement("button", {
     className: "btn sm",
-    onClick: () => hxApply(store, rec, 'emp_id', s.code, s, 'Emp ID')
+    onClick: () => hxApply(store, rec, 'emp_id', s.code, s, 'Emp ID', true)
   }, "Use this emp ID"))));
 }
 function HxLookup({
@@ -8801,9 +8931,9 @@ function HxLookup({
     className: "tag"
   }, "not Nursing Services")), React.createElement("div", {
     className: "hx-pairs"
-  }, [['Gender', p.gender], ['Marital status', p.marital], ['Age', p.age], ['Phone', (p.phones || []).join(', ')], ['Joined', hxDate(p.joinDate)], ['Service', p.service]].map(([k, v]) => React.createElement("div", {
+  }, [['Gender', p.gender], ['Marital status', p.marital], ['Age', p.age], ['Phone', (p.phones || []).join(', ')], ['Joined', hxDate(p.joinDate)], ['Length of service', p.service], ['Specialization', p.specialization], ['H360 record no.', p.h360Id]].filter(([, v]) => v).map(([k, v]) => React.createElement("div", {
     key: k
-  }, React.createElement("span", null, k), v || '—'))), p.records.length ? p.records.map(r => React.createElement("div", {
+  }, React.createElement("span", null, k), v))), p.records.length ? p.records.map(r => React.createElement("div", {
     key: r.id,
     style: {
       borderTop: '1px dashed var(--line)',
@@ -8966,13 +9096,13 @@ function HxVerify({
   const pending = info && info.verify && info.verify.run;
   const list = data && data.list || [];
   const prev = data && data.previous && data.previous.statusById || null;
-  const isNew = r => prev && r.status !== 'match' && prev[r.id] !== r.status;
+  const isNew = r => prev && !hxValid(r.status) && prev[r.id] !== r.status;
   const counts = {};
   list.forEach(r => {
     counts[r.status] = (counts[r.status] || 0) + 1;
   });
   const needle = text.trim().toLowerCase();
-  const shown = list.filter(r => (filter === 'all' || (filter === 'problems' ? r.status !== 'match' : r.status === filter)) && (!onlyNew || isNew(r)) && (!needle || [r.empId, r.name, r.dept, r.h360 && r.h360.name].some(v => String(v || '').toLowerCase().includes(needle)))).sort((a, b) => HX_ORDER.indexOf(a.status) - HX_ORDER.indexOf(b.status) || String(a.name).localeCompare(String(b.name)));
+  const shown = list.filter(r => (filter === 'all' || (filter === 'problems' ? !hxValid(r.status) : filter === 'valid' ? hxValid(r.status) : r.status === filter)) && (!onlyNew || isNew(r)) && (!needle || [r.empId, r.name, r.dept, r.h360 && r.h360.name].some(v => String(v || '').toLowerCase().includes(needle)))).sort((a, b) => HX_ORDER.indexOf(a.status) - HX_ORDER.indexOf(b.status) || String(a.name).localeCompare(String(b.name)));
   const differs = r => (r.fields || []).filter(f => f.ok === false).map(f => f.label).join(', ');
   return React.createElement("div", null, React.createElement("div", {
     style: {
@@ -9056,9 +9186,9 @@ function HxVerify({
     style: {
       marginBottom: 12
     }
-  }, ['problems', ...HX_ORDER.filter(s => counts[s]), 'all'].map(s => {
-    const n = s === 'all' ? list.length : s === 'problems' ? list.filter(r => r.status !== 'match').length : counts[s];
-    const m = HX_STATUS[s];
+  }, ['problems', 'valid', ...HX_ORDER.filter(s => counts[s]), 'all'].map(s => {
+    const n = s === 'all' ? list.length : s === 'problems' ? list.filter(r => !hxValid(r.status)).length : s === 'valid' ? list.filter(r => hxValid(r.status)).length : counts[s];
+    const m = s === 'valid' ? HX_STATUS.match : HX_STATUS[s];
     return React.createElement("button", {
       key: s,
       className: 'hx-tile' + (filter === s ? ' on' : ''),
@@ -9067,7 +9197,7 @@ function HxVerify({
       style: {
         color: m ? m.c : 'var(--ink)'
       }
-    }, n), React.createElement("span", null, s === 'all' ? 'All checked' : s === 'problems' ? 'Need attention' : m.label));
+    }, n), React.createElement("span", null, s === 'all' ? 'All checked' : s === 'problems' ? 'Not valid yet' : s === 'valid' ? 'Valid (emp ID + name + designation)' : m.label));
   })), React.createElement("div", {
     style: {
       display: 'flex',
@@ -9164,9 +9294,12 @@ function HxVerify({
       marginTop: 8,
       marginBottom: 0
     }
-  }, "H360 gives emp ID ", r.empId, " to ", r.h360.name, " (", [r.h360.designation, r.h360.dept].filter(Boolean).join(', '), "), not to ", r.name, "."), r.status !== 'id_other_person' && React.createElement(HxCompare, {
+  }, "H360 gives emp ID ", r.empId, " to ", r.h360.name, " (", [r.h360.designation, r.h360.dept].filter(Boolean).join(', '), "), not to ", r.name, "."), r.status !== 'id_other_person' && React.createElement(HxAllFields, {
+    h: r.h360
+  }), r.status !== 'id_other_person' && React.createElement(HxCompare, {
     result: r,
-    store: store
+    store: store,
+    onChanged: () => setTimeout(load, 1500)
   }), React.createElement(HxSuggestions, {
     result: r,
     store: store
@@ -9467,21 +9600,33 @@ function StaffH360Card({
   store
 }) {
   const [res, setRes] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const known = window.__UNICO_H360__ && window.__UNICO_H360__.byId ? window.__UNICO_H360__.byId[emp.id] : null;
+  const load = () => hxApi('/api/h360-staff/saved/' + encodeURIComponent(emp.id)).then(j => {
+    setRes(j.result || null);
+    setLoaded(true);
+  }).catch(e => {
+    setErr(e.message);
+    setLoaded(true);
+  });
+  const stamp = [emp.emp_id, emp.name, emp.phone, emp.gender, emp.doj, emp.designation, emp.current_department, emp.h360_verified && emp.h360_verified.at].join('|');
+  useEffect(() => {
+    load();
+  }, [emp.id, stamp]);
   const check = async () => {
     setBusy(true);
     setErr('');
     try {
       setRes(await hxApi('/api/h360-staff/verify/' + encodeURIComponent(emp.id)));
       window.__UNICO_H360__ = null;
+      hxToast('H360 record checked and saved.');
     } catch (e) {
       setErr(e.message);
     }
     setBusy(false);
   };
-  const status = res ? res.status : known ? known.s : null;
+  const status = res ? res.status : null;
   const m = status ? HX_STATUS[status] : null;
   return React.createElement("div", {
     className: "card",
@@ -9495,7 +9640,7 @@ function StaffH360Card({
     }
   }, React.createElement("h3", null, "H360 record"), React.createElement("span", {
     className: "sub"
-  }, "the hospital system's employee list"), React.createElement("span", {
+  }, res && res.at ? 'saved from H360 · checked ' + hxWhen(res.at) : "the hospital system's employee list"), React.createElement("span", {
     className: "spacer"
   }), status && React.createElement(HxPill, {
     status: status
@@ -9507,23 +9652,33 @@ function StaffH360Card({
     className: "card-b"
   }, err && React.createElement("div", {
     className: "hx-alert red"
-  }, err), !res && React.createElement("div", {
+  }, err), loaded && !res && !err && React.createElement("div", {
     className: "hx-muted"
-  }, known ? `Last checked ${hxWhen(known.at)}${known.h ? ' · H360 name: ' + known.h : ''}. Press “Check now” for the details.` : 'Not checked yet. Press “Check now” to compare this record with H360.'), res && React.createElement(React.Fragment, null, res.h360 && React.createElement("div", {
-    className: "hx-pairs"
-  }, [['H360 ID', res.h360.code], ['H360 name', res.h360.name], ['Designation', res.h360.designation], ['Department', res.h360.dept], ['Joined', hxDate(res.h360.joinDate)], ['Service', res.h360.service], ['Phone', (res.h360.phones || []).join(', ')], ['Gender', res.h360.gender]].map(([k, v]) => React.createElement("div", {
-    key: k
-  }, React.createElement("span", null, k), v || '—'))), res.status === 'id_other_person' && React.createElement("div", {
+  }, "Not checked yet. Press \u201CCheck now\u201D to compare this record with H360 \u2014 the answer is then saved here."), !loaded && React.createElement("div", {
+    className: "hx-muted"
+  }, "Loading the saved H360 record\u2026"), res && React.createElement(React.Fragment, null, React.createElement(HxAllFields, {
+    h: res.h360
+  }), res.idChanged && React.createElement("div", {
+    className: "hx-alert amber"
+  }, "The emp ID on this record changed since H360 was checked. Press \u201CCheck now\u201D."), res.status === 'id_other_person' && React.createElement("div", {
     className: "hx-alert red"
-  }, "H360 gives emp ID ", res.empId, " to ", res.h360.name, ", not to ", res.name, ". Either our emp ID is wrong or H360's record is."), res.status === 'not_in_h360' && React.createElement("div", {
+  }, "H360 gives emp ID ", res.empId, " to ", res.h360 && res.h360.name || res.other && res.other.name || 'another person', ", not to ", res.name, ". Either our emp ID is wrong or H360's record is."), res.status === 'not_in_h360' && React.createElement("div", {
     className: "hx-alert red"
   }, "H360 has nobody with emp ID ", res.empId, "."), res.status === 'no_emp_id' && React.createElement("div", {
     className: "hx-alert amber"
-  }, "This record has no emp ID."), res.duplicateOf && React.createElement("div", {
+  }, "This record has no emp ID."), res.status === 'field_diff' && React.createElement("div", {
+    className: "hx-alert amber"
+  }, "The emp ID is in H360, but the name or designation does not match \u2014 confirm which is right."), res.status === 'valid_diff' && React.createElement("div", {
+    className: "hx-alert info"
+  }, "Valid: emp ID, name and designation match H360. Some other details differ \u2014 \u201CUpdate from H360\u201D brings them in line."), res.duplicateOf && React.createElement("div", {
     className: "hx-alert red"
   }, "Emp ID ", res.empId, " is also on record(s) #", res.duplicateOf.join(', #'), "."), res.status !== 'id_other_person' && React.createElement(HxCompare, {
     result: res,
-    store: store
+    store: store,
+    onChanged: () => {
+      setTimeout(load, 2500);
+      setTimeout(load, 6000);
+    }
   }), React.createElement(HxSuggestions, {
     result: res,
     store: store

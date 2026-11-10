@@ -20,6 +20,11 @@ function resolveRoster(data, base) {
       out.licence_no = out.licence_no || verified.licence_no;
       out.licence_program = out.licence_program || verified.licence_program;
     }
+    // What H360 held for this record at its last check (server/h360/staff.js) — kept the same way.
+    if (verified.h360_verified && (!out.h360_verified ||
+      String(verified.h360_verified.at || '') > String(out.h360_verified.at || ''))) {
+      out.h360_verified = verified.h360_verified;
+    }
     return out;
   });
 }

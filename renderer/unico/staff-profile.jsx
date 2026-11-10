@@ -1034,6 +1034,8 @@ function StaffProfile({store, empId, setRoute}){
               {e.gender?infoTile('Gender',e.gender):null}
               {e.dob?infoTile('Date of birth',e.dob+(profAge!=null?'  ('+profAge+' yrs)':'')+(profBday?'   '+profBday:''),true):null}
               <div style={{gridColumn:'1 / -1'}}>{lbl('Department(s)')}{deptChipRow(e.current_department)}
+                {/* H360's department, kept beside ours (we assign our own; H360's is the hospital record). */}
+                {e.h360_verified&&e.h360_verified.dept&&window.unicoH360Ok&&window.unicoH360Ok()?<div style={{fontSize:11.5,color:'var(--muted)',marginTop:5}}>H360: <b style={{color:'var(--ink-2)'}}>{e.h360_verified.dept}</b>{e.h360_verified.designation?' · '+e.h360_verified.designation:''} <span style={{color:'var(--faint)'}}>(checked {String(e.h360_verified.at||'').slice(0,10).split('-').reverse().join('/')})</span></div>:null}
                 {e.primary_department?<div style={{fontSize:11,color:'var(--muted)',marginTop:5}}>Primary — <b style={{color:'var(--ink-2)'}}>{e.primary_department}</b>{e.can_float?' · can float to other units':''}</div>:null}</div>
               {/* A licence that has run out is a rostering blocker, so it is stated in
                   red on the profile rather than hidden inside the edit form. */}
@@ -1147,7 +1149,7 @@ function StaffProfile({store, empId, setRoute}){
 
           {/* H360 RECORD — this record against the hospital system's employee list
               (staff-h360.jsx). Checked on demand; H360 is only searched, never changed. */}
-          {window.StaffH360Card ? <window.StaffH360Card emp={e} store={store}/> : null}
+          {window.StaffH360Card && window.unicoH360Ok && window.unicoH360Ok() ? <window.StaffH360Card emp={e} store={store}/> : null}
 
           {/* Clinical Privileges — read-only summary of the checklist filled in on the
               create/edit form. Only the granted privilege areas are shown; edit the
