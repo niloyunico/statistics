@@ -30,7 +30,7 @@
     "test:d1": "node test/d1-store.test.js && node test/d1-admin.test.js",
     "cloudinary:usage": "node cloudinary-usage.js",
     "h360:collect": "node h360/cli.js",
-    "test:h360": "node test/h360.test.js"
+    "test:h360": "node test/h360.test.js && node test/h360-staff.test.js"
   },
   "dependencies": {
     "@imagekit/nodejs": "^7.12.1",

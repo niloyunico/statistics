@@ -101,10 +101,52 @@ async function open(cfg, { fetchImpl, cookies } = {}) {
 
   // What was learnt about pages that did not carry their list (see views.describePage).
   const notes = {};
+  // The Employee Search box of the Employee Roster page (staff lookup). The page is
+  // opened once per session for its token and the box's hidden values; then only the
+  // box's own query is sent. No other roster address is ever asked for.
+  let searchForm = null;
+  async function employeeForm() {
+    if (searchForm) return searchForm;
+    const rosterUrl = cfg.baseUrl + views.EMPLOYEE_ROSTER_PATH;
+    const page = await pageOf(rosterUrl, 'Employee Roster');
+    const token = views.csrfToken(page.frame) || views.csrfToken(page.body);
+    const form = views.employeeSearchForm(page.body || page.frame);
+    if (!form.found.length && page.body) Object.assign(form, views.employeeSearchForm(page.frame + page.body));
+    searchForm = { token, ...form, rosterUrl };
+    if (!token) notes.employees = views.describePage(page.body || page.frame, /autocomplete|personnel|designation_code|employee/i);
+    return searchForm;
+  }
   return {
     kind: 'http',
     notes,
     cookies: () => jar.list(),
+    // H360's people matching `term` (ID, name or phone: H360 matches anywhere), as views.employeeRows.
+    async employees(term) {
+      const text = String(term || '').trim();
+      if (text.length < 3) return [];
+      const form = await employeeForm();
+      const body = new URLSearchParams({ search_data: text, ...form.params });
+      const response = await request(cfg.baseUrl + views.EMPLOYEE_SEARCH_PATH, {
+        method: 'POST',
+        headers: {
+          'X-CSRF-TOKEN': form.token,
+          'X-Requested-With': 'XMLHttpRequest',
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          Accept: 'application/json, text/javascript, */*; q=0.01',
+          Referer: form.rosterUrl,
+          Origin: origin,
+        },
+        body: body.toString(),
+        timeout: 20000,
+      });
+      if (isLoginUrl(response.url)) throw new Error('H360 signed us out.');
+      if (response.status === 419) { searchForm = null; throw new Error('H360 refused the search (form token expired).'); }
+      if (response.status !== 200) throw new Error(`H360 search answered status ${response.status}.`);
+      const rows = views.employeeRows(response.text);
+      if (!rows) throw new Error('H360 search did not answer with a list of people.');
+      return rows;
+    },
+    searchFormInfo: () => (searchForm ? { found: searchForm.found, mentionsSearch: searchForm.mentionsSearch, hasToken: Boolean(searchForm.token) } : null),
     async stations() {
       const page = await pageOf(cfg.pageUrl, 'Nurse Station');
       csrf = views.csrfToken(page.frame) || views.csrfToken(page.body);

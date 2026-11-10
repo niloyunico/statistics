@@ -89,6 +89,7 @@ const MANIFEST = [
   { file: 'manage.jsx', jsx: true },
   { file: 'staff.jsx', jsx: true },
   { file: 'staff-profile.jsx', jsx: true, chunk: 'staffprofile' },
+  { file: 'staff-h360.jsx', jsx: true, chunk: 'staffprofile' },   // Staff Management → H360 Check + the profile's H360 card (window.StaffH360View / StaffH360Card)
   { file: 'input.jsx', jsx: true },
   { file: 'reports.jsx', jsx: true, chunk: 'reports' },
   { file: 'quality-console.jsx', jsx: true, chunk: 'quality' },

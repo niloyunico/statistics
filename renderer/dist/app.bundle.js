@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=b55d12daea","reports":"/dist/reports.chunk.js?v=4a957c6744","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0cd155c729","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=9a5231255b","reports":"/dist/reports.chunk.js?v=4a957c6744","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0cd155c729","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -10879,7 +10879,7 @@ const UNICO_MODULES = [{
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
   datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
-  staff: ['staffHome', 'staffAll', 'staffNewEntries', 'staffRecentUpdates', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests'],
+  staff: ['staffHome', 'staffAll', 'staffNewEntries', 'staffRecentUpdates', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests', 'staffH360'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport', 'supH360Scan', 'supH360', 'supSheet'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
@@ -11137,6 +11137,10 @@ function unicoSidebarGroups(moduleId) {
       id: 'staffPrevious',
       label: 'Previous Staff',
       icon: I.doc
+    }, {
+      id: 'staffH360',
+      label: 'H360 Check',
+      icon: I.check
     }, {
       id: 'perfHome',
       label: 'Performance',
@@ -11654,6 +11658,10 @@ function unicoWorkspaceSubAll(view) {
   }, {
     label: 'Nurse / PCA requests',
     view: 'staffRequests',
+    mod: 'staff'
+  }, {
+    label: 'H360 Check',
+    view: 'staffH360',
     mod: 'staff'
   }, {
     label: 'Performance',
@@ -23764,6 +23772,31 @@ function ManageStaff({
   recentDays = 0,
   recentKind = 'entry'
 }) {
+  const [h360, setH360] = React.useState(() => window.__UNICO_H360__ || null);
+  React.useEffect(() => {
+    const c = window.__UNICO_H360__;
+    if (c && Date.now() - c.t < 300000) {
+      setH360(c);
+      return;
+    }
+    let live = true;
+    fetch('/api/h360-staff/status', {
+      headers: {
+        accept: 'application/json'
+      }
+    }).then(r => r.ok ? r.json() : null).then(j => {
+      if (!j || !live) return;
+      const v = {
+        t: Date.now(),
+        byId: j.byId || {}
+      };
+      window.__UNICO_H360__ = v;
+      setH360(v);
+    }).catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
   const S = window.STAFF;
   const updates = recentKind === 'update';
   const recentTitle = updates ? 'Last Updated Staff Info' : 'New Entry Staff';
@@ -24392,6 +24425,24 @@ function ManageStaff({
       s: 9,
       c: "#fff"
     }));
+  })() : null, h360 && h360.byId && h360.byId[e.id] ? (() => {
+    const v = h360.byId[e.id],
+      M = (window.UNICO_H360_STATUS || {})[v.s],
+      c = v.s === 'match' ? '#13703d' : v.s === 'field_diff' || v.s === 'no_emp_id' ? '#9a5a06' : v.s === 'error' ? '#5b6676' : '#b42339';
+    return React.createElement("span", {
+      title: 'H360: ' + (v.why || M && M.label || v.s) + (v.h ? ' · H360 name ' + v.h : '') + ' · checked ' + String(v.at || '').slice(0, 10),
+      style: {
+        flex: '0 0 auto',
+        fontSize: 9,
+        fontWeight: 800,
+        letterSpacing: .3,
+        padding: '1px 5px',
+        borderRadius: 4,
+        border: '1px solid ' + c,
+        color: c,
+        lineHeight: 1.3
+      }
+    }, v.s === 'match' ? '✓ H360' : c === '#b42339' ? '⚠ H360' : '! H360');
   })() : null), e.qualification && React.createElement("div", {
     style: {
       fontSize: 10.5,
@@ -27966,7 +28017,7 @@ function App() {
     if (s.indexOf('kpi') === 0) return 'kpi';
     if (s.indexOf('dc') === 0 || s.indexOf('ds') === 0) return 'datacollection';
     if (s === 'reports' || s === 'settings' || s === 'users') return 'reports';
-    if (s === 'staffProfile' || s === 'staffForm' || s === 'perfStaff') return 'staffprofile';
+    if (s === 'staffProfile' || s === 'staffForm' || s === 'perfStaff' || s === 'staffH360') return 'staffprofile';
     if (s.indexOf('perf') === 0) return 'performance';
     if (s.indexOf('roster') === 0) return 'roster';
     if (s.indexOf('sup') === 0) return 'supervisor';
@@ -28476,6 +28527,12 @@ function App() {
       cycleId: route.cycleId,
       setRoute: setRoute
     });
+  } else if (route.view === 'staffH360') {
+    crumbs = ['UNICO', 'Staff Management', 'H360 Check'];
+    body = typeof window !== 'undefined' && window.StaffH360View ? React.createElement(window.StaffH360View, {
+      store: staff,
+      setRoute: setRoute
+    }) : null;
   } else if (route.view === 'staffProfile') {
     const emp = staff.get(route.emp);
     crumbs = ['UNICO', 'Staff Management', emp ? emp.name : 'Profile'];

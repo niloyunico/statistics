@@ -1145,6 +1145,10 @@ function StaffProfile({store, empId, setRoute}){
             );
           })():null}
 
+          {/* H360 RECORD — this record against the hospital system's employee list
+              (staff-h360.jsx). Checked on demand; H360 is only searched, never changed. */}
+          {window.StaffH360Card ? <window.StaffH360Card emp={e} store={store}/> : null}
+
           {/* Clinical Privileges — read-only summary of the checklist filled in on the
               create/edit form. Only the granted privilege areas are shown; edit the
               full checklist (all areas, all activities) via Edit profile. */}

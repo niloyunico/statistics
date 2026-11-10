@@ -93,6 +93,14 @@ const SUB_PAGES = [
   { prefix: '/v2/ipd/patient-assessment/', label: 'Saved assessment form', form: true },
   { prefix: '/ipd/doctor-shift-handover-edit/', label: 'Latest handover form', form: true },
 ];
+// Staff lookup (server/h360/staff.js): the Employee Roster page is opened only for its
+// form token and the hidden values its Employee Search box sends; the search itself is
+// the box's own query. Nothing else on the roster page is ever requested or pressed
+// (its Validate / Save / Delete buttons write the duty roster).
+const EMPLOYEE_ROSTER_PATH = '/roster/employee-roster';
+const EMPLOYEE_SEARCH_PATH = '/doctor-info-autocomplete';
+const EMPLOYEE_SEARCH_FIELDS = ['personnel_ind_name', 'personnel_ind', 'designation_code'];
+
 const DAYS_PER_PATIENT = 7;
 
 // Never requested, whatever else matches: discharge, bed transfer, billing,
@@ -501,7 +509,75 @@ function describePage(html, pattern) {
 
 const plainText = (value) => (/[<&]/.test(String(value)) ? clean(cheerio.load('<i>' + String(value) + '</i>')('i').text()) : clean(String(value)));
 
+// The extra values the Employee Search box sends with what is typed. They are read from
+// the roster page itself each time (a hidden input of that name or id, else a literal or
+// `$('#id').val()` in the page's script) so a change on H360 is followed, not guessed.
+// H360_EMP_SEARCH_PARAMS (JSON) overrides when the page cannot be read.
+function employeeSearchForm(html) {
+  const $ = cheerio.load(html || '');
+  const params = {};
+  const found = [];
+  const inputValue = (key) => {
+    const $el = $(`input[name="${key}"], input#${key}, select[name="${key}"], select#${key}`).first();
+    if (!$el.length) return null;
+    if ($el.is('select')) return $el.find('option[selected]').attr('value') || $el.find('option').first().attr('value') || '';
+    return $el.attr('value') || '';
+  };
+  const script = $('script').map((_, el) => $(el).html() || '').get().join('\n');
+  for (const key of EMPLOYEE_SEARCH_FIELDS) {
+    let value = inputValue(key);
+    if (value !== null) { found.push(key + ':input'); params[key] = value; continue; }
+    const literal = script.match(new RegExp(`["']?${key}["']?\\s*:\\s*["']([^"'\\n]{0,80})["']`));
+    if (literal) { found.push(key + ':script'); params[key] = literal[1]; continue; }
+    const byId = script.match(new RegExp(`["']?${key}["']?\\s*:\\s*\\$\\(\\s*["']#([\\w-]+)["']\\s*\\)\\.val\\(\\)`));
+    if (byId) {
+      value = $(`#${byId[1]}`).attr('value');
+      if (value !== undefined) { found.push(key + ':#' + byId[1]); params[key] = value; continue; }
+    }
+    const numeric = script.match(new RegExp(`["']?${key}["']?\\s*:\\s*(\\d{1,6})\\b`));
+    if (numeric) { found.push(key + ':number'); params[key] = numeric[1]; continue; }
+    params[key] = '';
+  }
+  try {
+    const forced = process.env.H360_EMP_SEARCH_PARAMS ? JSON.parse(process.env.H360_EMP_SEARCH_PARAMS) : null;
+    if (forced && typeof forced === 'object') for (const key of EMPLOYEE_SEARCH_FIELDS) if (forced[key] !== undefined) { params[key] = String(forced[key]); found.push(key + ':env'); }
+  } catch (err) { /* a broken override is ignored */ }
+  return { params, found, mentionsSearch: script.indexOf(EMPLOYEE_SEARCH_PATH.slice(1)) >= 0 };
+}
+
+const isoOfDmy = (value) => {
+  const m = String(value || '').trim().match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+  return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : '';
+};
+
+// One person as the Employee Search answers them, in the app's words. The signature
+// image and H360's internal lookup numbers that mean nothing outside H360 are left out.
+function employeeRows(text) {
+  let rows;
+  try { rows = typeof text === 'string' ? JSON.parse(text) : text; } catch (err) { return null; }
+  if (!Array.isArray(rows)) return null;
+  return rows.filter((r) => r && typeof r === 'object' && String(r.person_code || '').trim()).map((r) => {
+    const phones = String(r.phone_mobile || '').split(/[,/;]+/).map((p) => p.replace(/[^\d+]/g, '')).filter((p) => p.replace(/\D/g, '').length >= 10);
+    return {
+      code: String(r.person_code).trim(),
+      name: clean(String(r.full_name || '')),
+      gender: clean(String(r.gender_txt || '')),
+      marital: clean(String(r.marital_status || '')),
+      age: clean(String(r.age || '')),
+      phones,
+      dept: clean(String(r.su_name || '')),
+      designation: clean(String(r.designation || '')),
+      joinDate: isoOfDmy(r.join_date),
+      joinDateRaw: clean(String(r.join_date || '')),
+      service: clean(String(r.lenght_service || r.length_service || '')),
+      specialization: clean(String(r.specialization || '')),
+      h360Id: String(r.doctor_id || ''),
+    };
+  });
+}
+
 module.exports = {
   LIST_PATH, REGISTER_PATH, PATIENT_PAGES, MENU_PAGES, listButtons, assertReadOnly, subPage, parseMenu, parseSubPages, parseAlerts, extract, scriptAddresses,
   loginForm, loginMessage, csrfToken, stationOptions, plainTables, plainText, describePage,
+  EMPLOYEE_ROSTER_PATH, EMPLOYEE_SEARCH_PATH, EMPLOYEE_SEARCH_FIELDS, employeeSearchForm, employeeRows, isoOfDmy,
 };

@@ -981,6 +981,11 @@ require('./supervisor-reports').mount(app, { requireApi: [session.requireApi, ac
 // IPD Admission) and the log sheet filled in from them. Same gate; the H360 login and the
 // storage choice are administrator-only inside.
 require('./h360').mount(app, { requireApi: [session.requireApi, access.requireModule('supervisor')] });
+// Staff Management → H360 Check: our staff register compared with H360's employee list
+// (Employee Search only; nothing on H360 is pressed or written, and our register is never
+// changed by it). VIEW of staff opens it; the H360 sweep needs staff EDIT (checked inside).
+// Its /cron route carries no session and checks CRON_SECRET itself.
+require('./h360/staff').mount(app, { requireApi: [session.requireApi, access.requirePerm('staff', 'view')] });
 
 // Settings -> Database: browse and repair the Cloudflare D1 tables (admin only).
 require('./d1-admin').mount(app, { requireApi: [session.requireApi, access.attach] });

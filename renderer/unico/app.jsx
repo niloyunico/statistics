@@ -145,7 +145,7 @@ function App(){
     if(s.indexOf('kpi')===0) return 'kpi';
     if(s.indexOf('dc')===0||s.indexOf('ds')===0) return 'datacollection';
     if(s==='reports'||s==='settings'||s==='users') return 'reports';      // Settings + Access Control live in the reports chunk
-    if(s==='staffProfile'||s==='staffForm'||s==='perfStaff') return 'staffprofile';
+    if(s==='staffProfile'||s==='staffForm'||s==='perfStaff'||s==='staffH360') return 'staffprofile';
     if(s.indexOf('perf')===0) return 'performance';
     if(s.indexOf('roster')===0) return 'roster';
     if(s.indexOf('sup')===0) return 'supervisor';
@@ -389,6 +389,10 @@ function App(){
     // Performance is a section of Staff Management now, not a workspace of its own.
     crumbs=['UNICO','Staff Management',PV_TITLE[route.view]||'Performance'];
     body=<PerformanceView view={route.view} emp={route.emp} cycleId={route.cycleId} setRoute={setRoute}/>;
+  } else if(route.view==='staffH360'){
+    // Our register compared with H360's employee list (staff-h360.jsx, staffprofile chunk).
+    crumbs=['UNICO','Staff Management','H360 Check'];
+    body=(typeof window!=='undefined'&&window.StaffH360View)?<window.StaffH360View store={staff} setRoute={setRoute}/>:null;
   } else if(route.view==='staffProfile'){
     const emp=staff.get(route.emp);
     crumbs=['UNICO','Staff Management',emp?emp.name:'Profile'];

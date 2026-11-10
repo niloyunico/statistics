@@ -68,6 +68,30 @@ function standIn() {
 
   // state.shell: a page's address gives an empty frame whose script asks for the page again,
   // marked as coming from a script, and puts the answer into the frame (as H360 does).
+  // Employee Roster (staff lookup): the page carries the token and the hidden values its
+  // Employee Search box sends; the search answers JSON like H360's doctor-info-autocomplete.
+  state.employees = state.employees || [
+    { doctor_id: '11770', person_code: '11809', full_name: 'Khadija Akter Happy ', gender_txt: 'Female', marital_status: 'Single', age: '24', phone_mobile: '01613068260', su_name: 'Nursing Services - MICU', designation: 'Staff Nurse', join_date: '01-10-2026', lenght_service: '0Y 1M 10D ' },
+    { doctor_id: '11001', person_code: '11410', full_name: 'Md. Ashraf Ali Munna', gender_txt: 'Male', marital_status: 'Single', age: '29', phone_mobile: '01305084466', su_name: 'Nursing Services - SICU', designation: 'Patient Care Assistant', join_date: '15-09-2025', lenght_service: '1Y 1M ' },
+    { doctor_id: '11002', person_code: '11391', full_name: 'Akram Hossain', gender_txt: 'Male', marital_status: 'Married', age: '25', phone_mobile: '01717138266', su_name: 'Nursing Services - OT', designation: 'Patient Care Assistant', join_date: '06-09-2025', lenght_service: '1Y 2M ' },
+    { doctor_id: '11003', person_code: '11843', full_name: 'Mst. Arifa Akter Lipi', gender_txt: 'Female', marital_status: 'Married', age: '27', phone_mobile: '01700000001, 01800000002', su_name: 'Nursing Services - CCU', designation: 'Staff Nurse', join_date: '20-10-2026', lenght_service: '0Y 0M 20D ' },
+    { doctor_id: '11004', person_code: '10123', full_name: 'Dr. Some Doctor', gender_txt: 'Male', marital_status: 'Married', age: '45', phone_mobile: '01900000009', su_name: 'Medicine', designation: 'Consultant', join_date: '01-01-2020', lenght_service: '6Y ' },
+  ];
+  state.employeeSearches = [];
+  app.get('/roster/employee-roster', needLogin, (req, res) => res.send(page(`<div class="card"><label>Employee Search*</label>
+      <input type="hidden" id="personnel_ind_name" name="personnel_ind_name" value="employee">
+      <input type="hidden" id="personnel_ind" name="personnel_ind" value="1">
+      <input type="text" id="employee_search" placeholder="Employee">
+      <button id="validate">Validate</button><button id="save">Save</button><button id="all-delete">All Delete</button></div>
+      <script>$('#employee_search').typeahead({ source: function (q, cb) { $.post('/doctor-info-autocomplete', { search_data: q, personnel_ind_name: $('#personnel_ind_name').val(), personnel_ind: $('#personnel_ind').val(), designation_code: '' }, cb); } });</script>`)));
+  app.post('/doctor-info-autocomplete', (req, res) => {
+    if (!signedIn(req) || req.headers['x-csrf-token'] !== 'csrf-123') return res.status(419).json({ message: 'CSRF token mismatch.' });
+    if (req.body.personnel_ind_name !== 'employee' || req.body.personnel_ind !== '1' || req.body.designation_code === undefined) return res.json([]);
+    const q = String(req.body.search_data || '').toLowerCase();
+    state.employeeSearches.push(q);
+    res.json(state.employees.filter((e) => [e.person_code, e.full_name, e.phone_mobile].some((v) => String(v).toLowerCase().includes(q))));
+  });
+
   app.get(['/v2/ipd/nurse-station-receive-request', '/ipd/ipd-admission', '/prescription/appointments/opd-nurse-station'], needLogin, (req, res, next) => {
     if (!state.shell || req.headers['x-requested-with']) return next();
     res.send(page(`<div id="page-content"></div><script>

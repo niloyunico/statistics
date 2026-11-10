@@ -75,7 +75,7 @@ const UNICO_MODULES = [
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
   datacol:['dcReview','dcPatient','dcQuality','input','dcSettings','dcShare','dcFields','dcAnalytics'],
-  staff:  ['staffHome','staffAll','staffNewEntries','staffRecentUpdates','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests'],
+  staff:  ['staffHome','staffAll','staffNewEntries','staffRecentUpdates','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests','staffH360'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   supervisor:['supHome','supBoard','supNew','supHistory','supReport','supH360Scan','supH360','supSheet'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
@@ -319,6 +319,7 @@ function unicoSidebarGroups(moduleId){
       {id:'traineeHome',label:'Trainee Nurses',icon:I.steth,match:['traineeHome','trainees']},
       {id:'nurseCompliance',label:'Compliance',icon:I.heart,match:['nurseCompliance','pcaCompliance']},
       {id:'staffPrevious',label:'Previous Staff',icon:I.doc},
+      {id:'staffH360',label:'H360 Check',icon:I.check},
       {id:'perfHome',label:'Performance',icon:I.trend},
       {id:'rosterHome',label:'Duty Roster',icon:I.grid}]},
   ];
@@ -631,6 +632,7 @@ function unicoWorkspaceSubAll(view){
     { label:'Compliance',     view:'nurseCompliance', mod:'staff', match:['nurseCompliance','pcaCompliance'] },
     { label:'Previous Staff', view:'staffPrevious',   mod:'staff' },
     { label:'Nurse / PCA requests', view:'staffRequests', mod:'staff' },
+    { label:'H360 Check',     view:'staffH360',       mod:'staff' },
     { label:'Performance',    view:'perfHome',        mod:'perf', divider:true,
       match:UNICO_MODULE_VIEWS.perf },
     { label:'Attrition & Exits', view:'perfAttrition', mod:'attrition', match:UNICO_MODULE_VIEWS.attrition },
