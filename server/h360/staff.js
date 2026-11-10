@@ -15,7 +15,7 @@
  *   - Nursing Services people missing from our register    POST /api/h360-staff/sweep[/step], GET /missing
  *   - directory badges                                     GET  /api/h360-staff/status
  *   - Excel                                                GET  /api/h360-staff/export.xlsx
- *   - daily re-check                                       GET  /api/h360-staff/cron (Vercel cron)
+ *   - daily re-check, OFF unless turned on                 GET  /api/h360-staff/cron (Vercel cron), POST /options
  *
  * Signs in with the H360 login an administrator saved for the H360 link (settings.js);
  * the sign-in cookies are kept sealed so a lookup does not sign in every time.
@@ -333,6 +333,19 @@ function createStaffService(deps = {}) {
     return { list: match.missingFromRegister(rows, register), known: rows.filter((r) => r.nursing).length, sweep: sweep.last || null, run: publicRun(sweep.run) };
   }
 
+  // The daily automatic check is OFF unless someone with staff edit access turns it on
+  // (user 2026-11-10: the register hardly changes from day to day).
+  async function options() {
+    const d = await db();
+    const doc = (await settings.read(d, 'staffOptions')) || {};
+    return { daily: doc.daily === true, dailyBy: doc.dailyBy || '', dailyAt: doc.dailyAt || null };
+  }
+  async function setOptions(changes, by) {
+    const d = await db();
+    if (typeof changes.daily === 'boolean') await settings.write(d, 'staffOptions', { daily: changes.daily, dailyBy: by || '', dailyAt: new Date() });
+    return options();
+  }
+
   async function info() {
     const d = await db();
     const login = await settings.login(d);
@@ -344,11 +357,13 @@ function createStaffService(deps = {}) {
       verify: { last: lastInfo(verify), run: publicRun(verify.run) },
       sweep: { last: sweep.last || null, run: publicRun(sweep.run) },
       searchForm: diag && diag.form ? diag.form : null,
+      options: await options(),
     };
   }
 
   // The daily check: finish or start today's whole-register verify, then the weekly sweep.
   async function daily(budgetMs = 45000) {
+    if (!(await options()).daily) return ['daily check is off'];
     const until = Date.now() + budgetMs;
     const d = await db();
     const verify = (await settings.read(d, 'staffVerify')) || {};
@@ -396,7 +411,7 @@ function createStaffService(deps = {}) {
     return wb;
   }
 
-  return { search, lookup, verifyOne, verifyStart, verifyStep, results, sweepStart, sweepStep, missing, info, daily, workbook, snapshot };
+  return { options, setOptions, search, lookup, verifyOne, verifyStart, verifyStep, results, sweepStart, sweepStep, missing, info, daily, workbook, snapshot };
 }
 
 /* ---------------- routes ---------------- */
@@ -422,6 +437,10 @@ function mount(app, opts = {}) {
   app.get(P + '/info', guard, route(async (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json({ ...(await service.info()), canEdit: canEdit(req) });
+  }));
+
+  app.post(P + '/options', guard, editOnly, json, route(async (req, res) => {
+    res.json(await service.setOptions({ daily: (req.body || {}).daily }, who(req)));
   }));
 
   app.get(P + '/search', guard, route(async (req, res) => {

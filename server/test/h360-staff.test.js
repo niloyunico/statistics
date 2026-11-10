@@ -141,6 +141,12 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
     assert.ok(!kept.some((k) => k.code === '10123'), 'other hospital staff are not stored');
     ok('sweep: H360 Nursing Services people missing from the register are found; the doctor is not stored');
 
+    assert.deepStrictEqual(await service.daily(2000), ['daily check is off']);
+    assert.strictEqual((await service.setOptions({ daily: true }, 'tester')).daily, true);
+    assert.ok((await service.daily(3000)).some((x) => /verify/.test(x)));
+    await service.setOptions({ daily: false }, 'tester');
+    ok('the daily check is off until someone turns it on, and runs once it is');
+
     const wb = await service.workbook(new Set(register.map((r) => r.id)));
     assert.deepStrictEqual(wb.worksheets.map((w) => w.name), ['Verify', 'Not in register', 'Duplicates & IDs']);
     assert.strictEqual(wb.getWorksheet('Verify').rowCount, 7);

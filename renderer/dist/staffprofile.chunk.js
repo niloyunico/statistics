@@ -9021,7 +9021,35 @@ function HxVerify({
     style: {
       marginBottom: 10
     }
-  }, "Last full check ", hxWhen(data.last.finishedAt), data.last.by ? ' by ' + data.last.by : '', data.last.dept ? ' · ' + data.last.dept + ' only' : '', data.previous ? ' · compared with ' + hxWhen(data.previous.finishedAt) : '', ". A daily check runs by itself every morning."), !list.length && !run && React.createElement("div", {
+  }, "Last full check ", hxWhen(data.last.finishedAt), data.last.by ? ' by ' + data.last.by : '', data.last.dept ? ' · ' + data.last.dept + ' only' : '', data.previous ? ' · compared with ' + hxWhen(data.previous.finishedAt) : '', "."), info && info.options && React.createElement("label", {
+    style: {
+      display: 'flex',
+      gap: 7,
+      alignItems: 'center',
+      fontSize: 12.5,
+      marginBottom: 10,
+      color: 'var(--ink-2)'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: !!info.options.daily,
+    disabled: !hxCanEdit(),
+    onChange: async e => {
+      const on = e.target.checked;
+      try {
+        await hxApi('/api/h360-staff/options', {
+          method: 'POST',
+          body: {
+            daily: on
+          }
+        });
+        hxToast(on ? 'Daily H360 check turned on (about 08:30 every morning).' : 'Daily H360 check turned off.');
+      } catch (err) {
+        setErr(err.message);
+      }
+      reload && reload();
+    }
+  }), "Check every morning by itself (about 08:30) \u2014 ", info.options.daily ? 'on' : 'off', !hxCanEdit() ? ' · staff edit access changes this' : ''), !list.length && !run && React.createElement("div", {
     className: "hx-alert info"
   }, "No check yet. Press \u201CVerify with H360\u201D to compare every active staff record with H360."), list.length > 0 && React.createElement(React.Fragment, null, React.createElement("div", {
     className: "hx-tiles",

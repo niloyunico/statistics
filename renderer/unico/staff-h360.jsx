@@ -281,7 +281,17 @@ function HxVerify({ store, setRoute, ready, info, reload }) {
       </div>
       <HxProgress run={run} what="Checking records against H360" />
       {err && <div className="hx-alert red">{err}</div>}
-      {data && data.last && <div className="hx-muted" style={{ marginBottom: 10 }}>Last full check {hxWhen(data.last.finishedAt)}{data.last.by ? ' by ' + data.last.by : ''}{data.last.dept ? ' · ' + data.last.dept + ' only' : ''}{data.previous ? ' · compared with ' + hxWhen(data.previous.finishedAt) : ''}. A daily check runs by itself every morning.</div>}
+      {data && data.last && <div className="hx-muted" style={{ marginBottom: 10 }}>Last full check {hxWhen(data.last.finishedAt)}{data.last.by ? ' by ' + data.last.by : ''}{data.last.dept ? ' · ' + data.last.dept + ' only' : ''}{data.previous ? ' · compared with ' + hxWhen(data.previous.finishedAt) : ''}.</div>}
+      {/* Daily automatic check: OFF by default (the register hardly changes day to day). */}
+      {info && info.options && <label style={{ display: 'flex', gap: 7, alignItems: 'center', fontSize: 12.5, marginBottom: 10, color: 'var(--ink-2)' }}>
+        <input type="checkbox" checked={!!info.options.daily} disabled={!hxCanEdit()} onChange={async (e) => {
+          const on = e.target.checked;
+          try { await hxApi('/api/h360-staff/options', { method: 'POST', body: { daily: on } }); hxToast(on ? 'Daily H360 check turned on (about 08:30 every morning).' : 'Daily H360 check turned off.'); }
+          catch (err) { setErr(err.message); }
+          reload && reload();
+        }} />
+        Check every morning by itself (about 08:30) — {info.options.daily ? 'on' : 'off'}{!hxCanEdit() ? ' · staff edit access changes this' : ''}
+      </label>}
       {!list.length && !run && <div className="hx-alert info">No check yet. Press “Verify with H360” to compare every active staff record with H360.</div>}
       {list.length > 0 && <React.Fragment>
         <div className="hx-tiles" style={{ marginBottom: 12 }}>
