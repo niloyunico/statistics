@@ -33,6 +33,9 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
   assert.ok(match.nameScore('Runa Akter', 'Mishu Akter') < match.SIMILAR_NAME, 'a shared "Akter" is not the same person');
   assert.ok(match.nameScore('Rina Akter', 'Runa Akter') < match.SIMILAR_NAME, 'one letter of the given name makes another person');
   assert.ok(match.nameScore('Bipasa Maitra', 'Akram Hossain') < 0.2);
+  assert.ok(match.nameScore('Most Nurun Nahar Khatun', 'mst. Nurunnaher Khatun') >= match.SAME_NAME, 'a name split in one system, joined in the other');
+  assert.ok(match.nameScore('Nur Jahan', 'Nurjahan Begum') >= match.SAME_NAME);
+  assert.ok(match.nameScore('Sumaiya Islam', 'Sumaiya Akter') < match.SAME_NAME, 'a different family name is not the same written name');
   ok('names: Mst./Md., Afroza/Afroja and a missing middle name are the same person; a shared family name is not');
 
   assert.deepStrictEqual(match.phoneKeys('01700000001, 01800000002'), ['1700000001', '1800000002']);

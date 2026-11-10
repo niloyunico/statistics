@@ -1761,9 +1761,23 @@ const sameWord = (t, u) => {
 // 0..1: how likely the two names are the same person's. Word by word (order and a
 // missing middle name matter little), sound-alike spellings folded, common family
 // names weighted down.
+// One system splits a name the other writes as one word ("Nurun Nahar" / "Nurunnaher",
+// "Nur Jahan" / "Nurjahan"): two neighbouring words of X that, joined, are nearly one word of
+// Y are merged before comparing. Nothing is merged otherwise, so "Rina Akter" / "Runa Akter"
+// and "Sumaiya Islam" / "Sumaiya Akter" are compared word by word as before.
+function mergeSplits(X, Y) {
+  const out = X.slice();
+  for (let i = 0; i < out.length - 1; i++) {
+    const both = sound(out[i] + out[i + 1]);
+    if (both.length >= 6 && Y.some((u) => u.length >= 6 && ratio(both, u) >= 0.85)) { out.splice(i, 2, both); i--; }
+  }
+  return out;
+}
 function nameScore(a, b) {
-  const A = nameTokens(a).map(sound), B = nameTokens(b).map(sound);
+  let A = nameTokens(a).map(sound), B = nameTokens(b).map(sound);
   if (!A.length || !B.length) return 0;
+  A = mergeSplits(A, B);
+  B = mergeSplits(B, A);
   const side = (X, Y) => {
     let got = 0, of = 0;
     for (const t of X) { const w = weight(t); of += w; got += w * Math.max(...Y.map((u) => sameWord(t, u))); }
