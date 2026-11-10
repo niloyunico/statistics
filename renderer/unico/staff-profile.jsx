@@ -959,9 +959,9 @@ function StaffProfile({store, empId, setRoute}){
                     over a dark photo. Red when the council says the licence has lapsed —
                     an expired registration was still verified, and hiding that would let
                     a lapsed licence pass as compliant. */}
-                {e.licence_verified?(()=>{ const ex=(e.licence_verified.primary||{}).expired;
+                {e.licence_verified?(()=>{ const bad=window.UNICO_NAME&&window.UNICO_NAME.bnmcNameState(e,e.licence_verified)==='mismatch'; const ex=(e.licence_verified.primary||{}).expired||bad;
                   return (
-                    <span title={'BNMC '+(ex?'registration expired':'verified')+' — checked '+String(e.licence_verified.at||'').slice(0,10)}
+                    <span title={bad?'BNMC name differs — the saved registration is '+((e.licence_verified.person||{}).name||'another person'):'BNMC '+(ex?'registration expired':'verified')+' — checked '+String(e.licence_verified.at||'').slice(0,10)}
                       style={{position:'absolute',right:-3,bottom:-3,width:26,height:26,borderRadius:'50%',
                         display:'grid',placeItems:'center',background:ex?'#d23a52':'#1f9d57',
                         border:'2.5px solid var(--panel)',boxShadow:'0 2px 6px rgba(0,0,0,.28)'}}>
@@ -979,11 +979,11 @@ function StaffProfile({store, empId, setRoute}){
                     council's own register, not merely typed in. An EXPIRED registration
                     is still "verified" (we did check), so the badge reports what the
                     council actually said rather than flattening both to a green tick. */}
-                {e.licence_verified?(()=>{ const ex=(e.licence_verified.primary||{}).expired;
-                  return <span title={'Checked against the BNMC register on '+String(e.licence_verified.at||'').slice(0,10)}
+                {e.licence_verified?(()=>{ const bad=window.UNICO_NAME&&window.UNICO_NAME.bnmcNameState(e,e.licence_verified)==='mismatch'; const ex=(e.licence_verified.primary||{}).expired||bad;
+                  return <span title={bad?'The BNMC record saved here is '+((e.licence_verified.person||{}).name||'another person')+' — check the registration number':'Checked against the BNMC register on '+String(e.licence_verified.at||'').slice(0,10)}
                     style={{display:'inline-flex',alignItems:'center',gap:4,fontSize:11,fontWeight:700,padding:'3px 10px',borderRadius:15,
                       color:ex?'#a32c41':'#157a43',background:ex?'#fdf3f4':'#eef8f1',border:'1px solid '+(ex?'#f0c2ca':'#cde9d8')}}>
-                    <Ic d={I.check} s={11} c={ex?'#a32c41':'#157a43'}/>BNMC {ex?'expired':'verified'}</span>;
+                    <Ic d={I.check} s={11} c={ex?'#a32c41':'#157a43'}/>BNMC {bad?'name differs':ex?'expired':'verified'}</span>;
                 })():null}
               </div>
             </div>
@@ -1049,9 +1049,10 @@ function StaffProfile({store, empId, setRoute}){
                       {/* The council's own answer, as captured on the day it was
                           checked. Shown here so the register does not have to be up
                           — and so an auditor can see WHEN it was last confirmed. */}
-                      {e.licence_verified?<span title={'BNMC register checked '+String(e.licence_verified.at||'').slice(0,10)}
-                        style={{fontSize:10.5,fontWeight:700,color:'#157a43',background:'#157a4318',border:'1px solid #157a4344',borderRadius:6,padding:'1px 8px',display:'inline-flex',alignItems:'center',gap:3}}>
-                        <Ic d={I.check} s={11} c="#157a43"/>BNMC verified {String(e.licence_verified.at||'').slice(0,10)}</span>:null}
+                      {e.licence_verified?(()=>{ const bad=window.UNICO_NAME&&window.UNICO_NAME.bnmcNameState(e,e.licence_verified)==='mismatch'; const c=bad?'#a32c41':'#157a43';
+                        return <span title={bad?'The BNMC record saved here is '+((e.licence_verified.person||{}).name||'another person'):'BNMC register checked '+String(e.licence_verified.at||'').slice(0,10)}
+                        style={{fontSize:10.5,fontWeight:700,color:c,background:c+'18',border:'1px solid '+c+'44',borderRadius:6,padding:'1px 8px',display:'inline-flex',alignItems:'center',gap:3}}>
+                        <Ic d={I.check} s={11} c={c}/>{bad?'BNMC name differs':'BNMC verified '+String(e.licence_verified.at||'').slice(0,10)}</span>; })():null}
                     </div>
                     {e.licence_verified&&e.licence_verified.primary?(
                       <div style={{fontSize:11.5,color:'var(--muted)',marginTop:5,display:'flex',flexWrap:'wrap',gap:'2px 10px'}}>
@@ -1075,7 +1076,7 @@ function StaffProfile({store, empId, setRoute}){
               person is, which institution trained them, and how long the registration
               runs. It is a SNAPSHOT (see server/bnmc-verify.js) — deliberately readable
               on a day BNMC is unreachable, and re-checked from Edit profile. */}
-          {e.licence_verified?(()=>{
+          {e.licence_verified && !(e.role!=='PCA' && e.is_active!==false && (!window.unicoCan||window.unicoCan('staff','edit')))?(()=>{
             const v=e.licence_verified, per=v.person||{}, regs=v.registrations||[], p=v.primary||{};
             const ex=!!p.expired;
             return (
@@ -2760,7 +2761,12 @@ function BnmcVerify({ f, set, store, empId, editing }){
   const [storeWarn,setStoreWarn]=React.useState('');
   const [programs,setPrograms]=React.useState([]);
   const [mProg,setMProg]=React.useState(f.licence_program||'');
+  const [mismatch,setMismatch]=React.useState(null);   // a BNMC record whose name is somebody else's
   const v=f.licence_verified||null;
+  // The one name rule (name-match.js): BNMC's registrant must be this person.
+  const NM=window.UNICO_NAME;
+  const nameBad=(m)=>!!(NM&&String(f.name||'').trim()&&(m&&m.person||{}).name&&NM.nameScore(f.name,m.person.name)<NM.SIMILAR_NAME);
+  const vBad=!!(NM&&v&&NM.bnmcNameState(f,v)==='mismatch');
 
   // BNMC searches on digits only; people type "BNMC-7749" or "7749 " into the box.
   const digits=String(f.licence_no||'').replace(/\D/g,'');
@@ -2792,12 +2798,13 @@ function BnmcVerify({ f, set, store, empId, editing }){
     return {matches:out,total};
   };
 
-  const apply=(m)=>{
+  const apply=(m,confirmed)=>{
     const p=m.primary||{}, per=m.person||{};
     const snap={
       at:m.fetchedAt||new Date().toISOString(), number:digits,
       program:m.program, programName:m.programName,
       person:per, registrations:m.registrations||[], primary:p,
+      ...(confirmed?{confirmed:true}:{}),
     };
     set('licence_program',m.program);
     set('licence_verified',snap);
@@ -2842,6 +2849,7 @@ function BnmcVerify({ f, set, store, empId, editing }){
     }
     // One match is only presented as the answer, never as a certainty — the operator
     // still sees the name and can widen the search if it is the wrong person.
+    if(matches.length===1&&nameBad(matches[0])){ setMismatch(matches[0]); setNote(''); return true; }
     if(matches.length===1){ apply(matches[0]); setNote(scope==='edu'
       ? 'Matched on the course implied by this staff member’s education. Other courses were not searched.'
       : 'One match across all '+total+' courses.'); }
@@ -2852,7 +2860,7 @@ function BnmcVerify({ f, set, store, empId, editing }){
   // The main action: education-scoped first (usually one or two requests), widening to
   // every course only if that finds nothing.
   const verify=async()=>{
-    setErr(''); setNote(''); setCands(null); setProg(null);
+    setErr(''); setNote(''); setCands(null); setProg(null); setMismatch(null);
     try{
       if(edu){
         setBusy('edu');
@@ -2868,7 +2876,7 @@ function BnmcVerify({ f, set, store, empId, editing }){
 
   // Explicit widening, for when the education-scoped hit is the wrong person.
   const searchAll=async()=>{
-    setErr(''); setNote(''); setCands(null); setProg(null); setBusy('all');
+    setErr(''); setNote(''); setCands(null); setProg(null); setMismatch(null); setBusy('all');
     try{ const b=await sweep('all'); if(!settle(b.matches,'all',b.total)) setNote('No registration '+digits+' in any course.'); }
     catch(e){ setErr(e.message||'Could not reach the verification service.'); }
     finally{ setBusy(''); setProg(null); }
@@ -2879,6 +2887,8 @@ function BnmcVerify({ f, set, store, empId, editing }){
     try{
       const j=await bnmcApi('/api/bnmc/verify?number='+encodeURIComponent(digits)+'&program='+encodeURIComponent(mProg)+'&fresh=1');
       if(!j.found){ setNote('No registration '+digits+' under that course.'); return; }
+      const one={program:mProg,programName:(programs.find(p=>p.id===mProg)||{}).name||'',person:j.person,registrations:j.registrations,primary:j.primary,fetchedAt:j.fetchedAt};
+      if(nameBad(one)){ setMismatch(one); return; }
       apply({program:mProg,programName:(programs.find(p=>p.id===mProg)||{}).name||'',
         person:j.person,registrations:j.registrations,primary:j.primary,fetchedAt:j.fetchedAt});
     }catch(e){ setErr(e.message||'Lookup failed.'); }
@@ -2886,6 +2896,35 @@ function BnmcVerify({ f, set, store, empId, editing }){
   };
 
   const box={border:'1px solid var(--line)',borderRadius:10,padding:12,background:'#fff'};
+
+  // A SAVED verification of somebody else: take it off (kept on the server, not deleted) …
+  const removeVer=async()=>{
+    if(!window.confirm('Remove this BNMC verification from '+(f.name||'this record')+'?\n\nIt is kept in the record history (not deleted). The registration number stays — correct it, then verify again.')) return;
+    setErr('');
+    try{
+      if(editing){
+        const r=await fetch('/api/bnmc/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({staffId:empId})});
+        const j=await r.json().catch(()=>({}));
+        if(!r.ok||!j.ok) throw new Error(j.error||'Could not remove it.');
+        // The page's server copy must not put it back on the next load.
+        try{ const src=window.__UNICO_STAFF__; if(Array.isArray(src)){ const x=src.find(r=>String(r.id)===String(empId)); if(x) delete x.licence_verified; } }catch(e){}
+      }
+      set('licence_verified',null);
+      if(editing&&store&&store.update) store.update(empId,{licence_verified:null});
+      setStoredSrv(false); setSavedNow(false);
+      setNote('Verification removed. Correct the registration number, then verify again.');
+    }catch(e){ setErr(e.message); }
+  };
+  // … or confirm it IS this person (a changed name, a nickname).
+  const confirmVer=()=>{
+    if(!window.confirm('Keep '+((v&&v.person||{}).name||'this BNMC record')+' as '+(f.name||'this person')+'’s registration?\n\nOnly if it really is the same person.')) return;
+    const snap={...v,confirmed:true};
+    set('licence_verified',snap);
+    if(editing&&store&&store.update) store.update(empId,{licence_verified:snap});
+    if(editing) fetch('/api/bnmc/record',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({staffId:empId,empId:f.emp_id||null,licence_no:f.licence_no||digits,licence_program:v.program,verification:snap})})
+      .then(r=>r.json()).then(j=>{ if(j&&j.ok) setStoredSrv(true); else if(j&&j.error) setStoreWarn(j.error); }).catch(()=>{});
+  };
 
   // A field the council disagrees with. Shown rather than applied; `take` is the click.
   const diffs=(()=>{
@@ -2930,17 +2969,42 @@ function BnmcVerify({ f, set, store, empId, editing }){
       {err?<div style={{...box,borderColor:'#f0c2ca',background:'#fdf3f4',color:'#a32c41',fontSize:12.5,fontWeight:600}}>{err}</div>:null}
       {note&&!cands?<div style={{...box,borderColor:'#dbe4ee',background:'var(--panel-2)',color:'var(--ink-2)',fontSize:12,fontWeight:600}}>{note}</div>:null}
 
+      {/* BNMC's registrant is somebody else by name: nothing is saved until a person decides. */}
+      {mismatch&&!cands?(
+        <div style={{...box,borderColor:'#f0c2ca',background:'#fdf3f4',display:'flex',flexDirection:'column',gap:9}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:'#a32c41'}}>Not the same person — nothing saved</div>
+          <div style={{fontSize:12.5,color:'#7a1f30'}}>BNMC registration <b>{digits}</b> belongs to <b>{(mismatch.person||{}).name}</b>{(mismatch.primary||{}).course?' ('+mismatch.primary.course+')':''}, not <b>{f.name}</b>. The number on this record may be wrong, or BNMC holds this person under another course.</div>
+          <BnmcRecord m={mismatch} compact/>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <button type="button" className="btn sm" onClick={()=>{ setMismatch(null); searchAll(); }} disabled={!!busy||!digits}>Search all courses</button>
+            <button type="button" className="btn sm" onClick={()=>{ if(window.confirm('Save BNMC’s '+((mismatch.person||{}).name||'record')+' as '+(f.name||'this person')+'’s registration?\n\nOnly if it really is the same person (for example a changed name).')){ const m=mismatch; setMismatch(null); apply(m,true); } }}>Same person — save anyway</button>
+            <button type="button" className="btn sm" onClick={()=>setMismatch(null)}>Cancel</button>
+          </div>
+        </div>
+      ):null}
+
       {/* Several people, one number. No default, no pre-selection — the operator picks. */}
       {cands?(
         <div style={{display:'flex',flexDirection:'column',gap:9}}>
           <div style={{...box,borderColor:'#f2ddb4',background:'#fdf8ec',color:'#8a5d09',fontSize:12.5,fontWeight:700}}>{note}</div>
-          {cands.matches.map((m,i)=><BnmcRecord key={i} m={m} compact onPick={()=>apply(m)}/>)}
+          {cands.matches.map((m,i)=><BnmcRecord key={i} m={m} compact onPick={()=>{ if(nameBad(m)){ setCands(null); setMismatch(m); } else apply(m); }}/>)}
+        </div>
+      ):null}
+
+      {v&&!cands&&vBad?(
+        <div style={{...box,borderColor:'#f0c2ca',background:'#fdf3f4',display:'flex',flexDirection:'column',gap:8}}>
+          <div style={{fontSize:12.5,fontWeight:800,color:'#a32c41'}}>BNMC name differs — this saved verification is probably another person’s</div>
+          <div style={{fontSize:12.5,color:'#7a1f30'}}>The BNMC record saved here is <b>{(v.person||{}).name}</b>, not <b>{f.name}</b>. Check the registration number{digits?' ('+digits+')':''}.</div>
+          {editing||store?<div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <button type="button" className="btn sm" onClick={removeVer}>Remove this verification</button>
+            <button type="button" className="btn sm" onClick={confirmVer}>Same person — keep</button>
+          </div>:null}
         </div>
       ):null}
 
       {v&&!cands?(
         <div style={{display:'flex',flexDirection:'column',gap:9}}>
-          <div style={{display:'flex',alignItems:'center',gap:9,padding:'9px 13px',borderRadius:9,
+          {!vBad?<div style={{display:'flex',alignItems:'center',gap:9,padding:'9px 13px',borderRadius:9,
             background:(v.primary||{}).expired?'#fdf3f4':'#eef8f1',
             border:'1px solid '+((v.primary||{}).expired?'#f0c2ca':'#cde9d8')}}>
             <Ic d={I.check} s={15} c={(v.primary||{}).expired?'#a32c41':'#157a43'}/>
@@ -2949,7 +3013,7 @@ function BnmcVerify({ f, set, store, empId, editing }){
             </span>
             <span style={{flex:1}}/>
             <span style={{fontSize:11,color:'var(--muted)'}}>checked {String(v.at||'').slice(0,10)}</span>
-          </div>
+          </div>:null}
           {/* Be explicit about whether this is on the record yet — the previous version
               looked identical either way, which is how a verification got lost. */}
           <div style={{fontSize:11.5,fontWeight:600,padding:'7px 11px',borderRadius:8,

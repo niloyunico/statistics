@@ -13,6 +13,7 @@
         "includeFiles": [
           "renderer/index.html",
           "renderer/unico/hh-pool.js",
+          "renderer/unico/name-match.js",
           "renderer/unico/dose-library.js",
           "renderer/unico/dose-math.js",
           "server/seed/**",

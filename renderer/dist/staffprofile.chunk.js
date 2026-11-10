@@ -2234,9 +2234,10 @@ function StaffProfile({
     zoomable: true,
     zoomSub: desig || undefined
   }), e.licence_verified ? (() => {
-    const ex = (e.licence_verified.primary || {}).expired;
+    const bad = window.UNICO_NAME && window.UNICO_NAME.bnmcNameState(e, e.licence_verified) === 'mismatch';
+    const ex = (e.licence_verified.primary || {}).expired || bad;
     return React.createElement("span", {
-      title: 'BNMC ' + (ex ? 'registration expired' : 'verified') + ' — checked ' + String(e.licence_verified.at || '').slice(0, 10),
+      title: bad ? 'BNMC name differs — the saved registration is ' + ((e.licence_verified.person || {}).name || 'another person') : 'BNMC ' + (ex ? 'registration expired' : 'verified') + ' — checked ' + String(e.licence_verified.at || '').slice(0, 10),
       style: {
         position: 'absolute',
         right: -3,
@@ -2286,9 +2287,10 @@ function StaffProfile({
   }, "\u25CF Active") : React.createElement("span", {
     className: "chip neg"
   }, "\u25CB Inactive"), e.licence_verified ? (() => {
-    const ex = (e.licence_verified.primary || {}).expired;
+    const bad = window.UNICO_NAME && window.UNICO_NAME.bnmcNameState(e, e.licence_verified) === 'mismatch';
+    const ex = (e.licence_verified.primary || {}).expired || bad;
     return React.createElement("span", {
-      title: 'Checked against the BNMC register on ' + String(e.licence_verified.at || '').slice(0, 10),
+      title: bad ? 'The BNMC record saved here is ' + ((e.licence_verified.person || {}).name || 'another person') + ' — check the registration number' : 'Checked against the BNMC register on ' + String(e.licence_verified.at || '').slice(0, 10),
       style: {
         display: 'inline-flex',
         alignItems: 'center',
@@ -2305,7 +2307,7 @@ function StaffProfile({
       d: I.check,
       s: 11,
       c: ex ? '#a32c41' : '#157a43'
-    }), "BNMC ", ex ? 'expired' : 'verified');
+    }), "BNMC ", bad ? 'name differs' : ex ? 'expired' : 'verified');
   })() : null)), React.createElement("div", {
     style: {
       padding: '8px 22px 0'
@@ -2532,25 +2534,29 @@ function StaffProfile({
       borderRadius: 6,
       padding: '1px 8px'
     }
-  }, profLicence.t) : null, e.licence_verified ? React.createElement("span", {
-    title: 'BNMC register checked ' + String(e.licence_verified.at || '').slice(0, 10),
-    style: {
-      fontSize: 10.5,
-      fontWeight: 700,
-      color: '#157a43',
-      background: '#157a4318',
-      border: '1px solid #157a4344',
-      borderRadius: 6,
-      padding: '1px 8px',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: 3
-    }
-  }, React.createElement(Ic, {
-    d: I.check,
-    s: 11,
-    c: "#157a43"
-  }), "BNMC verified ", String(e.licence_verified.at || '').slice(0, 10)) : null), e.licence_verified && e.licence_verified.primary ? React.createElement("div", {
+  }, profLicence.t) : null, e.licence_verified ? (() => {
+    const bad = window.UNICO_NAME && window.UNICO_NAME.bnmcNameState(e, e.licence_verified) === 'mismatch';
+    const c = bad ? '#a32c41' : '#157a43';
+    return React.createElement("span", {
+      title: bad ? 'The BNMC record saved here is ' + ((e.licence_verified.person || {}).name || 'another person') : 'BNMC register checked ' + String(e.licence_verified.at || '').slice(0, 10),
+      style: {
+        fontSize: 10.5,
+        fontWeight: 700,
+        color: c,
+        background: c + '18',
+        border: '1px solid ' + c + '44',
+        borderRadius: 6,
+        padding: '1px 8px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 3
+      }
+    }, React.createElement(Ic, {
+      d: I.check,
+      s: 11,
+      c: c
+    }), bad ? 'BNMC name differs' : 'BNMC verified ' + String(e.licence_verified.at || '').slice(0, 10));
+  })() : null), e.licence_verified && e.licence_verified.primary ? React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: 'var(--muted)',
@@ -2580,7 +2586,7 @@ function StaffProfile({
     bg: '#f1eefb',
     fg: '#6a52d4',
     br: '#e3dcf7'
-  })))), e.licence_verified ? (() => {
+  })))), e.licence_verified && !(e.role !== 'PCA' && e.is_active !== false && (!window.unicoCan || window.unicoCan('staff', 'edit'))) ? (() => {
     const v = e.licence_verified,
       per = v.person || {},
       regs = v.registrations || [],
@@ -6783,7 +6789,11 @@ function BnmcVerify({
   const [storeWarn, setStoreWarn] = React.useState('');
   const [programs, setPrograms] = React.useState([]);
   const [mProg, setMProg] = React.useState(f.licence_program || '');
+  const [mismatch, setMismatch] = React.useState(null);
   const v = f.licence_verified || null;
+  const NM = window.UNICO_NAME;
+  const nameBad = m => !!(NM && String(f.name || '').trim() && (m && m.person || {}).name && NM.nameScore(f.name, m.person.name) < NM.SIMILAR_NAME);
+  const vBad = !!(NM && v && NM.bnmcNameState(f, v) === 'mismatch');
   const digits = String(f.licence_no || '').replace(/\D/g, '');
   const edu = String(f.qualification || '').trim();
   React.useEffect(() => {
@@ -6821,7 +6831,7 @@ function BnmcVerify({
       total
     };
   };
-  const apply = m => {
+  const apply = (m, confirmed) => {
     const p = m.primary || {},
       per = m.person || {};
     const snap = {
@@ -6831,7 +6841,10 @@ function BnmcVerify({
       programName: m.programName,
       person: per,
       registrations: m.registrations || [],
-      primary: p
+      primary: p,
+      ...(confirmed ? {
+        confirmed: true
+      } : {})
     };
     set('licence_program', m.program);
     set('licence_verified', snap);
@@ -6872,6 +6885,11 @@ function BnmcVerify({
       setNote(scope === 'edu' ? '' : 'BNMC has no registration ' + digits + ' in any of its ' + total + ' courses. Check the number.');
       return false;
     }
+    if (matches.length === 1 && nameBad(matches[0])) {
+      setMismatch(matches[0]);
+      setNote('');
+      return true;
+    }
     if (matches.length === 1) {
       apply(matches[0]);
       setNote(scope === 'edu' ? 'Matched on the course implied by this staff member’s education. Other courses were not searched.' : 'One match across all ' + total + ' courses.');
@@ -6890,6 +6908,7 @@ function BnmcVerify({
     setNote('');
     setCands(null);
     setProg(null);
+    setMismatch(null);
     try {
       if (edu) {
         setBusy('edu');
@@ -6911,6 +6930,7 @@ function BnmcVerify({
     setNote('');
     setCands(null);
     setProg(null);
+    setMismatch(null);
     setBusy('all');
     try {
       const b = await sweep('all');
@@ -6933,6 +6953,18 @@ function BnmcVerify({
         setNote('No registration ' + digits + ' under that course.');
         return;
       }
+      const one = {
+        program: mProg,
+        programName: (programs.find(p => p.id === mProg) || {}).name || '',
+        person: j.person,
+        registrations: j.registrations,
+        primary: j.primary,
+        fetchedAt: j.fetchedAt
+      };
+      if (nameBad(one)) {
+        setMismatch(one);
+        return;
+      }
       apply({
         program: mProg,
         programName: (programs.find(p => p.id === mProg) || {}).name || '',
@@ -6952,6 +6984,67 @@ function BnmcVerify({
     borderRadius: 10,
     padding: 12,
     background: '#fff'
+  };
+  const removeVer = async () => {
+    if (!window.confirm('Remove this BNMC verification from ' + (f.name || 'this record') + '?\n\nIt is kept in the record history (not deleted). The registration number stays — correct it, then verify again.')) return;
+    setErr('');
+    try {
+      if (editing) {
+        const r = await fetch('/api/bnmc/clear', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            staffId: empId
+          })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.ok) throw new Error(j.error || 'Could not remove it.');
+        try {
+          const src = window.__UNICO_STAFF__;
+          if (Array.isArray(src)) {
+            const x = src.find(r => String(r.id) === String(empId));
+            if (x) delete x.licence_verified;
+          }
+        } catch (e) {}
+      }
+      set('licence_verified', null);
+      if (editing && store && store.update) store.update(empId, {
+        licence_verified: null
+      });
+      setStoredSrv(false);
+      setSavedNow(false);
+      setNote('Verification removed. Correct the registration number, then verify again.');
+    } catch (e) {
+      setErr(e.message);
+    }
+  };
+  const confirmVer = () => {
+    if (!window.confirm('Keep ' + ((v && v.person || {}).name || 'this BNMC record') + ' as ' + (f.name || 'this person') + '’s registration?\n\nOnly if it really is the same person.')) return;
+    const snap = {
+      ...v,
+      confirmed: true
+    };
+    set('licence_verified', snap);
+    if (editing && store && store.update) store.update(empId, {
+      licence_verified: snap
+    });
+    if (editing) fetch('/api/bnmc/record', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        staffId: empId,
+        empId: f.emp_id || null,
+        licence_no: f.licence_no || digits,
+        licence_program: v.program,
+        verification: snap
+      })
+    }).then(r => r.json()).then(j => {
+      if (j && j.ok) setStoredSrv(true);else if (j && j.error) setStoreWarn(j.error);
+    }).catch(() => {});
   };
   const diffs = (() => {
     if (!v) return [];
@@ -7057,7 +7150,58 @@ function BnmcVerify({
       fontSize: 12,
       fontWeight: 600
     }
-  }, note) : null, cands ? React.createElement("div", {
+  }, note) : null, mismatch && !cands ? React.createElement("div", {
+    style: {
+      ...box,
+      borderColor: '#f0c2ca',
+      background: '#fdf3f4',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 9
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: '#a32c41'
+    }
+  }, "Not the same person \u2014 nothing saved"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#7a1f30'
+    }
+  }, "BNMC registration ", React.createElement("b", null, digits), " belongs to ", React.createElement("b", null, (mismatch.person || {}).name), (mismatch.primary || {}).course ? ' (' + mismatch.primary.course + ')' : '', ", not ", React.createElement("b", null, f.name), ". The number on this record may be wrong, or BNMC holds this person under another course."), React.createElement(BnmcRecord, {
+    m: mismatch,
+    compact: true
+  }), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => {
+      setMismatch(null);
+      searchAll();
+    },
+    disabled: !!busy || !digits
+  }, "Search all courses"), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => {
+      if (window.confirm('Save BNMC’s ' + ((mismatch.person || {}).name || 'record') + ' as ' + (f.name || 'this person') + '’s registration?\n\nOnly if it really is the same person (for example a changed name).')) {
+        const m = mismatch;
+        setMismatch(null);
+        apply(m, true);
+      }
+    }
+  }, "Same person \u2014 save anyway"), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: () => setMismatch(null)
+  }, "Cancel"))) : null, cands ? React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
@@ -7076,14 +7220,53 @@ function BnmcVerify({
     key: i,
     m: m,
     compact: true,
-    onPick: () => apply(m)
-  }))) : null, v && !cands ? React.createElement("div", {
+    onPick: () => {
+      if (nameBad(m)) {
+        setCands(null);
+        setMismatch(m);
+      } else apply(m);
+    }
+  }))) : null, v && !cands && vBad ? React.createElement("div", {
+    style: {
+      ...box,
+      borderColor: '#f0c2ca',
+      background: '#fdf3f4',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 800,
+      color: '#a32c41'
+    }
+  }, "BNMC name differs \u2014 this saved verification is probably another person\u2019s"), React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: '#7a1f30'
+    }
+  }, "The BNMC record saved here is ", React.createElement("b", null, (v.person || {}).name), ", not ", React.createElement("b", null, f.name), ". Check the registration number", digits ? ' (' + digits + ')' : '', "."), editing || store ? React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: removeVer
+  }, "Remove this verification"), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: confirmVer
+  }, "Same person \u2014 keep")) : null) : null, v && !cands ? React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',
       gap: 9
     }
-  }, React.createElement("div", {
+  }, !vBad ? React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -7112,7 +7295,7 @@ function BnmcVerify({
       fontSize: 11,
       color: 'var(--muted)'
     }
-  }, "checked ", String(v.at || '').slice(0, 10))), React.createElement("div", {
+  }, "checked ", String(v.at || '').slice(0, 10))) : null, React.createElement("div", {
     style: {
       fontSize: 11.5,
       fontWeight: 600,

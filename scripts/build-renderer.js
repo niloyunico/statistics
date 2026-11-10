@@ -58,6 +58,7 @@ const MANIFEST = [
   { file: 'data.js', jsx: false },
   { file: 'store.js', jsx: false },
   { file: 'staff-seed.js', jsx: false },
+  { file: 'name-match.js', jsx: false },      // window.UNICO_NAME — the one person-name rule (also require()d by the server)
   { file: 'staff-data.js', jsx: false },
   { file: 'quality-seed.js', jsx: false },
   { file: 'quality-data.js', jsx: false },

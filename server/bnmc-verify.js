@@ -564,6 +564,18 @@ function mount(app, opts) {
       if (!b.verification || typeof b.verification !== 'object') {
         return res.status(400).json({ ok: false, error: 'Nothing to store.' });
       }
+      // The council's registrant must be this person (the one name rule, renderer/unico/name-match.js).
+      // "Koly Das" was stored as verified under a number BNMC gives to "MST. RABEYA AKTER".
+      // A person who confirmed it is the same person sends verification.confirmed.
+      if (!b.verification.confirmed && b.staffId != null) {
+        try {
+          const row = (await require('./staff-roster').loadRoster({ cached: true })).find((r) => String(r.id) === String(b.staffId));
+          if (row && require('../renderer/unico/name-match.js').bnmcNameState(row, b.verification) === 'mismatch') {
+            return res.status(409).json({ ok: false, code: 'bnmc-name-mismatch',
+              error: 'Not stored: BNMC registration ' + (b.licence_no || '') + ' belongs to ' + b.verification.person.name + ', not ' + row.name + '. Check the number, or confirm it is the same person.' });
+          }
+        } catch (e) { /* the register could not be read: the browser already checked the name */ }
+      }
       const saved = await storeVerification(b.staffId, b.empId, b);
       if (!saved) return res.status(404).json({ ok: false, error: 'That staff member is not in the register yet — save the record first.' });
       activity.record(Object.assign({}, activity.actorOf(req), {
@@ -573,6 +585,35 @@ function mount(app, opts) {
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: String((e && e.message) || 'Could not store the verification.') });
+    }
+  });
+
+  // Take a wrong verification OFF a record (its name is somebody else's). Kept, not deleted: it
+  // moves to licence_mismatch_archive on the staff document, with who and when.
+  app.post('/api/bnmc/clear', requireApi, express.json({ limit: '50kb' }), async (req, res) => {
+    try {
+      const a = await access.forRequest(req);
+      if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
+      if (!a.unrestricted && !access.can(a, 'staff', 'edit')) return res.status(403).json({ ok: false, error: 'You do not have permission to edit staff records.' });
+      const b = req.body || {};
+      const filter = require('./staff-roster').staffIdFilter(b.staffId);
+      if (!filter) return res.status(400).json({ ok: false, error: 'No staff record named.' });
+      const h = await getDbHandle();
+      const dbh = h && h.db ? h.db : h;
+      if (!dbh) return res.status(503).json({ ok: false, error: 'Database not available.' });
+      const doc = await dbh.collection('staff').findOne(filter, { projection: { licence_verified: 1 } });
+      if (doc && doc.licence_verified) {
+        const who = activity.actorOf(req);
+        await dbh.collection('staff').updateOne(filter, {
+          $set: { licence_mismatch_archive: { ...doc.licence_verified, archived_at: new Date().toISOString(), archived_by: (who && (who.name || who.username)) || '', reason: String(b.reason || 'removed: the BNMC name is another person').slice(0, 200) } },
+          $unset: { licence_verified: '' },
+        });
+        try { await cache.bump('staff'); } catch (e) { /* best effort */ }
+      }
+      activity.record(Object.assign({}, activity.actorOf(req), { action: 'bnmc_clear', ip: activity.ipOf(req), detail: 'removed BNMC verification from staff ' + b.staffId + ' (kept in licence_mismatch_archive)' }));
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: String((e && e.message) || 'Could not remove the verification.') });
     }
   });
 

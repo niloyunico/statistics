@@ -92,7 +92,14 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
   assert.deepStrictEqual(sp.nameSuggestion, { name: 'Arnika Barai', evidence: ['same phone', 'same joining date'], kind: 'spelling' });
   assert.strictEqual(match.compareRecord({ ...armicka, h360_name_accepted: 'Arnika Barai' }, [arnika], []).status, 'match');
   assert.strictEqual(match.compareRecord({ ...armicka, phone: '01999999999', doj: '2020-01-01' }, [arnika], []).status, 'id_other_person');
-  assert.strictEqual(match.compareRecord({ ...armicka, name: 'Somebody Else Entirely' }, [arnika], []).status, 'id_other_person', 'a wholly different name is never a spelling mistake');
+  assert.strictEqual(match.compareRecord({ ...armicka, name: 'Somebody Else Entirely', doj: '2020-01-01' }, [arnika], []).status, 'id_other_person', 'a wholly different name with only the phone in common is another person');
+  // Same emp ID + same phone + same joining date: the same person however the name is written,
+  // and Bangla vowels vary ("Marium Islam Roushan" / "Moriom Islam Roshni").
+  const moriom = { code: '11736', name: 'Moriom Islam Roshni', phones: ['01777998200'], joinDate: '2026-08-08', designation: 'Staff Nurse', gender: 'Female' };
+  const marium = { id: 52, emp_id: '11736', name: 'Marium Islam Roushan', phone: '01777998200', doj: '2026-08-08', designation: 'Staff Nurse', gender: 'Female' };
+  const mr = match.compareRecord(marium, [moriom], []);
+  assert.deepStrictEqual([mr.status, mr.nameSuggestion.name], ['valid_diff', 'Moriom Islam Roshni']);
+  assert.notStrictEqual(match.compareRecord({ ...marium, name: 'Koly Das', doj: '2020-01-01' }, [moriom], []).status, 'valid_diff');
   // Same person, name written differently ("Arpana" / "Arpana Rani Das"): valid, H360's name offered.
   const arpH = { code: '11476', name: 'Arpana Rani Das', phones: ['01608087556'], joinDate: '2025-11-01', designation: 'Staff Nurse', dept: 'Nursing Services - Cabin (L-10)', gender: 'Female' };
   const arp = { id: 51, emp_id: '11476', name: 'Arpana', phone: '01608087556', doj: '2025-11-01', designation: 'Staff Nurse', gender: 'Female' };

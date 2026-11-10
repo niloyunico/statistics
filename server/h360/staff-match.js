@@ -35,57 +35,9 @@ const STATUS_LABEL = {
 const STATUS_LEVEL = { id_other_person: 'red', not_in_h360: 'red', duplicate_id: 'red', no_emp_id: 'amber', field_diff: 'amber', valid_diff: 'green', match: 'green', error: 'grey' };
 const worst = (a, b) => (STATUS_ORDER.indexOf(a) <= STATUS_ORDER.indexOf(b) ? a : b);
 
-/* ---------- names ---------- */
-// Honorifics and spellings that differ between the two systems without being a different name.
-const DROP = new Set(['md', 'mst', 'most', 'mosammat', 'mosammad', 'mossammat', 'mosa', 'mohammad', 'mohammed', 'muhammad', 'mohd', 'sk', 'sheikh', 'shaikh', 'mrs', 'mr', 'miss', 'ms', 'dr']);
-const SOUND = [[/ph/g, 'f'], [/z/g, 'j'], [/w/g, 'o'], [/ee/g, 'i'], [/oo/g, 'u'], [/th/g, 't'], [/kh/g, 'k'], [/gh/g, 'g'], [/sh/g, 's'], [/y/g, 'i'], [/(.)\1+/g, '$1']];
-function nameTokens(name) {
-  return String(name || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter((t) => t && !DROP.has(t));
-}
-const sound = (token) => SOUND.reduce((t, [re, to]) => t.replace(re, to), token);
-
-function lev(a, b) {
-  if (a === b) return 0;
-  const m = a.length, n = b.length;
-  if (!m) return n;
-  if (!n) return m;
-  let prev = Array.from({ length: n + 1 }, (_, j) => j);
-  for (let i = 1; i <= m; i++) {
-    const cur = [i];
-    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    prev = cur;
-  }
-  return prev[n];
-}
-const ratio = (a, b) => (!a && !b ? 1 : 1 - lev(a, b) / Math.max(a.length, b.length));
-
-// Family names half the staff share: agreeing on "Akter" says little about being the same person.
-const COMMON = new Set(['akter', 'aktar', 'akhter', 'akther', 'khatun', 'khatoon', 'begum', 'islam', 'hossain', 'hosen', 'hossen', 'hussain', 'rahman', 'sultana', 'khan', 'das', 'roy', 'sarkar', 'sorkar', 'mondal', 'mia', 'miah', 'uddin', 'ahmed', 'ahmad', 'nesa', 'nessa', 'jahan', 'parvin', 'parveen', 'bibi', 'chowdhury', 'biswas', 'haque', 'hoque', 'alam', 'kabir', 'rani', 'bala', 'kumar']
-  .map(sound));
-const weight = (t) => (COMMON.has(t) ? 0.3 : 1);
-// A word counts as the same word only when it is spelt nearly the same ("Rina" is not "Runa").
-const sameWord = (t, u) => { const r = ratio(t, u); return r >= 0.8 ? r : 0; };
-
-// 0..1: how likely the two names are the same person's. Word by word (order and a
-// missing middle name matter little), sound-alike spellings folded, common family
-// names weighted down.
-function nameScore(a, b) {
-  const A = nameTokens(a).map(sound), B = nameTokens(b).map(sound);
-  if (!A.length || !B.length) return 0;
-  const side = (X, Y) => {
-    let got = 0, of = 0;
-    for (const t of X) { const w = weight(t); of += w; got += w * Math.max(...Y.map((u) => sameWord(t, u))); }
-    return of ? got / of : 0;
-  };
-  const fromA = side(A, B), fromB = side(B, A);
-  // The shorter name wholly inside the longer one ("Ashraf Ali" / "Md. Ashraf Ali Munna"),
-  // provided it has a given name of its own, not just "Akter".
-  const [short, long] = A.length <= B.length ? [A, B] : [B, A];
-  const shortFits = short.some((t) => !COMMON.has(t)) && side(short, long) >= 0.9;
-  return Math.max((fromA + fromB) / 2, shortFits ? 0.86 : 0);
-}
-const SAME_NAME = 0.84;     // the same name, perhaps spelt differently
-const SIMILAR_NAME = 0.55;  // under this: a different person
+/* ---------- names: the ONE rule, shared with the browser (renderer/unico/name-match.js) ---------- */
+const NAME = require('../../renderer/unico/name-match.js');
+const { nameTokens, nameScore, SAME_NAME, SIMILAR_NAME } = NAME;
 
 /* ---------- other fields ---------- */
 const phoneKeys = (value) => (Array.isArray(value) ? value : String(value || '').split(/[,/;]+/))
@@ -156,17 +108,22 @@ function compareRecord(rec, byId, others) {
   return { ...base, status, valid, h360: h, nameScore: round(score), fields, suggestions: [], ...(nameField && nameField.spelling ? { nameSuggestion: { name: h.name, evidence, kind: 'spelling' } } : variant ? { nameSuggestion: { name: h.name, evidence: [], kind: 'written' } } : {}) };
 }
 // Two names written the same: case, dots, commas and extra spaces aside.
-const normName = (v) => String(v || '').toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+const normName = NAME.normName;
 const sameText = (a, b) => Boolean(a) && String(a).trim().toLowerCase().replace(/\s+/g, ' ') === String(b || '').trim().toLowerCase().replace(/\s+/g, ' ');
 // What, besides the emp ID, says this H360 person is our record's person.
 function samePersonEvidence(rec, h, score) {
   const out = [];
-  // A wholly different name is not a spelling mistake, whatever else agrees.
+  const alt = String((rec.custom && rec.custom.cf_alternative_phone_number) || '');
+  const ours = phoneKeys([rec.phone, alt].join(',')), theirs = phoneKeys(h.phones);
+  const phone = ours.length > 0 && ours.some((p) => theirs.includes(p));
+  const date = Boolean(rec.doj && h.joinDate && String(rec.doj).slice(0, 10) === h.joinDate);
+  // Same emp ID AND same phone AND same joining date: the same person, however the name is written.
+  if (phone && date) return ['same phone', 'same joining date'];
+  // One of them alone needs a name that is at least partly alike (a wholly different name is not
+  // a spelling mistake), and the date — many join on one day — a name that is close.
   if (score < 0.3) return out;
-  const ours = phoneKeys(rec.phone), theirs = phoneKeys(h.phones);
-  if (ours.length && ours.some((p) => theirs.includes(p))) out.push('same phone');
-  // Many people join on the same day: the date counts only beside a name that is at least close.
-  if (rec.doj && h.joinDate && String(rec.doj).slice(0, 10) === h.joinDate && score >= 0.4) out.push('same joining date');
+  if (phone) out.push('same phone');
+  if (date && score >= 0.4) out.push('same joining date');
   return out;
 }
 const round = (n) => Math.round(n * 100) / 100;
