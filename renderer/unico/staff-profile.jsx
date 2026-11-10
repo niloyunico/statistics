@@ -1151,6 +1151,9 @@ function StaffProfile({store, empId, setRoute}){
               (staff-h360.jsx). Checked on demand; H360 is only searched, never changed. */}
           {window.StaffH360Card && window.unicoH360Ok && window.unicoH360Ok() ? <window.StaffH360Card emp={e} store={store}/> : null}
 
+          {/* BNMC VERIFICATION — run the live BNMC check from the profile (nurses; staff edit). */}
+          {e.role!=='PCA' && e.is_active!==false && (!window.unicoCan||window.unicoCan('staff','edit')) ? <ProfileBnmcBox e={e} store={store}/> : null}
+
           {/* Clinical Privileges — read-only summary of the checklist filled in on the
               create/edit form. Only the granted privilege areas are shown; edit the
               full checklist (all areas, all activities) via Edit profile. */}
@@ -2619,6 +2622,37 @@ function bnmcQualification(course){
        Parsing that produced a bare "Unexpected token '<'" that told nobody anything.
      - Signed out / session expired -> a login redirect, so also HTML.
    Both are ordinary situations with obvious fixes, so both get told plainly. */
+/* Profile → "BNMC verification": the Edit form's live BNMC check (BnmcVerify), run from the
+   profile itself. As on the Edit form, a verification is committed at once — onto the record
+   and onto the staff document server-side — and only blank fields are filled; anything BNMC
+   disagrees with is offered on a click. A registration number typed here is saved with the
+   council's answer. Needs staff edit (the server refuses to store it otherwise). */
+function ProfileBnmcBox({ e, store }){
+  const [num,setNum]=React.useState(e.licence_no||'');
+  React.useEffect(()=>{ setNum(e.licence_no||''); },[e.id, e.licence_no]);
+  const f={...e, licence_no:num};
+  const set=(k,v)=>{ if(k==='licence_no') setNum(v); store.update(e.id,{[k]:v}); };
+  const v=e.licence_verified||null, p=(v&&v.primary)||{};
+  const tone=v?(p.expired?'#d23a52':'#1f9d57'):'var(--line)';
+  return (
+    <div className="card" style={{borderLeft:'4px solid '+tone}}>
+      <div className="card-h" style={{flexWrap:'wrap'}}>
+        <h3>BNMC verification</h3>
+        <span className="sub">{v?'last checked '+String(v.at||'').slice(0,10)+' · registration '+(p.regNo||v.number||'')+(p.status?' · '+p.status:''):'the Bangladesh Nursing & Midwifery Council register'}</span>
+      </div>
+      <div className="card-b" style={{display:'grid',gap:10}}>
+        {!String(e.licence_no||'').trim()?<div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          <span style={{fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>BNMC registration no.</span>
+          <input value={num} inputMode="numeric" onChange={ev=>setNum(ev.target.value.replace(/[^\d]/g,'').slice(0,8))} placeholder="e.g. 82099"
+            style={{border:'1px solid var(--line)',borderRadius:8,padding:'7px 10px',font:'inherit',fontSize:13,width:160,background:'var(--panel)',color:'var(--ink)'}}/>
+          <span style={{fontSize:11.5,color:'var(--muted)'}}>saved on the record when BNMC confirms it</span>
+        </div>:null}
+        <BnmcVerify f={f} set={set} store={store} empId={e.id} editing={true}/>
+      </div>
+    </div>
+  );
+}
+
 async function bnmcApi(url){
   let r;
   try{ r=await fetch(url,{headers:{Accept:'application/json'}}); }
