@@ -193,11 +193,11 @@ function HxCompare({ result, store, onChanged }) {
     <div style={{ marginTop: 8 }}>
       {/* Same emp ID + same phone / joining date, name spelt differently: suggest H360's spelling. */}
       {ns && !done.name && !done.h360_name_accepted && <div className="hx-alert amber">
-        <b>Same person, name spelt differently — spelling mistake?</b> {(() => { const ev = ['emp ID'].concat((ns.evidence || []).map((e) => e.replace(/^same /, ''))); return 'The ' + (ev.length > 1 ? ev.slice(0, -1).join(', ') + ' and ' + ev[ev.length - 1] : ev[0]) + (ev.length > 1 ? ' match' : ' matches') + ' H360.'; })()}
+        {ns.kind === 'written' ? <span><b>Same person — H360 writes the name differently.</b> Update our record to H360's name?</span> : <React.Fragment><b>Same person, name spelt differently — spelling mistake?</b> {(() => { const ev = ['emp ID'].concat((ns.evidence || []).map((e) => e.replace(/^same /, ''))); return 'The ' + (ev.length > 1 ? ev.slice(0, -1).join(', ') + ' and ' + ev[ev.length - 1] : ev[0]) + (ev.length > 1 ? ' match' : ' matches') + ' H360.'; })()}</React.Fragment>}
         <div style={{ marginTop: 6 }}>H360: <b>{ns.name}</b> · our record: <b>{ourName}</b></div>
         {can && <div style={{ marginTop: 9, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn pri sm" onClick={() => apply([{ field: 'name', value: ns.name, label: 'Name' }], 'Name changed to ' + ns.name + '.')}>Use H360 spelling: {ns.name}</button>
-          <button className="btn sm" onClick={() => apply([{ field: 'h360_name_accepted', value: ns.name, label: 'H360 spelling accepted' }], 'Our spelling kept — H360 "' + ns.name + '" accepted as the same name.')}>Keep our spelling: {ourName}</button>
+          <button className="btn pri sm" onClick={() => apply([{ field: 'name', value: ns.name, label: 'Name' }], 'Name changed to ' + ns.name + '.')}>{ns.kind === 'written' ? 'Use H360 name' : 'Use H360 spelling'}: {ns.name}</button>
+          <button className="btn sm" onClick={() => apply([{ field: 'h360_name_accepted', value: ns.name, label: 'H360 spelling accepted' }], 'Our spelling kept — H360 "' + ns.name + '" accepted as the same name.')}>{ns.kind === 'written' ? 'Keep our name' : 'Keep our spelling'}: {ourName}</button>
         </div>}
       </div>}
       {done.h360_name_accepted && <div className="hx-alert info">Our spelling kept; H360's “{ns && ns.name}” is accepted as the same name. <a style={{ cursor: 'pointer', color: 'var(--blue)', marginLeft: 6 }} onClick={() => undo('h360_name_accepted')}>Undo</a></div>}
@@ -211,12 +211,13 @@ function HxCompare({ result, store, onChanged }) {
           <tbody>
             {(result.fields || []).map((f) => {
               const value = hxValueOf(f.key, h);
-              const color = f.info ? 'var(--ink-2)' : f.missing ? '#9a5a06' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
+              const color = f.info ? 'var(--ink-2)' : f.missing || f.variant ? '#9a5a06' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
               let action;
               if (done[f.key]) action = <span><b style={{ color: '#13703d' }}>{f.missing ? 'filled' : 'updated'}</b><a style={{ cursor: 'pointer', color: 'var(--blue)', marginLeft: 8 }} onClick={() => undo(f.key)}>Undo</a></span>;
               else if (f.fill && can) action = <HxDeptFill h={h} ours={ours} onSet={(d) => apply([{ field: 'current_department', value: d, label: 'Department' }], 'Department set to ' + d + '.')} />;
               else if (f.fill) action = <span style={{ color: '#9a5a06', fontWeight: 700 }}>missing</span>;
               else if (f.info) action = <span className="hx-muted">not compared</span>;
+              else if (f.variant) action = <span style={{ color: '#9a5a06', fontWeight: 700 }}>written differently</span>;
               else if (f.ok === true) action = <span style={{ color: '#13703d', fontWeight: 700 }}>✓</span>;
               else if (f.ok === null) action = <span className="hx-muted">not compared</span>;
               else if (can && f.copyable && value) action = <button className="btn sm" onClick={() => apply([{ field: f.key, value, label: f.label }], f.label + (f.missing ? ' filled from H360.' : ' updated from H360.'))}>{f.missing ? 'Fill from H360' : 'Use H360 value'}</button>;
@@ -630,7 +631,7 @@ function StaffH360Card({ emp, store }) {
           {res.status === 'not_in_h360' && <div className="hx-alert red">H360 has nobody with emp ID {res.empId}.</div>}
           {res.status === 'no_emp_id' && <div className="hx-alert amber">This record has no emp ID.</div>}
           {res.status === 'field_diff' && !res.nameSuggestion && <div className="hx-alert amber">The emp ID is in H360, but the name or designation does not match — confirm which is right.</div>}
-          {res.status === 'valid_diff' && <div className="hx-alert info">Valid: emp ID, name and designation match H360. Some other details differ — “Update from H360” brings them in line.</div>}
+          {res.status === 'valid_diff' && !res.nameSuggestion && <div className="hx-alert info">Valid: emp ID, name and designation match H360. Some other details differ — “Update from H360” brings them in line.</div>}
           {res.duplicateOf && <div className="hx-alert red">Emp ID {res.empId} is also on record(s) #{res.duplicateOf.join(', #')}.</div>}
           {res.status !== 'id_other_person' && <HxCompare result={res} store={store} onChanged={() => { setTimeout(load, 2500); setTimeout(load, 6000); }} />}
           <HxSuggestions result={res} store={store} />

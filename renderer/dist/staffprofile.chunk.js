@@ -8784,10 +8784,10 @@ function HxCompare({
     }
   }, ns && !done.name && !done.h360_name_accepted && React.createElement("div", {
     className: "hx-alert amber"
-  }, React.createElement("b", null, "Same person, name spelt differently \u2014 spelling mistake?"), " ", (() => {
+  }, ns.kind === 'written' ? React.createElement("span", null, React.createElement("b", null, "Same person \u2014 H360 writes the name differently."), " Update our record to H360's name?") : React.createElement(React.Fragment, null, React.createElement("b", null, "Same person, name spelt differently \u2014 spelling mistake?"), " ", (() => {
     const ev = ['emp ID'].concat((ns.evidence || []).map(e => e.replace(/^same /, '')));
     return 'The ' + (ev.length > 1 ? ev.slice(0, -1).join(', ') + ' and ' + ev[ev.length - 1] : ev[0]) + (ev.length > 1 ? ' match' : ' matches') + ' H360.';
-  })(), React.createElement("div", {
+  })()), React.createElement("div", {
     style: {
       marginTop: 6
     }
@@ -8805,14 +8805,14 @@ function HxCompare({
       value: ns.name,
       label: 'Name'
     }], 'Name changed to ' + ns.name + '.')
-  }, "Use H360 spelling: ", ns.name), React.createElement("button", {
+  }, ns.kind === 'written' ? 'Use H360 name' : 'Use H360 spelling', ": ", ns.name), React.createElement("button", {
     className: "btn sm",
     onClick: () => apply([{
       field: 'h360_name_accepted',
       value: ns.name,
       label: 'H360 spelling accepted'
     }], 'Our spelling kept — H360 "' + ns.name + '" accepted as the same name.')
-  }, "Keep our spelling: ", ourName))), done.h360_name_accepted && React.createElement("div", {
+  }, ns.kind === 'written' ? 'Keep our name' : 'Keep our spelling', ": ", ourName))), done.h360_name_accepted && React.createElement("div", {
     className: "hx-alert info"
   }, "Our spelling kept; H360's \u201C", ns && ns.name, "\u201D is accepted as the same name. ", React.createElement("a", {
     style: {
@@ -8844,7 +8844,7 @@ function HxCompare({
     className: "hx-t"
   }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Field"), React.createElement("th", null, "Our record"), React.createElement("th", null, "H360"), React.createElement("th", null))), React.createElement("tbody", null, (result.fields || []).map(f => {
     const value = hxValueOf(f.key, h);
-    const color = f.info ? 'var(--ink-2)' : f.missing ? '#9a5a06' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
+    const color = f.info ? 'var(--ink-2)' : f.missing || f.variant ? '#9a5a06' : f.ok === false ? '#b42339' : f.ok === true ? '#13703d' : 'var(--faint)';
     let action;
     if (done[f.key]) action = React.createElement("span", null, React.createElement("b", {
       style: {
@@ -8872,7 +8872,12 @@ function HxCompare({
       }
     }, "missing");else if (f.info) action = React.createElement("span", {
       className: "hx-muted"
-    }, "not compared");else if (f.ok === true) action = React.createElement("span", {
+    }, "not compared");else if (f.variant) action = React.createElement("span", {
+      style: {
+        color: '#9a5a06',
+        fontWeight: 700
+      }
+    }, "written differently");else if (f.ok === true) action = React.createElement("span", {
       style: {
         color: '#13703d',
         fontWeight: 700
@@ -9835,7 +9840,7 @@ function StaffH360Card({
     className: "hx-alert amber"
   }, "This record has no emp ID."), res.status === 'field_diff' && !res.nameSuggestion && React.createElement("div", {
     className: "hx-alert amber"
-  }, "The emp ID is in H360, but the name or designation does not match \u2014 confirm which is right."), res.status === 'valid_diff' && React.createElement("div", {
+  }, "The emp ID is in H360, but the name or designation does not match \u2014 confirm which is right."), res.status === 'valid_diff' && !res.nameSuggestion && React.createElement("div", {
     className: "hx-alert info"
   }, "Valid: emp ID, name and designation match H360. Some other details differ \u2014 \u201CUpdate from H360\u201D brings them in line."), res.duplicateOf && React.createElement("div", {
     className: "hx-alert red"

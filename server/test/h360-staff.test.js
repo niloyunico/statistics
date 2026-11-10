@@ -89,10 +89,17 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
   const armicka = { id: 50, emp_id: '11696', name: 'Armicka Barai', phone: '01724641388', doj: '2026-07-15', designation: 'Staff Nurse', gender: 'Female', current_department: 'Level-10' };
   const sp = match.compareRecord(armicka, [arnika], []);
   assert.strictEqual(sp.status, 'field_diff');
-  assert.deepStrictEqual(sp.nameSuggestion, { name: 'Arnika Barai', evidence: ['same phone', 'same joining date'] });
+  assert.deepStrictEqual(sp.nameSuggestion, { name: 'Arnika Barai', evidence: ['same phone', 'same joining date'], kind: 'spelling' });
   assert.strictEqual(match.compareRecord({ ...armicka, h360_name_accepted: 'Arnika Barai' }, [arnika], []).status, 'match');
   assert.strictEqual(match.compareRecord({ ...armicka, phone: '01999999999', doj: '2020-01-01' }, [arnika], []).status, 'id_other_person');
   assert.strictEqual(match.compareRecord({ ...armicka, name: 'Somebody Else Entirely' }, [arnika], []).status, 'id_other_person', 'a wholly different name is never a spelling mistake');
+  // Same person, name written differently ("Arpana" / "Arpana Rani Das"): valid, H360's name offered.
+  const arpH = { code: '11476', name: 'Arpana Rani Das', phones: ['01608087556'], joinDate: '2025-11-01', designation: 'Staff Nurse', dept: 'Nursing Services - Cabin (L-10)', gender: 'Female' };
+  const arp = { id: 51, emp_id: '11476', name: 'Arpana', phone: '01608087556', doj: '2025-11-01', designation: 'Staff Nurse', gender: 'Female' };
+  const wr = match.compareRecord(arp, [arpH], []);
+  assert.deepStrictEqual([wr.status, wr.nameSuggestion && wr.nameSuggestion.kind, wr.nameSuggestion && wr.nameSuggestion.name], ['valid_diff', 'written', 'Arpana Rani Das']);
+  assert.strictEqual(match.compareRecord({ ...arp, name: 'arpana  rani das ' }, [arpH], []).status, 'match');
+  assert.strictEqual(match.compareRecord({ ...arp, h360_name_accepted: 'Arpana Rani Das' }, [arpH], []).status, 'match');
   ok('a spelling difference with the same emp ID and phone / joining date is the same person (name suggested), not "another person"; "keep our spelling" makes it valid');
   ok('valid first: emp ID + name + designation = valid; other details only add a note; department is never compared; name and department are never copyable');
   const other = match.compareRecord(reg[3], H('11391'), []);

@@ -143,14 +143,20 @@ function compareRecord(rec, byId, others) {
   const fields = fieldsOf(rec, h, score);
   const nameField = fields.find((f) => f.key === 'name');
   if (nameField && nameField.ok === false) Object.assign(nameField, { spelling: true, suggested: h.name, evidence });
+  // Same person, but the name is WRITTEN differently ("Arpana" / "Arpana Rani Das", "Mst." added):
+  // still valid, and H360's way of writing it is offered (user 2026-11-10: "not match, ask to update").
+  const variant = Boolean(nameField && nameField.ok === true && !accepted && normName(rec.name) !== normName(h.name));
+  if (variant) Object.assign(nameField, { variant: true, suggested: h.name });
   // Valid first: emp ID (found above), name and designation. Then the other details.
   // A field blank on our side ("missing") is something to fill, not a disagreement.
   const key = fields.filter((f) => (f.key === 'name' || f.key === 'designation') && !f.missing);
   const valid = key.every((f) => f.ok !== false);
-  const otherDiffs = fields.filter((f) => COPYABLE.has(f.key) && f.ok === false && (f.key !== 'designation' || f.missing));
+  const otherDiffs = fields.filter((f) => (COPYABLE.has(f.key) && f.ok === false && (f.key !== 'designation' || f.missing)) || f.variant);
   const status = !valid ? 'field_diff' : otherDiffs.length ? 'valid_diff' : 'match';
-  return { ...base, status, valid, h360: h, nameScore: round(score), fields, suggestions: [], ...(nameField && nameField.spelling ? { nameSuggestion: { name: h.name, evidence } } : {}) };
+  return { ...base, status, valid, h360: h, nameScore: round(score), fields, suggestions: [], ...(nameField && nameField.spelling ? { nameSuggestion: { name: h.name, evidence, kind: 'spelling' } } : variant ? { nameSuggestion: { name: h.name, evidence: [], kind: 'written' } } : {}) };
 }
+// Two names written the same: case, dots, commas and extra spaces aside.
+const normName = (v) => String(v || '').toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
 const sameText = (a, b) => Boolean(a) && String(a).trim().toLowerCase().replace(/\s+/g, ' ') === String(b || '').trim().toLowerCase().replace(/\s+/g, ' ');
 // What, besides the emp ID, says this H360 person is our record's person.
 function samePersonEvidence(rec, h, score) {
