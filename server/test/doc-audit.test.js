@@ -79,7 +79,7 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(DA.score({ c1: 'NA' }, [{ id: 'c1', no: 1 }]).pct, null, 'nothing applicable = no score');
   assert.equal(DA.score({}, IPD.criteria).blank, 25, 'unreviewed items stay blank — never N/A');
   let probs = DA.validate({ deptId: 'lvl9', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, answers: Object.assign(allYes(IPD), { c4: 'N' }), evidence: {} }, IPD.criteria, { today: '2026-11-11' });
-  assert.ok(probs.some((p) => p.field === 'evidence' && p.criterion === 'c4'), "a 'No' needs its evidence");
+  assert.equal(probs.length, 0, "evidence for a 'No' is optional");
   probs = DA.validate({ deptId: 'er', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, area: 'Emergency OT', answers: Object.assign({}, allYes(catalogue.TOOLS[1]), { c7: 'NA' }) }, catalogue.TOOLS[1].criteria, { tool: catalogue.TOOLS[1] });
   assert.ok(probs.some((p) => p.criterion === 'c7'), 'time-out is never N/A in an emergency OT (QA-002 §7.3)');
 
@@ -112,8 +112,8 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(res.body.audit.nurse.name, 'Rina Akter'); assert.equal(res.body.audit.nurse.staffId, '1', 'linked by the record id');
   assert.equal(res.body.audit.criteria.length, 25); assert.equal(res.body.audit.toolId, 'ipd25', 'the department’s tool');
   a = allYes(IPD); a.c3 = 'N'; a.c20 = 'NA';
-  res = await call('PUT /api/doc-audit/audits/:id', auditor, { params: { id: draftId }, body: { answers: a, evidence: {}, complete: true } });
-  assert.equal(res.status, 400); assert.equal(res.body.code, 'incomplete');
+  res = await call('PUT /api/doc-audit/audits/:id', auditor, { params: { id: draftId }, body: { answers: Object.assign({}, a, { c4: undefined }), evidence: {}, complete: true } });
+  assert.equal(res.status, 400); assert.equal(res.body.code, 'incomplete', 'every criterion must still be answered');
   res = await call('PUT /api/doc-audit/audits/:id', auditor, { params: { id: draftId }, body: { answers: a, evidence: { c3: 'No fall reassessment after sedation on 9 Nov 22:00' }, complete: true, result: { pct: 1, result: 'PASS' } } });
   assert.equal(res.status, 200);
   const A1 = res.body.audit;
@@ -130,6 +130,16 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   res = await call('POST /api/doc-audit/audits', incharge, { body: Object.assign({}, base, { uhid: 'UH-102', nurse: { name: 'Agency Nurse', empId: '' }, answers: allYes(IPD), complete: true }) });
   assert.equal(res.status, 200); assert.equal(res.body.audit.nurse.linked, false);
   const A3 = res.body.audit;
+  // a 'No' without evidence completes; an administrator may name the auditor, nobody else can
+  res = await call('POST /api/doc-audit/audits', auditor, { body: Object.assign({}, base, { uhid: 'UH-104', nurse: { staffId: 1 }, answers: Object.assign(allYes(IPD), { c6: 'N' }), complete: true, auditorName: 'Somebody Else' }) });
+  assert.equal(res.status, 200, "a 'No' without evidence completes"); assert.equal(res.body.audit.auditor.name, 'auditor', "a non-admin's auditorName is ignored");
+  await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id } });
+  res = await call('POST /api/doc-audit/audits', admin, { body: Object.assign({}, base, { uhid: 'UH-105', nurse: { staffId: 1 }, answers: allYes(IPD), complete: true, auditorName: 'Sr. Nurse Shirin' }) });
+  assert.equal(res.body.audit.auditor.name, 'Sr. Nurse Shirin'); assert.equal(res.body.audit.auditor.enteredBy, 'admin');
+  res = await call('PUT /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id }, body: { auditorName: 'Sr. Nurse Rokeya' } });
+  assert.equal(res.body.audit.auditor.name, 'Sr. Nurse Rokeya', 'an admin can correct the auditor');
+  assert.ok(/auditor set to Sr. Nurse Rokeya/.test(res.body.audit.history[res.body.audit.history.length - 1].changes));
+  await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id } });
 
   /* ---- the sign-off chain ---- */
   res = await call('POST /api/doc-audit/audits/:id/sign', incharge, { params: { id: A1.id } });

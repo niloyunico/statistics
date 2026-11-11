@@ -226,6 +226,7 @@ function changesOf(cur, next) {
   if (changed.length) out.push('answers ' + changed.map((k) => k.replace('c', '#') + ' ' + (ca[k] || '—') + '→' + (na[k] || '—')).join(' '));
   if (JSON.stringify(cur.evidence || {}) !== JSON.stringify(next.evidence || {})) out.push('evidence');
   if (String((cur.nurse || {}).staffId || (cur.nurse || {}).name) !== String((next.nurse || {}).staffId || (next.nurse || {}).name)) out.push('nurse');
+  if (String((cur.auditor || {}).name || '') !== String((next.auditor || {}).name || '')) out.push('auditor set to ' + (next.auditor || {}).name);
   return out;
 }
 const SLUG = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30);
@@ -579,12 +580,18 @@ function mount(app, opts) {
     const mine = await myStaffId(a);
     if (nurse && nurse.staffId && mine && mine.id === String(nurse.staffId)) return res.status(409).json({ ok: false, code: 'self', error: 'You cannot audit your own documentation (policy 7.3). Ask another auditor.' });
 
+    // The auditor: the person saving — except that an administrator may name who audited (e.g. a paper
+    // audit entered for a ward auditor). Anyone else's auditorName is ignored.
+    let auditor = cur ? cur.auditor : { username: me, name: nameOf(req, a), staffId: mine ? mine.id : null };
+    const typedAuditor = a.unrestricted ? str(b.auditorName, 120) : '';
+    if (typedAuditor && typedAuditor !== auditor.name) auditor = Object.assign({}, auditor, { name: typedAuditor, enteredBy: me, staffId: typedAuditor === nameOf(req, a) ? auditor.staffId : null });
+
     const t = now();
     const next = Object.assign({}, cur || {}, vals, {
       _id: cur ? cur._id : newId(), toolId: cur ? cur.toolId : tool._id, toolName: (tool && (tool.short || tool.name)) || (cur && cur.toolName) || '', toolCode: (tool && tool.code) || (cur && cur.toolCode) || '',
       toolRevision: cur ? cur.toolRevision : (tool.revision || 1), criteria,
       deptId, deptName: dept.name, month: vals.date.slice(0, 7), nurse,
-      auditor: cur ? cur.auditor : { username: me, name: nameOf(req, a), staffId: mine ? mine.id : null },
+      auditor,
       selfCheck: mine ? (mine.sure ? 'linked' : 'matched') : 'unknown',
       createdAt: cur ? cur.createdAt : t, createdBy: cur ? cur.createdBy : me, updatedAt: t, updatedBy: me,
     });

@@ -561,6 +561,43 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       title: self(p) ? 'You cannot audit your own documentation' : ''
     }, React.createElement("b", null, p.name), self(p) ? ' (you)' : '', React.createElement("small", null, [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · '))))), document.body));
   }
+  function AuditorField({
+    deptId,
+    value,
+    onChange
+  }) {
+    const [names, setNames] = useState([]);
+    useEffect(() => {
+      let live = true;
+      if (!deptId) return;
+      api('/api/doc-audit/staff?dept=' + encodeURIComponent(deptId)).then(j => {
+        if (live) setNames(j.staff.map(p => p.name).filter(Boolean));
+      }).catch(() => {});
+      return () => {
+        live = false;
+      };
+    }, [deptId]);
+    return React.createElement(React.Fragment, null, React.createElement("input", {
+      className: "da-in",
+      style: {
+        width: '100%'
+      },
+      list: "da-auditors",
+      value: value || '',
+      placeholder: "Auditor's name",
+      onChange: e => onChange(e.target.value)
+    }), React.createElement("datalist", {
+      id: "da-auditors"
+    }, names.map(n => React.createElement("option", {
+      key: n,
+      value: n
+    }))), React.createElement("div", {
+      className: "da-sub",
+      style: {
+        marginTop: 3
+      }
+    }, "Administrator: you may enter who audited."));
+  }
   function ResultPanel({
     res,
     criteria,
@@ -696,7 +733,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         nurse: null,
         answers: {},
         evidence: {},
-        remarks: ''
+        remarks: '',
+        auditorName: meta.name
       };
     }
     function fromAudit(a) {
@@ -711,7 +749,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         nurse: a.nurse || null,
         answers: a.answers || {},
         evidence: a.evidence || {},
-        remarks: a.remarks || ''
+        remarks: a.remarks || '',
+        auditorName: a.auditor && a.auditor.name || ''
       };
     }
     const audit = loaded && loaded.audit;
@@ -1085,7 +1124,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, (problems.find(p => p.field === 'nurse') || {}).message)), React.createElement("div", {
       className: "da-f"
-    }, React.createElement("label", null, "Auditor"), React.createElement("div", {
+    }, React.createElement("label", null, "Auditor"), meta.isAdmin && !readOnly ? React.createElement(AuditorField, {
+      deptId: form.deptId,
+      value: form.auditorName,
+      onChange: v => set('auditorName', v)
+    }) : React.createElement("div", {
       style: {
         fontSize: 13,
         paddingTop: 6
@@ -1120,7 +1163,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-h"
     }, React.createElement("h3", null, "Checklist"), React.createElement("span", {
       className: "da-sub"
-    }, "One answer per criterion. Write the evidence for every 'No' (what is missing, where, date/time). N/A is not scored; unreviewed items stay blank.")), sections.map(({
+    }, "One answer per criterion. Evidence for a 'No' is optional (what is missing, where, date/time). N/A is not scored; unreviewed items stay blank.")), sections.map(({
       s,
       items
     }) => React.createElement(React.Fragment, {
@@ -1179,7 +1222,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }, React.createElement("b", null, "Evidence:"), " ", form.evidence[c.id] || '—') : React.createElement("textarea", {
         className: 'da-ta' + (bad('evidence', c.id) ? ' bad' : ''),
         rows: 2,
-        placeholder: v === 'N' ? "Evidence for 'No' — what is missing, where, date / time (required)" : 'Remark',
+        placeholder: v === 'N' ? "Evidence for 'No' — what is missing, where, date / time (optional)" : 'Remark',
         value: form.evidence[c.id] || '',
         onChange: e => setEv(c.id, e.target.value)
       })));
@@ -3189,7 +3232,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     });
     const sum = '<table class="sum blk"><tr><td class="k">Total \'Yes\' (A)</td><td class="v">' + (r ? r.yes : '') + '</td><td class="k">Score % = A ÷ (A + B) × 100</td><td class="v">' + (r && r.pct != null ? r.pct + '%' : '') + '</td></tr>' + '<tr><td class="k">Total \'No\' (B)</td><td class="v">' + (r ? r.no : '') + '</td><td class="k">Critical criteria marked \'No\'</td><td class="v">' + (r ? r.criticalFails.map(id => '#' + (byId[id] ? byId[id].no : id)).join(', ') || 'None' : '') + '</td></tr>' + '<tr><td class="k">Total \'N/A\'</td><td class="v">' + (r ? r.na : '') + '</td><td class="k">Grade</td><td class="v">' + (r ? esc(r.gradeLabel) : 'Excellent / Good / Needs improvement / Unsatisfactory') + '</td></tr>' + '<tr><td class="k">Applicable (A + B)</td><td class="v">' + (r ? r.applicable : '') + '</td><td class="k">Result</td><td class="v res">' + (r ? r.result : 'PASS / FAIL') + '</td></tr></table>' + (r && r.action ? '<div class="act blk"><b>Required action:</b> ' + esc(r.action) + '</div>' : '') + (a && a.remarks ? '<div class="act blk"><b>Remarks / feedback:</b> ' + esc(a.remarks) + '</div>' : '');
     const signs = '<div class="signs blk"><div><span>Auditor</span>' + (a ? esc(a.auditor.name) + '<br>' + esc(when(a.completedAt || a.createdAt)) : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Auditee nurse (acknowledgement)</span>' + (a && a.ack ? esc(a.ack.name || a.nurse && a.nurse.name || '') + '<br>' + esc(when(a.ack.at)) + (a.ack.method === 'account' ? ' · own account' : ' · in person') : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Nurse In-charge</span>' + (a && a.signoff ? esc(a.signoff.name) + '<br>' + esc(when(a.signoff.at)) : 'Signature: ______________<br>Date / time: ____________') + '</div></div>';
-    const body = letterhead('Nursing Quality & Patient Safety', tool.name, [tool.code, tool.version && 'Version ' + tool.version, a && a.toolRevision > 1 ? 'tool revision ' + a.toolRevision : ''].filter(Boolean).join(' · ')) + '<table class="hd">' + hd + '</table>' + '<div class="hint">Mark ✓ in one box per criterion. Write evidence for every \'No\'. Items marked Critical: any \'No\' = audit FAIL. N/A is excluded from scoring.</div>' + '<table class="ck"><thead><tr><th>No.</th><th>Compliance criterion</th><th>JCI</th><th>Critical</th><th>Yes</th><th>No</th><th>N/A</th><th>Evidence / remarks</th></tr></thead><tbody>' + rows + '</tbody></table>' + sum + signs + footer();
+    const body = letterhead('Nursing Quality & Patient Safety', tool.name, [tool.code, tool.version && 'Version ' + tool.version, a && a.toolRevision > 1 ? 'tool revision ' + a.toolRevision : ''].filter(Boolean).join(' · ')) + '<table class="hd">' + hd + '</table>' + '<div class="hint">Mark ✓ in one box per criterion. Write evidence for a \'No\' where useful. Items marked Critical: any \'No\' = audit FAIL. N/A is excluded from scoring.</div>' + '<table class="ck"><thead><tr><th>No.</th><th>Compliance criterion</th><th>JCI</th><th>Critical</th><th>Yes</th><th>No</th><th>N/A</th><th>Evidence / remarks</th></tr></thead><tbody>' + rows + '</tbody></table>' + sum + signs + footer();
     const title = a ? 'Documentation audit — ' + (a.nurse && a.nurse.name || '') + ' — ' + a.date : tool.name + ' (blank form)';
     return {
       body,

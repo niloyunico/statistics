@@ -278,6 +278,23 @@
     </div>;
   }
 
+  /* The auditor's name — an administrator may type who audited (e.g. entering a paper audit done
+     by a ward auditor); suggestions come from the department's staff. Everyone else is the auditor. */
+  function AuditorField({ deptId, value, onChange }) {
+    const [names, setNames] = useState([]);
+    useEffect(() => {
+      let live = true;
+      if (!deptId) return;
+      api('/api/doc-audit/staff?dept=' + encodeURIComponent(deptId)).then((j) => { if (live) setNames(j.staff.map((p) => p.name).filter(Boolean)); }).catch(() => {});
+      return () => { live = false; };
+    }, [deptId]);
+    return <>
+      <input className="da-in" style={{ width: '100%' }} list="da-auditors" value={value || ''} placeholder="Auditor's name" onChange={(e) => onChange(e.target.value)} />
+      <datalist id="da-auditors">{names.map((n) => <option key={n} value={n} />)}</datalist>
+      <div className="da-sub" style={{ marginTop: 3 }}>Administrator: you may enter who audited.</div>
+    </>;
+  }
+
   /* ========================================================= result panel === */
   function ResultPanel({ res, criteria, problems }) {
     const total = DA.activeCriteria(criteria).length;
@@ -334,8 +351,8 @@
       setToolId(d.cfg.toolId);
     }, [auditId]);
 
-    function blankForm(deptId) { return { deptId, area: '', date: meta.today, shift: '', uhid: '', bed: '', extra: {}, nurse: null, answers: {}, evidence: {}, remarks: '' }; }
-    function fromAudit(a) { return { deptId: a.deptId, area: a.area || '', date: a.date, shift: a.shift || '', uhid: a.uhid || '', bed: a.bed || '', extra: a.extra || {}, nurse: a.nurse || null, answers: a.answers || {}, evidence: a.evidence || {}, remarks: a.remarks || '' }; }
+    function blankForm(deptId) { return { deptId, area: '', date: meta.today, shift: '', uhid: '', bed: '', extra: {}, nurse: null, answers: {}, evidence: {}, remarks: '', auditorName: meta.name }; }
+    function fromAudit(a) { return { deptId: a.deptId, area: a.area || '', date: a.date, shift: a.shift || '', uhid: a.uhid || '', bed: a.bed || '', extra: a.extra || {}, nurse: a.nurse || null, answers: a.answers || {}, evidence: a.evidence || {}, remarks: a.remarks || '', auditorName: (a.auditor && a.auditor.name) || '' }; }
     const audit = loaded && loaded.audit;
     const tool = audit ? (loaded.tool || toolOf(meta, audit.toolId)) : toolOf(meta, toolId);
     const criteria = useMemo(() => (audit ? audit.criteria : tool ? DA.freezeCriteria(tool) : []), [audit, tool]);
@@ -433,7 +450,10 @@
           <div className="da-f" style={{ gridColumn: '1 / -1' }}><label>Nurse audited (auditee)</label>
             <NursePicker meta={meta} deptId={form.deptId} value={form.nurse} onChange={(n) => set('nurse', n)} bad={bad('nurse')} disabled={readOnly} />
             {bad('nurse') && <div className="da-sub" style={{ color: 'var(--rose)' }}>{(problems.find((p) => p.field === 'nurse') || {}).message}</div>}</div>
-          <div className="da-f"><label>Auditor</label><div style={{ fontSize: 13, paddingTop: 6 }}>{audit ? audit.auditor.name : meta.name}</div></div>
+          <div className="da-f"><label>Auditor</label>
+            {meta.isAdmin && !readOnly
+              ? <AuditorField deptId={form.deptId} value={form.auditorName} onChange={(v) => set('auditorName', v)} />
+              : <div style={{ fontSize: 13, paddingTop: 6 }}>{audit ? audit.auditor.name : meta.name}</div>}</div>
         </div>
       </div>);
     const guideBox = (guide.notes.length || guide.na.length || guide.never.length) && !readOnly ? (
@@ -444,7 +464,7 @@
       </div></div>) : null;
     const checklist = (
       <div className="da-card" style={{ overflow: 'hidden' }}>
-        <div className="da-h"><h3>Checklist</h3><span className="da-sub">One answer per criterion. Write the evidence for every 'No' (what is missing, where, date/time). N/A is not scored; unreviewed items stay blank.</span></div>
+        <div className="da-h"><h3>Checklist</h3><span className="da-sub">One answer per criterion. Evidence for a 'No' is optional (what is missing, where, date/time). N/A is not scored; unreviewed items stay blank.</span></div>
         {sections.map(({ s, items }) => (
           <React.Fragment key={s.id}>
             <div className="da-sec"><b>Section {s.id !== '_' ? s.id + ': ' : ''}{s.title}</b>{s.jci && <span className="jcis">JCI: {s.jci}</span>}<span style={{ flex: 1 }} />
@@ -463,7 +483,7 @@
                   </div>
                   {(v === 'N' || (form.evidence[c.id] && v)) && <div className="da-ev">
                     {readOnly ? <div style={{ fontSize: 12.3, color: v === 'N' ? '#8f1d33' : 'var(--ink-2)' }}><b>Evidence:</b> {form.evidence[c.id] || '—'}</div>
-                      : <textarea className={'da-ta' + (bad('evidence', c.id) ? ' bad' : '')} rows={2} placeholder={v === 'N' ? "Evidence for 'No' — what is missing, where, date / time (required)" : 'Remark'} value={form.evidence[c.id] || ''} onChange={(e) => setEv(c.id, e.target.value)} />}
+                      : <textarea className={'da-ta' + (bad('evidence', c.id) ? ' bad' : '')} rows={2} placeholder={v === 'N' ? "Evidence for 'No' — what is missing, where, date / time (optional)" : 'Remark'} value={form.evidence[c.id] || ''} onChange={(e) => setEv(c.id, e.target.value)} />}
                   </div>}
                 </div>);
             })}
@@ -1022,7 +1042,7 @@
       + '<div><span>Nurse In-charge</span>' + (a && a.signoff ? esc(a.signoff.name) + '<br>' + esc(when(a.signoff.at)) : 'Signature: ______________<br>Date / time: ____________') + '</div></div>';
     const body = letterhead('Nursing Quality & Patient Safety', tool.name, [tool.code, tool.version && 'Version ' + tool.version, a && a.toolRevision > 1 ? 'tool revision ' + a.toolRevision : ''].filter(Boolean).join(' · '))
       + '<table class="hd">' + hd + '</table>'
-      + '<div class="hint">Mark ✓ in one box per criterion. Write evidence for every \'No\'. Items marked Critical: any \'No\' = audit FAIL. N/A is excluded from scoring.</div>'
+      + '<div class="hint">Mark ✓ in one box per criterion. Write evidence for a \'No\' where useful. Items marked Critical: any \'No\' = audit FAIL. N/A is excluded from scoring.</div>'
       + '<table class="ck"><thead><tr><th>No.</th><th>Compliance criterion</th><th>JCI</th><th>Critical</th><th>Yes</th><th>No</th><th>N/A</th><th>Evidence / remarks</th></tr></thead><tbody>' + rows + '</tbody></table>'
       + sum + signs + footer();
     const title = a ? 'Documentation audit — ' + ((a.nurse && a.nurse.name) || '') + ' — ' + a.date : tool.name + ' (blank form)';

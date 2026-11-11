@@ -131,8 +131,8 @@
     const guide = o.tool ? guideFor(o.tool, x.area) : { never: [] };
     activeCriteria(criteria).forEach((c) => {
       const v = ans[c.id];
+      // Evidence for a 'No' is optional (the user's choice, 2026-11-11): the box is offered, never required.
       if (ANSWERS.indexOf(v) < 0) out.push({ field: 'answers', criterion: c.id, message: 'Criterion ' + c.no + ' is not answered (Yes, No or N/A).' });
-      else if (v === 'N' && String(ev[c.id] || '').trim().length < 3) out.push({ field: 'evidence', criterion: c.id, message: "Criterion " + c.no + " is 'No': write the evidence (what is missing, where, date/time)." });
       else if (v === 'NA' && guide.never.indexOf(c.id) >= 0) out.push({ field: 'answers', criterion: c.id, message: 'Criterion ' + c.no + ' is never N/A in ' + x.area + ' (policy 7.3).' });
     });
     return out;
