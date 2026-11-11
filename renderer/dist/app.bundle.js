@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=2ec172bc8f","reports":"/dist/reports.chunk.js?v=642a509d61","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=cdf93972b7","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=2ec172bc8f","reports":"/dist/reports.chunk.js?v=642a509d61","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=df900d884c","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7598,6 +7598,23 @@ window.QI_CORRECTIONS_BY_DEFID = {
     return out;
   }
 
+  /* ------------------------------------------------------ the nurses audited --- */
+  /* One patient record can be documented by several nurses (day + night, scrub + circulating): an
+     audit lists them all, shares ONE checklist and score, and shows on every listed nurse's record.
+     Audits saved before the list existed carry a single `nurse`; they read as a list of one. */
+  const MAX_NURSES = 6;
+  const nursesOf = (a) => (a && Array.isArray(a.nurses) && a.nurses.length ? a.nurses.filter(Boolean) : (a && a.nurse ? [a.nurse] : []));
+  const nurseKey = (n) => (n && n.staffId != null && n.staffId !== '' ? 's:' + n.staffId : 'n:' + String((n && n.name) || '').trim().toLowerCase());
+  // Each nurse's acknowledgement by nurseKey. An older audit with one `ack` counts it for everyone.
+  function acksOf(a) {
+    if (a && a.acks && typeof a.acks === 'object') return a.acks;
+    const o = {};
+    if (a && a.ack) nursesOf(a).forEach((n) => { o[nurseKey(n)] = a.ack; });
+    return o;
+  }
+  const pendingAcks = (a) => { const k = acksOf(a); return nursesOf(a).filter((n) => !k[nurseKey(n)]); };
+  const nurseNames = (a) => nursesOf(a).map((n) => n.name).filter(Boolean).join(', ');
+
   /* ----------------------------------------------------------- one record --- */
   function gradeOf(pct) {
     if (!has(pct)) return null;
@@ -7641,9 +7658,10 @@ window.QI_CORRECTIONS_BY_DEFID = {
     if (!isDate(x.date)) out.push({ field: 'date', message: 'Enter the audit date.' });
     else if (o.today && x.date > o.today) out.push({ field: 'date', message: 'The audit date cannot be in the future.' });
     if (!String(x.uhid || '').trim()) out.push({ field: 'uhid', message: 'Enter the patient UHID / MRN.' });
-    const n = x.nurse || {};
-    if (!n.staffId && !String(n.name || '').trim()) out.push({ field: 'nurse', message: 'Choose the nurse whose documentation was audited.' });
-    if (o.auditorStaffId != null && n.staffId != null && String(o.auditorStaffId) === String(n.staffId)) out.push({ field: 'nurse', message: 'Nurses do not audit their own documentation (policy 7.3).' });
+    const ns = nursesOf(x).filter((n) => n.staffId || String(n.name || '').trim());
+    if (!ns.length) out.push({ field: 'nurse', message: 'Choose the nurse(s) whose documentation was audited.' });
+    if (ns.length > MAX_NURSES) out.push({ field: 'nurse', message: 'At most ' + MAX_NURSES + ' nurses on one audit.' });
+    if (o.auditorStaffId != null && ns.some((n) => n.staffId != null && String(o.auditorStaffId) === String(n.staffId))) out.push({ field: 'nurse', message: 'Nurses do not audit their own documentation (policy 7.3).' });
     const guide = o.tool ? guideFor(o.tool, x.area) : { never: [] };
     activeCriteria(criteria).forEach((c) => {
       const v = ans[c.id];
@@ -7689,7 +7707,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
       if (a.result.pass) s.pass++;
       if ((a.result.criticalFails || []).length) s.criticalRecords++;
       if (a.result.no === 0 && a.result.applicable > 0) s.fullyCompliant++;
-      if (a.nurse) nurses.add(String(a.nurse.staffId != null ? 's' + a.nurse.staffId : 'n' + String(a.nurse.name || '').toLowerCase()));
+      nursesOf(a).forEach((n) => nurses.add(nurseKey(n)));
       const crit = {};
       activeCriteria(a.criteria).forEach((c) => { crit[c.id] = c; });
       Object.keys(a.answers || {}).forEach((id) => {
@@ -7722,6 +7740,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
   const API = {
     STATUSES, STATUS_LABEL, ANSWERS, PASS_MARK, GRADES, FAIL_ACTION, KPI_FORMULAS, KPI_FORMULA_LABEL, SHIFTS,
     has, round1, isDate, isMonth, hospitalNow, addMonth, monthsBetween, fmtMonth, fmtDate, quarterOf,
+    MAX_NURSES, nursesOf, nurseKey, acksOf, pendingAcks, nurseNames,
     isLiveTool, activeCriteria, freezeCriteria, guideFor, gradeOf, score, validate,
     kpiValue, summarize, capDue, groupBy, countsInKpi,
   };

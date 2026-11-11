@@ -294,21 +294,54 @@
     </div>;
   }
 
-  /* The auditor's name — an administrator may type who audited (e.g. entering a paper audit done
-     by a ward auditor); suggestions come from the department's staff. Everyone else is the auditor. */
-  function AuditorField({ deptId, value, onChange }) {
-    const [names, setNames] = useState([]);
+  /* The auditor — an administrator may name who audited (e.g. entering a paper audit done by a ward
+     auditor): search the WHOLE staff register by name or employee ID and pick the person (their
+     name and staff record are taken), or type a name. Everyone else is the auditor themself. */
+  function AuditorField({ value, staffId, onChange }) {
+    const [list, setList] = useState(null);
+    const [open, setOpen] = useState(false);
+    const [hi, setHi] = useState(0);
+    const [pos, setPos] = useState(null);
+    const ref = useRef(null);
     useEffect(() => {
       let live = true;
-      if (!deptId) return;
-      api('/api/doc-audit/staff?dept=' + encodeURIComponent(deptId)).then((j) => { if (live) setNames(j.staff.map((p) => p.name).filter(Boolean)); }).catch(() => {});
+      api('/api/doc-audit/staff?all=1').then((j) => { if (live) setList(j.staff); }).catch(() => { if (live) setList([]); });
       return () => { live = false; };
-    }, [deptId]);
-    return <>
-      <input className="da-in" style={{ width: '100%' }} list="da-auditors" value={value || ''} placeholder="Auditor's name" onChange={(e) => onChange(e.target.value)} />
-      <datalist id="da-auditors">{names.map((n) => <option key={n} value={n} />)}</datalist>
-      <div className="da-sub" style={{ marginTop: 3 }}>Administrator: you may enter who audited.</div>
-    </>;
+    }, []);
+    const place = () => { const r = ref.current && ref.current.getBoundingClientRect(); if (!r) return; const below = window.innerHeight - r.bottom; const up = below < 240 && r.top > below; setPos({ left: r.left, width: Math.max(r.width, 300), top: up ? null : r.bottom + 4, bottom: up ? window.innerHeight - r.top + 4 : null, maxH: Math.min(320, (up ? r.top : below) - 12) }); };
+    useEffect(() => {
+      if (!open) return;
+      place();
+      const f = () => place();
+      window.addEventListener('scroll', f, true); window.addEventListener('resize', f);
+      const out = (e) => { if (ref.current && !ref.current.contains(e.target) && !(e.target.closest && e.target.closest('.da-dd'))) setOpen(false); };
+      document.addEventListener('mousedown', out);
+      return () => { window.removeEventListener('scroll', f, true); window.removeEventListener('resize', f); document.removeEventListener('mousedown', out); };
+    }, [open]);
+    const needle = String(value || '').trim().toLowerCase();
+    const picked = staffId != null && staffId !== '' && (list || []).find((p) => String(p.id) === String(staffId));
+    const hits = (list || []).filter((p) => !needle || (picked && String(p.id) === String(staffId)) || String(p.name || '').toLowerCase().indexOf(needle) >= 0 || String(p.emp_id || '').toLowerCase().indexOf(needle) >= 0).slice(0, 60);
+    const pick = (p) => { onChange(p.name, String(p.id)); setOpen(false); };
+    const key = (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, hits.length - 1)); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
+      else if (e.key === 'Enter' && open && hits[hi]) { e.preventDefault(); pick(hits[hi]); }
+      else if (e.key === 'Escape') setOpen(false);
+    };
+    return <div ref={ref}>
+      <input className="da-in" style={{ width: '100%' }} value={value || ''} placeholder={list ? 'Search staff by name or employee ID…' : 'Loading the staff list…'}
+        onFocus={() => setOpen(true)} onKeyDown={key} onChange={(e) => { onChange(e.target.value, null); setOpen(true); setHi(0); }} />
+      <div className="da-sub" style={{ marginTop: 3 }}>{picked ? [picked.emp_id && 'ID ' + picked.emp_id, picked.designation, picked.current_department].filter(Boolean).join(' · ') : 'Administrator: pick who audited, or type a name.'}</div>
+      {open && pos && ReactDOM.createPortal(
+        <div className="da-dd" style={{ left: pos.left, width: pos.width, top: pos.top == null ? 'auto' : pos.top, bottom: pos.bottom == null ? 'auto' : pos.bottom, maxHeight: pos.maxH }}>
+          {!list && <div className="it">Loading…</div>}
+          {list && !hits.length && <div className="it off">No staff member matches “{value}”. The name you typed will be used.</div>}
+          {hits.map((p, i) => (
+            <div key={p.id} className={'it' + (i === hi ? ' hi' : '')} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); pick(p); }}>
+              <b>{p.name}</b><small>{[p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')}</small>
+            </div>))}
+        </div>, document.body)}
+    </div>;
   }
 
   /* ========================================================= result panel === */
@@ -367,8 +400,8 @@
       setToolId(d.cfg.toolId);
     }, [auditId]);
 
-    function blankForm(deptId) { return { deptId, area: '', date: meta.today, shift: '', uhid: '', bed: '', extra: {}, nurse: null, answers: {}, evidence: {}, remarks: '', auditorName: meta.name }; }
-    function fromAudit(a) { return { deptId: a.deptId, area: a.area || '', date: a.date, shift: a.shift || '', uhid: a.uhid || '', bed: a.bed || '', extra: a.extra || {}, nurse: a.nurse || null, answers: a.answers || {}, evidence: a.evidence || {}, remarks: a.remarks || '', auditorName: (a.auditor && a.auditor.name) || '' }; }
+    function blankForm(deptId) { return { deptId, area: '', date: meta.today, shift: '', uhid: '', bed: '', extra: {}, nurse: null, answers: {}, evidence: {}, remarks: '', auditorName: meta.name, auditorStaffId: meta.staffId }; }
+    function fromAudit(a) { return { deptId: a.deptId, area: a.area || '', date: a.date, shift: a.shift || '', uhid: a.uhid || '', bed: a.bed || '', extra: a.extra || {}, nurse: a.nurse || null, answers: a.answers || {}, evidence: a.evidence || {}, remarks: a.remarks || '', auditorName: (a.auditor && a.auditor.name) || '', auditorStaffId: (a.auditor && a.auditor.staffId) || null }; }
     const audit = loaded && loaded.audit;
     const tool = audit ? (loaded.tool || toolOf(meta, audit.toolId)) : toolOf(meta, toolId);
     const criteria = useMemo(() => (audit ? audit.criteria : tool ? DA.freezeCriteria(tool) : []), [audit, tool]);
@@ -468,7 +501,7 @@
             {bad('nurse') && <div className="da-sub" style={{ color: 'var(--rose)' }}>{(problems.find((p) => p.field === 'nurse') || {}).message}</div>}</div>
           <div className="da-f"><label>Auditor</label>
             {meta.isAdmin && !readOnly
-              ? <AuditorField deptId={form.deptId} value={form.auditorName} onChange={(v) => set('auditorName', v)} />
+              ? <AuditorField value={form.auditorName} staffId={form.auditorStaffId} onChange={(name, id) => setForm((f) => Object.assign({}, f, { auditorName: name, auditorStaffId: id }))} />
               : <div style={{ fontSize: 13, paddingTop: 6 }}>{audit ? audit.auditor.name : meta.name}</div>}</div>
         </div>
       </div>);

@@ -46,6 +46,7 @@ async function coll(name) {
     indexed = true;
     d.collection(AUDITS).createIndex({ deptId: 1, month: 1 }).catch(() => {});
     d.collection(AUDITS).createIndex({ 'nurse.staffId': 1, date: -1 }).catch(() => {});
+    d.collection(AUDITS).createIndex({ 'nurses.staffId': 1, date: -1 }).catch(() => {});
     d.collection(AUDITS).createIndex({ status: 1, month: 1 }).catch(() => {});
   }
   return d.collection(name);
@@ -88,7 +89,7 @@ async function findAudits(q) {
     && (!q.from || a.date >= q.from) && (!q.to || a.date <= q.to)
     && (!q.statuses || q.statuses.indexOf(a.status) >= 0)
     && (q.drafts || a.status !== 'draft')
-    && (q.staffId == null || (a.nurse && String(a.nurse.staffId) === String(q.staffId)))
+    && (q.staffId == null || DA.nursesOf(a).some((n) => String(n.staffId) === String(q.staffId)))
     && (!q.toolId || a.toolId === q.toolId);
   let list;
   if (!c) list = [...mem[AUDITS].values()].map(clone).filter(ok);
@@ -99,7 +100,7 @@ async function findAudits(q) {
     if (q.from || q.to) { m.date = {}; if (q.from) m.date.$gte = q.from; if (q.to) m.date.$lte = q.to; }
     if (q.statuses) m.status = { $in: q.statuses };
     else if (!q.drafts) m.status = { $ne: 'draft' };
-    if (q.staffId != null) m['nurse.staffId'] = String(q.staffId);
+    if (q.staffId != null) m.$or = [{ 'nurse.staffId': String(q.staffId) }, { 'nurses.staffId': String(q.staffId) }];
     if (q.toolId) m.toolId = q.toolId;
     list = (await c.find(m).limit(q.limit || 5000).toArray()).filter(ok);
   }
@@ -190,11 +191,11 @@ const actor = (req, a) => (a && a.username) || (req.user && req.user.sub) || 'lo
 const nameOf = (req, a) => (a && a.name) || (req.user && req.user.name) || actor(req, a);
 const str = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
 const newId = () => 'da' + Date.now().toString(36) + crypto.randomBytes(3).toString('hex');
-const clean = (x) => { if (!x) return null; const { _id, history, ...rest } = x; return Object.assign({ id: _id }, rest, { history: (history || []).slice(-25) }); };
+const clean = (x) => { if (!x) return null; const { _id, history, ...rest } = x; return Object.assign({ id: _id }, rest, { nurses: DA.nursesOf(x), acks: DA.acksOf(x), history: (history || []).slice(-25) }); };
 const cleanTool = (t) => { if (!t) return null; const { _id, history, ...rest } = t; return Object.assign({ id: _id }, rest, { history: (history || []).slice(-15) }); };
 // What leaves the server about an audit outside its own screen (profile card, the nurse's list).
 const thinAudit = (x) => ({
-  id: x._id, toolId: x.toolId, toolName: x.toolName || '', deptId: x.deptId, deptName: x.deptName, area: x.area || '', date: x.date, month: x.month, shift: x.shift || '',
+  id: x._id, toolId: x.toolId, toolName: x.toolName || '', nurses: DA.nursesOf(x).map((n) => ({ staffId: n.staffId, name: n.name, empId: n.empId })), pendingAcks: DA.pendingAcks(x).map((n) => n.name), deptId: x.deptId, deptName: x.deptName, area: x.area || '', date: x.date, month: x.month, shift: x.shift || '',
   status: x.status, result: x.result ? { pct: x.result.pct, grade: x.result.grade, gradeLabel: x.result.gradeLabel, result: x.result.result, criticalFails: (x.result.criticalFails || []).length, yes: x.result.yes, no: x.result.no, na: x.result.na } : null,
   auditor: x.auditor ? { name: x.auditor.name } : null, ack: x.ack || null, signoff: x.signoff ? { name: x.signoff.name, at: x.signoff.at } : null,
 });
@@ -225,7 +226,8 @@ function changesOf(cur, next) {
   const changed = [...new Set(Object.keys(ca).concat(Object.keys(na)))].filter((k) => ca[k] !== na[k]);
   if (changed.length) out.push('answers ' + changed.map((k) => k.replace('c', '#') + ' ' + (ca[k] || '—') + '→' + (na[k] || '—')).join(' '));
   if (JSON.stringify(cur.evidence || {}) !== JSON.stringify(next.evidence || {})) out.push('evidence');
-  if (String((cur.nurse || {}).staffId || (cur.nurse || {}).name) !== String((next.nurse || {}).staffId || (next.nurse || {}).name)) out.push('nurse');
+  const keys = (x) => DA.nursesOf(x).map(DA.nurseKey).join('|');
+  if (keys(cur) !== keys(next)) out.push('nurses → ' + DA.nurseNames(next));
   if (String((cur.auditor || {}).name || '') !== String((next.auditor || {}).name || '')) out.push('auditor set to ' + (next.auditor || {}).name);
   return out;
 }
@@ -388,6 +390,18 @@ function buildSummary(audits, tools, months, depts, opts) {
 }
 function breakdown(audits, tools, by) {
   const toolById = {}; tools.forEach((t) => { toolById[t._id || t.id] = t; });
+  if (by === 'nurse') {
+    const groups = new Map();
+    audits.forEach((x) => DA.nursesOf(x).forEach((n) => {
+      const k = DA.nurseKey(n);
+      if (!groups.has(k)) groups.set(k, { key: k, label: n.name || '—', sub: [n.empId, n.designation].filter(Boolean).join(' · '), staffId: n.staffId || null, list: [] });
+      groups.get(k).list.push(x);
+    }));
+    return [...groups.values()].map((g) => {
+      const kpis = g.list.every((x) => x.toolId === g.list[0].toolId) && toolById[g.list[0].toolId] ? toolById[g.list[0].toolId].kpis : [];
+      return { key: g.key, label: g.label, sub: g.sub, staffId: g.staffId, summary: DA.summarize(g.list, kpis) };
+    }).sort((x, y) => (y.summary.records - x.summary.records) || String(x.label).localeCompare(String(y.label)));
+  }
   const keyOf = { area: (x) => x.area || '—', shift: (x) => x.shift || '—', nurse: (x) => (x.nurse && (x.nurse.staffId ? 's' + x.nurse.staffId : 'n' + x.nurse.name)) || '—', auditor: (x) => (x.auditor && x.auditor.username) || '—' }[by];
   if (!keyOf) return [];
   return Object.entries(DA.groupBy(audits, keyOf)).map(([key, list]) => {
@@ -427,7 +441,7 @@ function mount(app, opts) {
   const notMine = (res) => res.status(403).json({ ok: false, error: 'This department is not one of yours.' });
   const body = (req) => ((req.body && typeof req.body === 'object') ? req.body : {});
   const today = () => DA.hospitalNow(now()).date;
-  const logAudit = (req, x, what) => activity.log(req, 'docaudit_audit', { target: (x.deptName || x.deptId) + ' · ' + ((x.nurse && x.nurse.name) || '—') + ' · ' + x.date, detail: what + (x.result && x.result.pct != null ? ' · ' + x.result.pct + '% ' + x.result.result : '') });
+  const logAudit = (req, x, what) => activity.log(req, 'docaudit_audit', { target: (x.deptName || x.deptId) + ' · ' + (DA.nurseNames(x) || '—') + ' · ' + x.date, detail: what + (x.result && x.result.pct != null ? ' · ' + x.result.pct + '% ' + x.result.result : '') });
   const monthsOf = (q) => {
     const cur = DA.hospitalNow(now()).month;
     const to = DA.isMonth(q.to) ? q.to : cur;
@@ -558,39 +572,65 @@ function mount(app, opts) {
     if (cur) Object.keys(vals).forEach((k) => { if (b[k] === undefined) vals[k] = cur[k] == null ? vals[k] : cur[k]; });
     if (!vals.date) vals.date = cur ? cur.date : today();
 
-    // The nurse audited: a register record (linked by its id) or, for someone not in the register, a typed name.
-    let nurse = cur ? cur.nurse : null;
-    const bn = (b.nurse && typeof b.nurse === 'object') ? b.nurse : null;
-    if (bn) {
-      if (bn.staffId != null && bn.staffId !== '') {
-        if (!cur || !cur.nurse || String(cur.nurse.staffId) !== String(bn.staffId)) {
-          const roster = await loadRoster();
-          const rec = roster.find((p) => String(p.id) === String(bn.staffId));
-          if (!rec) return res.status(400).json({ ok: false, error: 'That nurse is not in the staff register.' });
-          const ids = access.auditDeptIds(a);
-          if (ids !== null && !thinStaff([rec], depts.filter((d) => ids.indexOf(d.id) >= 0), false).length) {
-            return res.status(403).json({ ok: false, error: 'That nurse is not on the staff list of your departments. Pick “Not in the register” and type the name, or ask the administrator.' });
+    /* The nurses audited — one patient record may be documented by several (day + night, scrub +
+       circulating): one shared checklist, the audit on each nurse's record. Each is a register
+       record (linked by its id) or, for someone not in the register, a typed name. `nurses` is the
+       list; the older single `nurse` is still accepted, and kept = the first nurse. */
+    let nurses = cur ? DA.nursesOf(cur) : [];
+    const wantList = Array.isArray(b.nurses) ? b.nurses : (b.nurse !== undefined ? (b.nurse ? [b.nurse] : []) : null);
+    if (wantList) {
+      if (wantList.length > DA.MAX_NURSES) return res.status(400).json({ ok: false, error: 'At most ' + DA.MAX_NURSES + ' nurses on one audit.' });
+      const had = {}; nurses.forEach((n) => { had[DA.nurseKey(n)] = n; });
+      const out = [], seen = new Set();
+      let roster = null;
+      for (const bn of wantList) {
+        if (!bn || typeof bn !== 'object') continue;
+        let snap = null;
+        if (bn.staffId != null && bn.staffId !== '') {
+          snap = had['s:' + String(bn.staffId)] || null;
+          if (!snap) {
+            roster = roster || await loadRoster();
+            const rec = roster.find((p) => String(p.id) === String(bn.staffId));
+            if (!rec) return res.status(400).json({ ok: false, error: 'A nurse you picked is not in the staff register.' });
+            const ids = access.auditDeptIds(a);
+            if (ids !== null && !thinStaff([rec], depts.filter((d) => ids.indexOf(d.id) >= 0), false).length) {
+              return res.status(403).json({ ok: false, error: rec.name + ' is not on the staff list of your departments. Pick “Not in the register” and type the name, or ask the administrator.' });
+            }
+            snap = nurseSnap(rec);
           }
-          nurse = nurseSnap(rec);
-        }
-      } else if (str(bn.name, 120)) nurse = { staffId: null, empId: str(bn.empId, 30), name: str(bn.name, 120), designation: str(bn.designation, 80), department: '', role: '', linked: false };
-      else nurse = null;
+        } else if (str(bn.name, 120)) snap = { staffId: null, empId: str(bn.empId, 30), name: str(bn.name, 120), designation: str(bn.designation, 80), department: '', role: '', linked: false };
+        if (!snap) continue;
+        const k = DA.nurseKey(snap);
+        if (seen.has(k)) continue;
+        seen.add(k); out.push(snap);
+      }
+      nurses = out;
     }
+    const nurse = nurses[0] || null;
     // Policy 7.3: nurses do not audit their own documentation.
     const mine = await myStaffId(a);
-    if (nurse && nurse.staffId && mine && mine.id === String(nurse.staffId)) return res.status(409).json({ ok: false, code: 'self', error: 'You cannot audit your own documentation (policy 7.3). Ask another auditor.' });
+    if (mine && nurses.some((n) => n.staffId && mine.id === String(n.staffId))) return res.status(409).json({ ok: false, code: 'self', error: 'You cannot audit your own documentation (policy 7.3). Take yourself off the list or ask another auditor.' });
 
     // The auditor: the person saving — except that an administrator may name who audited (e.g. a paper
     // audit entered for a ward auditor). Anyone else's auditorName is ignored.
     let auditor = cur ? cur.auditor : { username: me, name: nameOf(req, a), staffId: mine ? mine.id : null };
     const typedAuditor = a.unrestricted ? str(b.auditorName, 120) : '';
-    if (typedAuditor && typedAuditor !== auditor.name) auditor = Object.assign({}, auditor, { name: typedAuditor, enteredBy: me, staffId: typedAuditor === nameOf(req, a) ? auditor.staffId : null });
+    const pickedAuditor = a.unrestricted && b.auditorStaffId != null && b.auditorStaffId !== '' ? String(b.auditorStaffId) : null;
+    if (pickedAuditor && pickedAuditor !== String(auditor.staffId)) {
+      // A register record: the auditor's real name and staff record (so "not their own documentation" holds for them too).
+      const rec = (await loadRoster()).find((p) => String(p.id) === pickedAuditor);
+      if (!rec) return res.status(400).json({ ok: false, error: 'The auditor you picked is not in the staff register.' });
+      auditor = Object.assign({}, auditor, { name: String(rec.name || ''), staffId: String(rec.id), empId: String(rec.emp_id || ''), enteredBy: me });
+    } else if (!pickedAuditor && typedAuditor && typedAuditor !== auditor.name) auditor = Object.assign({}, auditor, { name: typedAuditor, enteredBy: me, staffId: typedAuditor === nameOf(req, a) ? auditor.staffId : null, empId: '' });
+    if (auditor.staffId && nurses.some((n) => n.staffId && String(n.staffId) === String(auditor.staffId))) {
+      return res.status(409).json({ ok: false, code: 'self', error: auditor.name + ' cannot audit their own documentation (policy 7.3).' });
+    }
 
     const t = now();
     const next = Object.assign({}, cur || {}, vals, {
       _id: cur ? cur._id : newId(), toolId: cur ? cur.toolId : tool._id, toolName: (tool && (tool.short || tool.name)) || (cur && cur.toolName) || '', toolCode: (tool && tool.code) || (cur && cur.toolCode) || '',
       toolRevision: cur ? cur.toolRevision : (tool.revision || 1), criteria,
-      deptId, deptName: dept.name, month: vals.date.slice(0, 7), nurse,
+      deptId, deptName: dept.name, month: vals.date.slice(0, 7), nurses, nurse,
       auditor,
       selfCheck: mine ? (mine.sure ? 'linked' : 'matched') : 'unknown',
       createdAt: cur ? cur.createdAt : t, createdBy: cur ? cur.createdBy : me, updatedAt: t, updatedBy: me,
@@ -608,7 +648,7 @@ function mount(app, opts) {
     if (next.status === 'completed' && (!cur || cur.status === 'draft')) { next.completedAt = t; next.completedBy = me; }
     // The nurse acknowledged what the audit said; if what it says changes, that no longer holds.
     if (cur && cur.status === 'acknowledged' && changes.some((c) => SCORED.some((k) => c.indexOf(k) === 0))) {
-      next.status = 'completed'; next.ackPrevious = cur.ack; next.ack = null; action += ' — acknowledgement cleared, the nurse must acknowledge again';
+      next.status = 'completed'; next.ackPrevious = cur.ack; next.acksPrevious = DA.acksOf(cur); next.ack = null; next.acks = {}; action += ' — acknowledgements cleared, the nurse(s) acknowledge again';
     }
     next.history = ((cur && cur.history) || []).concat([{ at: t, by: me, action, changes: changes.join('; ').slice(0, 900) || 'new' }]).slice(-100);
     if (!(await putDoc(AUDITS, next, cur ? cur.updatedAt : null))) return res.status(409).json({ ok: false, code: 'stale', error: 'Someone else changed this audit. Reload to see their version.' });
@@ -618,6 +658,17 @@ function mount(app, opts) {
   app.post('/api/doc-audit/audits', guard, async (req, res) => { try { await saveAudit(req, res, null); } catch (e) { fail(res, e, 'Could not save the audit.'); } });
   app.put('/api/doc-audit/audits/:id', guard, async (req, res) => { try { await saveAudit(req, res, String(req.params.id)); } catch (e) { fail(res, e, 'Could not save the audit.'); } });
 
+  /* Record acknowledgements for some of an audit's nurses (keys = DA.nurseKey). The audit becomes
+     Acknowledged only when every listed nurse has acknowledged. */
+  function ackSet(x, keys, entry) {
+    const acks = Object.assign({}, DA.acksOf(x));
+    keys.forEach((k) => { const n = DA.nursesOf(x).find((y) => DA.nurseKey(y) === k); acks[k] = Object.assign({}, entry, { name: (n && n.name) || entry.name || '' }); });
+    const done = DA.nursesOf(x).every((n) => acks[DA.nurseKey(n)]);
+    const names = keys.map((k) => acks[k].name).join(', ');
+    const left = DA.nursesOf(x).filter((n) => !acks[DA.nurseKey(n)]).length;
+    return { acks, done, names, left,
+      set: { acks, status: done ? 'acknowledged' : 'completed', ack: done ? { at: entry.at, by: entry.by, byName: entry.byName, method: entry.method, complete: true, count: DA.nursesOf(x).length, name: DA.nurseNames(x), note: entry.note } : null } };
+  }
   // A step in the sign-off chain on one audit.
   async function step(req, res, fn) {
     const x = await getDoc(AUDITS, String(req.params.id));
@@ -638,9 +689,12 @@ function mount(app, opts) {
         if (!inScope(a, x.deptId)) { notMine(res); return null; }
         if (x.status !== 'completed') { res.status(409).json({ ok: false, code: 'state', error: x.status === 'draft' ? 'Complete the audit first.' : 'This audit has already been acknowledged.' }); return null; }
         const b = body(req);
+        const pending = DA.pendingAcks(x).map(DA.nurseKey);
+        const keys = Array.isArray(b.keys) && b.keys.length ? b.keys.map(String).filter((k) => pending.indexOf(k) >= 0) : pending;
+        if (!keys.length) { res.status(400).json({ ok: false, error: 'Choose the nurse(s) who acknowledged.' }); return null; }
         const t = now(), me = actor(req, a);
-        return { by: me, action: 'acknowledged (in person)', note: str(b.note, 300),
-          set: { status: 'acknowledged', ack: { at: t, by: me, byName: nameOf(req, a), method: 'in-person', name: (x.nurse && x.nurse.name) || '', note: str(b.note, 300) } } };
+        const r = ackSet(x, keys, { at: t, by: me, byName: nameOf(req, a), method: 'in-person', note: str(b.note, 300) });
+        return { by: me, action: 'acknowledged in person: ' + r.names + (r.done ? '' : ' — ' + r.left + ' nurse(s) still to acknowledge'), note: str(b.note, 300), set: r.set };
       });
     } catch (e) { fail(res, e, 'Could not record the acknowledgement.'); }
   });
@@ -655,10 +709,10 @@ function mount(app, opts) {
         const ackNeeded = cfg.ackRequired !== false && !a.unrestricted;
         if (x.status === 'draft') { res.status(409).json({ ok: false, code: 'state', error: 'Complete the audit first.' }); return null; }
         if (x.status === 'signed') { res.status(409).json({ ok: false, code: 'state', error: 'This audit is already signed off.' }); return null; }
-        if (x.status === 'completed' && ackNeeded) { res.status(409).json({ ok: false, code: 'ack', error: 'The nurse has not acknowledged this audit yet.' }); return null; }
+        if (x.status === 'completed' && ackNeeded) { const p = DA.pendingAcks(x).map((n) => n.name); res.status(409).json({ ok: false, code: 'ack', error: (p.length > 1 ? p.length + ' nurses have' : (p[0] || 'The nurse') + ' has') + ' not acknowledged this audit yet' + (p.length > 1 ? ' (' + p.join(', ') + ').' : '.') }); return null; }
         if (!a.unrestricted && x.auditor && x.auditor.username === me) { res.status(409).json({ ok: false, code: 'own', error: 'You filled this audit, so another person must sign it off.' }); return null; }
         const mine = await myStaffId(a);
-        if (!a.unrestricted && mine && x.nurse && String(x.nurse.staffId) === mine.id) { res.status(409).json({ ok: false, code: 'self', error: 'This audit is of your own documentation.' }); return null; }
+        if (!a.unrestricted && mine && DA.nursesOf(x).some((n) => String(n.staffId) === mine.id)) { res.status(409).json({ ok: false, code: 'self', error: 'This audit is of your own documentation.' }); return null; }
         const t = now();
         return { by: me, action: 'signed off' + (x.status === 'completed' ? ' (without the nurse’s acknowledgement)' : ''), note: str(body(req).note, 300),
           set: { status: 'signed', signoff: { at: t, by: me, name: nameOf(req, a), note: str(body(req).note, 300) } } };
@@ -704,7 +758,9 @@ function mount(app, opts) {
       const me = await myStaffId(a);
       if (!me) return res.json({ ok: true, linked: false, audits: [] });
       const list = await findAudits({ staffId: me.id, limit: 60 });
-      res.json({ ok: true, linked: true, audits: list.map((x) => Object.assign(thinAudit(x), { gaps: (x.criteria || []).filter((c) => (x.answers || {})[c.id] === 'N').map((c) => ({ no: c.no, text: c.text, critical: c.critical, evidence: (x.evidence || {})[c.id] || '' })), action: x.result ? x.result.action : '' })) });
+      const myKey = 's:' + me.id;
+      res.json({ ok: true, linked: true, audits: list.map((x) => Object.assign(thinAudit(x), {
+        myPending: x.status === 'completed' && !DA.acksOf(x)[myKey], othersPending: DA.pendingAcks(x).filter((n) => DA.nurseKey(n) !== myKey).length, gaps: (x.criteria || []).filter((c) => (x.answers || {})[c.id] === 'N').map((c) => ({ no: c.no, text: c.text, critical: c.critical, evidence: (x.evidence || {})[c.id] || '' })), action: x.result ? x.result.action : '' })) });
     } catch (e) { fail(res, e, 'Could not load your audits.'); }
   });
   app.post('/api/doc-audit/mine/:id/ack', guard, async (req, res) => {
@@ -712,11 +768,12 @@ function mount(app, opts) {
       const a = await resolve(req, res, null); if (!a) return;
       const me = await myStaffId(a);
       await step(req, res, async (x) => {
-        if (!me || !x.nurse || String(x.nurse.staffId) !== me.id) { res.status(403).json({ ok: false, error: 'This audit is not of your documentation.' }); return null; }
-        if (x.status !== 'completed') { res.status(409).json({ ok: false, code: 'state', error: 'This audit is not waiting for your acknowledgement.' }); return null; }
+        if (!me || !DA.nursesOf(x).some((n) => String(n.staffId) === me.id)) { res.status(403).json({ ok: false, error: 'This audit is not of your documentation.' }); return null; }
+        const key = 's:' + me.id;
+        if (x.status !== 'completed' || DA.acksOf(x)[key]) { res.status(409).json({ ok: false, code: 'state', error: 'This audit is not waiting for your acknowledgement.' }); return null; }
         const t = now(), who = actor(req, a);
-        return { by: who, action: 'acknowledged by the nurse', note: str(body(req).note, 300),
-          set: { status: 'acknowledged', ack: { at: t, by: who, byName: nameOf(req, a), method: 'account', name: nameOf(req, a), note: str(body(req).note, 300) } } };
+        const r = ackSet(x, [key], { at: t, by: who, byName: nameOf(req, a), method: 'account', note: str(body(req).note, 300) });
+        return { by: who, action: 'acknowledged by ' + r.names + ' (own account)' + (r.done ? '' : ' — ' + r.left + ' nurse(s) still to acknowledge'), note: str(body(req).note, 300), set: r.set };
       });
     } catch (e) { fail(res, e, 'Could not record your acknowledgement.'); }
   });
@@ -909,7 +966,7 @@ function mount(app, opts) {
         const x = await getDoc(AUDITS, String(b.id || ''));
         if (!x || x.removedAt) return res.status(404).json({ ok: false, error: 'This audit does not exist.' });
         if (!inScope(a, x.deptId)) return notMine(res);
-        target = x.deptName + ' · ' + ((x.nurse && x.nurse.name) || '—') + ' · ' + x.date;
+        target = x.deptName + ' · ' + (DA.nurseNames(x) || '—') + ' · ' + x.date;
       } else if (b.dept) { if (!inScope(a, b.dept)) return notMine(res); target = String(b.dept); }
       activity.log(req, 'docaudit_print', { target, detail: kind + (b.from ? ' · ' + b.from + (b.to ? ' → ' + b.to : '') : '') + (b.pdf ? ' · PDF' : '') });
       res.json({ ok: true });

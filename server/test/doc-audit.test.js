@@ -140,6 +140,15 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(res.body.audit.auditor.name, 'Sr. Nurse Rokeya', 'an admin can correct the auditor');
   assert.ok(/auditor set to Sr. Nurse Rokeya/.test(res.body.audit.history[res.body.audit.history.length - 1].changes));
   await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id } });
+  // picked from the register (searched by employee ID in the form): the record's real name and id
+  res = await call('POST /api/doc-audit/audits', admin, { body: Object.assign({}, base, { uhid: 'UH-106', nurse: { staffId: 1 }, answers: allYes(IPD), complete: true, auditorName: '11003', auditorStaffId: 3 }) });
+  assert.equal(res.status, 200); assert.equal(res.body.audit.auditor.name, 'Auditor Nurse'); assert.equal(res.body.audit.auditor.staffId, '3'); assert.equal(res.body.audit.auditor.empId, '11003');
+  await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id } });
+  res = await call('POST /api/doc-audit/audits', admin, { body: Object.assign({}, base, { uhid: 'UH-107', nurse: { staffId: 1 }, answers: allYes(IPD), complete: true, auditorStaffId: 1 }) });
+  assert.equal(res.status, 409, 'the picked auditor cannot be the nurse audited');
+  res = await call('POST /api/doc-audit/audits', auditor, { body: Object.assign({}, base, { uhid: 'UH-108', nurse: { staffId: 1 }, answers: allYes(IPD), complete: true, auditorStaffId: 1 }) });
+  assert.equal(res.status, 200); assert.equal(res.body.audit.auditor.name, 'auditor', "a non-admin's auditorStaffId is ignored");
+  await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id } });
 
   /* ---- the sign-off chain ---- */
   res = await call('POST /api/doc-audit/audits/:id/sign', incharge, { params: { id: A1.id } });

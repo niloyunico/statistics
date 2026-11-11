@@ -578,41 +578,118 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, React.createElement("b", null, p.name), self(p) ? ' (you)' : '', React.createElement("small", null, [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · '))))), document.body));
   }
   function AuditorField({
-    deptId,
     value,
+    staffId,
     onChange
   }) {
-    const [names, setNames] = useState([]);
+    const [list, setList] = useState(null);
+    const [open, setOpen] = useState(false);
+    const [hi, setHi] = useState(0);
+    const [pos, setPos] = useState(null);
+    const ref = useRef(null);
     useEffect(() => {
       let live = true;
-      if (!deptId) return;
-      api('/api/doc-audit/staff?dept=' + encodeURIComponent(deptId)).then(j => {
-        if (live) setNames(j.staff.map(p => p.name).filter(Boolean));
-      }).catch(() => {});
+      api('/api/doc-audit/staff?all=1').then(j => {
+        if (live) setList(j.staff);
+      }).catch(() => {
+        if (live) setList([]);
+      });
       return () => {
         live = false;
       };
-    }, [deptId]);
-    return React.createElement(React.Fragment, null, React.createElement("input", {
+    }, []);
+    const place = () => {
+      const r = ref.current && ref.current.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom;
+      const up = below < 240 && r.top > below;
+      setPos({
+        left: r.left,
+        width: Math.max(r.width, 300),
+        top: up ? null : r.bottom + 4,
+        bottom: up ? window.innerHeight - r.top + 4 : null,
+        maxH: Math.min(320, (up ? r.top : below) - 12)
+      });
+    };
+    useEffect(() => {
+      if (!open) return;
+      place();
+      const f = () => place();
+      window.addEventListener('scroll', f, true);
+      window.addEventListener('resize', f);
+      const out = e => {
+        if (ref.current && !ref.current.contains(e.target) && !(e.target.closest && e.target.closest('.da-dd'))) setOpen(false);
+      };
+      document.addEventListener('mousedown', out);
+      return () => {
+        window.removeEventListener('scroll', f, true);
+        window.removeEventListener('resize', f);
+        document.removeEventListener('mousedown', out);
+      };
+    }, [open]);
+    const needle = String(value || '').trim().toLowerCase();
+    const picked = staffId != null && staffId !== '' && (list || []).find(p => String(p.id) === String(staffId));
+    const hits = (list || []).filter(p => !needle || picked && String(p.id) === String(staffId) || String(p.name || '').toLowerCase().indexOf(needle) >= 0 || String(p.emp_id || '').toLowerCase().indexOf(needle) >= 0).slice(0, 60);
+    const pick = p => {
+      onChange(p.name, String(p.id));
+      setOpen(false);
+    };
+    const key = e => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setOpen(true);
+        setHi(h => Math.min(h + 1, hits.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setHi(h => Math.max(h - 1, 0));
+      } else if (e.key === 'Enter' && open && hits[hi]) {
+        e.preventDefault();
+        pick(hits[hi]);
+      } else if (e.key === 'Escape') setOpen(false);
+    };
+    return React.createElement("div", {
+      ref: ref
+    }, React.createElement("input", {
       className: "da-in",
       style: {
         width: '100%'
       },
-      list: "da-auditors",
       value: value || '',
-      placeholder: "Auditor's name",
-      onChange: e => onChange(e.target.value)
-    }), React.createElement("datalist", {
-      id: "da-auditors"
-    }, names.map(n => React.createElement("option", {
-      key: n,
-      value: n
-    }))), React.createElement("div", {
+      placeholder: list ? 'Search staff by name or employee ID…' : 'Loading the staff list…',
+      onFocus: () => setOpen(true),
+      onKeyDown: key,
+      onChange: e => {
+        onChange(e.target.value, null);
+        setOpen(true);
+        setHi(0);
+      }
+    }), React.createElement("div", {
       className: "da-sub",
       style: {
         marginTop: 3
       }
-    }, "Administrator: you may enter who audited."));
+    }, picked ? [picked.emp_id && 'ID ' + picked.emp_id, picked.designation, picked.current_department].filter(Boolean).join(' · ') : 'Administrator: pick who audited, or type a name.'), open && pos && ReactDOM.createPortal(React.createElement("div", {
+      className: "da-dd",
+      style: {
+        left: pos.left,
+        width: pos.width,
+        top: pos.top == null ? 'auto' : pos.top,
+        bottom: pos.bottom == null ? 'auto' : pos.bottom,
+        maxHeight: pos.maxH
+      }
+    }, !list && React.createElement("div", {
+      className: "it"
+    }, "Loading\u2026"), list && !hits.length && React.createElement("div", {
+      className: "it off"
+    }, "No staff member matches \u201C", value, "\u201D. The name you typed will be used."), hits.map((p, i) => React.createElement("div", {
+      key: p.id,
+      className: 'it' + (i === hi ? ' hi' : ''),
+      onMouseEnter: () => setHi(i),
+      onMouseDown: e => {
+        e.preventDefault();
+        pick(p);
+      }
+    }, React.createElement("b", null, p.name), React.createElement("small", null, [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · '))))), document.body));
   }
   function ResultPanel({
     res,
@@ -750,7 +827,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         answers: {},
         evidence: {},
         remarks: '',
-        auditorName: meta.name
+        auditorName: meta.name,
+        auditorStaffId: meta.staffId
       };
     }
     function fromAudit(a) {
@@ -766,7 +844,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         answers: a.answers || {},
         evidence: a.evidence || {},
         remarks: a.remarks || '',
-        auditorName: a.auditor && a.auditor.name || ''
+        auditorName: a.auditor && a.auditor.name || '',
+        auditorStaffId: a.auditor && a.auditor.staffId || null
       };
     }
     const audit = loaded && loaded.audit;
@@ -1141,9 +1220,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, (problems.find(p => p.field === 'nurse') || {}).message)), React.createElement("div", {
       className: "da-f"
     }, React.createElement("label", null, "Auditor"), meta.isAdmin && !readOnly ? React.createElement(AuditorField, {
-      deptId: form.deptId,
       value: form.auditorName,
-      onChange: v => set('auditorName', v)
+      staffId: form.auditorStaffId,
+      onChange: (name, id) => setForm(f => Object.assign({}, f, {
+        auditorName: name,
+        auditorStaffId: id
+      }))
     }) : React.createElement("div", {
       style: {
         fontSize: 13,
