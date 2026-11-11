@@ -525,12 +525,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         display: 'inline-grid',
         placeItems: 'center',
-        width: 22,
-        height: 22,
+        width: 20,
+        height: 20,
         borderRadius: '50%',
         background: '#1f4f8a',
         color: '#fff',
-        fontSize: 11,
+        fontSize: 10.5,
         fontWeight: 800,
         flex: 'none'
       }
@@ -539,13 +539,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         flex: 1,
         minWidth: 0
       }
-    }, React.createElement("b", {
-      style: {
-        fontSize: 13
-      }
-    }, n.name), React.createElement("div", {
-      className: "da-sub"
-    }, nurseLine(n))), !disabled && React.createElement("button", {
+    }, React.createElement(Person, {
+      name: n.name,
+      empId: n.empId,
+      size: 32,
+      sub: nurseLine(n)
+    })), !disabled && React.createElement("button", {
       className: "da-btn sm",
       "aria-label": 'Remove ' + n.name,
       onClick: () => remove(i)
@@ -680,9 +679,91 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           pick(p);
         },
         title: self(p) ? 'The auditor cannot be audited on the same record' : isPicked(p) ? 'Already added' : ''
-      }, React.createElement("b", null, p.name), self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : '', React.createElement("small", null, [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')));
+      }, React.createElement(Person, {
+        name: p.name + (self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : ''),
+        empId: p.emp_id,
+        size: 26,
+        sub: [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')
+      }));
     })), document.body));
   }
+  function Person({
+    name,
+    empId,
+    sub,
+    size
+  }) {
+    const sz = size || 26;
+    const av = window.MK && window.MK.Av ? React.createElement(window.MK.Av, {
+      name: name || '?',
+      empId: empId || null,
+      size: sz,
+      style: {
+        fontSize: Math.round(sz / 2.6)
+      }
+    }) : React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: sz,
+        height: sz,
+        borderRadius: '50%',
+        background: '#e6eefb',
+        color: '#1f4f8a',
+        fontSize: Math.round(sz / 2.6),
+        fontWeight: 800
+      }
+    }, String(name || '?').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase());
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        minWidth: 0
+      }
+    }, React.createElement("span", {
+      style: {
+        flex: 'none'
+      }
+    }, av), React.createElement("div", {
+      style: {
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 600,
+        fontSize: 12.8,
+        lineHeight: 1.25
+      }
+    }, name || '—'), sub && React.createElement("div", {
+      className: "da-sub",
+      style: {
+        lineHeight: 1.3
+      }
+    }, sub)));
+  }
+  const NurseList = ({
+    x,
+    size
+  }) => {
+    const ns = DA.nursesOf(x);
+    return React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+        minWidth: 200
+      }
+    }, ns.length ? ns.map(n => React.createElement(Person, {
+      key: DA.nurseKey(n),
+      name: n.name,
+      empId: n.empId,
+      size: size,
+      sub: nurseLine(n)
+    })) : React.createElement("span", {
+      className: "da-muted"
+    }, "\u2014"));
+  };
   const nursesShort = x => {
     const ns = DA.nursesOf(x);
     return ns.length ? ns[0].name + (ns.length > 1 ? ' +' + (ns.length - 1) : '') : '—';
@@ -1673,10 +1754,14 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         whiteSpace: 'nowrap'
       }
-    }, DA.fmtDate(x.date)), React.createElement("td", {
-      title: DA.nurseNames(x)
-    }, React.createElement("b", null, nursesShort(x)), React.createElement("div", {
-      className: "da-sub"
+    }, DA.fmtDate(x.date)), React.createElement("td", null, React.createElement(NurseList, {
+      x: x,
+      size: 22
+    }), React.createElement("div", {
+      className: "da-sub",
+      style: {
+        marginTop: 3
+      }
     }, x.deptName, x.area ? ' · ' + x.area : '')), React.createElement("td", {
       className: "n"
     }, pctTxt(x.result && x.result.pct)), React.createElement("td", null, React.createElement(ResultChip, {
@@ -1978,7 +2063,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-scroll"
     }, React.createElement("table", {
       className: "da-tbl"
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Department / area"), React.createElement("th", null, "Nurse audited"), React.createElement("th", null, "UHID"), React.createElement("th", null, "Auditor"), React.createElement("th", {
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Department / area"), React.createElement("th", null, "Nurse(s) audited"), React.createElement("th", null, "UHID"), React.createElement("th", null, "Auditor"), React.createElement("th", {
       className: "n"
     }, "Y / N / NA"), React.createElement("th", {
       className: "n"
@@ -1997,11 +2082,18 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-sub"
     }, x.shift)), React.createElement("td", null, React.createElement("b", null, x.deptName), React.createElement("div", {
       className: "da-sub"
-    }, x.area, x.toolName ? ' · ' + x.toolName : '')), React.createElement("td", {
-      title: DA.nurseNames(x)
-    }, nursesShort(x), React.createElement("div", {
-      className: "da-sub"
-    }, DA.nursesOf(x).length > 1 ? DA.nursesOf(x).length + ' nurses · shared record' : DA.nursesOf(x).map(nurseLine).join(''))), React.createElement("td", null, x.uhid), React.createElement("td", null, x.auditor ? x.auditor.name : ''), React.createElement("td", {
+    }, x.area, x.toolName ? ' · ' + x.toolName : '')), React.createElement("td", null, React.createElement(NurseList, {
+      x: x
+    }), DA.nursesOf(x).length > 1 && React.createElement("div", {
+      className: "da-sub",
+      style: {
+        marginTop: 4
+      }
+    }, DA.nursesOf(x).length, " nurses \xB7 shared record")), React.createElement("td", null, x.uhid), React.createElement("td", null, x.auditor ? React.createElement(Person, {
+      name: x.auditor.name,
+      empId: x.auditor.empId,
+      sub: x.auditor.enteredBy && x.auditor.enteredBy !== x.auditor.username ? 'entered by ' + x.auditor.enteredBy : x.auditor.enteredBy ? 'entered by an administrator' : ''
+    }) : ''), React.createElement("td", {
       className: "n"
     }, x.result ? x.result.yes + ' / ' + x.result.no + ' / ' + x.result.na : ''), React.createElement("td", {
       className: "n"

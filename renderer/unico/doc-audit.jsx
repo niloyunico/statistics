@@ -291,8 +291,8 @@
     };
     const chips = picked.map((n, i) => (
       <div key={DA.nurseKey(n) + i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 8, background: '#f6fafd', animation: 'da-in .2s ease' }}>
-        <span style={{ display: 'inline-grid', placeItems: 'center', width: 22, height: 22, borderRadius: '50%', background: '#1f4f8a', color: '#fff', fontSize: 11, fontWeight: 800, flex: 'none' }}>{i + 1}</span>
-        <div style={{ flex: 1, minWidth: 0 }}><b style={{ fontSize: 13 }}>{n.name}</b><div className="da-sub">{nurseLine(n)}</div></div>
+        <span style={{ display: 'inline-grid', placeItems: 'center', width: 20, height: 20, borderRadius: '50%', background: '#1f4f8a', color: '#fff', fontSize: 10.5, fontWeight: 800, flex: 'none' }}>{i + 1}</span>
+        <div style={{ flex: 1, minWidth: 0 }}><Person name={n.name} empId={n.empId} size={32} sub={nurseLine(n)} /></div>
         {!disabled && <button className="da-btn sm" aria-label={'Remove ' + n.name} onClick={() => remove(i)}>Remove</button>}
       </div>));
     if (disabled) return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{chips.length ? chips : <span>—</span>}</div>;
@@ -319,11 +319,25 @@
           {list && !hits.length && <div className="it off">No nurse matches “{q}”. {all ? '' : 'Only the staff of this department are listed.'}</div>}
           {hits.map((p, i) => { const off = self(p) || isPicked(p);
             return <div key={p.id} className={'it' + (i === hi ? ' hi' : '') + (off ? ' off' : '')} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); pick(p); }} title={self(p) ? 'The auditor cannot be audited on the same record' : isPicked(p) ? 'Already added' : ''}>
-              <b>{p.name}</b>{self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : ''}<small>{[p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')}</small>
+              <Person name={p.name + (self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : '')} empId={p.emp_id} size={26} sub={[p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')} />
             </div>; })}
         </div>, document.body)}
     </div>;
   }
+  /* A person with a small photo — the staff register's picture when there is one (window.MK.Av reads
+     window.__STAFF_PHOTOS__ by employee ID / name), coloured initials otherwise. */
+  function Person({ name, empId, sub, size }) {
+    const sz = size || 26;
+    const av = window.MK && window.MK.Av ? <window.MK.Av name={name || '?'} empId={empId || null} size={sz} style={{ fontSize: Math.round(sz / 2.6) }} />
+      : <span style={{ display: 'inline-grid', placeItems: 'center', width: sz, height: sz, borderRadius: '50%', background: '#e6eefb', color: '#1f4f8a', fontSize: Math.round(sz / 2.6), fontWeight: 800 }}>{String(name || '?').trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()}</span>;
+    return <div style={{ display: 'flex', gap: 8, alignItems: 'center', minWidth: 0 }}>
+      <span style={{ flex: 'none' }}>{av}</span>
+      <div style={{ minWidth: 0 }}><div style={{ fontWeight: 600, fontSize: 12.8, lineHeight: 1.25 }}>{name || '—'}</div>{sub && <div className="da-sub" style={{ lineHeight: 1.3 }}>{sub}</div>}</div>
+    </div>;
+  }
+  // Every nurse of an audit, one under the other, each with a photo.
+  const NurseList = ({ x, size }) => { const ns = DA.nursesOf(x);
+    return <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }}>{ns.length ? ns.map((n) => <Person key={DA.nurseKey(n)} name={n.name} empId={n.empId} size={size} sub={nurseLine(n)} />) : <span className="da-muted">—</span>}</div>; };
   // "Rina Akter +2" for tables; the full list on hover.
   const nursesShort = (x) => { const ns = DA.nursesOf(x); return ns.length ? ns[0].name + (ns.length > 1 ? ' +' + (ns.length - 1) : '') : '—'; };
 
@@ -653,7 +667,7 @@
         {!rows.length ? <div className="da-empty" style={{ padding: 14 }}>Nothing waiting.</div>
           : <div className="da-scroll"><table className="da-tbl"><tbody>{rows.slice(0, 8).map((x) => (
             <tr key={x.id} className="click" onClick={() => setRoute({ view: 'docAuditNew', audit: x.id })}>
-              <td style={{ whiteSpace: 'nowrap' }}>{DA.fmtDate(x.date)}</td><td title={DA.nurseNames(x)}><b>{nursesShort(x)}</b><div className="da-sub">{x.deptName}{x.area ? ' · ' + x.area : ''}</div></td>
+              <td style={{ whiteSpace: 'nowrap' }}>{DA.fmtDate(x.date)}</td><td><NurseList x={x} size={22} /><div className="da-sub" style={{ marginTop: 3 }}>{x.deptName}{x.area ? ' · ' + x.area : ''}</div></td>
               <td className="n">{pctTxt(x.result && x.result.pct)}</td><td><ResultChip r={x.result} /></td></tr>))}</tbody></table></div>}
         {rows.length > 8 && <div className="da-pad" style={{ paddingTop: 8 }}><a href="#" onClick={(e) => { e.preventDefault(); setRoute({ view: 'docAuditRegister' }); }}>All {rows.length} in the register →</a></div>}
       </div>);
@@ -736,13 +750,14 @@
         <div className="da-card">
           {!data ? <div className="da-empty">Loading…</div> : !rows.length ? <div className="da-empty">No audit matches.</div> :
             <div className="da-scroll"><table className="da-tbl">
-              <thead><tr><th>Date</th><th>Department / area</th><th>Nurse audited</th><th>UHID</th><th>Auditor</th><th className="n">Y / N / NA</th><th className="n">Score</th><th>Grade</th><th>Result</th><th>Status</th></tr></thead>
+              <thead><tr><th>Date</th><th>Department / area</th><th>Nurse(s) audited</th><th>UHID</th><th>Auditor</th><th className="n">Y / N / NA</th><th className="n">Score</th><th>Grade</th><th>Result</th><th>Status</th></tr></thead>
               <tbody>{rows.map((x) => (
                 <tr key={x.id} className="click" onClick={() => setRoute({ view: 'docAuditNew', audit: x.id })}>
                   <td style={{ whiteSpace: 'nowrap' }}>{DA.fmtDate(x.date)}<div className="da-sub">{x.shift}</div></td>
                   <td><b>{x.deptName}</b><div className="da-sub">{x.area}{x.toolName ? ' · ' + x.toolName : ''}</div></td>
-                  <td title={DA.nurseNames(x)}>{nursesShort(x)}<div className="da-sub">{DA.nursesOf(x).length > 1 ? DA.nursesOf(x).length + ' nurses · shared record' : DA.nursesOf(x).map(nurseLine).join('')}</div></td>
-                  <td>{x.uhid}</td><td>{x.auditor ? x.auditor.name : ''}</td>
+                  <td><NurseList x={x} />{DA.nursesOf(x).length > 1 && <div className="da-sub" style={{ marginTop: 4 }}>{DA.nursesOf(x).length} nurses · shared record</div>}</td>
+                  <td>{x.uhid}</td>
+                  <td>{x.auditor ? <Person name={x.auditor.name} empId={x.auditor.empId} sub={x.auditor.enteredBy && x.auditor.enteredBy !== x.auditor.username ? 'entered by ' + x.auditor.enteredBy : x.auditor.enteredBy ? 'entered by an administrator' : ''} /> : ''}</td>
                   <td className="n">{x.result ? x.result.yes + ' / ' + x.result.no + ' / ' + x.result.na : ''}</td>
                   <td className="n"><b>{pctTxt(x.result && x.result.pct)}</b></td>
                   <td style={{ color: gradeColor(x.result && x.result.grade), fontWeight: 600, fontSize: 12 }}>{x.result ? x.result.gradeLabel : ''}{x.result && (x.result.criticalFails || []).length ? <div><span className="da-chip crit">{x.result.criticalFails.length} critical</span></div> : null}</td>
