@@ -186,6 +186,22 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
 .da-ed-row{display:grid;grid-template-columns:30px 90px minmax(0,1fr) 110px auto;gap:8px;align-items:start;padding:8px 0;border-bottom:1px solid var(--line-2)}
 .da-ed-row.off{opacity:.5}
 @media (max-width:760px){.da-row{grid-template-columns:28px minmax(0,1fr)}.da-row .da-yn{grid-column:2}.da-ev{grid-column:2}.da-ed-row{grid-template-columns:1fr}}
+/* Smooth state changes: colours fade instead of snapping, a chosen Yes / No / N/A pops in, the
+   evidence box, drop-downs and dialogs ease in, buttons give a little press. Off for anyone who
+   asked their system for less motion. */
+.da-btn,.da-yn button,.da-in,.da-sel,.da-ta,.da-tile,.da-row,.da-tbl tr.click td,.da-dd .it,.da-wrap .seg button{transition:background-color .2s ease,color .2s ease,border-color .2s ease,box-shadow .2s ease,transform .12s ease,opacity .2s ease}
+.da-btn:hover:not(:disabled){box-shadow:0 3px 10px rgba(13,27,46,.08)}
+.da-btn:active:not(:disabled),.da-yn button:active:not(:disabled),.da-wrap .seg button:active{transform:scale(.96)}
+.da-yn button.on{animation:da-pop .24s ease;box-shadow:inset 0 0 0 1px rgba(0,0,0,.05)}
+@keyframes da-pop{0%{transform:scale(.88)}60%{transform:scale(1.05)}100%{transform:scale(1)}}
+.da-ev,.da-dd,.da-modal{animation:da-in .2s ease}
+@keyframes da-in{from{opacity:0;transform:translateY(-5px)}to{opacity:1;transform:none}}
+.da-modal-bg{animation:da-fade .18s ease}
+@keyframes da-fade{from{opacity:0}to{opacity:1}}
+.da-res .big,.da-res .grade,.da-res .da-chip{transition:color .3s ease,background-color .3s ease}
+.da-tile:hover{box-shadow:0 4px 14px rgba(13,27,46,.07)}
+.da-step i{transition:background-color .25s ease,border-color .25s ease,box-shadow .25s ease}
+@media (prefers-reduced-motion:reduce){.da-wrap *,.da-dd,.da-dd *,.da-modal,.da-modal-bg{animation:none!important;transition:none!important}}
 `;
   function useStyles() {
     useEffect(() => {
