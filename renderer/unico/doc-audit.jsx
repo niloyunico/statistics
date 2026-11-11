@@ -203,6 +203,28 @@
     });
   }
 
+  // Which of the nurses acknowledged in person (all ticked), and a note.
+  function askAck(pending) {
+    return new Promise((done) => {
+      const host = document.createElement('div'); document.body.appendChild(host);
+      const root = ReactDOM.createRoot ? ReactDOM.createRoot(host) : null;
+      const close = (v) => { if (root) root.unmount(); else ReactDOM.unmountComponentAtNode(host); host.remove(); done(v); };
+      function Ask() {
+        const [keys, setKeys] = useState(pending.map(DA.nurseKey));
+        const [note, setNote] = useState('');
+        const tog = (k) => setKeys((ks) => (ks.indexOf(k) >= 0 ? ks.filter((x) => x !== k) : ks.concat([k])));
+        return <Modal title={pending.length > 1 ? 'Nurses’ acknowledgement' : 'Nurse’s acknowledgement'} onClose={() => close(null)}
+          footer={<><button className="da-btn" onClick={() => close(null)}>Cancel</button><button className="da-btn pri" disabled={!keys.length} onClick={() => close({ keys, note: note.trim() })}>Record acknowledgement</button></>}>
+          <div style={{ fontSize: 12.8, lineHeight: 1.5 }}>Record that {pending.length > 1 ? 'these nurses were' : pending[0].name + ' was'} given the same-day feedback and acknowledged this audit (policy 7.2).</div>
+          {pending.length > 1 && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{pending.map((n) => { const k = DA.nurseKey(n);
+            return <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}><input type="checkbox" checked={keys.indexOf(k) >= 0} onChange={() => tog(k)} /><b>{n.name}</b><span className="da-sub">{nurseLine(n)}</span></label>; })}</div>}
+          <textarea className="da-ta" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional) — e.g. feedback given at the nurses’ station; gaps explained." />
+        </Modal>;
+      }
+      if (root) root.render(<Ask />); else ReactDOM.render(<Ask />, host);
+    });
+  }
+
   function useMeta() {
     const [meta, setMeta] = useState(null);
     const [err, setErr] = useState('');
@@ -220,24 +242,28 @@
   const toolOf = (meta, id) => ((meta && meta.tools) || []).find((t) => t.id === id) || null;
 
   /* ======================================================== nurse picker === */
-  // The nurse whose documentation was audited: a register record of the auditor's departments
-  // (the server only lists those), or a typed name for someone not in the register.
-  function NursePicker({ meta, deptId, value, onChange, bad, disabled }) {
+  /* The nurses whose documentation was audited — one patient record can be documented by several
+     (day + night, scrub + circulating): one shared checklist, the audit on every listed nurse's
+     record. Each is a register record of the auditor's departments (the server lists only those)
+     or a typed name for someone not in the register. Up to DA.MAX_NURSES. */
+  const nurseLine = (n) => [n.empId && 'ID ' + n.empId, n.designation, n.department, n.linked === false && 'not in the register'].filter(Boolean).join(' · ');
+  function NursePicker({ meta, deptId, value, onChange, bad, disabled, excludeId }) {
+    const picked = Array.isArray(value) ? value : [];
     const [list, setList] = useState(null);
     const [all, setAll] = useState(false);
     const [q, setQ] = useState('');
     const [open, setOpen] = useState(false);
     const [hi, setHi] = useState(0);
-    const [manual, setManual] = useState(!!(value && !value.staffId && value.name));
+    const [manual, setManual] = useState(null);   // { name, empId } while typing a nurse not in the register
     const ref = useRef(null);
     const [pos, setPos] = useState(null);
     useEffect(() => {
-      if (!deptId) return;
+      if (!deptId || disabled) return;
       let live = true;
       setList(null);
       api('/api/doc-audit/staff?' + (all ? 'all=1' : 'dept=' + encodeURIComponent(deptId))).then((j) => { if (live) setList(j.staff); }).catch(() => { if (live) setList([]); });
       return () => { live = false; };
-    }, [deptId, all]);
+    }, [deptId, all, disabled]);
     const place = () => { const r = ref.current && ref.current.getBoundingClientRect(); if (!r) return; const below = window.innerHeight - r.bottom; const up = below < 240 && r.top > below; setPos({ left: r.left, width: Math.max(r.width, 280), top: up ? null : r.bottom + 4, bottom: up ? window.innerHeight - r.top + 4 : null, maxH: Math.min(320, (up ? r.top : below) - 12) }); };
     useEffect(() => {
       if (!open) return;
@@ -248,51 +274,58 @@
       document.addEventListener('mousedown', out);
       return () => { window.removeEventListener('scroll', f, true); window.removeEventListener('resize', f); document.removeEventListener('mousedown', out); };
     }, [open]);
+    const full = picked.length >= DA.MAX_NURSES;
     const needle = q.trim().toLowerCase();
+    const isPicked = (p) => picked.some((n) => String(n.staffId) === String(p.id));
+    const self = (p) => (meta && meta.staffId != null && String(p.id) === String(meta.staffId)) || (excludeId != null && String(p.id) === String(excludeId));
     const hits = (list || []).filter((p) => !needle || String(p.name || '').toLowerCase().indexOf(needle) >= 0 || String(p.emp_id || '').toLowerCase().indexOf(needle) >= 0).slice(0, 80);
-    const self = (p) => meta && meta.staffId != null && String(p.id) === String(meta.staffId);
-    const pick = (p) => { if (self(p)) return; onChange({ staffId: String(p.id), empId: String(p.emp_id || ''), name: p.name, designation: p.designation || '', department: p.current_department || '', linked: true }); setQ(''); setOpen(false); };
+    const add = (n) => onChange(picked.concat([n]));
+    const pick = (p) => { if (self(p) || isPicked(p) || full) return; add({ staffId: String(p.id), empId: String(p.emp_id || ''), name: p.name, designation: p.designation || '', department: p.current_department || '', linked: true }); setQ(''); setHi(0); };
+    const remove = (i) => onChange(picked.filter((_, j) => j !== i));
     const key = (e) => {
       if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, hits.length - 1)); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
       else if (e.key === 'Enter' && open && hits[hi]) { e.preventDefault(); pick(hits[hi]); }
       else if (e.key === 'Escape') setOpen(false);
+      else if (e.key === 'Backspace' && !q && picked.length) remove(picked.length - 1);
     };
-    if (disabled) return <div style={{ fontSize: 13, fontWeight: 600 }}>{value ? value.name : '—'}{value && <div className="da-sub">{[value.empId && 'ID ' + value.empId, value.designation, value.department].filter(Boolean).join(' · ')}</div>}</div>;
-    if (manual) {
-      const v = value && !value.staffId ? value : { name: '', empId: '', designation: '' };
-      const set = (k, x) => onChange(Object.assign({ staffId: null, linked: false }, v, { [k]: x }));
-      return <div>
-        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 6 }}>
-          <input className={'da-in' + (bad ? ' bad' : '')} placeholder="Nurse's full name" value={v.name} onChange={(e) => set('name', e.target.value)} />
-          <input className="da-in" placeholder="Employee ID" value={v.empId} onChange={(e) => set('empId', e.target.value)} />
-        </div>
-        <div className="da-sub" style={{ marginTop: 4 }}>Not linked to the staff register — this audit will not show on a staff profile. <a href="#" onClick={(e) => { e.preventDefault(); setManual(false); onChange(null); }}>Pick from the register instead</a></div>
-      </div>;
-    }
-    return <div ref={ref}>
-      {value && value.staffId
-        ? <div style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 8, background: '#f6fafd' }}>
-            <div style={{ flex: 1, minWidth: 0 }}><b style={{ fontSize: 13 }}>{value.name}</b><div className="da-sub">{[value.empId && 'ID ' + value.empId, value.designation, value.department].filter(Boolean).join(' · ')}</div></div>
-            <button className="da-btn sm" onClick={() => { onChange(null); setTimeout(() => { setOpen(true); }, 0); }}>Change</button>
+    const chips = picked.map((n, i) => (
+      <div key={DA.nurseKey(n) + i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 8, background: '#f6fafd', animation: 'da-in .2s ease' }}>
+        <span style={{ display: 'inline-grid', placeItems: 'center', width: 22, height: 22, borderRadius: '50%', background: '#1f4f8a', color: '#fff', fontSize: 11, fontWeight: 800, flex: 'none' }}>{i + 1}</span>
+        <div style={{ flex: 1, minWidth: 0 }}><b style={{ fontSize: 13 }}>{n.name}</b><div className="da-sub">{nurseLine(n)}</div></div>
+        {!disabled && <button className="da-btn sm" aria-label={'Remove ' + n.name} onClick={() => remove(i)}>Remove</button>}
+      </div>));
+    if (disabled) return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{chips.length ? chips : <span>—</span>}</div>;
+    return <div ref={ref} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {chips}
+      {manual ? <div className="da-card da-pad" style={{ padding: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr auto', gap: 6 }}>
+            <input className="da-in" autoFocus placeholder="Nurse's full name" value={manual.name} onChange={(e) => setManual(Object.assign({}, manual, { name: e.target.value }))} />
+            <input className="da-in" placeholder="Employee ID" value={manual.empId} onChange={(e) => setManual(Object.assign({}, manual, { empId: e.target.value }))} />
+            <button className="da-btn sm pri" disabled={!manual.name.trim()} onClick={() => { add({ staffId: null, empId: manual.empId.trim(), name: manual.name.trim(), designation: '', department: '', linked: false }); setManual(null); }}>Add</button>
           </div>
-        : <input className={'da-in' + (bad ? ' bad' : '')} style={{ width: '100%' }} placeholder={list ? 'Search the nurse by name or employee ID…' : 'Loading the staff list…'} value={q} onFocus={() => setOpen(true)}
+          <div className="da-sub" style={{ marginTop: 4 }}>Not linked to the staff register — the audit will not show on a staff profile for this nurse. <a href="#" onClick={(e) => { e.preventDefault(); setManual(null); }}>Cancel</a></div>
+        </div>
+        : !full && <input className={'da-in' + (bad ? ' bad' : '')} style={{ width: '100%' }} placeholder={!list ? 'Loading the staff list…' : picked.length ? 'Add another nurse — name or employee ID…' : 'Search the nurse by name or employee ID…'} value={q} onFocus={() => setOpen(true)}
             onChange={(e) => { setQ(e.target.value); setOpen(true); setHi(0); }} onKeyDown={key} />}
-      <div className="da-sub" style={{ marginTop: 4 }}>
+      <div className="da-sub">
         {meta && meta.allStaff && <label style={{ cursor: 'pointer', marginRight: 10 }}><input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} style={{ verticalAlign: -2 }} /> Whole register</label>}
-        <a href="#" onClick={(e) => { e.preventDefault(); setManual(true); onChange(null); }}>Not in the register?</a>
+        {!full && !manual && <a href="#" style={{ marginRight: 10 }} onClick={(e) => { e.preventDefault(); setManual({ name: '', empId: '' }); setOpen(false); }}>Not in the register?</a>}
+        <span>{picked.length > 1 ? picked.length + ' nurses share this record’s checklist and score; the audit shows on each one’s record.' : 'One patient record, one checklist — add every nurse who documented in it (e.g. day + night), up to ' + DA.MAX_NURSES + '.'}</span>
       </div>
-      {open && pos && !(value && value.staffId) && ReactDOM.createPortal(
+      {open && pos && !full && !manual && ReactDOM.createPortal(
         <div className="da-dd" style={{ left: pos.left, width: pos.width, top: pos.top == null ? 'auto' : pos.top, bottom: pos.bottom == null ? 'auto' : pos.bottom, maxHeight: pos.maxH }}>
           {!list && <div className="it">Loading…</div>}
           {list && !hits.length && <div className="it off">No nurse matches “{q}”. {all ? '' : 'Only the staff of this department are listed.'}</div>}
-          {hits.map((p, i) => (
-            <div key={p.id} className={'it' + (i === hi ? ' hi' : '') + (self(p) ? ' off' : '')} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); pick(p); }} title={self(p) ? 'You cannot audit your own documentation' : ''}>
-              <b>{p.name}</b>{self(p) ? ' (you)' : ''}<small>{[p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')}</small>
-            </div>))}
+          {hits.map((p, i) => { const off = self(p) || isPicked(p);
+            return <div key={p.id} className={'it' + (i === hi ? ' hi' : '') + (off ? ' off' : '')} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); pick(p); }} title={self(p) ? 'The auditor cannot be audited on the same record' : isPicked(p) ? 'Already added' : ''}>
+              <b>{p.name}</b>{self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : ''}<small>{[p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')}</small>
+            </div>; })}
         </div>, document.body)}
     </div>;
   }
+  // "Rina Akter +2" for tables; the full list on hover.
+  const nursesShort = (x) => { const ns = DA.nursesOf(x); return ns.length ? ns[0].name + (ns.length > 1 ? ' +' + (ns.length - 1) : '') : '—'; };
 
   /* The auditor — an administrator may name who audited (e.g. entering a paper audit done by a ward
      auditor): search the WHOLE staff register by name or employee ID and pick the person (their
@@ -400,8 +433,8 @@
       setToolId(d.cfg.toolId);
     }, [auditId]);
 
-    function blankForm(deptId) { return { deptId, area: '', date: meta.today, shift: '', uhid: '', bed: '', extra: {}, nurse: null, answers: {}, evidence: {}, remarks: '', auditorName: meta.name, auditorStaffId: meta.staffId }; }
-    function fromAudit(a) { return { deptId: a.deptId, area: a.area || '', date: a.date, shift: a.shift || '', uhid: a.uhid || '', bed: a.bed || '', extra: a.extra || {}, nurse: a.nurse || null, answers: a.answers || {}, evidence: a.evidence || {}, remarks: a.remarks || '', auditorName: (a.auditor && a.auditor.name) || '', auditorStaffId: (a.auditor && a.auditor.staffId) || null }; }
+    function blankForm(deptId) { return { deptId, area: '', date: meta.today, shift: '', uhid: '', bed: '', extra: {}, nurses: [], answers: {}, evidence: {}, remarks: '', auditorName: meta.name, auditorStaffId: meta.staffId }; }
+    function fromAudit(a) { return { deptId: a.deptId, area: a.area || '', date: a.date, shift: a.shift || '', uhid: a.uhid || '', bed: a.bed || '', extra: a.extra || {}, nurses: DA.nursesOf(a), answers: a.answers || {}, evidence: a.evidence || {}, remarks: a.remarks || '', auditorName: (a.auditor && a.auditor.name) || '', auditorStaffId: (a.auditor && a.auditor.staffId) || null }; }
     const audit = loaded && loaded.audit;
     const tool = audit ? (loaded.tool || toolOf(meta, audit.toolId)) : toolOf(meta, toolId);
     const criteria = useMemo(() => (audit ? audit.criteria : tool ? DA.freezeCriteria(tool) : []), [audit, tool]);
@@ -427,7 +460,7 @@
     const set = (k, v) => setForm((f) => Object.assign({}, f, { [k]: v }));
     const setAns = (cid, v) => setForm((f) => { const answers = Object.assign({}, f.answers); if (answers[cid] === v) delete answers[cid]; else answers[cid] = v; return Object.assign({}, f, { answers }); });
     const setEv = (cid, v) => setForm((f) => Object.assign({}, f, { evidence: Object.assign({}, f.evidence, { [cid]: v }) }));
-    const changeDept = (id) => { const d = depts.find((x) => x.id === id); lsSet('da_dept', id); setForm((f) => Object.assign({}, f, { deptId: id, nurse: null })); if (d && !audit) setToolId(d.cfg.toolId); };
+    const changeDept = (id) => { const d = depts.find((x) => x.id === id); lsSet('da_dept', id); setForm((f) => Object.assign({}, f, { deptId: id, nurses: [] })); if (d && !audit) setToolId(d.cfg.toolId); };
     const sections = (tool.sections || []).map((s) => ({ s, items: criteria.filter((c) => c.sectionId === s.id) })).filter((x) => x.items.length);
     const orphan = criteria.filter((c) => !(tool.sections || []).some((s) => s.id === c.sectionId));
     if (orphan.length) sections.push({ s: { id: '_', title: 'Other criteria', jci: '' }, items: orphan });
@@ -464,7 +497,12 @@
       try { const j = await post('/api/doc-audit/audits/' + encodeURIComponent(audit.id) + path, body); setLoaded({ audit: j.audit, tool }); setForm(fromAudit(j.audit)); toast(okMsg, 'success'); refreshBadge(); }
       catch (e) { toast(e.message, 'error'); } finally { setBusy(false); }
     }
-    async function ack() { const note = await askText({ title: 'Nurse’s acknowledgement', message: 'Record that ' + ((audit.nurse && audit.nurse.name) || 'the nurse') + ' was given the same-day feedback and acknowledged this audit (policy 7.2). A note is optional.', confirmLabel: 'Record acknowledgement', placeholder: 'e.g. Feedback given at the nurses’ station; gaps explained.' }); if (note == null) return; act('/ack', { note }, 'Acknowledgement recorded.'); }
+    async function ack() {
+      const pending = DA.pendingAcks(audit);
+      const r = await askAck(pending);
+      if (!r) return;
+      act('/ack', { keys: r.keys, note: r.note }, r.keys.length === pending.length ? 'Acknowledgement recorded.' : r.keys.length + ' acknowledgement(s) recorded — ' + (pending.length - r.keys.length) + ' still waiting.');
+    }
     async function sign() { const note = await askText({ title: 'Nurse In-charge sign-off', message: 'Sign off this audit. It is locked afterwards; only an administrator can reopen it.', confirmLabel: 'Sign off', placeholder: 'Comment (optional)' }); if (note == null) return; act('/sign', { note }, 'Signed off.'); }
     async function reopen() { const reason = await askText({ title: 'Reopen this audit?', message: 'The sign-off is kept in the history. Say why it is reopened.', confirmLabel: 'Reopen', min: 5 }); if (!reason) return; act('/reopen', { reason }, 'Reopened.'); }
     async function remove() {
@@ -496,8 +534,8 @@
             {readOnly ? <div style={{ fontSize: 13, paddingTop: 6 }}>{form.extra[f.id] || '—'}</div>
               : f.type === 'select' ? <select className="da-sel" value={form.extra[f.id] || ''} onChange={(e) => set('extra', Object.assign({}, form.extra, { [f.id]: e.target.value }))}>{(f.options || ['']).map((o) => <option key={o} value={o}>{o || '—'}</option>)}</select>
                 : <input className="da-in" value={form.extra[f.id] || ''} onChange={(e) => set('extra', Object.assign({}, form.extra, { [f.id]: e.target.value }))} />}</div>)}
-          <div className="da-f" style={{ gridColumn: '1 / -1' }}><label>Nurse audited (auditee)</label>
-            <NursePicker meta={meta} deptId={form.deptId} value={form.nurse} onChange={(n) => set('nurse', n)} bad={bad('nurse')} disabled={readOnly} />
+          <div className="da-f" style={{ gridColumn: '1 / -1' }}><label>Nurse(s) audited (auditees)</label>
+            <NursePicker meta={meta} deptId={form.deptId} value={form.nurses} onChange={(l) => set('nurses', l)} bad={bad('nurse')} disabled={readOnly} excludeId={meta.isAdmin ? form.auditorStaffId : null} />
             {bad('nurse') && <div className="da-sub" style={{ color: 'var(--rose)' }}>{(problems.find((p) => p.field === 'nurse') || {}).message}</div>}</div>
           <div className="da-f"><label>Auditor</label>
             {meta.isAdmin && !readOnly
@@ -548,8 +586,12 @@
         <div className="da-sub" style={{ fontWeight: 700, letterSpacing: .4, textTransform: 'uppercase', marginBottom: 4 }}>Sign-off</div>
         <div className="da-chain">
           <div className="da-step done"><i /><div><b>Audited</b> by {audit.auditor.name}<small>{when(audit.completedAt || audit.createdAt)}</small></div></div>
-          <div className={'da-step ' + (audit.ack ? 'done' : 'now')}><i /><div><b>Nurse’s acknowledgement</b>{audit.ack ? <small>{audit.ack.method === 'account' ? 'by the nurse, own account' : 'in person, recorded by ' + (audit.ack.byName || audit.ack.by)} · {when(audit.ack.at)}{audit.ack.note ? ' · “' + audit.ack.note + '”' : ''}</small> : <small>Waiting{meta.config.ackRequired ? ' — needed before sign-off' : ''}</small>}
-            {!audit.ack && audit.status === 'completed' && meta.canAdd && <div style={{ marginTop: 5 }}><button className="da-btn sm pri" disabled={busy} onClick={ack}>Record acknowledgement</button></div>}</div></div>
+          {(() => { const ns = DA.nursesOf(audit), acks = DA.acksOf(audit), pend = DA.pendingAcks(audit);
+            return <div className={'da-step ' + (!pend.length ? 'done' : 'now')}><i /><div><b>{ns.length > 1 ? 'Nurses’ acknowledgement (' + (ns.length - pend.length) + ' of ' + ns.length + ')' : 'Nurse’s acknowledgement'}</b>
+              {ns.map((n) => { const k = acks[DA.nurseKey(n)];
+                return <small key={DA.nurseKey(n)}>{ns.length > 1 ? n.name + ': ' : ''}{k ? (k.method === 'account' ? '✓ own account' : '✓ in person, recorded by ' + (k.byName || k.by)) + ' · ' + when(k.at) + (k.note ? ' · “' + k.note + '”' : '') : 'waiting' + (meta.config.ackRequired && ns.length === 1 ? ' — needed before sign-off' : '')}</small>; })}
+              {pend.length > 0 && ns.length > 1 && meta.config.ackRequired && <small>Every nurse acknowledges before sign-off.</small>}
+              {pend.length > 0 && audit.status === 'completed' && meta.canAdd && <div style={{ marginTop: 5 }}><button className="da-btn sm pri" disabled={busy} onClick={ack}>Record acknowledgement</button></div>}</div></div>; })()}
           <div className={'da-step ' + (audit.signoff ? 'done' : (audit.status === 'acknowledged' ? 'now' : ''))}><i /><div><b>Nurse In-charge sign-off</b>{audit.signoff ? <small>{audit.signoff.name} · {when(audit.signoff.at)}{audit.signoff.note ? ' · “' + audit.signoff.note + '”' : ''}</small> : <small>{own && !meta.isAdmin ? 'Another person signs off your audit' : 'Waiting'}</small>}
             {!audit.signoff && meta.canEdit && (audit.status === 'acknowledged' || (meta.isAdmin && audit.status === 'completed') || (!meta.config.ackRequired && audit.status === 'completed')) && (!own || meta.isAdmin) && <div style={{ marginTop: 5 }}><button className="da-btn sm ok" disabled={busy} onClick={sign}>Sign off</button></div>}</div></div>
         </div>
@@ -574,7 +616,7 @@
       <div className="da-wrap">
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <button className="da-btn sm" onClick={() => setRoute({ view: audit ? 'docAuditRegister' : 'docAuditHome' })}>← {audit ? 'Register' : 'Dashboard'}</button>
-          {audit && audit.status !== 'draft' && <span className="da-sub">Audit of {audit.nurse ? audit.nurse.name : '—'} · {audit.deptName} · {DA.fmtDate(audit.date)}</span>}
+          {audit && audit.status !== 'draft' && <span className="da-sub">Audit of {DA.nurseNames(audit) || '—'} · {audit.deptName} · {DA.fmtDate(audit.date)}</span>}
           <span style={{ flex: 1 }} />
           {!audit && tool.sample && <span className="da-sub" title={tool.sample.note}>Sample rule: at least {(depts.find((d) => d.id === form.deptId) || { cfg: {} }).cfg.minRecords || tool.sample.minRecords} records a month · hover for details</span>}
         </div>
@@ -611,7 +653,7 @@
         {!rows.length ? <div className="da-empty" style={{ padding: 14 }}>Nothing waiting.</div>
           : <div className="da-scroll"><table className="da-tbl"><tbody>{rows.slice(0, 8).map((x) => (
             <tr key={x.id} className="click" onClick={() => setRoute({ view: 'docAuditNew', audit: x.id })}>
-              <td style={{ whiteSpace: 'nowrap' }}>{DA.fmtDate(x.date)}</td><td><b>{x.nurse ? x.nurse.name : '—'}</b><div className="da-sub">{x.deptName}{x.area ? ' · ' + x.area : ''}</div></td>
+              <td style={{ whiteSpace: 'nowrap' }}>{DA.fmtDate(x.date)}</td><td title={DA.nurseNames(x)}><b>{nursesShort(x)}</b><div className="da-sub">{x.deptName}{x.area ? ' · ' + x.area : ''}</div></td>
               <td className="n">{pctTxt(x.result && x.result.pct)}</td><td><ResultChip r={x.result} /></td></tr>))}</tbody></table></div>}
         {rows.length > 8 && <div className="da-pad" style={{ paddingTop: 8 }}><a href="#" onClick={(e) => { e.preventDefault(); setRoute({ view: 'docAuditRegister' }); }}>All {rows.length} in the register →</a></div>}
       </div>);
@@ -673,7 +715,7 @@
     }, [f.dept, f.from, f.to, f.status, f.result, f.tool, f.nurse]);
     const set = (k, v) => setF((x) => Object.assign({}, x, { [k]: v }));
     const needle = f.q.trim().toLowerCase();
-    const rows = data ? data.audits.filter((x) => !needle || [x.nurse && x.nurse.name, x.nurse && x.nurse.empId, x.uhid, x.auditor && x.auditor.name, x.area].join(' ').toLowerCase().indexOf(needle) >= 0) : [];
+    const rows = data ? data.audits.filter((x) => !needle || [DA.nursesOf(x).map((n) => n.name + ' ' + (n.empId || '')).join(' '), x.uhid, x.auditor && x.auditor.name, x.area].join(' ').toLowerCase().indexOf(needle) >= 0) : [];
     const months = DA.monthsBetween(f.from.slice(0, 7), f.to.slice(0, 7), 36);
     async function excel() { try { await download('/api/doc-audit/xlsx?from=' + months[0] + '&to=' + months[months.length - 1] + (f.dept ? '&dept=' + encodeURIComponent(f.dept) : '')); toast('Excel downloaded.', 'success'); } catch (e) { toast(e.message, 'error'); } }
     return (
@@ -699,7 +741,7 @@
                 <tr key={x.id} className="click" onClick={() => setRoute({ view: 'docAuditNew', audit: x.id })}>
                   <td style={{ whiteSpace: 'nowrap' }}>{DA.fmtDate(x.date)}<div className="da-sub">{x.shift}</div></td>
                   <td><b>{x.deptName}</b><div className="da-sub">{x.area}{x.toolName ? ' · ' + x.toolName : ''}</div></td>
-                  <td>{x.nurse ? x.nurse.name : '—'}<div className="da-sub">{x.nurse ? [x.nurse.empId && 'ID ' + x.nurse.empId, x.nurse.designation, x.nurse.linked === false && 'not in register'].filter(Boolean).join(' · ') : ''}</div></td>
+                  <td title={DA.nurseNames(x)}>{nursesShort(x)}<div className="da-sub">{DA.nursesOf(x).length > 1 ? DA.nursesOf(x).length + ' nurses · shared record' : DA.nursesOf(x).map(nurseLine).join('')}</div></td>
                   <td>{x.uhid}</td><td>{x.auditor ? x.auditor.name : ''}</td>
                   <td className="n">{x.result ? x.result.yes + ' / ' + x.result.no + ' / ' + x.result.na : ''}</td>
                   <td className="n"><b>{pctTxt(x.result && x.result.pct)}</b></td>
@@ -1074,7 +1116,7 @@
     const v = (x) => (a ? esc(x || '—') : '&nbsp;');
     const extra = (H.extra || []).map((f) => [f.label, a ? (a.extra || {})[f.id] : '']);
     const pairs = [['Department', a && a.deptName], ['Audit date / shift', a && (DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : ''))], ['Patient UHID / MRN', a && a.uhid],
-      ['Nurse auditee', a && a.nurse && (a.nurse.name + (a.nurse.empId ? ' (ID ' + a.nurse.empId + ')' : ''))], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed],
+      [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map((n) => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '')).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed],
       [H.areaLabel || 'Area', a && a.area]].concat(extra);
     while (pairs.length % 2) pairs.push(['', '']);
     let hd = '';
@@ -1087,14 +1129,14 @@
       + (r && r.action ? '<div class="act blk"><b>Required action:</b> ' + esc(r.action) + '</div>' : '')
       + (a && a.remarks ? '<div class="act blk"><b>Remarks / feedback:</b> ' + esc(a.remarks) + '</div>' : '');
     const signs = '<div class="signs blk"><div><span>Auditor</span>' + (a ? esc(a.auditor.name) + '<br>' + esc(when(a.completedAt || a.createdAt)) : 'Signature: ______________<br>Date / time: ____________') + '</div>'
-      + '<div><span>Auditee nurse (acknowledgement)</span>' + (a && a.ack ? esc(a.ack.name || (a.nurse && a.nurse.name) || '') + '<br>' + esc(when(a.ack.at)) + (a.ack.method === 'account' ? ' · own account' : ' · in person') : 'Signature: ______________<br>Date / time: ____________') + '</div>'
+      + '<div><span>Auditee nurse' + (a && DA.nursesOf(a).length > 1 ? 's' : '') + ' (acknowledgement)</span>' + (a && DA.nursesOf(a).length ? DA.nursesOf(a).map((n) => { const k = DA.acksOf(a)[DA.nurseKey(n)]; return esc(n.name) + (k ? ' · ' + esc(when(k.at)) + (k.method === 'account' ? ' · own account' : ' · in person') : ' · ____________'); }).join('<br>') : 'Signature: ______________<br>Date / time: ____________') + '</div>'
       + '<div><span>Nurse In-charge</span>' + (a && a.signoff ? esc(a.signoff.name) + '<br>' + esc(when(a.signoff.at)) : 'Signature: ______________<br>Date / time: ____________') + '</div></div>';
     const body = letterhead('Nursing Quality & Patient Safety', tool.name, [tool.code, tool.version && 'Version ' + tool.version, a && a.toolRevision > 1 ? 'tool revision ' + a.toolRevision : ''].filter(Boolean).join(' · '))
       + '<table class="hd">' + hd + '</table>'
       + '<div class="hint">Mark ✓ in one box per criterion. Write evidence for a \'No\' where useful. Items marked Critical: any \'No\' = audit FAIL. N/A is excluded from scoring.</div>'
       + '<table class="ck"><thead><tr><th>No.</th><th>Compliance criterion</th><th>JCI</th><th>Critical</th><th>Yes</th><th>No</th><th>N/A</th><th>Evidence / remarks</th></tr></thead><tbody>' + rows + '</tbody></table>'
       + sum + signs + footer();
-    const title = a ? 'Documentation audit — ' + ((a.nurse && a.nurse.name) || '') + ' — ' + a.date : tool.name + ' (blank form)';
+    const title = a ? 'Documentation audit — ' + DA.nurseNames(a) + ' — ' + a.date : tool.name + ' (blank form)';
     return { body, title, file: a ? 'Documentation-Audit_' + a.deptName.replace(/\W+/g, '-') + '_' + a.date : 'Documentation-Audit-form_' + (tool.short || tool.id).replace(/\W+/g, '-') };
   }
   // Appendix C — the department KPI report of a period, one table per tool, plus the action plans due.

@@ -323,6 +323,74 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       if (root) root.render(React.createElement(Ask, null));else ReactDOM.render(React.createElement(Ask, null), host);
     });
   }
+  function askAck(pending) {
+    return new Promise(done => {
+      const host = document.createElement('div');
+      document.body.appendChild(host);
+      const root = ReactDOM.createRoot ? ReactDOM.createRoot(host) : null;
+      const close = v => {
+        if (root) root.unmount();else ReactDOM.unmountComponentAtNode(host);
+        host.remove();
+        done(v);
+      };
+      function Ask() {
+        const [keys, setKeys] = useState(pending.map(DA.nurseKey));
+        const [note, setNote] = useState('');
+        const tog = k => setKeys(ks => ks.indexOf(k) >= 0 ? ks.filter(x => x !== k) : ks.concat([k]));
+        return React.createElement(Modal, {
+          title: pending.length > 1 ? 'Nurses’ acknowledgement' : 'Nurse’s acknowledgement',
+          onClose: () => close(null),
+          footer: React.createElement(React.Fragment, null, React.createElement("button", {
+            className: "da-btn",
+            onClick: () => close(null)
+          }, "Cancel"), React.createElement("button", {
+            className: "da-btn pri",
+            disabled: !keys.length,
+            onClick: () => close({
+              keys,
+              note: note.trim()
+            })
+          }, "Record acknowledgement"))
+        }, React.createElement("div", {
+          style: {
+            fontSize: 12.8,
+            lineHeight: 1.5
+          }
+        }, "Record that ", pending.length > 1 ? 'these nurses were' : pending[0].name + ' was', " given the same-day feedback and acknowledged this audit (policy 7.2)."), pending.length > 1 && React.createElement("div", {
+          style: {
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6
+          }
+        }, pending.map(n => {
+          const k = DA.nurseKey(n);
+          return React.createElement("label", {
+            key: k,
+            style: {
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              cursor: 'pointer',
+              fontSize: 13
+            }
+          }, React.createElement("input", {
+            type: "checkbox",
+            checked: keys.indexOf(k) >= 0,
+            onChange: () => tog(k)
+          }), React.createElement("b", null, n.name), React.createElement("span", {
+            className: "da-sub"
+          }, nurseLine(n)));
+        })), React.createElement("textarea", {
+          className: "da-ta",
+          rows: 2,
+          value: note,
+          onChange: e => setNote(e.target.value),
+          placeholder: "Note (optional) \u2014 e.g. feedback given at the nurses\u2019 station; gaps explained."
+        }));
+      }
+      if (root) root.render(React.createElement(Ask, null));else ReactDOM.render(React.createElement(Ask, null), host);
+    });
+  }
   function useMeta() {
     const [meta, setMeta] = useState(null);
     const [err, setErr] = useState('');
@@ -347,24 +415,27 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }
   }, "Documentation Audit \u2192 Settings"), " and choose the tool each department audits with.") : React.createElement("span", null, "No department has been set for you yet. Ask the administrator to choose your departments in Access Control \u2192 Documentation Audit."));
   const toolOf = (meta, id) => (meta && meta.tools || []).find(t => t.id === id) || null;
+  const nurseLine = n => [n.empId && 'ID ' + n.empId, n.designation, n.department, n.linked === false && 'not in the register'].filter(Boolean).join(' · ');
   function NursePicker({
     meta,
     deptId,
     value,
     onChange,
     bad,
-    disabled
+    disabled,
+    excludeId
   }) {
+    const picked = Array.isArray(value) ? value : [];
     const [list, setList] = useState(null);
     const [all, setAll] = useState(false);
     const [q, setQ] = useState('');
     const [open, setOpen] = useState(false);
     const [hi, setHi] = useState(0);
-    const [manual, setManual] = useState(!!(value && !value.staffId && value.name));
+    const [manual, setManual] = useState(null);
     const ref = useRef(null);
     const [pos, setPos] = useState(null);
     useEffect(() => {
-      if (!deptId) return;
+      if (!deptId || disabled) return;
       let live = true;
       setList(null);
       api('/api/doc-audit/staff?' + (all ? 'all=1' : 'dept=' + encodeURIComponent(deptId))).then(j => {
@@ -375,7 +446,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       return () => {
         live = false;
       };
-    }, [deptId, all]);
+    }, [deptId, all, disabled]);
     const place = () => {
       const r = ref.current && ref.current.getBoundingClientRect();
       if (!r) return;
@@ -405,12 +476,15 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         document.removeEventListener('mousedown', out);
       };
     }, [open]);
+    const full = picked.length >= DA.MAX_NURSES;
     const needle = q.trim().toLowerCase();
+    const isPicked = p => picked.some(n => String(n.staffId) === String(p.id));
+    const self = p => meta && meta.staffId != null && String(p.id) === String(meta.staffId) || excludeId != null && String(p.id) === String(excludeId);
     const hits = (list || []).filter(p => !needle || String(p.name || '').toLowerCase().indexOf(needle) >= 0 || String(p.emp_id || '').toLowerCase().indexOf(needle) >= 0).slice(0, 80);
-    const self = p => meta && meta.staffId != null && String(p.id) === String(meta.staffId);
+    const add = n => onChange(picked.concat([n]));
     const pick = p => {
-      if (self(p)) return;
-      onChange({
+      if (self(p) || isPicked(p) || full) return;
+      add({
         staffId: String(p.id),
         empId: String(p.emp_id || ''),
         name: p.name,
@@ -419,8 +493,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         linked: true
       });
       setQ('');
-      setOpen(false);
+      setHi(0);
     };
+    const remove = i => onChange(picked.filter((_, j) => j !== i));
     const key = e => {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
@@ -432,61 +507,10 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       } else if (e.key === 'Enter' && open && hits[hi]) {
         e.preventDefault();
         pick(hits[hi]);
-      } else if (e.key === 'Escape') setOpen(false);
+      } else if (e.key === 'Escape') setOpen(false);else if (e.key === 'Backspace' && !q && picked.length) remove(picked.length - 1);
     };
-    if (disabled) return React.createElement("div", {
-      style: {
-        fontSize: 13,
-        fontWeight: 600
-      }
-    }, value ? value.name : '—', value && React.createElement("div", {
-      className: "da-sub"
-    }, [value.empId && 'ID ' + value.empId, value.designation, value.department].filter(Boolean).join(' · ')));
-    if (manual) {
-      const v = value && !value.staffId ? value : {
-        name: '',
-        empId: '',
-        designation: ''
-      };
-      const set = (k, x) => onChange(Object.assign({
-        staffId: null,
-        linked: false
-      }, v, {
-        [k]: x
-      }));
-      return React.createElement("div", null, React.createElement("div", {
-        style: {
-          display: 'grid',
-          gridTemplateColumns: '2fr 1fr',
-          gap: 6
-        }
-      }, React.createElement("input", {
-        className: 'da-in' + (bad ? ' bad' : ''),
-        placeholder: "Nurse's full name",
-        value: v.name,
-        onChange: e => set('name', e.target.value)
-      }), React.createElement("input", {
-        className: "da-in",
-        placeholder: "Employee ID",
-        value: v.empId,
-        onChange: e => set('empId', e.target.value)
-      })), React.createElement("div", {
-        className: "da-sub",
-        style: {
-          marginTop: 4
-        }
-      }, "Not linked to the staff register \u2014 this audit will not show on a staff profile. ", React.createElement("a", {
-        href: "#",
-        onClick: e => {
-          e.preventDefault();
-          setManual(false);
-          onChange(null);
-        }
-      }, "Pick from the register instead")));
-    }
-    return React.createElement("div", {
-      ref: ref
-    }, value && value.staffId ? React.createElement("div", {
+    const chips = picked.map((n, i) => React.createElement("div", {
+      key: DA.nurseKey(n) + i,
       style: {
         display: 'flex',
         gap: 8,
@@ -494,9 +518,23 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         padding: '6px 10px',
         border: '1px solid var(--line)',
         borderRadius: 8,
-        background: '#f6fafd'
+        background: '#f6fafd',
+        animation: 'da-in .2s ease'
       }
-    }, React.createElement("div", {
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 22,
+        height: 22,
+        borderRadius: '50%',
+        background: '#1f4f8a',
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: 800,
+        flex: 'none'
+      }
+    }, i + 1), React.createElement("div", {
       style: {
         flex: 1,
         minWidth: 0
@@ -505,22 +543,84 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         fontSize: 13
       }
-    }, value.name), React.createElement("div", {
+    }, n.name), React.createElement("div", {
       className: "da-sub"
-    }, [value.empId && 'ID ' + value.empId, value.designation, value.department].filter(Boolean).join(' · '))), React.createElement("button", {
+    }, nurseLine(n))), !disabled && React.createElement("button", {
       className: "da-btn sm",
-      onClick: () => {
-        onChange(null);
-        setTimeout(() => {
-          setOpen(true);
-        }, 0);
+      "aria-label": 'Remove ' + n.name,
+      onClick: () => remove(i)
+    }, "Remove")));
+    if (disabled) return React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6
       }
-    }, "Change")) : React.createElement("input", {
+    }, chips.length ? chips : React.createElement("span", null, "\u2014"));
+    return React.createElement("div", {
+      ref: ref,
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6
+      }
+    }, chips, manual ? React.createElement("div", {
+      className: "da-card da-pad",
+      style: {
+        padding: 10
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '2fr 1fr auto',
+        gap: 6
+      }
+    }, React.createElement("input", {
+      className: "da-in",
+      autoFocus: true,
+      placeholder: "Nurse's full name",
+      value: manual.name,
+      onChange: e => setManual(Object.assign({}, manual, {
+        name: e.target.value
+      }))
+    }), React.createElement("input", {
+      className: "da-in",
+      placeholder: "Employee ID",
+      value: manual.empId,
+      onChange: e => setManual(Object.assign({}, manual, {
+        empId: e.target.value
+      }))
+    }), React.createElement("button", {
+      className: "da-btn sm pri",
+      disabled: !manual.name.trim(),
+      onClick: () => {
+        add({
+          staffId: null,
+          empId: manual.empId.trim(),
+          name: manual.name.trim(),
+          designation: '',
+          department: '',
+          linked: false
+        });
+        setManual(null);
+      }
+    }, "Add")), React.createElement("div", {
+      className: "da-sub",
+      style: {
+        marginTop: 4
+      }
+    }, "Not linked to the staff register \u2014 the audit will not show on a staff profile for this nurse. ", React.createElement("a", {
+      href: "#",
+      onClick: e => {
+        e.preventDefault();
+        setManual(null);
+      }
+    }, "Cancel"))) : !full && React.createElement("input", {
       className: 'da-in' + (bad ? ' bad' : ''),
       style: {
         width: '100%'
       },
-      placeholder: list ? 'Search the nurse by name or employee ID…' : 'Loading the staff list…',
+      placeholder: !list ? 'Loading the staff list…' : picked.length ? 'Add another nurse — name or employee ID…' : 'Search the nurse by name or employee ID…',
       value: q,
       onFocus: () => setOpen(true),
       onChange: e => {
@@ -530,10 +630,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       },
       onKeyDown: key
     }), React.createElement("div", {
-      className: "da-sub",
-      style: {
-        marginTop: 4
-      }
+      className: "da-sub"
     }, meta && meta.allStaff && React.createElement("label", {
       style: {
         cursor: 'pointer',
@@ -546,14 +643,20 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         verticalAlign: -2
       }
-    }), " Whole register"), React.createElement("a", {
+    }), " Whole register"), !full && !manual && React.createElement("a", {
       href: "#",
+      style: {
+        marginRight: 10
+      },
       onClick: e => {
         e.preventDefault();
-        setManual(true);
-        onChange(null);
+        setManual({
+          name: '',
+          empId: ''
+        });
+        setOpen(false);
       }
-    }, "Not in the register?")), open && pos && !(value && value.staffId) && ReactDOM.createPortal(React.createElement("div", {
+    }, "Not in the register?"), React.createElement("span", null, picked.length > 1 ? picked.length + ' nurses share this record’s checklist and score; the audit shows on each one’s record.' : 'One patient record, one checklist — add every nurse who documented in it (e.g. day + night), up to ' + DA.MAX_NURSES + '.')), open && pos && !full && !manual && ReactDOM.createPortal(React.createElement("div", {
       className: "da-dd",
       style: {
         left: pos.left,
@@ -566,17 +669,24 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "it"
     }, "Loading\u2026"), list && !hits.length && React.createElement("div", {
       className: "it off"
-    }, "No nurse matches \u201C", q, "\u201D. ", all ? '' : 'Only the staff of this department are listed.'), hits.map((p, i) => React.createElement("div", {
-      key: p.id,
-      className: 'it' + (i === hi ? ' hi' : '') + (self(p) ? ' off' : ''),
-      onMouseEnter: () => setHi(i),
-      onMouseDown: e => {
-        e.preventDefault();
-        pick(p);
-      },
-      title: self(p) ? 'You cannot audit your own documentation' : ''
-    }, React.createElement("b", null, p.name), self(p) ? ' (you)' : '', React.createElement("small", null, [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · '))))), document.body));
+    }, "No nurse matches \u201C", q, "\u201D. ", all ? '' : 'Only the staff of this department are listed.'), hits.map((p, i) => {
+      const off = self(p) || isPicked(p);
+      return React.createElement("div", {
+        key: p.id,
+        className: 'it' + (i === hi ? ' hi' : '') + (off ? ' off' : ''),
+        onMouseEnter: () => setHi(i),
+        onMouseDown: e => {
+          e.preventDefault();
+          pick(p);
+        },
+        title: self(p) ? 'The auditor cannot be audited on the same record' : isPicked(p) ? 'Already added' : ''
+      }, React.createElement("b", null, p.name), self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : '', React.createElement("small", null, [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')));
+    })), document.body));
   }
+  const nursesShort = x => {
+    const ns = DA.nursesOf(x);
+    return ns.length ? ns[0].name + (ns.length > 1 ? ' +' + (ns.length - 1) : '') : '—';
+  };
   function AuditorField({
     value,
     staffId,
@@ -823,7 +933,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         uhid: '',
         bed: '',
         extra: {},
-        nurse: null,
+        nurses: [],
         answers: {},
         evidence: {},
         remarks: '',
@@ -840,7 +950,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         uhid: a.uhid || '',
         bed: a.bed || '',
         extra: a.extra || {},
-        nurse: a.nurse || null,
+        nurses: DA.nursesOf(a),
         answers: a.answers || {},
         evidence: a.evidence || {},
         remarks: a.remarks || '',
@@ -901,7 +1011,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       lsSet('da_dept', id);
       setForm(f => Object.assign({}, f, {
         deptId: id,
-        nurse: null
+        nurses: []
       }));
       if (d && !audit) setToolId(d.cfg.toolId);
     };
@@ -1006,16 +1116,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }
     async function ack() {
-      const note = await askText({
-        title: 'Nurse’s acknowledgement',
-        message: 'Record that ' + (audit.nurse && audit.nurse.name || 'the nurse') + ' was given the same-day feedback and acknowledged this audit (policy 7.2). A note is optional.',
-        confirmLabel: 'Record acknowledgement',
-        placeholder: 'e.g. Feedback given at the nurses’ station; gaps explained.'
-      });
-      if (note == null) return;
+      const pending = DA.pendingAcks(audit);
+      const r = await askAck(pending);
+      if (!r) return;
       act('/ack', {
-        note
-      }, 'Acknowledgement recorded.');
+        keys: r.keys,
+        note: r.note
+      }, r.keys.length === pending.length ? 'Acknowledgement recorded.' : r.keys.length + ' acknowledgement(s) recorded — ' + (pending.length - r.keys.length) + ' still waiting.');
     }
     async function sign() {
       const note = await askText({
@@ -1205,13 +1312,14 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         gridColumn: '1 / -1'
       }
-    }, React.createElement("label", null, "Nurse audited (auditee)"), React.createElement(NursePicker, {
+    }, React.createElement("label", null, "Nurse(s) audited (auditees)"), React.createElement(NursePicker, {
       meta: meta,
       deptId: form.deptId,
-      value: form.nurse,
-      onChange: n => set('nurse', n),
+      value: form.nurses,
+      onChange: l => set('nurses', l),
       bad: bad('nurse'),
-      disabled: readOnly
+      disabled: readOnly,
+      excludeId: meta.isAdmin ? form.auditorStaffId : null
     }), bad('nurse') && React.createElement("div", {
       className: "da-sub",
       style: {
@@ -1355,17 +1463,27 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-chain"
     }, React.createElement("div", {
       className: "da-step done"
-    }, React.createElement("i", null), React.createElement("div", null, React.createElement("b", null, "Audited"), " by ", audit.auditor.name, React.createElement("small", null, when(audit.completedAt || audit.createdAt)))), React.createElement("div", {
-      className: 'da-step ' + (audit.ack ? 'done' : 'now')
-    }, React.createElement("i", null), React.createElement("div", null, React.createElement("b", null, "Nurse\u2019s acknowledgement"), audit.ack ? React.createElement("small", null, audit.ack.method === 'account' ? 'by the nurse, own account' : 'in person, recorded by ' + (audit.ack.byName || audit.ack.by), " \xB7 ", when(audit.ack.at), audit.ack.note ? ' · “' + audit.ack.note + '”' : '') : React.createElement("small", null, "Waiting", meta.config.ackRequired ? ' — needed before sign-off' : ''), !audit.ack && audit.status === 'completed' && meta.canAdd && React.createElement("div", {
-      style: {
-        marginTop: 5
-      }
-    }, React.createElement("button", {
-      className: "da-btn sm pri",
-      disabled: busy,
-      onClick: ack
-    }, "Record acknowledgement")))), React.createElement("div", {
+    }, React.createElement("i", null), React.createElement("div", null, React.createElement("b", null, "Audited"), " by ", audit.auditor.name, React.createElement("small", null, when(audit.completedAt || audit.createdAt)))), (() => {
+      const ns = DA.nursesOf(audit),
+        acks = DA.acksOf(audit),
+        pend = DA.pendingAcks(audit);
+      return React.createElement("div", {
+        className: 'da-step ' + (!pend.length ? 'done' : 'now')
+      }, React.createElement("i", null), React.createElement("div", null, React.createElement("b", null, ns.length > 1 ? 'Nurses’ acknowledgement (' + (ns.length - pend.length) + ' of ' + ns.length + ')' : 'Nurse’s acknowledgement'), ns.map(n => {
+        const k = acks[DA.nurseKey(n)];
+        return React.createElement("small", {
+          key: DA.nurseKey(n)
+        }, ns.length > 1 ? n.name + ': ' : '', k ? (k.method === 'account' ? '✓ own account' : '✓ in person, recorded by ' + (k.byName || k.by)) + ' · ' + when(k.at) + (k.note ? ' · “' + k.note + '”' : '') : 'waiting' + (meta.config.ackRequired && ns.length === 1 ? ' — needed before sign-off' : ''));
+      }), pend.length > 0 && ns.length > 1 && meta.config.ackRequired && React.createElement("small", null, "Every nurse acknowledges before sign-off."), pend.length > 0 && audit.status === 'completed' && meta.canAdd && React.createElement("div", {
+        style: {
+          marginTop: 5
+        }
+      }, React.createElement("button", {
+        className: "da-btn sm pri",
+        disabled: busy,
+        onClick: ack
+      }, "Record acknowledgement"))));
+    })(), React.createElement("div", {
       className: 'da-step ' + (audit.signoff ? 'done' : audit.status === 'acknowledged' ? 'now' : '')
     }, React.createElement("i", null), React.createElement("div", null, React.createElement("b", null, "Nurse In-charge sign-off"), audit.signoff ? React.createElement("small", null, audit.signoff.name, " \xB7 ", when(audit.signoff.at), audit.signoff.note ? ' · “' + audit.signoff.note + '”' : '') : React.createElement("small", null, own && !meta.isAdmin ? 'Another person signs off your audit' : 'Waiting'), !audit.signoff && meta.canEdit && (audit.status === 'acknowledged' || meta.isAdmin && audit.status === 'completed' || !meta.config.ackRequired && audit.status === 'completed') && (!own || meta.isAdmin) && React.createElement("div", {
       style: {
@@ -1462,7 +1580,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       })
     }, "\u2190 ", audit ? 'Register' : 'Dashboard'), audit && audit.status !== 'draft' && React.createElement("span", {
       className: "da-sub"
-    }, "Audit of ", audit.nurse ? audit.nurse.name : '—', " \xB7 ", audit.deptName, " \xB7 ", DA.fmtDate(audit.date)), React.createElement("span", {
+    }, "Audit of ", DA.nurseNames(audit) || '—', " \xB7 ", audit.deptName, " \xB7 ", DA.fmtDate(audit.date)), React.createElement("span", {
       style: {
         flex: 1
       }
@@ -1555,7 +1673,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         whiteSpace: 'nowrap'
       }
-    }, DA.fmtDate(x.date)), React.createElement("td", null, React.createElement("b", null, x.nurse ? x.nurse.name : '—'), React.createElement("div", {
+    }, DA.fmtDate(x.date)), React.createElement("td", {
+      title: DA.nurseNames(x)
+    }, React.createElement("b", null, nursesShort(x)), React.createElement("div", {
       className: "da-sub"
     }, x.deptName, x.area ? ' · ' + x.area : '')), React.createElement("td", {
       className: "n"
@@ -1759,7 +1879,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       [k]: v
     }));
     const needle = f.q.trim().toLowerCase();
-    const rows = data ? data.audits.filter(x => !needle || [x.nurse && x.nurse.name, x.nurse && x.nurse.empId, x.uhid, x.auditor && x.auditor.name, x.area].join(' ').toLowerCase().indexOf(needle) >= 0) : [];
+    const rows = data ? data.audits.filter(x => !needle || [DA.nursesOf(x).map(n => n.name + ' ' + (n.empId || '')).join(' '), x.uhid, x.auditor && x.auditor.name, x.area].join(' ').toLowerCase().indexOf(needle) >= 0) : [];
     const months = DA.monthsBetween(f.from.slice(0, 7), f.to.slice(0, 7), 36);
     async function excel() {
       try {
@@ -1877,9 +1997,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-sub"
     }, x.shift)), React.createElement("td", null, React.createElement("b", null, x.deptName), React.createElement("div", {
       className: "da-sub"
-    }, x.area, x.toolName ? ' · ' + x.toolName : '')), React.createElement("td", null, x.nurse ? x.nurse.name : '—', React.createElement("div", {
+    }, x.area, x.toolName ? ' · ' + x.toolName : '')), React.createElement("td", {
+      title: DA.nurseNames(x)
+    }, nursesShort(x), React.createElement("div", {
       className: "da-sub"
-    }, x.nurse ? [x.nurse.empId && 'ID ' + x.nurse.empId, x.nurse.designation, x.nurse.linked === false && 'not in register'].filter(Boolean).join(' · ') : '')), React.createElement("td", null, x.uhid), React.createElement("td", null, x.auditor ? x.auditor.name : ''), React.createElement("td", {
+    }, DA.nursesOf(x).length > 1 ? DA.nursesOf(x).length + ' nurses · shared record' : DA.nursesOf(x).map(nurseLine).join(''))), React.createElement("td", null, x.uhid), React.createElement("td", null, x.auditor ? x.auditor.name : ''), React.createElement("td", {
       className: "n"
     }, x.result ? x.result.yes + ' / ' + x.result.no + ' / ' + x.result.na : ''), React.createElement("td", {
       className: "n"
@@ -3320,7 +3442,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const H = tool.header || {};
     const v = x => a ? esc(x || '—') : '&nbsp;';
     const extra = (H.extra || []).map(f => [f.label, a ? (a.extra || {})[f.id] : '']);
-    const pairs = [['Department', a && a.deptName], ['Audit date / shift', a && DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : '')], ['Patient UHID / MRN', a && a.uhid], ['Nurse auditee', a && a.nurse && a.nurse.name + (a.nurse.empId ? ' (ID ' + a.nurse.empId + ')' : '')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed], [H.areaLabel || 'Area', a && a.area]].concat(extra);
+    const pairs = [['Department', a && a.deptName], ['Audit date / shift', a && DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : '')], ['Patient UHID / MRN', a && a.uhid], [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map(n => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '')).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed], [H.areaLabel || 'Area', a && a.area]].concat(extra);
     while (pairs.length % 2) pairs.push(['', '']);
     let hd = '';
     for (let i = 0; i < pairs.length; i += 2) hd += '<tr><td class="k">' + esc(pairs[i][0]) + '</td><td>' + v(pairs[i][1]) + '</td><td class="k">' + esc(pairs[i + 1][0]) + '</td><td>' + (pairs[i + 1][0] ? v(pairs[i + 1][1]) : '') + '</td></tr>';
@@ -3329,9 +3451,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       byId[c.id] = c;
     });
     const sum = '<table class="sum blk"><tr><td class="k">Total \'Yes\' (A)</td><td class="v">' + (r ? r.yes : '') + '</td><td class="k">Score % = A ÷ (A + B) × 100</td><td class="v">' + (r && r.pct != null ? r.pct + '%' : '') + '</td></tr>' + '<tr><td class="k">Total \'No\' (B)</td><td class="v">' + (r ? r.no : '') + '</td><td class="k">Critical criteria marked \'No\'</td><td class="v">' + (r ? r.criticalFails.map(id => '#' + (byId[id] ? byId[id].no : id)).join(', ') || 'None' : '') + '</td></tr>' + '<tr><td class="k">Total \'N/A\'</td><td class="v">' + (r ? r.na : '') + '</td><td class="k">Grade</td><td class="v">' + (r ? esc(r.gradeLabel) : 'Excellent / Good / Needs improvement / Unsatisfactory') + '</td></tr>' + '<tr><td class="k">Applicable (A + B)</td><td class="v">' + (r ? r.applicable : '') + '</td><td class="k">Result</td><td class="v res">' + (r ? r.result : 'PASS / FAIL') + '</td></tr></table>' + (r && r.action ? '<div class="act blk"><b>Required action:</b> ' + esc(r.action) + '</div>' : '') + (a && a.remarks ? '<div class="act blk"><b>Remarks / feedback:</b> ' + esc(a.remarks) + '</div>' : '');
-    const signs = '<div class="signs blk"><div><span>Auditor</span>' + (a ? esc(a.auditor.name) + '<br>' + esc(when(a.completedAt || a.createdAt)) : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Auditee nurse (acknowledgement)</span>' + (a && a.ack ? esc(a.ack.name || a.nurse && a.nurse.name || '') + '<br>' + esc(when(a.ack.at)) + (a.ack.method === 'account' ? ' · own account' : ' · in person') : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Nurse In-charge</span>' + (a && a.signoff ? esc(a.signoff.name) + '<br>' + esc(when(a.signoff.at)) : 'Signature: ______________<br>Date / time: ____________') + '</div></div>';
+    const signs = '<div class="signs blk"><div><span>Auditor</span>' + (a ? esc(a.auditor.name) + '<br>' + esc(when(a.completedAt || a.createdAt)) : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Auditee nurse' + (a && DA.nursesOf(a).length > 1 ? 's' : '') + ' (acknowledgement)</span>' + (a && DA.nursesOf(a).length ? DA.nursesOf(a).map(n => {
+      const k = DA.acksOf(a)[DA.nurseKey(n)];
+      return esc(n.name) + (k ? ' · ' + esc(when(k.at)) + (k.method === 'account' ? ' · own account' : ' · in person') : ' · ____________');
+    }).join('<br>') : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Nurse In-charge</span>' + (a && a.signoff ? esc(a.signoff.name) + '<br>' + esc(when(a.signoff.at)) : 'Signature: ______________<br>Date / time: ____________') + '</div></div>';
     const body = letterhead('Nursing Quality & Patient Safety', tool.name, [tool.code, tool.version && 'Version ' + tool.version, a && a.toolRevision > 1 ? 'tool revision ' + a.toolRevision : ''].filter(Boolean).join(' · ')) + '<table class="hd">' + hd + '</table>' + '<div class="hint">Mark ✓ in one box per criterion. Write evidence for a \'No\' where useful. Items marked Critical: any \'No\' = audit FAIL. N/A is excluded from scoring.</div>' + '<table class="ck"><thead><tr><th>No.</th><th>Compliance criterion</th><th>JCI</th><th>Critical</th><th>Yes</th><th>No</th><th>N/A</th><th>Evidence / remarks</th></tr></thead><tbody>' + rows + '</tbody></table>' + sum + signs + footer();
-    const title = a ? 'Documentation audit — ' + (a.nurse && a.nurse.name || '') + ' — ' + a.date : tool.name + ' (blank form)';
+    const title = a ? 'Documentation audit — ' + DA.nurseNames(a) + ' — ' + a.date : tool.name + ' (blank form)';
     return {
       body,
       title,

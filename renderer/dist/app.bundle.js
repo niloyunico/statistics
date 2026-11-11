@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=2ec172bc8f","reports":"/dist/reports.chunk.js?v=642a509d61","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=df900d884c","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=2ec172bc8f","reports":"/dist/reports.chunk.js?v=642a509d61","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=82ea56e0ee","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -15124,7 +15124,7 @@ Object.assign(window, {
         setBusy('');
       }
     };
-    const waiting = d.audits.filter(x => x.status === 'completed').length;
+    const waiting = d.audits.filter(x => x.myPending).length;
     return React.createElement("div", {
       className: "card"
     }, React.createElement("div", {
@@ -15175,7 +15175,7 @@ Object.assign(window, {
         style: {
           color: 'var(--muted)'
         }
-      }, x.auditor ? ' · audited by ' + x.auditor.name : '')), React.createElement("b", {
+      }, x.auditor ? ' · audited by ' + x.auditor.name : '', x.nurses && x.nurses.length > 1 ? ' · shared with ' + (x.nurses.length - 1) + ' colleague(s)' : '')), React.createElement("b", {
         style: {
           fontSize: 13
         }
@@ -15188,7 +15188,7 @@ Object.assign(window, {
           background: pass ? '#e7f6ed' : '#fde4e8',
           color: pass ? '#14713f' : '#a3172f'
         }
-      }, r.result || '—'), x.status === 'completed' ? React.createElement("button", {
+      }, r.result || '—'), x.myPending ? React.createElement("button", {
         className: "btn pri sm",
         disabled: busy === x.id,
         onClick: e => {
@@ -15200,7 +15200,7 @@ Object.assign(window, {
           fontSize: 11,
           color: 'var(--muted)'
         }
-      }, x.status === 'signed' ? 'Signed off' : 'Acknowledged')), isOpen && React.createElement("div", {
+      }, x.status === 'signed' ? 'Signed off' : x.status === 'completed' && x.othersPending ? 'Acknowledged — waiting for ' + x.othersPending + ' colleague' + (x.othersPending > 1 ? 's' : '') : 'Acknowledged')), isOpen && React.createElement("div", {
         style: {
           marginTop: 8,
           fontSize: 12,

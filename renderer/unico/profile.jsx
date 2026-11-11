@@ -120,7 +120,7 @@
         load();
       } catch (e) { if (window.UI && window.UI.toast) window.UI.toast(e.message, 'error'); } finally { setBusy(''); }
     };
-    const waiting = d.audits.filter((x) => x.status === 'completed').length;
+    const waiting = d.audits.filter((x) => x.myPending).length;
     return (
       <div className="card">
         <div className="card-h"><h3>My documentation audits</h3><span className="sub" style={{ marginLeft: 'auto' }}>{waiting ? waiting + ' waiting for your acknowledgement' : 'Feedback on your nursing records'}</span></div>
@@ -129,11 +129,11 @@
             return <div key={x.id} style={{ borderTop: '1px solid var(--line-2)', padding: '8px 0' }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', cursor: 'pointer' }} onClick={() => setOpen(isOpen ? null : x.id)}>
                 <span style={{ fontSize: 12, minWidth: 88 }}>{fmt(x.date)}</span>
-                <span style={{ flex: 1, minWidth: 120, fontSize: 12.5 }}>{x.deptName}<span style={{ color: 'var(--muted)' }}>{x.auditor ? ' · audited by ' + x.auditor.name : ''}</span></span>
+                <span style={{ flex: 1, minWidth: 120, fontSize: 12.5 }}>{x.deptName}<span style={{ color: 'var(--muted)' }}>{x.auditor ? ' · audited by ' + x.auditor.name : ''}{x.nurses && x.nurses.length > 1 ? ' · shared with ' + (x.nurses.length - 1) + ' colleague(s)' : ''}</span></span>
                 <b style={{ fontSize: 13 }}>{r.pct == null ? '—' : r.pct + '%'}</b>
                 <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: pass ? '#e7f6ed' : '#fde4e8', color: pass ? '#14713f' : '#a3172f' }}>{r.result || '—'}</span>
-                {x.status === 'completed' ? <button className="btn pri sm" disabled={busy === x.id} onClick={(e) => { e.stopPropagation(); ack(x); }}>Acknowledge</button>
-                  : <span style={{ fontSize: 11, color: 'var(--muted)' }}>{x.status === 'signed' ? 'Signed off' : 'Acknowledged'}</span>}
+                {x.myPending ? <button className="btn pri sm" disabled={busy === x.id} onClick={(e) => { e.stopPropagation(); ack(x); }}>Acknowledge</button>
+                  : <span style={{ fontSize: 11, color: 'var(--muted)' }}>{x.status === 'signed' ? 'Signed off' : x.status === 'completed' && x.othersPending ? 'Acknowledged — waiting for ' + x.othersPending + ' colleague' + (x.othersPending > 1 ? 's' : '') : 'Acknowledged'}</span>}
               </div>
               {isOpen && <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.45, background: 'var(--panel-2)', borderRadius: 8, padding: '8px 10px' }}>
                 {r.gradeLabel && <div><b>{r.gradeLabel}</b>{x.action ? ' — ' + x.action : ''}</div>}

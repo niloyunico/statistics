@@ -22,6 +22,8 @@ const ROSTER = [
   { id: 2, name: 'Mitu Das', emp_id: '11002', designation: 'Staff Nurse', current_department: 'Emergency', role: 'Nurse' },
   { id: 3, name: 'Auditor Nurse', emp_id: '11003', designation: 'Senior Staff Nurse', current_department: 'Level 9', role: 'Nurse' },
   { id: 4, name: 'Former Nurse', emp_id: '11004', current_department: 'Level 9', former: true },
+  { id: 5, name: 'Shapla Khatun', emp_id: '11005', designation: 'Staff Nurse', current_department: 'Level 9', role: 'Nurse' },
+  { id: 6, name: 'Moni PCA', emp_id: '11006', designation: 'Patient Care Assistant', current_department: 'Level 9', role: 'PCA' },
 ];
 // Hospital clock: 2026-11-11 12:00 Asia/Dhaka.
 const clock = Date.parse('2026-11-11T06:00:00Z');
@@ -90,7 +92,7 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(res.body.tools.length, 4, 'the four tools are seeded');
   assert.equal(res.body.staffId, '3');
   res = await call('GET /api/doc-audit/staff', auditor, { query: { dept: 'lvl9' } });
-  assert.deepEqual(res.body.staff.map((p) => p.id).sort(), [1, 3], 'Level 9 staff only, never a former one');
+  assert.deepEqual(res.body.staff.map((p) => p.id).sort(), [1, 3, 5], 'Level 9 nurses only — never a former one, never a PCA');
   assert.ok(!('phone' in res.body.staff[0]), 'thin records');
   assert.equal((await call('GET /api/doc-audit/staff', auditor, { query: { dept: 'er' } })).status, 403);
   assert.equal((await call('GET /api/doc-audit/meta', person('nobody', [], ['lvl9']))).status, 403);
@@ -254,6 +256,43 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(res.status, 200);
   assert.equal((await call('GET /api/doc-audit/audits/:id', incharge, { params: { id: A3.id } })).status, 404, 'removed = gone from the register, kept in the store');
   assert.ok(docAudit._mem.docAudits.get(A3.id).removedAt, 'never hard-deleted');
+
+  /* ---- several nurses on one audit (1 record : 3 nurses) ---- */
+  const incharge2 = person('incharge2', ['view', 'add', 'edit'], ['lvl9'], null);
+  const shapla = { unrestricted: false, username: 'shapla', name: 'Shapla Khatun', role: 'User', perms: {}, staffId: 5 };
+  const before = (await docAudit.monthlyFigures(['2026-11']))['2026-11'].records;
+  res = await call('POST /api/doc-audit/audits', incharge, { body: Object.assign({}, base, { uhid: 'UH-300', nurses: [{ staffId: 1 }, { staffId: 5 }, { staffId: '5' }, { name: 'Agency Nurse B', empId: 'X9' }], answers: Object.assign(allYes(IPD), { c4: 'N' }), complete: true }) });
+  assert.equal(res.status, 200);
+  const M = res.body.audit;
+  assert.deepEqual(M.nurses.map((n) => n.name), ['Rina Akter', 'Shapla Khatun', 'Agency Nurse B'], 'three nurses, the duplicate dropped');
+  assert.equal(M.nurse.staffId, '1', 'nurse = the first, for older readers'); assert.equal(M.nurses[2].linked, false);
+  assert.equal(M.result.pct, DA.score(Object.assign(allYes(IPD), { c4: 'N' }), M.criteria).pct, 'one shared checklist, one score');
+  assert.equal((await call('POST /api/doc-audit/audits', auditor, { body: Object.assign({}, base, { nurses: [{ staffId: 1 }, { staffId: 3 }], answers: allYes(IPD), complete: true }) })).body.code, 'self', 'the auditor cannot be one of the nurses');
+  assert.equal((await call('POST /api/doc-audit/audits', auditor, { body: Object.assign({}, base, { nurses: [{ staffId: 1 }, { staffId: 2 }], answers: allYes(IPD), complete: true }) })).status, 403, 'every nurse from my departments');
+  assert.equal((await call('POST /api/doc-audit/audits', auditor, { body: Object.assign({}, base, { nurses: Array.from({ length: 7 }, (_, i) => ({ name: 'N' + i })), answers: allYes(IPD), complete: true }) })).status, 400, 'at most 6');
+  assert.equal((await docAudit.monthlyFigures(['2026-11']))['2026-11'].records, before + 1, 'the record counts once in the KPI');
+  for (const id of ['1', '5']) assert.ok((await call('GET /api/doc-audit/staff/:staffId', incharge, { params: { staffId: id } })).body.audits.some((x) => x.id === M.id), 'on nurse ' + id + '’s record');
+  res = await call('GET /api/doc-audit/summary', incharge, { query: { from: '2026-11', to: '2026-11', by: 'nurse' } });
+  assert.equal(res.body.breakdown.find((b) => b.label === 'Shapla Khatun').summary.records, 1, 'counted under each nurse');
+  assert.ok(res.body.breakdown.find((b) => b.label === 'Agency Nurse B'));
+  let mine = (await call('GET /api/doc-audit/mine', shapla)).body.audits.find((x) => x.id === M.id);
+  assert.deepEqual([mine.myPending, mine.othersPending], [true, 2]);
+  // two of three acknowledge in person: still waiting, no sign-off yet
+  res = await call('POST /api/doc-audit/audits/:id/ack', incharge, { params: { id: M.id }, body: { keys: ['s:1', 'n:agency nurse b'] } });
+  assert.equal(res.body.audit.status, 'completed'); assert.equal(Object.keys(res.body.audit.acks).length, 2);
+  res = await call('POST /api/doc-audit/audits/:id/sign', incharge2, { params: { id: M.id } });
+  assert.equal(res.status, 409); assert.equal(res.body.code, 'ack'); assert.ok(/Shapla/.test(res.body.error), 'names who is missing');
+  // the third from her own account → acknowledged → signed
+  res = await call('POST /api/doc-audit/mine/:id/ack', shapla, { params: { id: M.id } });
+  assert.equal(res.body.audit.status, 'acknowledged'); assert.equal(res.body.audit.ack.complete, true); assert.equal(res.body.audit.acks['s:5'].method, 'account');
+  assert.equal((await call('POST /api/doc-audit/mine/:id/ack', shapla, { params: { id: M.id } })).status, 409, 'once');
+  res = await call('POST /api/doc-audit/audits/:id/sign', incharge2, { params: { id: M.id } });
+  assert.equal(res.body.audit.status, 'signed');
+  // an older single-nurse audit reads as a list of one
+  res = await call('GET /api/doc-audit/audits/:id', incharge, { params: { id: A2.id } });
+  assert.equal(res.body.audit.nurses.length, 1); assert.equal(res.body.audit.nurses[0].name, 'Rina Akter');
+  res = await call('GET /api/doc-audit/xlsx', admin, { query: { from: '2026-11', to: '2026-11' } });
+  assert.equal(res.body.slice(0, 2).toString(), 'PK');
 
   console.log('doc-audit: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });
