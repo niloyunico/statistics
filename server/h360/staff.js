@@ -481,6 +481,8 @@ function createStaffService(deps = {}) {
     const diag = await settings.read(d, 'staffDiagnostics');
     return {
       login: Boolean(login.user && login.pass), loginElsewhere: Boolean(login.elsewhere),
+      // For administrators only (the route drops these for everyone else). Never the password.
+      loginUser: login.user || '', loginSource: login.source || '', loginSavedAt: login.savedAt || null, loginSavedBy: login.savedBy || '',
       verify: { last: lastInfo(verify), run: publicRun(verify.run) },
       sweep: { last: sweep.last || null, run: publicRun(sweep.run) },
       searchForm: diag && diag.form ? diag.form : null,
@@ -568,7 +570,10 @@ function mount(app, opts = {}) {
 
   app.get(P + '/info', guard, route(async (req, res) => {
     res.set('Cache-Control', 'no-store');
-    res.json({ ...(await service.info()), canEdit: canEdit(req) });
+    const out = await service.info();
+    const admin = !req.access || req.access.unrestricted;
+    if (!admin) { delete out.loginUser; delete out.loginSource; delete out.loginSavedAt; delete out.loginSavedBy; }
+    res.json({ ...out, canEdit: canEdit(req), isAdmin: admin });
   }));
 
   app.post(P + '/options', guard, editOnly, json, route(async (req, res) => {

@@ -261,6 +261,21 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
     assert.strictEqual((await fresh().sessionInfo()).active, true);
     ok('a wrong H360 password fails once with the reason; sign-out clears the session and the next click signs in');
 
+    // Changing the H360 login (admin panel -> POST /api/h360/login) ends the shared sign-in.
+    const sup = express();
+    require('../h360').mount(sup, { deps: { sharedDb: async () => db, localDb: async () => null, site: () => 'cloud' } });
+    const supServer = await listen(sup);
+    const supBase = 'http://127.0.0.1:' + supServer.address().port;
+    assert.strictEqual((await fresh().sessionInfo()).active, true);
+    const saved = await fetch(supBase + '/api/h360/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ user: 'tester', pass: 'secret-pass' }) });
+    assert.strictEqual(saved.status, 200);
+    assert.strictEqual((await fresh().sessionInfo()).active, false, 'a new login clears the old sign-in');
+    mock.state.hits.length = 0;
+    await fresh().lookup('11809');
+    assert.strictEqual(count('POST /login'), 1, 'the next check signs in with the new login');
+    supServer.close();
+    ok('saving a new H360 login (admin panel) ends the old sign-in; the next check signs in with it');
+
     const wb = await service.workbook(new Set(register.map((r) => r.id)));
     assert.deepStrictEqual(wb.worksheets.map((w) => w.name), ['Verify', 'Not in register', 'Duplicates & IDs']);
     assert.strictEqual(wb.getWorksheet('Verify').rowCount, 7);
@@ -290,6 +305,13 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
     assert.strictEqual(await codeFor(viewer, '/api/h360-staff/saved/1'), 403);
     assert.strictEqual(await codeFor({ ...viewer, subMenus: { staff: ['staffAll', 'staffH360'] } }, '/api/h360-staff/status'), 200);
     assert.strictEqual(await codeFor({ ...viewer, perms: { staff: [] }, subMenus: { staff: ['staffH360'] } }, '/api/h360-staff/status'), 403);
+    // The H360 login name is shown to administrators only, and the password never.
+    who = { unrestricted: true };
+    const adminInfo = await (await fetch(gBase + '/api/h360-staff/info')).json();
+    who = { ...viewer, subMenus: { staff: ['staffH360'] } };
+    const userInfo = await (await fetch(gBase + '/api/h360-staff/info')).json();
+    assert.deepStrictEqual([adminInfo.loginUser, adminInfo.isAdmin, 'loginUser' in userInfo, userInfo.isAdmin], ['tester', true, false, false]);
+    assert.ok(!JSON.stringify(adminInfo).includes('secret-pass'));
     gServer.close();
     ok('H360 data is admin-only unless the "H360 Check" tick is given (staff view access alone gets 403)');
     ok('routes: the cron refuses a caller that is not the cron; short searches refused; badges come from the last check');

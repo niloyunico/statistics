@@ -8740,7 +8740,9 @@ async function hxApi(path, options) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const err = new Error(body && body.error || 'The request failed.');
+    let msg = body && body.error || 'The request failed.';
+    if (/Login failed/i.test(msg)) msg += ' — an administrator can enter the new H360 password under "H360 login" at the top of H360 Check.';
+    const err = new Error(msg);
     err.status = response.status;
     throw err;
   }
@@ -10026,6 +10028,129 @@ function HxDuplicates({
     className: "hx-alert info"
   }, data && data.last ? 'None found in the last check.' : 'Run Bulk Verify first.'));
 }
+function HxLoginPanel({
+  info,
+  reload
+}) {
+  const [open, setOpen] = useState(false);
+  const [user, setUser] = useState('');
+  const [pass, setPass] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  if (!info || !info.isAdmin) return null;
+  const fromEnv = info.loginSource === 'environment';
+  const save = async ev => {
+    ev.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      await hxApi('/api/h360/login', {
+        method: 'POST',
+        body: {
+          user: user.trim(),
+          pass
+        }
+      });
+      setPass('');
+      setOpen(false);
+      hxToast('H360 login saved — the next check signs in with it.');
+      reload && reload();
+    } catch (e) {
+      setErr(e.message);
+    }
+    setBusy(false);
+  };
+  return React.createElement("div", {
+    style: {
+      border: '1px solid var(--line)',
+      borderRadius: 10,
+      padding: '10px 12px',
+      marginBottom: 10,
+      background: 'var(--panel-2)'
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      flexWrap: 'wrap',
+      fontSize: 12.5
+    }
+  }, React.createElement("b", {
+    style: {
+      color: 'var(--ink)'
+    }
+  }, "H360 login"), info.login ? React.createElement("span", {
+    className: "hx-muted"
+  }, "in use: ", React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, info.loginUser || '—'), info.loginSavedAt ? ' · saved ' + hxWhen(info.loginSavedAt) + (info.loginSavedBy ? ' by ' + info.loginSavedBy : '') : '') : React.createElement("span", {
+    style: {
+      color: '#9a5a06',
+      fontWeight: 700
+    }
+  }, "not saved yet"), React.createElement("span", {
+    className: "spacer"
+  }), !fromEnv && React.createElement("button", {
+    className: "btn sm",
+    onClick: () => {
+      setOpen(!open);
+      setUser(info.loginUser || '');
+      setErr('');
+    }
+  }, open ? 'Cancel' : info.login ? 'Change login' : 'Enter login')), fromEnv && React.createElement("div", {
+    className: "hx-muted",
+    style: {
+      marginTop: 6
+    }
+  }, "This server takes the H360 login from its own settings (HIS_USER / HIS_PASS); change it there."), open && !fromEnv && React.createElement("form", {
+    onSubmit: save,
+    autoComplete: "off",
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      marginTop: 9
+    }
+  }, React.createElement("input", {
+    className: "hx-input",
+    style: {
+      flex: '1 1 150px'
+    },
+    value: user,
+    onChange: e => setUser(e.target.value),
+    placeholder: "H360 user ID",
+    autoComplete: "off"
+  }), React.createElement("input", {
+    className: "hx-input",
+    style: {
+      flex: '1 1 150px'
+    },
+    type: "password",
+    value: pass,
+    onChange: e => setPass(e.target.value),
+    placeholder: "H360 password",
+    autoComplete: "new-password"
+  }), React.createElement("button", {
+    className: "btn pri sm",
+    type: "submit",
+    disabled: busy || !user.trim() || !pass
+  }, busy ? 'Saving…' : 'Save login'), React.createElement("span", {
+    className: "hx-muted",
+    style: {
+      flexBasis: '100%'
+    }
+  }, "When the H360 password is changed, enter the new one here. It is kept sealed on the server and never shown again.")), err && React.createElement("div", {
+    className: "hx-alert red",
+    style: {
+      marginTop: 8,
+      marginBottom: 0
+    }
+  }, err));
+}
 function StaffH360View({
   store,
   setRoute
@@ -10087,7 +10212,10 @@ function StaffH360View({
     className: "hx-alert red"
   }, err), info && info.searchForm && !(info.searchForm.found || []).length && React.createElement("div", {
     className: "hx-alert amber"
-  }, "H360's Employee Search form values were not found on the Employee Roster page, so H360 may be answering every search with nobody. Treat \"Emp ID not found in H360\" with caution until this is checked (server setting H360_EMP_SEARCH_PARAMS can supply them)."), info && info.login && info.session && React.createElement("div", {
+  }, "H360's Employee Search form values were not found on the Employee Roster page, so H360 may be answering every search with nobody. Treat \"Emp ID not found in H360\" with caution until this is checked (server setting H360_EMP_SEARCH_PARAMS can supply them)."), React.createElement(HxLoginPanel, {
+    info: info,
+    reload: reload
+  }), info && info.login && info.session && React.createElement("div", {
     style: {
       display: 'flex',
       alignItems: 'center',

@@ -442,6 +442,8 @@ if (service.site() === 'cloud') {
     if (!user || !pass) return res.status(400).json({ error: 'Enter both the user name and the password.' });
     if (/[\r\n]/.test(user + pass)) return res.status(400).json({ error: 'The login cannot contain line breaks.' });
     await settings.saveLogin(await service.sharedDb(), user, pass, who(req));
+    // H360 Check's shared sign-in was made with the old login: the next check signs in with this one.
+    await settings.write(await service.sharedDb(), 'staffSession', {}, { cookies: '', token: '' }).catch(() => {});
     service.forget();
     res.json({ ok: true });
   }));
@@ -449,6 +451,7 @@ if (service.site() === 'cloud') {
   app.delete('/api/h360/login', guard, adminOnly, route(async (req, res) => {
     if (service.job.running) return res.status(409).json({ error: 'Wait for the collection to finish first.' });
     await settings.forgetLogin(await service.sharedDb());
+    await settings.write(await service.sharedDb(), 'staffSession', {}, { cookies: '', token: '' }).catch(() => {});
     service.forget();
     res.json({ ok: true });
   }));

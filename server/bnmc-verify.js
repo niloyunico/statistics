@@ -470,27 +470,56 @@ async function detect(number, opts) {
  * number within a week. They have nothing to do with how long a verification is kept:
  * what is stored here is kept until someone verifies that licence again.
  */
-/* ---------------------------------------- BNMC portraits, cached in our database ---
-   bnmcPhotos: { _id: the BNMC image URL, type, data (bytes), at }. Fetched from BNMC once
-   (paced like every other BNMC request), then served from here. */
+/* ---------------------------------------- BNMC portraits, kept in our own storage ---
+   A staff record with no photo of ours shows its BNMC portrait, so each portrait is fetched
+   from BNMC at most ONCE and then kept:
+     - live (Vercel Blob configured): in Vercel Blob, like our profile photos — bnmcPhotos maps
+       the BNMC URL to the Blob file { _id: bnmcUrl, pathname, url, at };
+     - without Blob (this PC, tests): the bytes in bnmcPhotos.data, as before.
+   A portrait kept as bytes earlier moves to Blob on its next view, without asking BNMC. */
 const PHOTO_MAX = 500 * 1024;
+const blobStore = () => {
+  if (process.env.PHOTO_STORAGE_PROVIDER !== 'vercel-blob') return null;
+  try { const store = require('./storage-blob'); return store.status().configured ? store : null; } catch (e) { return null; }
+};
 async function portrait(href, opts) {
   const fetchImpl = (opts && opts.fetch) || null;
+  const blob = opts && Object.prototype.hasOwnProperty.call(opts, 'blob') ? opts.blob : blobStore();
   const h = await getDbHandle();
   const dbh = h && h.db ? h.db : h;
   const col = dbh ? dbh.collection('bnmcPhotos') : null;
-  if (col) {
-    const kept = await col.findOne({ _id: href });
-    if (kept && kept.data) return { type: kept.type || 'image/jpeg', data: Buffer.from(kept.data.buffer || kept.data) };
+  const kept = col ? await col.findOne({ _id: href }) : null;
+  // 1. Already in Blob.
+  if (blob && kept && kept.pathname) {
+    try {
+      const got = await blob.readCachedAsset(kept.pathname);
+      if (got && got.data) return { type: got.contentType || 'image/avif', data: got.data };
+    } catch (e) { /* the Blob file is unreadable: fetch again below */ }
   }
+  const keepInBlob = async (data) => {
+    if (!blob || !col) return false;
+    try {
+      const up = await blob.uploadBuffer(data, { folder: 'unico/bnmc' });
+      await col.updateOne({ _id: href }, { $set: { pathname: up.publicId || up.pathname, url: up.url, at: new Date() }, $unset: { data: '', type: '' } }, { upsert: true });
+      return true;
+    } catch (e) { return false; }
+  };
+  // 2. Kept as bytes earlier: serve them, and move them to Blob (no BNMC request).
+  if (kept && kept.data) {
+    const data = Buffer.from(kept.data.buffer || kept.data);
+    if (blob) await keepInBlob(data);
+    return { type: kept.type || 'image/jpeg', data };
+  }
+  // 3. Never seen: ask BNMC once.
   await pace();
   const r = fetchImpl ? await fetchImpl(href) : await hit(href, { headers: { 'User-Agent': UA, Referer: BASE } });
   if (!r.ok) return null;
   const type = r.headers.get('content-type') || 'image/jpeg';
   if (!/^image\//i.test(type)) { const e = new Error('not an image'); e.status = 415; throw e; }
   const data = Buffer.from(await r.arrayBuffer());
-  if (col && data.length && data.length <= PHOTO_MAX) {
-    await col.updateOne({ _id: href }, { $set: { type, data, at: new Date() } }, { upsert: true }).catch(() => {});
+  if (data.length && data.length <= PHOTO_MAX && col) {
+    const inBlob = await keepInBlob(data);
+    if (!inBlob) await col.updateOne({ _id: href }, { $set: { type, data, at: new Date() } }, { upsert: true }).catch(() => {});
   }
   return { type, data };
 }
