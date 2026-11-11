@@ -1876,7 +1876,14 @@ function StaffDocAuditCard({
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap'
       }
-    }, x.deptName, x.area ? ' · ' + x.area : '', React.createElement("span", {
+    }, x.deptName, x.area ? ' · ' + x.area : '', (() => {
+      const me = (x.nurses || []).find(n => String(n.staffId) === String(emp.id));
+      return me && me.fromOtherDept ? React.createElement("span", {
+        style: {
+          color: '#8a5a00'
+        }
+      }, ' · ' + (me.assignment || 'Deployed').toLowerCase() + ' here') : null;
+    })(), React.createElement("span", {
       style: {
         color: 'var(--muted)'
       }

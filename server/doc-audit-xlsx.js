@@ -43,7 +43,7 @@ async function build(data) {
   const reg = sheet(wb, 'Audit Register', [
     { header: 'Date', key: 'date', width: 12 }, { header: 'Month', key: 'month', width: 10 }, { header: 'Department', key: 'dept', width: 22 },
     { header: 'Area / zone', key: 'area', width: 18 }, { header: 'Shift', key: 'shift', width: 9 }, { header: 'UHID / MRN', key: 'uhid', width: 14 },
-    { header: 'Nurse(s) audited', key: 'nurse', width: 26 }, { header: 'Emp. ID', key: 'emp', width: 9 }, { header: 'Designation', key: 'desig', width: 16 },
+    { header: 'Nurse(s) audited', key: 'nurse', width: 26 }, { header: 'Emp. ID', key: 'emp', width: 9 }, { header: 'Designation', key: 'desig', width: 16 }, { header: 'From other department', key: 'other', width: 28 },
     { header: 'Auditor', key: 'auditor', width: 20 }, { header: 'Tool', key: 'tool', width: 18 },
     { header: 'Yes', key: 'yes', width: 6 }, { header: 'No', key: 'no', width: 6 }, { header: 'N/A', key: 'na', width: 6 }, { header: 'Applicable', key: 'app', width: 9 },
     { header: 'Score %', key: 'pct', width: 8 }, { header: 'Grade', key: 'grade', width: 16 }, { header: 'Result', key: 'result', width: 8 },
@@ -58,6 +58,7 @@ async function build(data) {
     const row = reg.addRow({
       date: x.date, month: x.month, dept: x.deptName, area: x.area || '', shift: x.shift || '', uhid: x.uhid || '',
       nurse: DA.nurseNames(x), emp: DA.nursesOf(x).map((n) => n.empId || '—').join(', '), desig: DA.nursesOf(x).map((n) => n.designation || '—').join(', '),
+      other: DA.nursesOf(x).filter((n) => n.fromOtherDept).map((n) => n.name + ': ' + (n.homeDept || '—') + ' · ' + (n.assignment || 'Deployed')).join(', '),
       auditor: (x.auditor && x.auditor.name) || '', tool: x.toolName || x.toolId,
       yes: r.yes, no: r.no, na: r.na, app: r.applicable, pct: r.pct, grade: r.gradeLabel || '', result: r.result || '',
       crit: (r.criticalFails || []).map((k) => '#' + ((byId[k] || {}).no || k)).join(', '), gaps,

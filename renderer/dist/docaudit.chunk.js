@@ -379,7 +379,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
             onChange: () => tog(k)
           }), React.createElement("b", null, n.name), React.createElement("span", {
             className: "da-sub"
-          }, nurseLine(n)));
+          }, nurseSub(n)));
         })), React.createElement("textarea", {
           className: "da-ta",
           rows: 2,
@@ -416,6 +416,22 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   }, "Documentation Audit \u2192 Settings"), " and choose the tool each department audits with.") : React.createElement("span", null, "No department has been set for you yet. Ask the administrator to choose your departments in Access Control \u2192 Documentation Audit."));
   const toolOf = (meta, id) => (meta && meta.tools || []).find(t => t.id === id) || null;
   const nurseLine = n => [n.empId && 'ID ' + n.empId, n.designation, n.department, n.linked === false && 'not in the register'].filter(Boolean).join(' · ');
+  const OtherDept = ({
+    n
+  }) => n && n.fromOtherDept ? React.createElement("span", {
+    className: "da-chip",
+    style: {
+      background: '#fff1d6',
+      color: '#8a5a00',
+      marginLeft: 5,
+      verticalAlign: 1
+    },
+    title: "Belongs to another department"
+  }, "\u21C4 Other dept", n.homeDept && n.homeDept !== n.department ? ' · ' + n.homeDept : '', " \xB7 ", n.assignment || 'Deployed') : null;
+  const nurseSub = n => React.createElement(React.Fragment, null, nurseLine(n), React.createElement(OtherDept, {
+    n: n
+  }));
+  const otherText = n => n && n.fromOtherDept ? ' — from ' + (n.homeDept || n.department || 'another department') + ', ' + String(n.assignment || 'Deployed').toLowerCase() : '';
   function NursePicker({
     meta,
     deptId,
@@ -478,20 +494,46 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, [open]);
     const full = picked.length >= DA.MAX_NURSES;
     const needle = q.trim().toLowerCase();
+    const [others, setOthers] = useState([]);
+    useEffect(() => {
+      if (all || disabled || needle.length < 2) {
+        setOthers([]);
+        return;
+      }
+      let live = true;
+      const t = setTimeout(() => {
+        api('/api/doc-audit/staff?all=1&q=' + encodeURIComponent(needle)).then(j => {
+          if (live) setOthers(j.staff || []);
+        }).catch(() => {});
+      }, 250);
+      return () => {
+        live = false;
+        clearTimeout(t);
+      };
+    }, [needle, all, disabled]);
     const isPicked = p => picked.some(n => String(n.staffId) === String(p.id));
     const self = p => meta && meta.staffId != null && String(p.id) === String(meta.staffId) || excludeId != null && String(p.id) === String(excludeId);
     const hits = (list || []).filter(p => !needle || String(p.name || '').toLowerCase().indexOf(needle) >= 0 || String(p.emp_id || '').toLowerCase().indexOf(needle) >= 0).slice(0, 80);
     const add = n => onChange(picked.concat([n]));
+    const localIds = new Set((list || []).map(p => String(p.id)));
+    const extra = others.filter(p => !localIds.has(String(p.id)));
+    const choices = hits.concat(extra);
+    const isOther = p => !all && !localIds.has(String(p.id));
     const pick = p => {
       if (self(p) || isPicked(p) || full) return;
-      add({
+      const other = isOther(p);
+      add(Object.assign({
         staffId: String(p.id),
         empId: String(p.emp_id || ''),
         name: p.name,
         designation: p.designation || '',
         department: p.current_department || '',
         linked: true
-      });
+      }, other ? {
+        fromOtherDept: true,
+        homeDept: p.current_department || '',
+        assignment: 'Deployed'
+      } : {}));
       setQ('');
       setHi(0);
     };
@@ -500,13 +542,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setOpen(true);
-        setHi(h => Math.min(h + 1, hits.length - 1));
+        setHi(h => Math.min(h + 1, choices.length - 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setHi(h => Math.max(h - 1, 0));
-      } else if (e.key === 'Enter' && open && hits[hi]) {
+      } else if (e.key === 'Enter' && open && choices[hi]) {
         e.preventDefault();
-        pick(hits[hi]);
+        pick(choices[hi]);
       } else if (e.key === 'Escape') setOpen(false);else if (e.key === 'Backspace' && !q && picked.length) remove(picked.length - 1);
     };
     const chips = picked.map((n, i) => React.createElement("div", {
@@ -543,8 +585,31 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       name: n.name,
       empId: n.empId,
       size: 32,
-      sub: nurseLine(n)
-    })), !disabled && React.createElement("button", {
+      sub: nurseSub(n)
+    }), n.fromOtherDept && !disabled && React.createElement("div", {
+      style: {
+        marginTop: 4,
+        display: 'flex',
+        gap: 6,
+        alignItems: 'center',
+        fontSize: 11.5
+      }
+    }, React.createElement("span", {
+      className: "da-sub"
+    }, "Here as"), React.createElement("select", {
+      className: "da-sel",
+      style: {
+        padding: '3px 6px',
+        fontSize: 11.5
+      },
+      value: n.assignment || 'Deployed',
+      onChange: e => onChange(picked.map((x, j) => j === i ? Object.assign({}, x, {
+        assignment: e.target.value
+      }) : x))
+    }, (meta && meta.assignments || ['Deployed', 'Relief / cover', 'Overtime', 'Float pool', 'Other']).map(a => React.createElement("option", {
+      key: a,
+      value: a
+    }, a))))), !disabled && React.createElement("button", {
       className: "da-btn sm",
       "aria-label": 'Remove ' + n.name,
       onClick: () => remove(i)
@@ -666,25 +731,46 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, !list && React.createElement("div", {
       className: "it"
-    }, "Loading\u2026"), list && !hits.length && React.createElement("div", {
+    }, "Loading\u2026"), list && !choices.length && React.createElement("div", {
       className: "it off"
-    }, "No nurse matches \u201C", q, "\u201D. ", all ? '' : 'Only the staff of this department are listed.'), hits.map((p, i) => {
+    }, needle.length >= 2 ? 'No staff member matches “' + q + '” in any department. Use “Not in the register?”.' : 'No nurse matches “' + q + '” in this department — type 2 or more letters or digits to search every department.'), choices.map((p, i) => {
       const off = self(p) || isPicked(p);
-      return React.createElement("div", {
-        key: p.id,
+      const other = isOther(p);
+      return React.createElement(React.Fragment, {
+        key: p.id
+      }, other && i === hits.length && React.createElement("div", {
+        className: "it off",
+        style: {
+          background: '#fff8e9',
+          color: '#8a5a00',
+          fontWeight: 700,
+          fontSize: 11,
+          letterSpacing: .4,
+          textTransform: 'uppercase',
+          cursor: 'default',
+          opacity: 1
+        }
+      }, "Other departments \u2014 deployed / relief / float"), React.createElement("div", {
         className: 'it' + (i === hi ? ' hi' : '') + (off ? ' off' : ''),
         onMouseEnter: () => setHi(i),
         onMouseDown: e => {
           e.preventDefault();
           pick(p);
         },
-        title: self(p) ? 'The auditor cannot be audited on the same record' : isPicked(p) ? 'Already added' : ''
+        title: self(p) ? 'The auditor cannot be audited on the same record' : isPicked(p) ? 'Already added' : other ? 'Belongs to ' + (p.current_department || 'another department') : ''
       }, React.createElement(Person, {
         name: p.name + (self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : ''),
         empId: p.emp_id,
         size: 26,
-        sub: [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')
-      }));
+        sub: React.createElement(React.Fragment, null, [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · '), other && React.createElement("span", {
+          className: "da-chip",
+          style: {
+            background: '#fff1d6',
+            color: '#8a5a00',
+            marginLeft: 5
+          }
+        }, "\u21C4 Other dept"))
+      })));
     })), document.body));
   }
   function Person({
@@ -759,7 +845,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       name: n.name,
       empId: n.empId,
       size: size,
-      sub: nurseLine(n)
+      sub: nurseSub(n)
     })) : React.createElement("span", {
       className: "da-muted"
     }, "\u2014"));
@@ -3534,7 +3620,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const H = tool.header || {};
     const v = x => a ? esc(x || '—') : '&nbsp;';
     const extra = (H.extra || []).map(f => [f.label, a ? (a.extra || {})[f.id] : '']);
-    const pairs = [['Department', a && a.deptName], ['Audit date / shift', a && DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : '')], ['Patient UHID / MRN', a && a.uhid], [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map(n => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '')).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed], [H.areaLabel || 'Area', a && a.area]].concat(extra);
+    const pairs = [['Department', a && a.deptName], ['Audit date / shift', a && DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : '')], ['Patient UHID / MRN', a && a.uhid], [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map(n => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '') + otherText(n)).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed], [H.areaLabel || 'Area', a && a.area]].concat(extra);
     while (pairs.length % 2) pairs.push(['', '']);
     let hd = '';
     for (let i = 0; i < pairs.length; i += 2) hd += '<tr><td class="k">' + esc(pairs[i][0]) + '</td><td>' + v(pairs[i][1]) + '</td><td class="k">' + esc(pairs[i + 1][0]) + '</td><td>' + (pairs[i + 1][0] ? v(pairs[i + 1][1]) : '') + '</td></tr>';

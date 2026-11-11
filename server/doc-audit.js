@@ -184,6 +184,8 @@ function thinStaff(roster, deptsInScope, all) {
   deptsInScope.forEach((d) => { keys.push(d.id); if (d.name) keys.push(d.name); });
   return access.portalStaff(keys, roster, access.MYDEPT_STAFF_FIELDS);
 }
+// Why a nurse from another department documented in this one (shown and printed with the audit).
+const ASSIGNMENTS = ['Deployed', 'Relief / cover', 'Overtime', 'Float pool', 'Other'];
 const nurseSnap = (p) => ({ staffId: String(p.id), empId: String(p.emp_id || ''), name: String(p.name || ''), designation: String(p.designation || ''), department: String(p.current_department || ''), role: String(p.role || ''), linked: true });
 
 /* ---------------------------------------------------------------- helpers --- */
@@ -195,7 +197,7 @@ const clean = (x) => { if (!x) return null; const { _id, history, ...rest } = x;
 const cleanTool = (t) => { if (!t) return null; const { _id, history, ...rest } = t; return Object.assign({ id: _id }, rest, { history: (history || []).slice(-15) }); };
 // What leaves the server about an audit outside its own screen (profile card, the nurse's list).
 const thinAudit = (x) => ({
-  id: x._id, toolId: x.toolId, toolName: x.toolName || '', nurses: DA.nursesOf(x).map((n) => ({ staffId: n.staffId, name: n.name, empId: n.empId })), pendingAcks: DA.pendingAcks(x).map((n) => n.name), deptId: x.deptId, deptName: x.deptName, area: x.area || '', date: x.date, month: x.month, shift: x.shift || '',
+  id: x._id, toolId: x.toolId, toolName: x.toolName || '', nurses: DA.nursesOf(x).map((n) => ({ staffId: n.staffId, name: n.name, empId: n.empId, fromOtherDept: !!n.fromOtherDept, homeDept: n.homeDept || '', assignment: n.assignment || '' })), pendingAcks: DA.pendingAcks(x).map((n) => n.name), deptId: x.deptId, deptName: x.deptName, area: x.area || '', date: x.date, month: x.month, shift: x.shift || '',
   status: x.status, result: x.result ? { pct: x.result.pct, grade: x.result.grade, gradeLabel: x.result.gradeLabel, result: x.result.result, criticalFails: (x.result.criticalFails || []).length, yes: x.result.yes, no: x.result.no, na: x.result.na } : null,
   auditor: x.auditor ? { name: x.auditor.name } : null, ack: x.ack || null, signoff: x.signoff ? { name: x.signoff.name, at: x.signoff.at } : null,
 });
@@ -226,8 +228,9 @@ function changesOf(cur, next) {
   const changed = [...new Set(Object.keys(ca).concat(Object.keys(na)))].filter((k) => ca[k] !== na[k]);
   if (changed.length) out.push('answers ' + changed.map((k) => k.replace('c', '#') + ' ' + (ca[k] || '—') + '→' + (na[k] || '—')).join(' '));
   if (JSON.stringify(cur.evidence || {}) !== JSON.stringify(next.evidence || {})) out.push('evidence');
-  const keys = (x) => DA.nursesOf(x).map(DA.nurseKey).join('|');
-  if (keys(cur) !== keys(next)) out.push('nurses → ' + DA.nurseNames(next));
+  const keys = (x) => DA.nursesOf(x).map((n) => DA.nurseKey(n) + (n.assignment ? '/' + n.assignment : '')).join('|');
+  const named = (x) => DA.nursesOf(x).map((n) => n.name + (n.fromOtherDept ? ' (from ' + (n.homeDept || 'another department') + ', ' + String(n.assignment || 'Deployed').toLowerCase() + ')' : '')).join(', ');
+  if (keys(cur) !== keys(next)) out.push('nurses → ' + named(next));
   if (String((cur.auditor || {}).name || '') !== String((next.auditor || {}).name || '')) out.push('auditor set to ' + (next.auditor || {}).name);
   return out;
 }
@@ -458,13 +461,16 @@ function mount(app, opts) {
       const tools = await liveTools();
       const me = await myStaffId(a);
       res.json({ ok: true, departments: await myDepts(a, cfg), tools: tools.map(cleanTool), today: today(), month: DA.hospitalNow(now()).month,
-        config: { kpiLink: cfg.kpiLink !== false, ackRequired: cfg.ackRequired !== false }, user: actor(req, a), name: nameOf(req, a),
+        config: { kpiLink: cfg.kpiLink !== false, ackRequired: cfg.ackRequired !== false }, assignments: ASSIGNMENTS, user: actor(req, a), name: nameOf(req, a),
         staffId: me ? me.id : null, allStaff: access.auditDeptIds(a) === null, ...rights(a) });
     } catch (e) { fail(res, e, 'Could not load Documentation Audit.'); }
   });
 
-  // The nurses an auditor may pick: their departments' staff, thin. `all=1` = the whole register,
-  // only for someone who audits every department. Literal route, declared before staff/:staffId.
+  /* The staff an auditor may pick, thin (id, employee ID, name, designation, role, department):
+     their department's staff; `all=1` the whole register — the full list only for someone who audits
+     every department, otherwise only a SEARCH (q of 2+ characters, 25 hits) so a nurse floating in
+     from another unit can be found by name or employee ID. Nurses first, then PCAs.
+     Literal route, declared before staff/:staffId. */
   app.get('/api/doc-audit/staff', guard, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
@@ -473,14 +479,15 @@ function mount(app, opts) {
       let depts = await myDepts(a, cfg);
       const deptId = String(req.query.dept || '');
       if (deptId) { if (!inScope(a, deptId)) return notMine(res); depts = (await allDepts()).filter((d) => d.id === deptId); }
-      const everyone = req.query.all === '1' && access.auditDeptIds(a) === null;
-      const roster = await loadRoster();
       const q = String(req.query.q || '').trim().toLowerCase();
-      // Policy scope: registered nurses, in-charges and supervisors who document — not the PCAs.
-      let list = thinStaff(roster, depts, everyone).filter((p) => String(p.role || '').toUpperCase() !== 'PCA');
+      const fullList = access.auditDeptIds(a) === null;
+      const everyone = req.query.all === '1' && (fullList || q.length >= 2);
+      const roster = await loadRoster();
+      let list = thinStaff(roster, depts, everyone);
       if (q) list = list.filter((p) => String(p.name || '').toLowerCase().indexOf(q) >= 0 || String(p.emp_id || '').toLowerCase().indexOf(q) >= 0);
-      list.sort((x, y) => String(x.name || '').localeCompare(String(y.name || '')));
-      res.json({ ok: true, staff: list.slice(0, 400), all: everyone });
+      const pca = (p) => (String(p.role || '').toUpperCase() === 'PCA' ? 1 : 0);
+      list.sort((x, y) => pca(x) - pca(y) || String(x.name || '').localeCompare(String(y.name || '')));
+      res.json({ ok: true, staff: list.slice(0, everyone && !fullList ? 25 : 400), all: everyone });
     } catch (e) { fail(res, e, 'Could not load the staff list.'); }
   });
 
@@ -592,12 +599,14 @@ function mount(app, opts) {
             roster = roster || await loadRoster();
             const rec = roster.find((p) => String(p.id) === String(bn.staffId));
             if (!rec) return res.status(400).json({ ok: false, error: 'A nurse you picked is not in the staff register.' });
-            const ids = access.auditDeptIds(a);
-            if (ids !== null && !thinStaff([rec], depts.filter((d) => ids.indexOf(d.id) >= 0), false).length) {
-              return res.status(403).json({ ok: false, error: rec.name + ' is not on the staff list of your departments. Pick “Not in the register” and type the name, or ask the administrator.' });
-            }
+            // Any register nurse: one floating in from another unit documents in this department's records too.
+            // Whether they belong here is worked out here (the picker's own matcher), never taken from the browser.
             snap = nurseSnap(rec);
+            snap.fromOtherDept = !thinStaff([rec], [dept], false).length;
+            if (snap.fromOtherDept) snap.homeDept = String(rec.current_department || '');
           }
+          // Why a nurse from another department was here (deployed / relief…): the auditor's choice.
+          if (snap.fromOtherDept) snap = Object.assign({}, snap, { assignment: ASSIGNMENTS.indexOf(bn.assignment) >= 0 ? bn.assignment : (snap.assignment || ASSIGNMENTS[0]) });
         } else if (str(bn.name, 120)) snap = { staffId: null, empId: str(bn.empId, 30), name: str(bn.name, 120), designation: str(bn.designation, 80), department: '', role: '', linked: false };
         if (!snap) continue;
         const k = DA.nurseKey(snap);

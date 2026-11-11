@@ -842,7 +842,7 @@ function StaffDocAuditCard({ emp, setRoute }){
               {d.audits.slice(0,8).map(x=>{ const r=x.result||{}; const pass=r.result==='PASS';
                 return <div key={x.id} onClick={()=>go({view:'docAuditNew',audit:x.id})} style={{display:'grid',gridTemplateColumns:'90px minmax(0,1fr) 60px 60px',gap:8,alignItems:'center',padding:'6px 0',borderTop:'1px solid var(--line-2)',cursor:'pointer',fontSize:12}}>
                   <span>{fmt(x.date)}</span>
-                  <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{x.deptName}{x.area?' · '+x.area:''}<span style={{color:'var(--muted)'}}>{x.status==='draft'?' · draft':x.status==='signed'?' · signed off':x.status==='acknowledged'?' · acknowledged':' · awaiting acknowledgement'}</span></span>
+                  <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{x.deptName}{x.area?' · '+x.area:''}{(()=>{ const me=(x.nurses||[]).find(n=>String(n.staffId)===String(emp.id)); return me&&me.fromOtherDept?<span style={{color:'#8a5a00'}}>{' · '+(me.assignment||'Deployed').toLowerCase()+' here'}</span>:null; })()}<span style={{color:'var(--muted)'}}>{x.status==='draft'?' · draft':x.status==='signed'?' · signed off':x.status==='acknowledged'?' · acknowledged':' · awaiting acknowledgement'}</span></span>
                   <b style={{textAlign:'right'}}>{r.pct==null?'—':r.pct+'%'}</b>
                   <span style={{textAlign:'center',fontSize:10.5,fontWeight:700,padding:'2px 6px',borderRadius:999,background:!r.result?'#eef2f6':pass?'#e7f6ed':'#fde4e8',color:!r.result?'#5b6878':pass?'#14713f':'#a3172f'}}>{r.result||'—'}{r.criticalFails?' ⚑':''}</span>
                 </div>; })}

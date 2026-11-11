@@ -217,7 +217,7 @@
           footer={<><button className="da-btn" onClick={() => close(null)}>Cancel</button><button className="da-btn pri" disabled={!keys.length} onClick={() => close({ keys, note: note.trim() })}>Record acknowledgement</button></>}>
           <div style={{ fontSize: 12.8, lineHeight: 1.5 }}>Record that {pending.length > 1 ? 'these nurses were' : pending[0].name + ' was'} given the same-day feedback and acknowledged this audit (policy 7.2).</div>
           {pending.length > 1 && <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{pending.map((n) => { const k = DA.nurseKey(n);
-            return <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}><input type="checkbox" checked={keys.indexOf(k) >= 0} onChange={() => tog(k)} /><b>{n.name}</b><span className="da-sub">{nurseLine(n)}</span></label>; })}</div>}
+            return <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer', fontSize: 13 }}><input type="checkbox" checked={keys.indexOf(k) >= 0} onChange={() => tog(k)} /><b>{n.name}</b><span className="da-sub">{nurseSub(n)}</span></label>; })}</div>}
           <textarea className="da-ta" rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional) — e.g. feedback given at the nurses’ station; gaps explained." />
         </Modal>;
       }
@@ -247,6 +247,10 @@
      record. Each is a register record of the auditor's departments (the server lists only those)
      or a typed name for someone not in the register. Up to DA.MAX_NURSES. */
   const nurseLine = (n) => [n.empId && 'ID ' + n.empId, n.designation, n.department, n.linked === false && 'not in the register'].filter(Boolean).join(' · ');
+  // A nurse who belongs to another department (deployed, relief…) — shown wherever the audit is, so it stays on record.
+  const OtherDept = ({ n }) => (n && n.fromOtherDept ? <span className="da-chip" style={{ background: '#fff1d6', color: '#8a5a00', marginLeft: 5, verticalAlign: 1 }} title="Belongs to another department">⇄ Other dept{n.homeDept && n.homeDept !== n.department ? ' · ' + n.homeDept : ''} · {n.assignment || 'Deployed'}</span> : null);
+  const nurseSub = (n) => <>{nurseLine(n)}<OtherDept n={n} /></>;
+  const otherText = (n) => (n && n.fromOtherDept ? ' — from ' + (n.homeDept || n.department || 'another department') + ', ' + String(n.assignment || 'Deployed').toLowerCase() : '');
   function NursePicker({ meta, deptId, value, onChange, bad, disabled, excludeId }) {
     const picked = Array.isArray(value) ? value : [];
     const [list, setList] = useState(null);
@@ -276,23 +280,40 @@
     }, [open]);
     const full = picked.length >= DA.MAX_NURSES;
     const needle = q.trim().toLowerCase();
+    // Nurses of OTHER departments (deployed, relief, float): searched in the whole register as you type.
+    const [others, setOthers] = useState([]);
+    useEffect(() => {
+      if (all || disabled || needle.length < 2) { setOthers([]); return; }
+      let live = true;
+      const t = setTimeout(() => { api('/api/doc-audit/staff?all=1&q=' + encodeURIComponent(needle)).then((j) => { if (live) setOthers(j.staff || []); }).catch(() => {}); }, 250);
+      return () => { live = false; clearTimeout(t); };
+    }, [needle, all, disabled]);
     const isPicked = (p) => picked.some((n) => String(n.staffId) === String(p.id));
     const self = (p) => (meta && meta.staffId != null && String(p.id) === String(meta.staffId)) || (excludeId != null && String(p.id) === String(excludeId));
     const hits = (list || []).filter((p) => !needle || String(p.name || '').toLowerCase().indexOf(needle) >= 0 || String(p.emp_id || '').toLowerCase().indexOf(needle) >= 0).slice(0, 80);
     const add = (n) => onChange(picked.concat([n]));
-    const pick = (p) => { if (self(p) || isPicked(p) || full) return; add({ staffId: String(p.id), empId: String(p.emp_id || ''), name: p.name, designation: p.designation || '', department: p.current_department || '', linked: true }); setQ(''); setHi(0); };
+    const localIds = new Set((list || []).map((p) => String(p.id)));
+    const extra = others.filter((p) => !localIds.has(String(p.id)));
+    const choices = hits.concat(extra);
+    const isOther = (p) => !all && !localIds.has(String(p.id));
+    const pick = (p) => { if (self(p) || isPicked(p) || full) return; const other = isOther(p);
+      add(Object.assign({ staffId: String(p.id), empId: String(p.emp_id || ''), name: p.name, designation: p.designation || '', department: p.current_department || '', linked: true },
+        other ? { fromOtherDept: true, homeDept: p.current_department || '', assignment: 'Deployed' } : {})); setQ(''); setHi(0); };
     const remove = (i) => onChange(picked.filter((_, j) => j !== i));
     const key = (e) => {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, hits.length - 1)); }
+      if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setHi((h) => Math.min(h + 1, choices.length - 1)); }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setHi((h) => Math.max(h - 1, 0)); }
-      else if (e.key === 'Enter' && open && hits[hi]) { e.preventDefault(); pick(hits[hi]); }
+      else if (e.key === 'Enter' && open && choices[hi]) { e.preventDefault(); pick(choices[hi]); }
       else if (e.key === 'Escape') setOpen(false);
       else if (e.key === 'Backspace' && !q && picked.length) remove(picked.length - 1);
     };
     const chips = picked.map((n, i) => (
       <div key={DA.nurseKey(n) + i} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 10px', border: '1px solid var(--line)', borderRadius: 8, background: '#f6fafd', animation: 'da-in .2s ease' }}>
         <span style={{ display: 'inline-grid', placeItems: 'center', width: 20, height: 20, borderRadius: '50%', background: '#1f4f8a', color: '#fff', fontSize: 10.5, fontWeight: 800, flex: 'none' }}>{i + 1}</span>
-        <div style={{ flex: 1, minWidth: 0 }}><Person name={n.name} empId={n.empId} size={32} sub={nurseLine(n)} /></div>
+        <div style={{ flex: 1, minWidth: 0 }}><Person name={n.name} empId={n.empId} size={32} sub={nurseSub(n)} />
+          {n.fromOtherDept && !disabled && <div style={{ marginTop: 4, display: 'flex', gap: 6, alignItems: 'center', fontSize: 11.5 }}><span className="da-sub">Here as</span>
+            <select className="da-sel" style={{ padding: '3px 6px', fontSize: 11.5 }} value={n.assignment || 'Deployed'} onChange={(e) => onChange(picked.map((x, j) => (j === i ? Object.assign({}, x, { assignment: e.target.value }) : x)))}>
+              {((meta && meta.assignments) || ['Deployed', 'Relief / cover', 'Overtime', 'Float pool', 'Other']).map((a) => <option key={a} value={a}>{a}</option>)}</select></div>}</div>
         {!disabled && <button className="da-btn sm" aria-label={'Remove ' + n.name} onClick={() => remove(i)}>Remove</button>}
       </div>));
     if (disabled) return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{chips.length ? chips : <span>—</span>}</div>;
@@ -316,11 +337,15 @@
       {open && pos && !full && !manual && ReactDOM.createPortal(
         <div className="da-dd" style={{ left: pos.left, width: pos.width, top: pos.top == null ? 'auto' : pos.top, bottom: pos.bottom == null ? 'auto' : pos.bottom, maxHeight: pos.maxH }}>
           {!list && <div className="it">Loading…</div>}
-          {list && !hits.length && <div className="it off">No nurse matches “{q}”. {all ? '' : 'Only the staff of this department are listed.'}</div>}
-          {hits.map((p, i) => { const off = self(p) || isPicked(p);
-            return <div key={p.id} className={'it' + (i === hi ? ' hi' : '') + (off ? ' off' : '')} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); pick(p); }} title={self(p) ? 'The auditor cannot be audited on the same record' : isPicked(p) ? 'Already added' : ''}>
-              <Person name={p.name + (self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : '')} empId={p.emp_id} size={26} sub={[p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')} />
-            </div>; })}
+          {list && !choices.length && <div className="it off">{needle.length >= 2 ? 'No staff member matches “' + q + '” in any department. Use “Not in the register?”.' : 'No nurse matches “' + q + '” in this department — type 2 or more letters or digits to search every department.'}</div>}
+          {choices.map((p, i) => { const off = self(p) || isPicked(p); const other = isOther(p);
+            return <React.Fragment key={p.id}>
+              {other && i === hits.length && <div className="it off" style={{ background: '#fff8e9', color: '#8a5a00', fontWeight: 700, fontSize: 11, letterSpacing: .4, textTransform: 'uppercase', cursor: 'default', opacity: 1 }}>Other departments — deployed / relief / float</div>}
+              <div className={'it' + (i === hi ? ' hi' : '') + (off ? ' off' : '')} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); pick(p); }} title={self(p) ? 'The auditor cannot be audited on the same record' : isPicked(p) ? 'Already added' : other ? 'Belongs to ' + (p.current_department || 'another department') : ''}>
+                <Person name={p.name + (self(p) ? ' (auditor)' : isPicked(p) ? ' ✓ added' : '')} empId={p.emp_id} size={26}
+                  sub={<>{[p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · ')}{other && <span className="da-chip" style={{ background: '#fff1d6', color: '#8a5a00', marginLeft: 5 }}>⇄ Other dept</span>}</>} />
+              </div>
+            </React.Fragment>; })}
         </div>, document.body)}
     </div>;
   }
@@ -337,7 +362,7 @@
   }
   // Every nurse of an audit, one under the other, each with a photo.
   const NurseList = ({ x, size }) => { const ns = DA.nursesOf(x);
-    return <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }}>{ns.length ? ns.map((n) => <Person key={DA.nurseKey(n)} name={n.name} empId={n.empId} size={size} sub={nurseLine(n)} />) : <span className="da-muted">—</span>}</div>; };
+    return <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }}>{ns.length ? ns.map((n) => <Person key={DA.nurseKey(n)} name={n.name} empId={n.empId} size={size} sub={nurseSub(n)} />) : <span className="da-muted">—</span>}</div>; };
   // "Rina Akter +2" for tables; the full list on hover.
   const nursesShort = (x) => { const ns = DA.nursesOf(x); return ns.length ? ns[0].name + (ns.length > 1 ? ' +' + (ns.length - 1) : '') : '—'; };
 
@@ -1131,7 +1156,7 @@
     const v = (x) => (a ? esc(x || '—') : '&nbsp;');
     const extra = (H.extra || []).map((f) => [f.label, a ? (a.extra || {})[f.id] : '']);
     const pairs = [['Department', a && a.deptName], ['Audit date / shift', a && (DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : ''))], ['Patient UHID / MRN', a && a.uhid],
-      [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map((n) => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '')).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed],
+      [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map((n) => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '') + otherText(n)).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed],
       [H.areaLabel || 'Area', a && a.area]].concat(extra);
     while (pairs.length % 2) pairs.push(['', '']);
     let hd = '';
