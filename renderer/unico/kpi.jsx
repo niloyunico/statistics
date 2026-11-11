@@ -297,6 +297,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   // color = chip text, dot = the grid's marker (one clearly different hue per source).
   const SRC = {
     'hh-audit': { label: 'HH audit', color: '#0d5e55', dot: '#2bb3a3', bg: '#dff5f1', long: 'From the hospital hand hygiene audit' },
+    'doc-audit': { label: 'Doc. audit', color: '#1f4f8a', dot: '#4a7fd0', bg: '#e6eefb', long: 'From the Nursing Documentation Audit (Σ Yes ÷ Σ Yes + No over every completed audit)' },
     pooled: { label: 'Quality', color: '#0b4f6c', dot: '#0090ca', bg: '#e1f1fa', long: 'From the quality data — all units pooled' },
     hospital: { label: 'Quality', color: '#0b4f6c', dot: '#0090ca', bg: '#e1f1fa', long: 'From the Overall Hospital quality data' },
     edited: { label: 'Edited', color: '#8a5a00', dot: '#e08a1e', bg: '#fff1d6', long: 'The system figure, changed by a KPI manager' },
@@ -493,6 +494,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     own: ['Own reading', '#0b4f6c', '#e1f1fa'], covered: ['Covered by audit', '#5b6878', '#eef2f6'], 'not-audited': ['Not audited', '#a3172f', '#fde4e8'],
     'not-observed': ['Not observed', '#5b6878', '#eef2f6'], missing: ['Missing', '#a3172f', '#fde4e8'], partial: ['No denominator', '#a3172f', '#fde4e8'],
     'den-zero': ['Denominator 0', '#a3172f', '#fde4e8'], 'carried-den': ['Headcount carried', '#8a5a00', '#fff1d6'], manual: ['Entered', '#4b3fb0', '#efebfd'],
+    'doc-audit': ['Audits', '#1f4f8a', '#e6eefb'],
   };
   const EvSrc = ({ s }) => { const x = EV_SRC[s] || [s, '#5b6878', '#eef2f6']; return <span className="kp-src" style={{ color: x[1], background: x[2] }}>{x[0]}</span>; };
   const dayOf = (t) => (t ? new Date(t).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'short', year: 'numeric' }) : '');
@@ -1046,7 +1048,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         {err && <div className="kp-banner">{err}</div>}
         <div className="kp-card">
           <div className="kp-h"><h3>Monthly figures</h3><span className="grow" />
-            <div className="kp-legend">{[['pooled', 'From quality data'], ['hh-audit', 'Hand hygiene audit'], ['edited', 'Edited by you'], ['manual', 'Entered'], ['partial', 'Denominator missing']].map(([k, l]) => <span key={k}><i className="kp-dot" style={{ background: srcOf(k).dot }} />{l}</span>)}
+            <div className="kp-legend">{[['pooled', 'From quality data'], ['hh-audit', 'Hand hygiene audit'], ['doc-audit', 'Documentation audit'], ['edited', 'Edited by you'], ['manual', 'Entered'], ['partial', 'Denominator missing']].map(([k, l]) => <span key={k}><i className="kp-dot" style={{ background: srcOf(k).dot }} />{l}</span>)}
               <span><i className="kp-dot" style={{ border: '1.5px dashed #d23a52' }} />Missing</span>
               <span><i style={{ display: 'inline-block', borderStyle: 'solid', borderWidth: '0 9px 9px 0', borderColor: 'transparent #d23a52 transparent transparent' }} />Data error</span>
               <span><i style={{ display: 'inline-block', borderStyle: 'solid', borderWidth: '0 9px 9px 0', borderColor: 'transparent #e0a21e transparent transparent' }} />Warning</span></div></div>
@@ -1741,7 +1743,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}><b style={{ fontSize: 13 }}>Where the monthly figures come from</b><span style={{ flex: 1 }} />
                   {linked && may && <Btn onClick={() => set('source', { indId: null })}>Unlink — type them monthly</Btn>}</div>
                 {linked && <label className={'kp-switch light' + (d.autoFill !== false ? ' on' : '')} onClick={() => may && set('autoFill', d.autoFill === false)}><i /><span>{d.autoFill !== false ? 'Auto-fill from the quality data: ON' : 'Auto-fill from the quality data: OFF — typed monthly, the system figure is shown as a hint'}</span></label>}
-                {linked ? <div style={{ fontSize: 12.5 }}>{d.autoFill !== false ? 'Filled automatically from' : 'Linked (for reference) to'} the quality indicator <b>{d.source.indName || d.source.indId}</b>{d.source.rule ? ' (' + ({ hh: 'hand hygiene audit', fall: 'all units, out-patient falls left out', pool: 'all units pooled', hospital: 'Overall Hospital' })[d.source.rule] + ')' : ''}. {d.autoFill !== false ? 'Any month can still be typed over in Data Update — with a reason.' : 'Each month is typed in Data Update.'}</div>
+                {linked ? <div style={{ fontSize: 12.5 }}>{d.autoFill !== false ? 'Filled automatically from' : 'Linked (for reference) to'} the quality indicator <b>{d.source.indName || d.source.indId}</b>{d.source.rule ? ' (' + ({ hh: 'hand hygiene audit', fall: 'all units, out-patient falls left out', pool: 'all units pooled', hospital: 'Overall Hospital', docaudit: 'the Documentation Audit module — Σ Yes ÷ Σ Yes + No over every completed audit' })[d.source.rule] + ')' : ''}. {d.autoFill !== false ? 'Any month can still be typed over in Data Update — with a reason.' : 'Each month is typed in Data Update.'}</div>
                   : <div style={{ fontSize: 12.5 }}>Typed each month in Data Update. Or link it to a quality indicator the units already report:</div>}
                 {may && <><input className="kp-in" placeholder="Search the quality indicators…" value={q} onChange={(e) => setQ(e.target.value)} />
                   <div style={{ maxHeight: 170, overflow: 'auto', border: '1px solid var(--line)', borderRadius: 8, background: '#fff' }}>

@@ -14,7 +14,7 @@
    this page — reached through window.UserModal / window.UNICO_USERS_KIT. The server
    (server/users-admin.js) is the only authority: every button here just calls it. */
 
-const AC_SHORT={stats:'OV',quality:'QL',supervisor:'SR',medicine:'MX',datacol:'DC',reports:'RP',staff:'ST',perf:'PF',roster:'RO',users:'AC',datasubmit:'DS',staffapp:'SA',mydept:'MD',devdays:'DD',kpi:'KP'};
+const AC_SHORT={stats:'OV',quality:'QL',supervisor:'SR',medicine:'MX',datacol:'DC',reports:'RP',staff:'ST',perf:'PF',roster:'RO',users:'AC',datasubmit:'DS',staffapp:'SA',mydept:'MD',devdays:'DD',docaudit:'DA',kpi:'KP'};
 const AC_ACT_LETTER={view:'V',edit:'E',add:'A',delete:'D',print:'P'};
 const acKit=()=>window.UNICO_USERS_KIT||null;
 

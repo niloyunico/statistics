@@ -104,6 +104,29 @@ async function ensureSeed(now) {
   return n;
 }
 
+/* KPI 2C (Documentation Accuracy) was linked to a quality indicator nobody reports; since the
+   Documentation Audit module it is filled from the audits themselves (kpi-link rule 'docaudit',
+   policy UHP-NSG-QA-001 KPI-1). Once, on its own marker — ensureSeed returns early on every
+   install already seeded. Figures typed meanwhile stay as overrides; `indId` is kept (the link
+   test reads it). An administrator may still relink it afterwards: this never runs again. */
+const DOC_AUDIT_LINK = { rule: 'docaudit', numLabel: "Criteria met ('Yes')", denLabel: "Criteria applicable ('Yes' + 'No')",
+  formulaText: "Total 'Yes' ÷ (Total 'Yes' + Total 'No') × 100 across all audited records (Documentation Audit, UHP-NSG-QA-001 KPI-1)" };
+async function ensureDocAuditLink(now) {
+  const cfg = await getConfig();
+  if (cfg.docAuditLinked) return false;
+  const d = await getDoc(DEFS, 'kpi-documentation');
+  let changed = false;
+  if (d && d.source && d.source.indId === link.DOC_AUDIT_IND && (!d.source.rule || d.source.rule === 'hospital')) {
+    const next = Object.assign({}, d, { source: Object.assign({}, d.source, { rule: DOC_AUDIT_LINK.rule }), numLabel: DOC_AUDIT_LINK.numLabel, denLabel: DOC_AUDIT_LINK.denLabel, formulaText: DOC_AUDIT_LINK.formulaText,
+      updatedAt: now, updatedBy: 'system', history: (d.history || []).concat([{ at: now, by: 'system', action: 'linked to the Documentation Audit module (Σ Yes ÷ Σ Yes + No)' }]).slice(-100) });
+    changed = await putDoc(DEFS, next, d.updatedAt);
+    if (!changed) return false;   // edited meanwhile: try again next request
+  }
+  await patchConfig({ docAuditLinked: now });
+  return changed;
+}
+async function ensureReady(now) { await ensureSeed(now); await ensureDocAuditLink(now); }
+
 /* ---------------------------------------------------------------- helpers --- */
 
 const cleanDef = (d) => { if (!d) return null; const { _id, history, ...rest } = d; return Object.assign({ id: _id }, rest, { history: (history || []).slice(-15) }); };
@@ -317,7 +340,7 @@ async function ensureDraft(ym, source, opts) {
   if (!K.isMonth(ym)) return { ok: false, skipped: 'bad-month' };
   const id = K.reportId(ym, ym);
   if (await getDoc(REPORTS, id)) return { ok: true, skipped: 'exists', id };
-  await ensureSeed(now);
+  await ensureReady(now);
   const cfg = await getConfig();
   const live = await computeReport(ym, ym, cfg, opts && opts.deps);
   const doc = Object.assign({ _id: id, from: ym, to: ym, state: 'draft' }, live, {
@@ -358,7 +381,7 @@ function mount(app, opts) {
     res.set('Cache-Control', 'no-store');
     try {
       const a = await resolve(req, res, 'view'); if (!a) return;
-      await ensureSeed(now());
+      await ensureReady(now());
       const cfgDoc = await getConfig();
       const cfg = K.cfgOf(cfgDoc);
       const last = K.lastClosedMonth(now());
@@ -372,7 +395,7 @@ function mount(app, opts) {
     res.set('Cache-Control', 'no-store');
     try {
       const a = await resolve(req, res, 'view'); if (!a) return;
-      await ensureSeed(now());
+      await ensureReady(now());
       const docs = await allDocs(DEFS);
       const all = req.query.all === '1' && can(a, 'edit');
       res.json({ ok: true, defs: (all ? docs.slice().sort((x, y) => (x.order || 0) - (y.order || 0)) : activeDefs(docs)).map(cleanDef) });
@@ -594,7 +617,7 @@ function mount(app, opts) {
       const to = K.isMonth(req.query.to) ? req.query.to : K.lastClosedMonth(now());
       const from = K.isMonth(req.query.from) && req.query.from <= to ? req.query.from : K.addMonth(to, -5);
       const months = K.monthsBetween(from, to);
-      await ensureSeed(now());
+      await ensureReady(now());
       const cfg = await getConfig();
       const defs = defsAsPlain(await allDocs(DEFS));
       const v = await valuesFor(defs, months, deps, cfg);
@@ -1081,4 +1104,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, ensureDraft, ensureSeed, computeReport, _mem: mem };
+module.exports = { mount, ensureDraft, ensureSeed, ensureDocAuditLink, computeReport, _mem: mem };

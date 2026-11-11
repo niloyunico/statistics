@@ -21,6 +21,7 @@
           "server/h360/logo.png",
           "server/kpi/**",
           "renderer/unico/kpi-core.js",
+          "renderer/unico/doc-audit-core.js",
           "renderer/nurse-app.html",
           "renderer/admin-app.html"
         ]

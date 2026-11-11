@@ -802,6 +802,56 @@ function ConductDialog({kind,e,perfId,already,categories,onClose,onSaved}){
   return (window.ReactDOM&&window.ReactDOM.createPortal)?window.ReactDOM.createPortal(body,document.body):body;
 }
 
+/* Documentation audits of this nurse (module 'docaudit'): every audit of their records, with the
+   score, grade and PASS / FAIL, and how often they were audited this quarter (policy 7.1: at least
+   once a quarter). The server lists only the audits of departments the viewer may see. Linked by
+   the staff RECORD id — never the employee number. */
+function StaffDocAuditCard({ emp, setRoute }){
+  const [d,setD]=React.useState(null);
+  React.useEffect(()=>{
+    let live=true;
+    if(!emp||emp.id==null) return;
+    fetch('/api/doc-audit/staff/'+encodeURIComponent(emp.id),{credentials:'same-origin',cache:'no-store'})
+      .then(r=>r.ok?r.json():null).then(j=>{ if(live) setD(j&&j.ok?j:{audits:[],error:true}); }).catch(()=>{ if(live) setD({audits:[],error:true}); });
+    return ()=>{live=false;};
+  },[emp&&emp.id]);
+  const fmt=(x)=>{ try{ return new Date(x+'T00:00:00Z').toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric',timeZone:'UTC'}); }catch(e){ return x; } };
+  const sum=d&&d.summary;
+  const go=(v)=>setRoute&&setRoute(v);
+  return (
+    <div className="card" style={{borderLeft:'4px solid #1f4f8a'}}>
+      <div className="card-h">
+        <span style={{display:'inline-grid',placeItems:'center',width:30,height:30,borderRadius:9,background:'#e6eefb',color:'#1f4f8a',marginRight:7}}><Ic d={I.doc} s={16}/></span>
+        <h3>Documentation audits</h3>
+        {d&&!d.error&&<span className="sub">{d.thisQuarter} this quarter{d.thisQuarter?'':' — policy: at least once a quarter'}</span>}
+        <span className="spacer"/>
+        {d&&d.audits.length>0&&<button className="btn sm" onClick={()=>go({view:'docAuditRegister',nurse:String(emp.id)})}>All audits</button>}
+        {window.unicoCan&&window.unicoCan('docaudit','add')&&<button className="btn sm" onClick={()=>go({view:'docAuditNew'})}>+ Audit</button>}
+      </div>
+      <div className="card-b">
+        {!d ? <div style={{fontSize:12,color:'var(--muted)'}}>Loading…</div>
+          : d.error ? <div style={{fontSize:12,color:'var(--muted)'}}>Could not load the audits.</div>
+          : !d.audits.length ? <div style={{fontSize:12,color:'var(--muted)'}}>No documentation audit of this nurse yet{window.unicoCan&&window.unicoCan('docaudit','add')?'.':' in your departments.'}</div>
+          : <>
+            {sum&&sum.records>0&&<div style={{display:'flex',gap:16,flexWrap:'wrap',fontSize:12,marginBottom:10}}>
+              <span><b style={{fontSize:16}}>{sum.accuracy==null?'—':sum.accuracy+'%'}</b> accuracy</span>
+              <span><b style={{fontSize:16}}>{sum.pass}</b> / {sum.records} passed</span>
+              {sum.criticalRecords>0&&<span style={{color:'#a3172f'}}><b style={{fontSize:16}}>{sum.criticalRecords}</b> with a critical failure</span>}
+            </div>}
+            <div style={{display:'flex',flexDirection:'column'}}>
+              {d.audits.slice(0,8).map(x=>{ const r=x.result||{}; const pass=r.result==='PASS';
+                return <div key={x.id} onClick={()=>go({view:'docAuditNew',audit:x.id})} style={{display:'grid',gridTemplateColumns:'90px minmax(0,1fr) 60px 60px',gap:8,alignItems:'center',padding:'6px 0',borderTop:'1px solid var(--line-2)',cursor:'pointer',fontSize:12}}>
+                  <span>{fmt(x.date)}</span>
+                  <span style={{minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{x.deptName}{x.area?' · '+x.area:''}<span style={{color:'var(--muted)'}}>{x.status==='draft'?' · draft':x.status==='signed'?' · signed off':x.status==='acknowledged'?' · acknowledged':' · awaiting acknowledgement'}</span></span>
+                  <b style={{textAlign:'right'}}>{r.pct==null?'—':r.pct+'%'}</b>
+                  <span style={{textAlign:'center',fontSize:10.5,fontWeight:700,padding:'2px 6px',borderRadius:999,background:!r.result?'#eef2f6':pass?'#e7f6ed':'#fde4e8',color:!r.result?'#5b6878':pass?'#14713f':'#a3172f'}}>{r.result||'—'}{r.criticalFails?' ⚑':''}</span>
+                </div>; })}
+            </div>
+          </>}
+      </div>
+    </div>
+  );
+}
 function StaffProfile({store, empId, setRoute}){
   const S=window.STAFF;
   const e=store.get(empId);
@@ -1349,6 +1399,8 @@ function StaffProfile({store, empId, setRoute}){
               </div>
             </div>;
           })()}
+
+          {window.unicoCan&&window.unicoCan('docaudit','view')&&<StaffDocAuditCard emp={e} setRoute={setRoute}/>}
 
           {/* Conduct — the achievements and incidents on this person's file. Shown
               side by side on purpose: a register that only lists what went wrong is

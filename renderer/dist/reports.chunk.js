@@ -4344,7 +4344,7 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['devdays', 'Device Days', 'Clinical', 'Add = enter & send · Edit = review & correct · departments set below'], ['kpi', 'Nursing KPI', 'Clinical', 'Add = enter figures · Edit = change figures, KPIs & reports · Print = print, PDF, PowerPoint, Excel'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
+const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['devdays', 'Device Days', 'Clinical', 'Add = enter & send · Edit = review & correct · departments set below'], ['kpi', 'Nursing KPI', 'Clinical', 'Add = enter figures · Edit = change figures, KPIs & reports · Print = print, PDF, PowerPoint, Excel'], ['docaudit', 'Documentation Audit', 'Clinical', 'Add = fill audits · Edit = correct & sign off · departments set below'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
 const MOD_GROUPS = ['Clinical', 'Data', 'Administer', 'Phone'];
 const modsGrouped = list => MOD_GROUPS.map(g => [g, list.filter(m => m[2] === g)]).filter(([, ms]) => ms.length);
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
@@ -4364,6 +4364,13 @@ const KPI_TIPS = {
   add: 'Enter figures for months that have none, add custom KPIs, generate reports',
   delete: 'Archive a KPI, clear a month, remove a draft report (all kept in history)',
   print: 'Print, PDF, PowerPoint and Excel — every export is logged'
+};
+const DOCAUDIT_TIPS = {
+  view: 'See the register, the reports and the dashboards of their departments',
+  edit: 'Correct completed audits, sign off as Nurse In-charge, write the action plan (CAP)',
+  add: 'Fill documentation audits and record the nurse’s acknowledgement',
+  delete: 'Remove an audit (kept in history)',
+  print: 'Print the audit form and the reports, PDF and Excel — every printout is logged'
 };
 const DEVDAYS_TIPS = {
   view: 'See the daily sheet and the summary',
@@ -4878,6 +4885,9 @@ function UserModal({
   const [devDepts, setDevDepts] = useState(editing && Array.isArray(initial.deviceDepartments) ? initial.deviceDepartments.slice() : []);
   const [devDeptQ, setDevDeptQ] = useState('');
   const toggleDevDept = id => setDevDepts(ds => id === '*' ? ds.indexOf('*') >= 0 ? [] : ['*'] : ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds.filter(x => x !== '*'), id]);
+  const [audDepts, setAudDepts] = useState(editing && Array.isArray(initial.auditDepartments) ? initial.auditDepartments.slice() : []);
+  const [audDeptQ, setAudDeptQ] = useState('');
+  const toggleAudDept = id => setAudDepts(ds => id === '*' ? ds.indexOf('*') >= 0 ? [] : ['*'] : ds.indexOf(id) >= 0 ? ds.filter(x => x !== id) : [...ds.filter(x => x !== '*'), id]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const isAdmin = !isPortalAcct && accessType === 'full';
@@ -4990,7 +5000,7 @@ function UserModal({
       setRosSelIn(s => s ? [] : s);
       setRosSelMgr(s => s ? [] : s);
       setRosCns(false);
-    } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept', 'devdays', 'kpi'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
+    } else if (kind === 'view') setPerms(p => USER_MODS.reduce((m, [k]) => (m[k] = ['datasubmit', 'staffapp', 'users', 'datacol', 'mydept', 'devdays', 'kpi', 'docaudit'].indexOf(k) >= 0 ? asActions(p[k]) : ['view'], m), {}));
   };
   const copyAccess = uname => {
     const src = (allUsers || []).find(x => x.username === uname);
@@ -5001,7 +5011,8 @@ function UserModal({
         ...FULL_PERMS(),
         mydept: asActions(cur.mydept),
         devdays: asActions(cur.devdays),
-        kpi: asActions(cur.kpi)
+        kpi: asActions(cur.kpi),
+        docaudit: asActions(cur.docaudit)
       }));
       setSubMenus({});
       return;
@@ -5013,12 +5024,13 @@ function UserModal({
       ...NONE_PERMS(),
       ...(src.perms || {})
     };
-    setPerms(cur => USER_MODS.reduce((m, [k]) => (m[k] = k === 'mydept' || k === 'devdays' || k === 'kpi' ? asActions(cur[k]) : asActions(p[k]), m), {}));
+    setPerms(cur => USER_MODS.reduce((m, [k]) => (m[k] = k === 'mydept' || k === 'devdays' || k === 'kpi' || k === 'docaudit' ? asActions(cur[k]) : asActions(p[k]), m), {}));
   };
   const toggleAct = (mid, act) => {
     if (mid === 'mydept' && MYDEPT_ACTS.indexOf(act) < 0) return;
     if (mid === 'mydept' && !asActions(perms.mydept).length && !myDepts.length) setMyDepts(myDeptGuess());
     if (mid === 'devdays' && !asActions(perms.devdays).length && !devDepts.length) setDevDepts(myDeptGuess());
+    if (mid === 'docaudit' && !asActions(perms.docaudit).length && !audDepts.length) setAudDepts(myDeptGuess());
     setPerms(p => {
       const cur = asActions(p[mid]);
       let next = cur.indexOf(act) >= 0 ? cur.filter(a => a !== act) : [...cur, act];
@@ -5137,6 +5149,10 @@ function UserModal({
       setSec('access');
       return setErr('Device Days: pick at least one department (or All departments), or set it back to None.');
     }
+    if (!isAdmin && !isColl && asActions(perms.docaudit).length && !audDepts.length) {
+      setSec('access');
+      return setErr('Documentation Audit: pick at least one department (or All departments), or set it back to None.');
+    }
     if (mdActs.length) {
       const was = editing ? asActions(initial.perms && initial.perms.mydept) : [];
       const wasDepts = editing && Array.isArray(initial.myDepartments) ? initial.myDepartments : [];
@@ -5200,6 +5216,7 @@ function UserModal({
         }
         payload.myDepartments = asActions(perms.mydept).length ? myDepts : [];
         payload.deviceDepartments = asActions(perms.devdays).length ? devDepts : [];
+        payload.auditDepartments = asActions(perms.docaudit).length ? audDepts : [];
         if (staffLinkDirty) {
           payload.staffId = staffId !== '' ? Number(staffId) : null;
           const rec = allStaff.find(x => String(x.id) === String(staffId));
@@ -6377,7 +6394,7 @@ function UserModal({
       return React.createElement("button", {
         key: v,
         onClick: () => toggleAct(id, v),
-        title: id === 'devdays' ? DEVDAYS_TIPS[v] : id === 'kpi' ? KPI_TIPS[v] : v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : v === 'delete' ? 'Can delete' : 'Can print / save as PDF — take the record out of the system on paper',
+        title: id === 'devdays' ? DEVDAYS_TIPS[v] : id === 'kpi' ? KPI_TIPS[v] : id === 'docaudit' ? DOCAUDIT_TIPS[v] : v === 'view' ? 'Can open / read' : v === 'edit' ? 'Can modify existing' : v === 'add' ? 'Can create new' : v === 'delete' ? 'Can delete' : 'Can print / save as PDF — take the record out of the system on paper',
         style: {
           display: 'inline-flex',
           alignItems: 'center',
@@ -6650,6 +6667,90 @@ function UserModal({
         marginTop: 6
       }
     }, "Pick at least one department, or set Device Days back to None."));
+  })(), asActions(perms.docaudit).length > 0 && (() => {
+    const needle = audDeptQ.trim().toLowerCase();
+    const all = audDepts.indexOf('*') >= 0;
+    const acts = asActions(perms.docaudit);
+    const list = allDepts.slice().sort((a, b) => (audDepts.indexOf(b.id) >= 0) - (audDepts.indexOf(a.id) >= 0) || String(a.name).localeCompare(String(b.name))).filter(d => !needle || (String(d.name) + ' ' + d.id).toLowerCase().indexOf(needle) >= 0);
+    const chip = on => ({
+      padding: '5px 11px',
+      borderRadius: 16,
+      fontSize: 12,
+      fontWeight: 600,
+      cursor: 'pointer',
+      border: '1px solid ' + (on ? 'var(--blue)' : 'var(--line)'),
+      background: on ? 'var(--blue)' : '#fff',
+      color: on ? '#fff' : 'var(--ink-2)'
+    });
+    const does = [acts.indexOf('add') >= 0 && 'audit', acts.indexOf('edit') >= 0 && 'sign off', acts.indexOf('add') < 0 && acts.indexOf('edit') < 0 && 'view'].filter(Boolean).join(' and ');
+    return React.createElement("div", {
+      style: {
+        borderTop: '1px solid var(--line-2)',
+        paddingTop: 14,
+        marginTop: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: 'var(--ink)',
+        marginBottom: 3
+      }
+    }, "Documentation Audit ", React.createElement("span", {
+      style: {
+        fontWeight: 500,
+        color: 'var(--muted)',
+        fontSize: 11
+      }
+    }, '· which departments they ' + does)), React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginBottom: 9
+      }
+    }, "Only departments switched on in Documentation Audit ", '→', " Settings can be audited. \"All departments\" also covers departments added later and lets them pick any nurse in the register. Nobody can audit their own documentation."), React.createElement("input", {
+      value: audDeptQ,
+      onChange: e => setAudDeptQ(e.target.value),
+      placeholder: "Search department\u2026",
+      style: {
+        padding: '6px 9px',
+        border: '1px solid var(--line)',
+        borderRadius: 7,
+        fontSize: 12,
+        fontFamily: 'inherit',
+        marginBottom: 8,
+        width: '100%',
+        maxWidth: 260
+      }
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 6,
+        maxHeight: 170,
+        overflow: 'auto'
+      }
+    }, React.createElement("button", {
+      type: "button",
+      onClick: () => toggleAudDept('*'),
+      style: Object.assign(chip(all), {
+        borderStyle: 'dashed'
+      })
+    }, "All departments"), !all && list.map(d => {
+      const on = audDepts.indexOf(d.id) >= 0;
+      return React.createElement("button", {
+        key: d.id,
+        type: "button",
+        onClick: () => toggleAudDept(d.id),
+        style: chip(on)
+      }, d.name);
+    })), !audDepts.length && React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--rose)',
+        marginTop: 6
+      }
+    }, "Pick at least one department, or set Documentation Audit back to None."));
   })()), curSec === 'data' && collects && scopeBlock, curSec === 'data' && submits && React.createElement("div", {
     style: {
       display: 'flex',
@@ -7723,6 +7824,34 @@ function ActivityLog() {
     kpi_ack: {
       l: 'KPI check acknowledged',
       c: '#e08a1e'
+    },
+    docaudit_audit: {
+      l: 'Documentation audit',
+      c: '#1f4f8a'
+    },
+    docaudit_tool: {
+      l: 'Audit tool changed',
+      c: '#6a52d4'
+    },
+    docaudit_config: {
+      l: 'Doc. audit settings',
+      c: '#6a52d4'
+    },
+    docaudit_cap: {
+      l: 'Doc. audit action plan',
+      c: '#e08a1e'
+    },
+    docaudit_print: {
+      l: 'Doc. audit print / PDF',
+      c: '#3ab5a7'
+    },
+    docaudit_export: {
+      l: 'Doc. audit export',
+      c: '#3ab5a7'
+    },
+    docaudit_access: {
+      l: 'Doc. audit access',
+      c: '#0090ca'
     }
   };
   const meta = a => META[a] || {
@@ -11275,6 +11404,7 @@ const AC_SHORT = {
   staffapp: 'SA',
   mydept: 'MD',
   devdays: 'DD',
+  docaudit: 'DA',
   kpi: 'KP'
 };
 const AC_ACT_LETTER = {

@@ -143,6 +143,7 @@ function App(){
     if(s.indexOf('quality')===0||s==='reportsQuality'||s==='gallery') return 'quality';
     if(s.indexOf('devDays')===0) return 'devdays';
     if(s.indexOf('kpi')===0) return 'kpi';
+    if(s.indexOf('docAudit')===0) return 'docaudit';
     if(s.indexOf('dc')===0||s.indexOf('ds')===0) return 'datacollection';
     if(s==='reports'||s==='settings'||s==='users') return 'reports';      // Settings + Access Control live in the reports chunk
     if(s==='staffProfile'||s==='staffForm'||s==='perfStaff'||s==='staffH360') return 'staffprofile';
@@ -232,6 +233,11 @@ function App(){
     const KPI_TITLE={kpiDashboard:'Dashboard',kpiEntry:'Data Update',kpiReports:'Reports',kpiManage:'Manage KPIs',kpiActions:'Action Plans',kpiSettings:'Settings'};
     crumbs=['UNICO','Nursing KPI',KPI_TITLE[route.view]||'Dashboard'];
     body= (typeof KpiView!=='undefined') ? <KpiView view={route.view} report={route.report} kpi={route.kpi} setRoute={setRoute}/> : null;
+  } else if(route.view && route.view.indexOf('docAudit')===0){
+    // Documentation Audit (module 'docaudit'; window.DocAuditView, chunk 'docaudit'); the server checks it again.
+    const DA_TITLE={docAuditHome:'Dashboard',docAuditNew:route.audit?'Audit':'New audit',docAuditRegister:'Register',docAuditReports:'Reports',docAuditTools:'Audit tools',docAuditSettings:'Settings'};
+    crumbs=['UNICO','Documentation Audit',DA_TITLE[route.view]||'Dashboard'];
+    body= (typeof DocAuditView!=='undefined') ? <DocAuditView view={route.view} audit={route.audit} dept={route.dept} nurse={route.nurse} month={route.month} setRoute={setRoute}/> : null;
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];
     body=<Settings depts={depts} store={store} setRoute={setRoute}/>;

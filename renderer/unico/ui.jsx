@@ -71,6 +71,9 @@ const UNICO_MODULES = [
   { id:'devdays', label:'Device Days',        short:'Devices',    icon:I.activity,home:'devDaysEntry' },
   // Nursing KPI — the Nursing Department's KPI programme (window.KpiView, chunk 'kpi').
   { id:'kpi',     label:'Nursing KPI',        short:'KPI',        icon:I.trend,   home:'kpiDashboard' },
+  // Documentation Audit — the nursing documentation audit per patient record (window.DocAuditView,
+  // chunk 'docaudit'); departments set per person: auditDepartments. Never a default.
+  { id:'docaudit',label:'Documentation Audit', short:'Doc audit', icon:I.doc,    home:'docAuditHome' },
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
@@ -90,6 +93,7 @@ const UNICO_MODULE_VIEWS = {
   mydept: ['myDept'],
   devdays:['devDaysEntry','devDaysReview','devDaysSummary','devDaysSettings'],
   kpi:['kpiDashboard','kpiEntry','kpiReports','kpiManage','kpiActions','kpiSettings'],
+  docaudit:['docAuditHome','docAuditNew','docAuditRegister','docAuditReports','docAuditTools','docAuditSettings'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
 /* Data Submission's screens — each its own route and its own sidebar sub-item, and each
@@ -145,7 +149,7 @@ function unicoModuleOf(view){
    they are never gated here. `modules` null/absent = unrestricted (legacy accounts
    keep full access until an admin assigns modules). ---- */
 // 'staffapp' is grantable too, but it is the phone app only — it has no screen in here.
-const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp','mydept','devdays','kpi'];
+const UNICO_ACCESS_MODULES = ['stats','quality','supervisor','staff','datacol','reports','users','perf','attrition','roster','medicine','datasubmit','staffapp','mydept','devdays','kpi','docaudit'];
 // The workspace a route.view belongs to for ACCESS purposes. Settings is the admin
 // hub, so it is gated under 'users' rather than 'stats'.
 function unicoAccessModuleOf(view){
@@ -227,7 +231,7 @@ let unicoSubMenusMemo=null;
 function unicoSubMenus(){
   if(unicoSubMenusMemo) return unicoSubMenusMemo;
   const out={};
-  const SAMPLE={ stats:'departments', quality:'quality', supervisor:'supHome', medicine:'medHome', staff:'staffHome', datacol:'dcReview', reports:'reports', devdays:'devDaysEntry', kpi:'kpiDashboard' };
+  const SAMPLE={ stats:'departments', quality:'quality', supervisor:'supHome', medicine:'medHome', staff:'staffHome', datacol:'dcReview', reports:'reports', devdays:'devDaysEntry', kpi:'kpiDashboard', docaudit:'docAuditHome' };
   Object.keys(SAMPLE).forEach(m=>{
     unicoWorkspaceSubAll(SAMPLE[m]).forEach(s=>{
       // Performance / Attrition / Duty Roster ride in Staff Management's list but are whole
@@ -271,7 +275,7 @@ function unicoFirstAllowedHome(){
   // 'home' is not in this list on purpose: it is ungated, so unicoCanAccessView()
   // never sends anyone here looking for a fallback. This list answers a different
   // question — which WORKSPACE to open when a restricted account needs one.
-  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings'],['mydept','myDept'],['devdays','devDaysEntry'],['kpi','kpiDashboard']];
+  const homes=[['stats','dashboard'],['quality','quality'],['supervisor','supHome'],['medicine','medHome'],['staff','nurseHome'],['datacol','dcReview'],['datasubmit','dsHome'],['perf','perfHome'],['attrition','perfAttrition'],['roster','rosterHome'],['reports','reports'],['users','settings'],['mydept','myDept'],['devdays','devDaysEntry'],['kpi','kpiDashboard'],['docaudit','docAuditHome']];
   for(let i=0;i<homes.length;i++){ if(unicoCanAccessModule(homes[i][0])) return unicoModuleLanding(homes[i][0], homes[i][1]); }
   return null;
 }
@@ -451,6 +455,9 @@ const UNICO_WS = [
     { id:'devdays',     label:'Device Days',     icon:I.activity,home:'devDaysEntry', on:v=>unicoModuleOf(v)==='devdays', badge:'dd' },
     // Badge: KPIs still without a figure for last month + a monthly report waiting to be finalised.
     { id:'kpi',         label:'Nursing KPI',     icon:I.trend,  home:'kpiDashboard', on:v=>unicoModuleOf(v)==='kpi', badge:'kpi', tag:'NEW' },
+    // Badge: audits waiting for the nurse's acknowledgement / the In-charge's sign-off, own drafts,
+    // and (after the 20th) departments short of their monthly sample.
+    { id:'docaudit',    label:'Documentation Audit', icon:I.doc, home:'docAuditHome', on:v=>unicoModuleOf(v)==='docaudit', badge:'da', tag:'NEW' },
     // Drug index (21.7k Bangladeshi brands / 1.7k generic monographs) + prescriptions.
     { id:'medicine',    label:'Medicine & Rx',   icon:I.syringe,home:'medHome',     on:v=>unicoModuleOf(v)==='medicine', tag:'NEW' },
   ]},
@@ -599,6 +606,14 @@ function unicoWorkspaceSubAll(view){
     { label:'Manage KPIs',  view:'kpiManage' },
     { label:'Action Plans', view:'kpiActions' },
     ...(unicoUserPerms()===null ? [{ label:'Settings', view:'kpiSettings', adminOnly:true }] : []),
+  ];
+  // DOCUMENTATION AUDIT — the audit tools and Settings are the administrator's alone.
+  if(mod==='docaudit') return [
+    { label:'Dashboard',  view:'docAuditHome' },
+    { label:'New audit',  view:'docAuditNew' },
+    { label:'Register',   view:'docAuditRegister' },
+    { label:'Reports',    view:'docAuditReports' },
+    ...(unicoUserPerms()===null ? [{ label:'Audit tools', view:'docAuditTools', adminOnly:true }, { label:'Settings', view:'docAuditSettings', adminOnly:true }] : []),
   ];
   if(mod==='devdays') return [
     { label:'Daily Sheet',  view:'devDaysEntry' },
@@ -770,6 +785,8 @@ function Sidebar({route, setRoute, collapsed, depts}){
   const ddBadge = ddAlerts ? (ddAlerts.total||0)+(ddAlerts.pendingReview||0) : 0;
   const kpiAlerts = unicoUseKpiAlerts(unicoCanAccessModule('kpi'));
   const kpiBadge = kpiAlerts ? (kpiAlerts.total||0) : 0;
+  const daAlerts = unicoUseDocAuditAlerts(unicoCanAccessModule('docaudit'));
+  const daBadge = daAlerts ? (daAlerts.total||0) : 0;
   // Duty Roster: rosters waiting for this person's step + their units' rosters returned to them.
   const rosPend = unicoUseRosterPending(unicoCanAccessModule('roster'));
   const rosBadge = rosPend ? (rosPend.pending||0)+(rosPend.returned||0) : 0;
@@ -818,7 +835,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
             {g.sec && <div className="sb-sec">{g.sec}</div>}
             {items.map(it=>{
               const active = it.on(view);
-              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='dd' ? ddBadge : it.badge==='kpi' ? kpiBadge : it.badge==='ros' ? rosBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
+              const badgeN = it.id==='datacol' ? dcBadge : it.badge==='sup' ? supBadge : it.badge==='dd' ? ddBadge : it.badge==='kpi' ? kpiBadge : it.badge==='da' ? daBadge : it.badge==='ros' ? rosBadge : it.badge==='ds' ? dsBadge : (it.badge ? qBadge : 0);
               const badge = badgeN>0 ? badgeN : null;
               const auto = !!AUTO_OPEN[it.id];
               const itSub = auto && folded[it.id] ? [] : subFor(it, active);
@@ -1018,6 +1035,28 @@ function unicoUseKpiAlerts(enabled){
     window.addEventListener('unico:kpi-refresh',run);
     document.addEventListener('visibilitychange',vis);
     return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:kpi-refresh',run); document.removeEventListener('visibilitychange',vis); };
+  },[enabled]);
+  return enabled?a:null;
+}
+/* Documentation Audit: what needs attention (server/doc-audit.js /missing) — audits waiting for
+   the nurse's acknowledgement or the In-charge's sign-off, the person's own drafts, departments
+   short of their sample after the 20th. No toast: the badge says it. */
+function unicoUseDocAuditAlerts(enabled){
+  const [a,setA]=React.useState(()=>window.__UNICO_DA_ALERTS__||null);
+  React.useEffect(()=>{
+    if(!enabled) return;
+    let live=true;
+    const run=()=>{
+      if(document.visibilityState==='hidden') return;
+      fetch('/api/doc-audit/missing',{credentials:'same-origin',cache:'no-store'})
+        .then(r=>r.ok?r.json():null).then(j=>{ if(!live||!j||!j.ok) return; setA(j); try{ window.__UNICO_DA_ALERTS__=j; }catch(e){} }).catch(()=>{});
+    };
+    run();
+    const t=setInterval(run,300000);
+    const vis=()=>{ if(document.visibilityState==='visible') run(); };
+    window.addEventListener('unico:da-refresh',run);
+    document.addEventListener('visibilitychange',vis);
+    return ()=>{ live=false; clearInterval(t); window.removeEventListener('unico:da-refresh',run); document.removeEventListener('visibilitychange',vis); };
   },[enabled]);
   return enabled?a:null;
 }

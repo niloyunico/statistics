@@ -43,7 +43,9 @@ const { getUsers } = require('./db');
 // departments an administrator picks per person (users.deviceDepartments, '*' = all). Never a default.
 // 'kpi' (Nursing KPI): the Nursing Department's KPI programme — catalogue, monthly figures,
 // reports and exports (server/kpi.js). Hospital-level, so no per-person department list. Never a default.
-const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays', 'kpi'];
+// 'docaudit' (Documentation Audit): the nursing documentation audit (UHP-NSG-QA-001…004) for the
+// departments an administrator picks per person (users.auditDepartments, '*' = all). Never a default.
+const ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays', 'kpi', 'docaudit'];
 
 // Escalating legacy level strings. The newer model stores an ARRAY of independently
 // granted actions (e.g. ['view','delete'] = delete without add); both are supported,
@@ -289,6 +291,8 @@ async function forRequest(req) {
     myDepartments: Array.isArray(u.myDepartments) ? u.myDepartments.map(String) : [],
     // Device Days: the departments this person sends / reviews there ('*' = every department).
     deviceDepartments: Array.isArray(u.deviceDepartments) ? u.deviceDepartments.map(String) : [],
+    // Documentation Audit: the departments this person audits ('*' = every department).
+    auditDepartments: Array.isArray(u.auditDepartments) ? u.auditDepartments.map(String) : [],
   };
 }
 
@@ -549,6 +553,16 @@ function deviceDeptIds(access) {
   if (access.unrestricted) return null;
   if (!can(access, 'devdays', 'view')) return []; // any granted action implies view
   const list = Array.isArray(access.deviceDepartments) ? access.deviceDepartments.map(String) : [];
+  return list.indexOf('*') >= 0 ? null : list;
+}
+
+/* The departments this account audits in Documentation Audit: null = every department (an
+   administrator, or '*' picked), else the picked ones — none at all without the module. */
+function auditDeptIds(access) {
+  if (!access) return [];
+  if (access.unrestricted) return null;
+  if (!can(access, 'docaudit', 'view')) return [];
+  const list = Array.isArray(access.auditDepartments) ? access.auditDepartments.map(String) : [];
   return list.indexOf('*') >= 0 ? null : list;
 }
 
@@ -1006,7 +1020,7 @@ async function mergeStaffOverlay(access, rawIncoming, rawCurrent, rawBase) {
 
 module.exports = {
   h360StaffOk,
-  PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster, MYDEPT_STAFF_FIELDS, myDeptIds, deviceDeptIds,
+  PORTAL_ROLES, isPortal, portalStaff, portalMayEditRoster, MYDEPT_STAFF_FIELDS, myDeptIds, deviceDeptIds, auditDeptIds,
   LEGACY_SUBMIT_ROLES, submitsData, dataScoped, isUnitLead, phoneRoleOf, CONSOLE_MODULES,
   SUBMIT_KINDS, cleanSubmitKinds, maySubmitKind,
   DS_SCREENS, cleanDsScreens, dsScreensOf, mayOpenDsScreen, hhScreenOn, cleanSubMenus,

@@ -23,7 +23,7 @@ const resultOf = (r) => (r.latest ? 'latest: ' + r.latest.label : r.freqMonths >
 // A month cell: '·' when the KPI owes nothing that month (measured less often).
 const monthTxt = (r, m, fv) => { const c = (r.cells || {})[m] || {}; return c.source === 'not-due' ? '·' : fv(r, c.value); };
 const LVL = { error: 'D23A52', warn: 'E0A21E', info: '7B8796' };
-const SRC_LABEL = { approved: 'Approved', 'overlay-edit': 'Console edit', audit: 'Audit', own: 'Own reading', covered: 'Covered by audit', 'not-audited': 'Not audited', 'not-observed': 'Not observed', missing: 'MISSING', partial: 'No denominator', 'den-zero': 'Denominator 0', 'carried-den': 'Headcount carried', manual: 'Entered' };
+const SRC_LABEL = { 'doc-audit': 'Documentation audits', approved: 'Approved', 'overlay-edit': 'Console edit', audit: 'Audit', own: 'Own reading', covered: 'Covered by audit', 'not-audited': 'Not audited', 'not-observed': 'Not observed', missing: 'MISSING', partial: 'No denominator', 'den-zero': 'Denominator 0', 'carried-den': 'Headcount carried', manual: 'Entered' };
 const who = (x) => [x && x.reviewedBy, x && x.by].filter(Boolean)[0] || '';
 const shortDate = (t) => (t ? new Date(t).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'short' }) : '');
 
@@ -248,7 +248,7 @@ function build(report, opts) {
     tile(7.85, fv(r, r.period.value), resultOf(r) ? cut(resultOf(r), 24) : report.months && report.months.length > 1 ? 'Period value' : 'This month', NAVY, 'EAF6FB');
     tile(9.55, K.has(r.target) ? fv(r, r.target) : '—', 'Target', NAVY, 'EEF7F5');
     tile(11.25, K.STATUS[r.status].label, r.achievement != null ? r.achievement + '% of target' : (r.trendDir ? r.trendDir : 'status'), ST[r.status], ST_BG[r.status]);
-    s.addText(r.linked ? 'Figures filled from the hospital’s quality data' : 'Figures entered by the KPI team', { x: 7.85, y: 6.42, w: 4.95, h: 0.28, fontFace: FONT, fontSize: 8, color: MUTED, italic: true });
+    s.addText(r.linked ? (r.sourceRule === 'docaudit' ? 'Figures filled from the Nursing Documentation Audit' : 'Figures filled from the hospital’s quality data') : 'Figures entered by the KPI team', { x: 7.85, y: 6.42, w: 4.95, h: 0.28, fontFace: FONT, fontSize: 8, color: MUTED, italic: true });
     // Remarks that do not fit the table (a list, or long text) get a notes slide of their own.
     const remark = r.remarks && (cm || r.remarks.length > 300 || r.remarks.indexOf('\n') >= 0) ? r.remarks : '';
     if (remark) {

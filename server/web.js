@@ -388,7 +388,8 @@ async function serveIndex(req, res) {
         phone: scopeUser.phone || null, designation: scopeUser.designation || null, title: scopeUser.title || null,
         workDepartment: scopeUser.workDepartment || null,
         myDepartments: Array.isArray(scopeUser.myDepartments) ? scopeUser.myDepartments : [],
-        deviceDepartments: Array.isArray(scopeUser.deviceDepartments) ? scopeUser.deviceDepartments : [] }
+        deviceDepartments: Array.isArray(scopeUser.deviceDepartments) ? scopeUser.deviceDepartments : [],
+        auditDepartments: Array.isArray(scopeUser.auditDepartments) ? scopeUser.auditDepartments : [] }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
   // Canonical quality-formula master: the DB catalogue expanded to the
@@ -1083,6 +1084,11 @@ require('./device-days').mount(app, { requireApi: [session.requireApi] });
 // Nursing KPI: the Nursing Department's KPI programme — catalogue, monthly figures (filled from
 // the quality data where it exists), reports, PowerPoint / Excel export (module 'kpi').
 require('./kpi').mount(app, { requireApi: [session.requireApi] });
+
+// Documentation Audit: the nursing documentation audit (UHP-NSG-QA-001…004) per patient record —
+// four editable tools, auto-scored, nurse acknowledgement + in-charge sign-off, monthly KPIs that
+// feed KPI 2C (module 'docaudit'; each route checks the module and users.auditDepartments itself).
+require('./doc-audit').mount(app, { requireApi: [session.requireApi] });
 
 // Medicine module: the Bangladesh drug index (21.7k brands / 1.7k generic monographs)
 // and the prescriptions written from it. Prescriptions carry patient names, UHIDs and

@@ -61,10 +61,12 @@ async function loadSources(ctx, opts, deps) {
   const months = ctx.months;
   const monKeys = months.map(K.toMonKey);
   const dev = () => require('./device-days');
-  const [subs, ddCfg, settings] = await Promise.all([
+  const [subs, ddCfg, settings, daDepts] = await Promise.all([
     (d.submissions ? d.submissions({ months: monKeys }) : readSubmissions(monKeys)).catch(() => null),
     (d.deviceCfg ? d.deviceCfg() : dev().getConfig()).catch(() => null),
     (d.collectionSettings ? d.collectionSettings() : require('./data-collection').getCollectionSettings()).catch(() => []),
+    // Documentation Audit: the departments expected to audit (rule 'docaudit', KPI 2C).
+    Promise.resolve().then(() => (d.docAuditDepts ? d.docAuditDepts() : require('./doc-audit').enabledDepts())).catch(() => []),
   ]);
   // submissions, grouped by area | indicator | month (also by indicator name: a stale id falls back to it)
   const subMap = new Map();
@@ -106,7 +108,7 @@ async function loadSources(ctx, opts, deps) {
     if (s.qualityKey) setByKey.set(String(s.qualityKey), row);
     if (s.id) setById.set(String(s.id), row);
   });
-  ctx.sources = { subs: subMap, subsLoaded: Array.isArray(subs), dd: ddView, ddCfg: cfgDoc, setByKey, setById, now };
+  ctx.sources = { subs: subMap, subsLoaded: Array.isArray(subs), dd: ddView, ddCfg: cfgDoc, setByKey, setById, da: Array.isArray(daDepts) ? daDepts : [], now };
   return ctx.sources;
 }
 
@@ -131,6 +133,8 @@ const notMeasured = (ctx, area, ind) => !!(ind && settingOf(ctx, area).notMeasur
    wins; otherwise Department Setup decides (the same rule the collectors' Missing-data page uses). */
 function derivedUnits(ctx, def, ym) {
   const rule = link.ruleOf(def);
+  // Documentation audits: every department switched on in Documentation Audit → Settings.
+  if (rule === 'docaudit') return ((ctx.sources && ctx.sources.da) || []).filter((d) => !d.since || ym >= d.since).map((d) => ({ key: String(d.deptId), name: d.name, deptId: d.deptId }));
   const hosp = (a) => HH.isHospital(a);
   const out = [];
   ctx.areas.forEach((a) => {
@@ -298,6 +302,12 @@ function evidenceFor(ctx, def, ym, saved, cfg, opts) {
           pending: subsFor(ctx, hosp, sInd, mk).some((s) => s.status !== 'approved') };
         if (!units.some((u) => u.used) && has(m0.pct)) units.push({ key: String(hosp.key), name: hosp.name + ' (audit total)', num: m0.n, den: m0.d, value: m0.pct, source: 'audit', used: true });
       }
+    } else if (rule === 'docaudit') {
+      // One row per department that audited: its Σ Yes ÷ Σ (Yes + No) and how many records.
+      const c = (ctx.docAudit || {})[ym];
+      const minOf = {}; ((ctx.sources && ctx.sources.da) || []).forEach((d) => { minOf[d.deptId] = d.minRecords; });
+      ((c && c.byDept) || []).forEach((d) => units.push({ key: String(d.deptId), name: d.name, deptId: d.deptId, indicator: 'Documentation audits',
+        num: d.yes, den: d.yes + d.no, value: d.value, source: 'doc-audit', used: d.yes + d.no > 0, records: d.records, minRecords: minOf[d.deptId] == null ? null : minOf[d.deptId] }));
     } else {
       const hosp = ctx.areas.filter((a) => HH.isHospital(a));
       const unitAreas = ctx.areas.filter((a) => !HH.isHospital(a));
@@ -373,6 +383,7 @@ function evidenceFor(ctx, def, ym, saved, cfg, opts) {
         if ((has(u.num) && Number(u.num) < 0) || (has(u.den) && Number(u.den) < 0) || (f === 'pct' && has(u.num) && has(u.den) && Number(u.num) > Number(u.den)) || (f === 'pct' && has(u.value) && Number(u.value) > 100)) {
           add('impossible', nm + ': ' + u.num + ' ÷ ' + u.den + ' cannot be right for ' + (def.name || 'this KPI') + '.', u);
         }
+        if (rule === 'docaudit' && u.used && u.minRecords > 0 && u.records < u.minRecords) add('docaudit-sample', nm + ': ' + u.records + ' record(s) audited in ' + month + ' — the minimum is ' + u.minRecords + '.', u, Object.assign(unitSubject(u), { r: u.records, m: u.minRecords }));
         if (u.source === 'overlay-edit') add('overlay-edit', nm + ': the figure was changed in the Quality console' + (u.overlayEdited && u.overlayEdited.by ? ' by ' + u.overlayEdited.by : '') + ' and is not the approved submission.', u);
         if (u.pending && u.pending.length && u.used) add('pending-newer', nm + ': a newer figure (' + u.pending[0].num + (has(u.pending[0].den) ? ' ÷ ' + u.pending[0].den : '') + ') from ' + (u.pending[0].by || 'the unit') + ' is waiting for approval.', u);
         if (u.carriedFrom && K.monthDiff(K.toYm(u.carriedFrom), ym) > STALE_DEN_MONTHS) add('stale-den', nm + ': the ' + (def.denLabel || 'denominator').toLowerCase() + ' (' + u.den + ') was entered for ' + K.fmtMonth(K.toYm(u.carriedFrom)) + ' and carried forward.', u);

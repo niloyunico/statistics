@@ -361,6 +361,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       bg: '#dff5f1',
       long: 'From the hospital hand hygiene audit'
     },
+    'doc-audit': {
+      label: 'Doc. audit',
+      color: '#1f4f8a',
+      dot: '#4a7fd0',
+      bg: '#e6eefb',
+      long: 'From the Nursing Documentation Audit (Σ Yes ÷ Σ Yes + No over every completed audit)'
+    },
     pooled: {
       label: 'Quality',
       color: '#0b4f6c',
@@ -1024,7 +1031,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     partial: ['No denominator', '#a3172f', '#fde4e8'],
     'den-zero': ['Denominator 0', '#a3172f', '#fde4e8'],
     'carried-den': ['Headcount carried', '#8a5a00', '#fff1d6'],
-    manual: ['Entered', '#4b3fb0', '#efebfd']
+    manual: ['Entered', '#4b3fb0', '#efebfd'],
+    'doc-audit': ['Audits', '#1f4f8a', '#e6eefb']
   };
   const EvSrc = ({
     s
@@ -2493,7 +2501,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       className: "grow"
     }), React.createElement("div", {
       className: "kp-legend"
-    }, [['pooled', 'From quality data'], ['hh-audit', 'Hand hygiene audit'], ['edited', 'Edited by you'], ['manual', 'Entered'], ['partial', 'Denominator missing']].map(([k, l]) => React.createElement("span", {
+    }, [['pooled', 'From quality data'], ['hh-audit', 'Hand hygiene audit'], ['doc-audit', 'Documentation audit'], ['edited', 'Edited by you'], ['manual', 'Entered'], ['partial', 'Denominator missing']].map(([k, l]) => React.createElement("span", {
       key: k
     }, React.createElement("i", {
       className: "kp-dot",
@@ -4862,7 +4870,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       hh: 'hand hygiene audit',
       fall: 'all units, out-patient falls left out',
       pool: 'all units pooled',
-      hospital: 'Overall Hospital'
+      hospital: 'Overall Hospital',
+      docaudit: 'the Documentation Audit module — Σ Yes ÷ Σ Yes + No over every completed audit'
     }[d.source.rule] + ')' : '', ". ", d.autoFill !== false ? 'Any month can still be typed over in Data Update — with a reason.' : 'Each month is typed in Data Update.') : React.createElement("div", {
       style: {
         fontSize: 12.5

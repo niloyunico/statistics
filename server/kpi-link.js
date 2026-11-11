@@ -12,6 +12,9 @@
  *   hospital  An indicator reported once, on Overall Hospital (NSI, the nursing-service KPIs).
  *             An administrator-only denominator (the NSI headcount) carries forward from the last
  *             month that has one, as the quality forms do.
+ *   docaudit  Documentation Accuracy (KPI 2C): not the quality data but the Documentation Audit
+ *             module itself (server/doc-audit.js monthlyFigures) — Σ 'Yes' ÷ Σ ('Yes' + 'No') over
+ *             every completed audit of the month, all departments (policy UHP-NSG-QA-001 KPI-1).
  *
  * Readings are the quality console's: the database, with the unico_quality_v2 overlay on top
  * (newest wins, my-department.js mergeLayers) and the master formula catalogue applied.
@@ -27,7 +30,8 @@ const K = require('../renderer/unico/kpi-core.js');
 const HH_MAPS = md.Q_MAPS.concat(['mDeptBreakdown', 'mFromAudit', 'mCovered', 'mGroups', 'mGroupsDen']);
 const norm = (s) => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 const has = K.has;
-const RULES = ['hh', 'pool', 'fall', 'hospital'];
+const RULES = ['hh', 'pool', 'fall', 'hospital', 'docaudit'];
+const DOC_AUDIT_IND = 'ind-nursing-documentation-accuracy';
 const CARRY_BACK = 24; // months an admin-only denominator may be carried forward from
 
 /* Where each month's figure came from, for the calculation evidence (server/kpi-evidence.js):
@@ -79,11 +83,14 @@ async function loadContext(yms, deps) {
   const first = months[0] || K.thisMonth();
   const wide = K.monthsBetween(K.addMonth(first, -CARRY_BACK), K.addMonth(first, -1)).concat(months);
   const monKeys = wide.map(K.toMonKey);
-  const [quality, ov, formulas, map] = await Promise.all([
+  const [quality, ov, formulas, map, docAudit] = await Promise.all([
     (d.getQuality || getQuality)().catch(() => []),
     (d.overlays || md.overlays)().catch(() => ({ quality: {} })),
     (d.getFormulas || qf.getFormulas)().catch(() => []),
     (d.deptmap || deptmap).get().catch(() => null),
+    // The Documentation Audit's monthly totals (rule 'docaudit'); lazy so a test that never
+    // links that KPI never loads the module.
+    Promise.resolve().then(() => (d.docAuditMonthly || require('./doc-audit').monthlyFigures)(months)).catch(() => ({})),
   ]);
   const byName = qf.buildByNameMap(formulas || []);
   const qov = (ov && ov.quality && ov.quality.depts) || {};
@@ -105,7 +112,7 @@ async function loadContext(yms, deps) {
     const nm = map && q.deptId && map.byId && map.byId[q.deptId] && map.byId[q.deptId].name;
     return { key: q.key, name: nm || q.name || q.key, qualityName: nm && nm !== q.name ? q.name : undefined, deptId: q.deptId, indicators: inds };
   });
-  return { areas, byName, months, wide, monKeys };
+  return { areas, byName, months, wide, monKeys, docAudit: docAudit || {} };
 }
 
 const isOpd = (area, ind) => norm(area.key) === 'opd' || area.deptId === 'opd' || /^out[\s-]*patient/i.test((ind && ind.name) || '');
@@ -118,6 +125,7 @@ function findInd(area, def, ctx) {
 const ruleOf = (def) => {
   const s = def.source || {};
   if (RULES.indexOf(s.rule) >= 0) return s.rule;
+  if (s.indId === DOC_AUDIT_IND) return 'docaudit';
   if (s.indId === 'ind-hand-hygiene-compliance') return 'hh';
   if (s.indId === 'ind-patient-fall') return 'fall';
   if (s.indId === 'ind-needle-stick-injury') return 'hospital';
@@ -166,6 +174,14 @@ function linkedMonthlyFrom(ctx, def, yms) {
   if (!s || !s.indId) return out;
   const months = (yms || ctx.months).filter(K.isMonth);
   const rule = ruleOf(def);
+
+  if (rule === 'docaudit') {
+    months.forEach((ym) => {
+      const c = (ctx.docAudit || {})[ym];
+      if (c && (c.den > 0)) out[ym] = { num: c.num, den: c.den, value: c.value, source: 'doc-audit', areas: c.areas || null };
+    });
+    return out;
+  }
 
   if (rule === 'hh') {
     const res = HH.build(ctx.areas, months.map(K.toMonKey));
@@ -234,4 +250,4 @@ function indicatorCatalog(ctx) {
 const areaList = (ctx) => ctx.areas.map((a) => ({ key: a.key, name: a.name, deptId: a.deptId || null, hospital: HH.isHospital(a) }))
   .sort((x, y) => (x.hospital - y.hospital) || String(x.name).localeCompare(String(y.name)));
 
-module.exports = { loadContext, linkedMonthlyFrom, periodSystem, linkedMonthly, linkedMonthlyAll, indicatorCatalog, areaList, ruleOf, RULES, mergeInd, findInd, isOpd, poolMonth, carriedDen, formulaOf, norm };
+module.exports = { DOC_AUDIT_IND, loadContext, linkedMonthlyFrom, periodSystem, linkedMonthly, linkedMonthlyAll, indicatorCatalog, areaList, ruleOf, RULES, mergeInd, findInd, isOpd, poolMonth, carriedDen, formulaOf, norm };

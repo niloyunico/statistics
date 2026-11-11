@@ -1728,6 +1728,175 @@ function ConductDialog({
   }, busy ? 'Saving...' : isAch ? 'Save achievement' : 'Save incident')))));
   return window.ReactDOM && window.ReactDOM.createPortal ? window.ReactDOM.createPortal(body, document.body) : body;
 }
+function StaffDocAuditCard({
+  emp,
+  setRoute
+}) {
+  const [d, setD] = React.useState(null);
+  React.useEffect(() => {
+    let live = true;
+    if (!emp || emp.id == null) return;
+    fetch('/api/doc-audit/staff/' + encodeURIComponent(emp.id), {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(r => r.ok ? r.json() : null).then(j => {
+      if (live) setD(j && j.ok ? j : {
+        audits: [],
+        error: true
+      });
+    }).catch(() => {
+      if (live) setD({
+        audits: [],
+        error: true
+      });
+    });
+    return () => {
+      live = false;
+    };
+  }, [emp && emp.id]);
+  const fmt = x => {
+    try {
+      return new Date(x + 'T00:00:00Z').toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        timeZone: 'UTC'
+      });
+    } catch (e) {
+      return x;
+    }
+  };
+  const sum = d && d.summary;
+  const go = v => setRoute && setRoute(v);
+  return React.createElement("div", {
+    className: "card",
+    style: {
+      borderLeft: '4px solid #1f4f8a'
+    }
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("span", {
+    style: {
+      display: 'inline-grid',
+      placeItems: 'center',
+      width: 30,
+      height: 30,
+      borderRadius: 9,
+      background: '#e6eefb',
+      color: '#1f4f8a',
+      marginRight: 7
+    }
+  }, React.createElement(Ic, {
+    d: I.doc,
+    s: 16
+  })), React.createElement("h3", null, "Documentation audits"), d && !d.error && React.createElement("span", {
+    className: "sub"
+  }, d.thisQuarter, " this quarter", d.thisQuarter ? '' : ' — policy: at least once a quarter'), React.createElement("span", {
+    className: "spacer"
+  }), d && d.audits.length > 0 && React.createElement("button", {
+    className: "btn sm",
+    onClick: () => go({
+      view: 'docAuditRegister',
+      nurse: String(emp.id)
+    })
+  }, "All audits"), window.unicoCan && window.unicoCan('docaudit', 'add') && React.createElement("button", {
+    className: "btn sm",
+    onClick: () => go({
+      view: 'docAuditNew'
+    })
+  }, "+ Audit")), React.createElement("div", {
+    className: "card-b"
+  }, !d ? React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Loading\u2026") : d.error ? React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "Could not load the audits.") : !d.audits.length ? React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "No documentation audit of this nurse yet", window.unicoCan && window.unicoCan('docaudit', 'add') ? '.' : ' in your departments.') : React.createElement(React.Fragment, null, sum && sum.records > 0 && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 16,
+      flexWrap: 'wrap',
+      fontSize: 12,
+      marginBottom: 10
+    }
+  }, React.createElement("span", null, React.createElement("b", {
+    style: {
+      fontSize: 16
+    }
+  }, sum.accuracy == null ? '—' : sum.accuracy + '%'), " accuracy"), React.createElement("span", null, React.createElement("b", {
+    style: {
+      fontSize: 16
+    }
+  }, sum.pass), " / ", sum.records, " passed"), sum.criticalRecords > 0 && React.createElement("span", {
+    style: {
+      color: '#a3172f'
+    }
+  }, React.createElement("b", {
+    style: {
+      fontSize: 16
+    }
+  }, sum.criticalRecords), " with a critical failure")), React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column'
+    }
+  }, d.audits.slice(0, 8).map(x => {
+    const r = x.result || {};
+    const pass = r.result === 'PASS';
+    return React.createElement("div", {
+      key: x.id,
+      onClick: () => go({
+        view: 'docAuditNew',
+        audit: x.id
+      }),
+      style: {
+        display: 'grid',
+        gridTemplateColumns: '90px minmax(0,1fr) 60px 60px',
+        gap: 8,
+        alignItems: 'center',
+        padding: '6px 0',
+        borderTop: '1px solid var(--line-2)',
+        cursor: 'pointer',
+        fontSize: 12
+      }
+    }, React.createElement("span", null, fmt(x.date)), React.createElement("span", {
+      style: {
+        minWidth: 0,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap'
+      }
+    }, x.deptName, x.area ? ' · ' + x.area : '', React.createElement("span", {
+      style: {
+        color: 'var(--muted)'
+      }
+    }, x.status === 'draft' ? ' · draft' : x.status === 'signed' ? ' · signed off' : x.status === 'acknowledged' ? ' · acknowledged' : ' · awaiting acknowledgement')), React.createElement("b", {
+      style: {
+        textAlign: 'right'
+      }
+    }, r.pct == null ? '—' : r.pct + '%'), React.createElement("span", {
+      style: {
+        textAlign: 'center',
+        fontSize: 10.5,
+        fontWeight: 700,
+        padding: '2px 6px',
+        borderRadius: 999,
+        background: !r.result ? '#eef2f6' : pass ? '#e7f6ed' : '#fde4e8',
+        color: !r.result ? '#5b6878' : pass ? '#14713f' : '#a3172f'
+      }
+    }, r.result || '—', r.criticalFails ? ' ⚑' : ''));
+  })))));
+}
 function StaffProfile({
   store,
   empId,
@@ -3231,7 +3400,10 @@ function StaffProfile({
         cycleId: h.cycleId
       })
     }, "Print")))))))))));
-  })(), canSeePerf() && React.createElement("div", {
+  })(), window.unicoCan && window.unicoCan('docaudit', 'view') && React.createElement(StaffDocAuditCard, {
+    emp: e,
+    setRoute: setRoute
+  }), canSeePerf() && React.createElement("div", {
     className: "card",
     style: {
       borderLeft: '4px solid #6a52d4'

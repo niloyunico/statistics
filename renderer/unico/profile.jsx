@@ -99,6 +99,53 @@
     );
   }
 
+  /* My documentation audits: the audits of MY documentation (Documentation Audit module) — the
+     score, what was missing, the required action — and my own acknowledgement of an audit that is
+     waiting for it. No module needed: it is my feedback. Shows nothing until there is one. */
+  function MyDocAudits() {
+    const [d, setD] = useState(null);
+    const [open, setOpen] = useState(null);
+    const [busy, setBusy] = useState('');
+    const load = () => fetch('/api/doc-audit/mine', { credentials: 'same-origin', cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => setD(j && j.ok ? j : null)).catch(() => setD(null));
+    useEffect(() => { load(); }, []);
+    if (!d || !d.linked || !d.audits.length) return null;
+    const fmt = (x) => { try { return new Date(x + 'T00:00:00Z').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); } catch (e) { return x; } };
+    const ack = async (x) => {
+      setBusy(x.id);
+      try {
+        const r = await fetch('/api/doc-audit/mine/' + encodeURIComponent(x.id) + '/ack', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const j = await r.json().catch(() => null);
+        if (!j || !j.ok) throw new Error((j && j.error) || 'Could not record your acknowledgement.');
+        if (window.UI && window.UI.toast) window.UI.toast('Acknowledged — thank you.', 'success');
+        load();
+      } catch (e) { if (window.UI && window.UI.toast) window.UI.toast(e.message, 'error'); } finally { setBusy(''); }
+    };
+    const waiting = d.audits.filter((x) => x.status === 'completed').length;
+    return (
+      <div className="card">
+        <div className="card-h"><h3>My documentation audits</h3><span className="sub" style={{ marginLeft: 'auto' }}>{waiting ? waiting + ' waiting for your acknowledgement' : 'Feedback on your nursing records'}</span></div>
+        <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {d.audits.slice(0, 6).map((x) => { const r = x.result || {}; const pass = r.result === 'PASS'; const isOpen = open === x.id;
+            return <div key={x.id} style={{ borderTop: '1px solid var(--line-2)', padding: '8px 0' }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', cursor: 'pointer' }} onClick={() => setOpen(isOpen ? null : x.id)}>
+                <span style={{ fontSize: 12, minWidth: 88 }}>{fmt(x.date)}</span>
+                <span style={{ flex: 1, minWidth: 120, fontSize: 12.5 }}>{x.deptName}<span style={{ color: 'var(--muted)' }}>{x.auditor ? ' · audited by ' + x.auditor.name : ''}</span></span>
+                <b style={{ fontSize: 13 }}>{r.pct == null ? '—' : r.pct + '%'}</b>
+                <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: pass ? '#e7f6ed' : '#fde4e8', color: pass ? '#14713f' : '#a3172f' }}>{r.result || '—'}</span>
+                {x.status === 'completed' ? <button className="btn pri sm" disabled={busy === x.id} onClick={(e) => { e.stopPropagation(); ack(x); }}>Acknowledge</button>
+                  : <span style={{ fontSize: 11, color: 'var(--muted)' }}>{x.status === 'signed' ? 'Signed off' : 'Acknowledged'}</span>}
+              </div>
+              {isOpen && <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.45, background: 'var(--panel-2)', borderRadius: 8, padding: '8px 10px' }}>
+                {r.gradeLabel && <div><b>{r.gradeLabel}</b>{x.action ? ' — ' + x.action : ''}</div>}
+                {x.gaps && x.gaps.length ? <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>{x.gaps.map((g) => <li key={g.no}><b>#{g.no}{g.critical ? ' (critical)' : ''}</b> {g.text}{g.evidence ? <div style={{ color: '#8f1d33' }}>{g.evidence}</div> : null}</li>)}</ul>
+                  : <div style={{ marginTop: 4, color: '#14713f' }}>Every applicable criterion was met.</div>}
+              </div>}
+            </div>; })}
+        </div>
+      </div>
+    );
+  }
+
   function ProfileView() {
     const u = (typeof window !== 'undefined' && window.__UNICO_USER__) || null;
 
@@ -310,6 +357,8 @@
 
           {/* ============ the quiet column ============ */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+            {u && staff ? <MyDocAudits /> : null}
 
             {u && (
               <div className="card">

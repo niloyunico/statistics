@@ -1891,6 +1891,8 @@ const USER_MODS=[
   // Record of Device Insertion Days. Which departments is set per person below the grid.
   ['devdays','Device Days','Clinical','Add = enter & send · Edit = review & correct · departments set below'],
   ['kpi','Nursing KPI','Clinical','Add = enter figures · Edit = change figures, KPIs & reports · Print = print, PDF, PowerPoint, Excel'],
+  // Nursing documentation audit (UHP-NSG-QA-001…004). Which departments is set per person below the grid.
+  ['docaudit','Documentation Audit','Clinical','Add = fill audits · Edit = correct & sign off · departments set below'],
   ['datacol','Data Collection','Data',''],
   ['reports','Reports','Data',''],
   ['staff','Staff Management','Administer',''],
@@ -1919,6 +1921,7 @@ const PERM_ORDER=['view','edit','add','delete','print'];
 const MYDEPT_ACTS=['view','print'];
 // What each action means in Device Days (shown on the buttons' tooltips).
 const KPI_TIPS={view:'See the KPI dashboard, figures, reports and action plans',edit:'Change saved figures (incl. the system’s), edit KPIs and action plans, comment on and finalise reports',add:'Enter figures for months that have none, add custom KPIs, generate reports',delete:'Archive a KPI, clear a month, remove a draft report (all kept in history)',print:'Print, PDF, PowerPoint and Excel — every export is logged'};
+const DOCAUDIT_TIPS={view:'See the register, the reports and the dashboards of their departments',edit:'Correct completed audits, sign off as Nurse In-charge, write the action plan (CAP)',add:'Fill documentation audits and record the nurse’s acknowledgement',delete:'Remove an audit (kept in history)',print:'Print the audit form and the reports, PDF and Excel — every printout is logged'};
 const DEVDAYS_TIPS={view:'See the daily sheet and the summary',edit:'Review: approve or return sent days, and correct them',add:'Enter the daily figures and send them for review',delete:'Remove a day’s figures (kept in history)',print:'Print the sheet and the summary — every printout is logged'};
 const PERM_LEVEL_ORDER=['view','edit','add','delete'];
 function levelToActions(lv){ const i=['none','view','edit','add','delete'].indexOf(lv); return i<=0?[]:PERM_LEVEL_ORDER.slice(0,i); }
@@ -2271,6 +2274,10 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   const [devDepts,setDevDepts]=useState(editing&&Array.isArray(initial.deviceDepartments)?initial.deviceDepartments.slice():[]);
   const [devDeptQ,setDevDeptQ]=useState('');
   const toggleDevDept=(id)=>setDevDepts(ds=>id==='*'?(ds.indexOf('*')>=0?[]:['*']):(ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds.filter(x=>x!=='*'),id]));
+  // Documentation Audit: which departments they audit ('*' = every department).
+  const [audDepts,setAudDepts]=useState(editing&&Array.isArray(initial.auditDepartments)?initial.auditDepartments.slice():[]);
+  const [audDeptQ,setAudDeptQ]=useState('');
+  const toggleAudDept=(id)=>setAudDepts(ds=>id==='*'?(ds.indexOf('*')>=0?[]:['*']):(ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds.filter(x=>x!=='*'),id]));
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=!isPortalAcct&&accessType==='full';
   const isColl=isPortalAcct;
@@ -2368,16 +2375,16 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     // Access Control lists every account — none of those is a harmless "view".
     // Those modules are LEFT as they are (not cleared): clearing Data Submission on Save also wiped
     // the person's departments / areas and switched off their Indicator Access record.
-    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol','mydept','devdays','kpi'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
+    else if(kind==='view') setPerms(p=>USER_MODS.reduce((m,[k])=>(m[k]=(['datasubmit','staffapp','users','datacol','mydept','devdays','kpi','docaudit'].indexOf(k)>=0?asActions(p[k]):['view']),m),{})); };
   // Start from what another person holds. Copies the ticks only; their scope stays theirs.
   const copyAccess=(uname)=>{
     const src=(allUsers||[]).find(x=>x.username===uname); setCopyFrom(uname); if(!src) return;
     // My Department is never copied: it is granted to a person by hand, for their own departments.
-    if(src.role==='Administrator'){ setPerms(cur=>({...FULL_PERMS(),mydept:asActions(cur.mydept),devdays:asActions(cur.devdays),kpi:asActions(cur.kpi)})); setSubMenus({}); return; }
+    if(src.role==='Administrator'){ setPerms(cur=>({...FULL_PERMS(),mydept:asActions(cur.mydept),devdays:asActions(cur.devdays),kpi:asActions(cur.kpi),docaudit:asActions(cur.docaudit)})); setSubMenus({}); return; }
     setSubMenus(src.subMenus&&typeof src.subMenus==='object'&&!Array.isArray(src.subMenus)?{...src.subMenus}:{});
     const p={...NONE_PERMS(),...(src.perms||{})};
     // Device Days likewise: it goes with the departments picked for this person.
-    setPerms(cur=>USER_MODS.reduce((m,[k])=>(m[k]=(k==='mydept'||k==='devdays'||k==='kpi')?asActions(cur[k]):asActions(p[k]),m),{}));
+    setPerms(cur=>USER_MODS.reduce((m,[k])=>(m[k]=(k==='mydept'||k==='devdays'||k==='kpi'||k==='docaudit')?asActions(cur[k]):asActions(p[k]),m),{}));
   };
   // Toggle one action for a module (independent). Granting edit/add/delete auto-adds view.
   // Data Submission exists to SEND: ticking it on from nothing grants view+edit+add, or the person
@@ -2385,6 +2392,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   const toggleAct=(mid,act)=>{ if(mid==='mydept'&&MYDEPT_ACTS.indexOf(act)<0) return;
     if(mid==='mydept'&&!asActions(perms.mydept).length&&!myDepts.length) setMyDepts(myDeptGuess());
     if(mid==='devdays'&&!asActions(perms.devdays).length&&!devDepts.length) setDevDepts(myDeptGuess());
+    if(mid==='docaudit'&&!asActions(perms.docaudit).length&&!audDepts.length) setAudDepts(myDeptGuess());
     setPerms(p=>{ const cur=asActions(p[mid]); let next=cur.indexOf(act)>=0?cur.filter(a=>a!==act):[...cur,act];
     if(mid==='datasubmit'&&!cur.length&&act==='view') next=['view','edit','add'];
     if(next.some(a=>a!=='view')&&next.indexOf('view')<0) next.push('view'); next=PERM_ORDER.filter(a=>next.indexOf(a)>=0); return {...p,[mid]:next}; }); };
@@ -2446,6 +2454,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     const mdActs=(!isAdmin&&!isColl)?asActions(perms.mydept):[];
     if(mdActs.length&&!myDepts.length){ setSec('access'); return setErr('My Department: pick at least one department, or set it back to None.'); }
     if(!isAdmin&&!isColl&&asActions(perms.devdays).length&&!devDepts.length){ setSec('access'); return setErr('Device Days: pick at least one department (or All departments), or set it back to None.'); }
+    if(!isAdmin&&!isColl&&asActions(perms.docaudit).length&&!audDepts.length){ setSec('access'); return setErr('Documentation Audit: pick at least one department (or All departments), or set it back to None.'); }
     if(mdActs.length){
       const was=editing?asActions(initial.perms&&initial.perms.mydept):[];
       const wasDepts=(editing&&Array.isArray(initial.myDepartments))?initial.myDepartments:[];
@@ -2517,6 +2526,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
         // the record was missing from this administrator's own staff list.
         payload.myDepartments=asActions(perms.mydept).length?myDepts:[];
         payload.deviceDepartments=asActions(perms.devdays).length?devDepts:[];
+        payload.auditDepartments=asActions(perms.docaudit).length?audDepts:[];
         if(staffLinkDirty){ payload.staffId=staffId!==''?Number(staffId):null; const rec=allStaff.find(x=>String(x.id)===String(staffId)); payload.staffEmpId=(rec&&rec.emp_id)?rec.emp_id:''; }
       }
       // Sent only for the one role the toggle is shown for, so no other kind of account is
@@ -2848,7 +2858,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                   <div style={{display:'flex',gap:6,flexShrink:0,flexWrap:'wrap'}}>
                     <button onClick={()=>clearMod(id)} style={{padding:'5px 12px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(none?'var(--muted)':'var(--line)'),background:none?'var(--panel-2)':'#fff',color:none?'var(--ink)':'var(--muted)'}}>None</button>
                     {PERM_ACTS.filter(([v])=>id!=='mydept'||MYDEPT_ACTS.indexOf(v)>=0).map(([v,l])=>{ const on=acts.indexOf(v)>=0; const c=lvlColor[v]; return (
-                      <button key={v} onClick={()=>toggleAct(id,v)} title={id==='devdays'?DEVDAYS_TIPS[v]:id==='kpi'?KPI_TIPS[v]:v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':v==='delete'?'Can delete':'Can print / save as PDF — take the record out of the system on paper'}
+                      <button key={v} onClick={()=>toggleAct(id,v)} title={id==='devdays'?DEVDAYS_TIPS[v]:id==='kpi'?KPI_TIPS[v]:id==='docaudit'?DOCAUDIT_TIPS[v]:v==='view'?'Can open / read':v==='edit'?'Can modify existing':v==='add'?'Can create new':v==='delete'?'Can delete':'Can print / save as PDF — take the record out of the system on paper'}
                         style={{display:'inline-flex',alignItems:'center',gap:6,padding:'5px 11px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?c:'var(--line)'),background:on?c:'#fff',color:on?'#fff':'var(--ink-2)'}}>
                         <span style={{width:13,height:13,borderRadius:4,display:'grid',placeItems:'center',flexShrink:0,border:'1px solid '+(on?'#fff':'var(--line)'),background:on?'rgba(255,255,255,.25)':'#fff'}}>{on&&<Ic d={I.check} s={9} c="#fff" sw={3}/>}</span>
                         {l}
@@ -2921,6 +2931,28 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                   );})}
                 </div>
                 {!devDepts.length&&<div style={{fontSize:10.5,color:'var(--rose)',marginTop:6}}>Pick at least one department, or set Device Days back to None.</div>}
+              </div>
+              ); })()}
+            {asActions(perms.docaudit).length>0&&(()=>{
+              const needle=audDeptQ.trim().toLowerCase();
+              const all=audDepts.indexOf('*')>=0;
+              const acts=asActions(perms.docaudit);
+              const list=allDepts.slice().sort((a,b)=>(audDepts.indexOf(b.id)>=0)-(audDepts.indexOf(a.id)>=0)||String(a.name).localeCompare(String(b.name)))
+                .filter(d=>!needle||(String(d.name)+' '+d.id).toLowerCase().indexOf(needle)>=0);
+              const chip=(on)=>({padding:'5px 11px',borderRadius:16,fontSize:12,fontWeight:600,cursor:'pointer',border:'1px solid '+(on?'var(--blue)':'var(--line)'),background:on?'var(--blue)':'#fff',color:on?'#fff':'var(--ink-2)'});
+              const does=[acts.indexOf('add')>=0&&'audit',acts.indexOf('edit')>=0&&'sign off',acts.indexOf('add')<0&&acts.indexOf('edit')<0&&'view'].filter(Boolean).join(' and ');
+              return (
+              <div style={{borderTop:'1px solid var(--line-2)',paddingTop:14,marginTop:14}}>
+                <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Documentation Audit <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>{'· which departments they '+does}</span></div>
+                <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Only departments switched on in Documentation Audit {'→'} Settings can be audited. "All departments" also covers departments added later and lets them pick any nurse in the register. Nobody can audit their own documentation.</div>
+                <input value={audDeptQ} onChange={e=>setAudDeptQ(e.target.value)} placeholder="Search department…" style={{padding:'6px 9px',border:'1px solid var(--line)',borderRadius:7,fontSize:12,fontFamily:'inherit',marginBottom:8,width:'100%',maxWidth:260}}/>
+                <div style={{display:'flex',flexWrap:'wrap',gap:6,maxHeight:170,overflow:'auto'}}>
+                  <button type="button" onClick={()=>toggleAudDept('*')} style={Object.assign(chip(all),{borderStyle:'dashed'})}>All departments</button>
+                  {!all&&list.map(d=>{ const on=audDepts.indexOf(d.id)>=0; return (
+                    <button key={d.id} type="button" onClick={()=>toggleAudDept(d.id)} style={chip(on)}>{d.name}</button>
+                  );})}
+                </div>
+                {!audDepts.length&&<div style={{fontSize:10.5,color:'var(--rose)',marginTop:6}}>Pick at least one department, or set Documentation Audit back to None.</div>}
               </div>
               ); })()}
           </div>
@@ -3194,7 +3226,9 @@ function ActivityLog(){
     role_template_created:{l:'Role created',c:'#0090ca'}, role_template_updated:{l:'Role updated',c:'#e08a1e'},
     role_template_deleted:{l:'Role deleted',c:'#d23a52'}, role_template_applied:{l:'Role applied to members',c:'#6a52d4'},
     kpi_value:{l:'KPI figure',c:'#0090ca'}, kpi_def:{l:'KPI changed',c:'#6a52d4'}, kpi_def_archive:{l:'KPI archived',c:'#d23a52'}, kpi_report:{l:'KPI report',c:'#0090ca'},
-    kpi_report_final:{l:'KPI report final',c:'#1f9d57'}, kpi_report_reopen:{l:'KPI report re-opened',c:'#e08a1e'}, kpi_export:{l:'KPI export',c:'#3ab5a7'}, kpi_print:{l:'KPI print / PDF',c:'#3ab5a7'}, kpi_config:{l:'KPI settings',c:'#6a52d4'}, kpi_schedule:{l:'KPI schedule',c:'#6a52d4'}, kpi_ack:{l:'KPI check acknowledged',c:'#e08a1e'} };
+    kpi_report_final:{l:'KPI report final',c:'#1f9d57'}, kpi_report_reopen:{l:'KPI report re-opened',c:'#e08a1e'}, kpi_export:{l:'KPI export',c:'#3ab5a7'}, kpi_print:{l:'KPI print / PDF',c:'#3ab5a7'}, kpi_config:{l:'KPI settings',c:'#6a52d4'}, kpi_schedule:{l:'KPI schedule',c:'#6a52d4'}, kpi_ack:{l:'KPI check acknowledged',c:'#e08a1e'},
+    docaudit_audit:{l:'Documentation audit',c:'#1f4f8a'}, docaudit_tool:{l:'Audit tool changed',c:'#6a52d4'}, docaudit_config:{l:'Doc. audit settings',c:'#6a52d4'}, docaudit_cap:{l:'Doc. audit action plan',c:'#e08a1e'},
+    docaudit_print:{l:'Doc. audit print / PDF',c:'#3ab5a7'}, docaudit_export:{l:'Doc. audit export',c:'#3ab5a7'}, docaudit_access:{l:'Doc. audit access',c:'#0090ca'} };
   const meta=a=>META[a]||{l:a,c:'#8a93a3'};
   const fmtTs=ts=>{ try{ return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }catch(e){ return ''; } };
   const filtered=(rows||[]).filter(r=>{ if(!q.trim()) return true; const s=(r.username+' '+r.name+' '+meta(r.action).l+' '+r.target+' '+r.detail+' '+r.ip).toLowerCase(); return s.includes(q.trim().toLowerCase()); });

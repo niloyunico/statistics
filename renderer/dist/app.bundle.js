@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=434bb2f7f4","reports":"/dist/reports.chunk.js?v=cb1b16497c","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=65d770e321","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=2ec172bc8f","reports":"/dist/reports.chunk.js?v=642a509d61","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=39c06c6e07","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -9,7 +9,7 @@ function load(n){if(!M[n])return Promise.resolve(false);if(READY[n])return Promi
 window.unicoLoadChunk=load;
 window.unicoChunkReady=function(n){return !!READY[n];};
 window.unicoChunkNames=function(){var a=[];for(var k in M){if(Object.prototype.hasOwnProperty.call(M,k))a.push(k);}return a;};
-var ORDER=["datacollection","qualityguide","quality","reports","staffprofile","roster","performance","supervisor","medicine","manpower","devdays","kpi"];
+var ORDER=["datacollection","qualityguide","quality","reports","staffprofile","roster","performance","supervisor","medicine","manpower","devdays","kpi","docaudit"];
 function preload(){var q=ORDER.slice();
 try{var u=window.__UNICO_USER__;if(u&&["collector","incharge","nurse","pca"].indexOf(u.role)>=0){q=["datacollection"].concat(q.filter(function(n){return n!=="datacollection";}));}}catch(e){}
 function next(){if(!q.length)return;var n=q.shift();load(n)["catch"](function(){})["then"](function(){setTimeout(next,150);});}
@@ -18,7 +18,7 @@ function start(){var idle=window.requestIdleCallback||function(f){return setTime
 if(document.readyState==="complete")start();else window.addEventListener("load",start);
 })();
 /* ===== placeholders for code-split components ===== */
-(function(){var N=["StaffProfile","StaffForm","Reports","Settings","AccessControl","QualityView","QualityReportsPanel","ChartsGallery","DataFields","CollectorStaffRequests","DataPatientForm","DataQualityForm","DataReview","DataShareLinks","CollectorPortal","SubmissionAnalytics","DataCollectionSettings","DeviceDaysView","KpiView","SupervisorView","PerformanceView","RosterView","MedicineView"];
+(function(){var N=["StaffProfile","StaffForm","Reports","Settings","AccessControl","QualityView","QualityReportsPanel","ChartsGallery","DataFields","CollectorStaffRequests","DataPatientForm","DataQualityForm","DataReview","DataShareLinks","CollectorPortal","SubmissionAnalytics","DataCollectionSettings","DeviceDaysView","KpiView","DocAuditView","SupervisorView","PerformanceView","RosterView","MedicineView"];
 function ph(){return (window.React&&window.React.createElement)?window.React.createElement("div",{style:{display:"grid",placeItems:"center",height:"50vh",color:"var(--muted)",fontSize:13}},"Loading this screen\u2026"):null;}
 for(var i=0;i<N.length;i++){if(typeof window[N[i]]==="undefined"){window[N[i]]=ph;window[N[i]].__unicoPlaceholder=true;}}
 })();
@@ -7359,6 +7359,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     'overlay-edit': { level: 'warn', title: 'Edited in the Quality console', fix: 'The figure used is a Quality-console edit, not the approved submission. Check it is intended.' },
     'dd-incomplete': { level: 'warn', title: 'Device Days not complete', fix: 'Some days of the month are missing or waiting for review in Device Days, so the denominator may be short.' },
     'patient-days-mismatch': { level: 'warn', title: 'Patient-days differ from Device Days', fix: 'The patient-days used differ by more than 5% from the unit’s approved Device Days total patients. Check which is right.' },
+    'docaudit-sample': { level: 'warn', title: 'Fewer records audited than the minimum', fix: 'The department audited fewer patient records than its monthly minimum (Documentation Audit → Settings; policy 7.1: at least 10 per unit). Audit more records before the 5th of next month.' },
     'stale-den': { level: 'warn', title: 'Old headcount carried forward', fix: 'The staff headcount used was entered more than 3 months ago. Enter this month’s headcount in Quality → Indicator Administration.' },
     outlier: { level: 'warn', title: 'Unusual figure', fix: 'Far from the KPI’s recent months. Check the source figures are right.' },
     'setup-drift': { level: 'warn', title: 'Units expected differ from Department Setup', fix: 'This KPI’s “Units expected” list differs from the units Department Setup says report the indicator. Update one of them.' },
@@ -7471,7 +7472,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
         kpiId: def.id, code: def.code || '', name: def.name, pillar: def.pillar, unit: def.unit || '', formula: def.formula, goalDirection: def.goalDirection,
         decimals: def.decimals, objective: def.objective || '', formulaText: def.formulaText || '', numLabel: def.numLabel || '', denLabel: def.denLabel || '',
         baseline: def.baseline || null, targets: (def.targets || []).filter((t) => t && t.cycle <= cycleCfg(def, cfg).cycles), baselineTargetPct: def.baselineTargetPct, actions: (def.actions || []).filter((x) => x && x.text), remarks: def.remarks || '',
-        frequency: def.frequency || '', trackingNote: trackingNote(def), linked: !!(def.source && def.source.indId), autoFill: def.autoFill !== false,
+        frequency: def.frequency || '', trackingNote: trackingNote(def), linked: !!(def.source && def.source.indId), sourceRule: (def.source && def.source.rule) || null, autoFill: def.autoFill !== false,
         startMonth: startOf(def, cfg), ownStart: isMonth(def.startMonth), cycle: cycleOf(end, cfg, def),
         freqMonths: f, schedule: scheduleText(def, cfg), ownCycles: cycleCfg(def, cfg).own, latest, resultLabel, periods,
         nextDue: f > 1 && started.length ? nextDue(def, end, cfg) : null,
@@ -7509,6 +7510,223 @@ window.QI_CORRECTIONS_BY_DEFID = {
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   if (root) root.UNICO_KPI = API;
+})(typeof window !== 'undefined' ? window : null);
+
+;
+/* ===== doc-audit-core.js ===== */
+/* UNICO — Nursing Documentation Audit: the ONE rule for scoring an audited record and for the
+   monthly KPIs. Shared by the server (server/doc-audit.js, require()) and the browser
+   (window.UNICO_DA: the audit form's live result panel, the register, the reports), so the
+   score a nurse is shown on screen is exactly the score the server stores and the KPI counts.
+
+   The rules are the policy's (UHP-NSG-QA-001 v2.0 §8, repeated by QA-002/003/004):
+     Documentation Accuracy (%) = Yes ÷ (Yes + No) × 100 — N/A is excluded from scoring.
+     PASS = score ≥ 90 % AND no critical criterion marked No. Any critical failure = FAIL.
+     Grade: ≥ 95 Excellent · 90–94.9 Good · 80–89.9 Needs improvement · < 80 Unsatisfactory.
+   The score is rounded to one decimal BEFORE it is graded, so the band printed always matches
+   the figure printed beside it. Unreviewed items stay blank and are never counted as N/A.
+
+   An audit carries a frozen copy of the criteria it was filled against (freezeCriteria), so
+   editing a tool later never changes an old audit's score. Dates are on the hospital calendar
+   (Asia/Dhaka, UTC+6, no DST). */
+(function (root) {
+  const STATUSES = ['draft', 'completed', 'acknowledged', 'signed'];
+  const STATUS_LABEL = { draft: 'Draft', completed: 'Completed', acknowledged: 'Acknowledged', signed: 'Signed off' };
+  const ANSWERS = ['Y', 'N', 'NA'];
+  const PASS_MARK = 90;
+  const GRADES = [
+    { id: 'excellent', min: 95, label: 'Excellent', action: 'Recognise good practice; share as example.' },
+    { id: 'good', min: 90, label: 'Good', action: 'Feedback on gaps; monitor next audit.' },
+    { id: 'improve', min: 80, label: 'Needs improvement', action: 'Coaching; re-audit within 1 month.' },
+    { id: 'unsat', min: -1, label: 'Unsatisfactory', action: 'Individual improvement plan; focused training; re-audit within 2 weeks.' },
+  ];
+  const FAIL_ACTION = 'Same-day correction where possible; incident report if harm/near miss; root-cause review.';
+  const KPI_FORMULAS = ['accuracy', 'pass', 'full', 'critical', 'subset'];
+  const KPI_FORMULA_LABEL = {
+    accuracy: "Total 'Yes' ÷ (Total 'Yes' + Total 'No') × 100 across all audited records",
+    pass: 'Records scoring ≥ 90% with zero critical failures ÷ records audited × 100',
+    full: "Records with no 'No' answers ÷ records audited × 100",
+    critical: "Records with ≥ 1 critical criterion marked 'No' ÷ records audited × 100",
+    subset: "'Yes' ÷ ('Yes' + 'No') for the chosen criteria",
+  };
+  const SHIFTS = ['Morning', 'Evening', 'Night'];
+  const MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const TZ_MS = 6 * 3600 * 1000;
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const has = (v) => v !== null && v !== undefined && v !== '' && !(typeof v === 'number' && isNaN(v));
+  const round1 = (x) => Math.round(x * 10) / 10;
+  const isDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s + 'T00:00:00Z'));
+  const isMonth = (s) => typeof s === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(s);
+  function hospitalNow(now) {
+    const t = new Date((now == null ? Date.now() : +now) + TZ_MS);
+    return { date: t.toISOString().slice(0, 10), month: t.toISOString().slice(0, 7) };
+  }
+  const addMonth = (ym, n) => { let y = +ym.slice(0, 4), m = +ym.slice(5, 7) - 1 + n; y += Math.floor(m / 12); m = ((m % 12) + 12) % 12; return y + '-' + pad(m + 1); };
+  function monthsBetween(from, to, cap) {
+    const out = [];
+    if (!isMonth(from) || !isMonth(to) || from > to) return out;
+    for (let m = from; m <= to && out.length < (cap || 60); m = addMonth(m, 1)) out.push(m);
+    return out;
+  }
+  const fmtMonth = (ym) => (isMonth(ym) ? MONS[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4) : String(ym || ''));
+  const fmtDate = (d) => (isDate(d) ? +d.slice(8, 10) + ' ' + MONS[+d.slice(5, 7) - 1] + ' ' + d.slice(0, 4) : String(d || ''));
+  const quarterOf = (d) => { const s = String(d || ''); return s.slice(0, 4) + '-Q' + (Math.floor((+s.slice(5, 7) - 1) / 3) + 1); };
+
+  /* ------------------------------------------------------------ the tool --- */
+  const isLiveTool = (t) => !!t && !t.removedAt && !t.disabled;
+  const activeCriteria = (list) => (list || []).filter((c) => c && c.id && c.active !== false);
+  // The criteria an audit is scored against, frozen onto the audit when it is created.
+  function freezeCriteria(tool) {
+    const secs = {};
+    ((tool && tool.sections) || []).forEach((s) => { secs[s.id] = s.title; });
+    return activeCriteria(tool && tool.criteria).map((c) => ({
+      id: c.id, no: c.no, sectionId: c.sectionId || '', section: secs[c.sectionId] || '', text: c.text,
+      critical: !!c.critical, jci: Array.isArray(c.jci) ? c.jci.slice(0, 8) : [],
+    }));
+  }
+  // The N/A guidance for one procedure area / zone: { na:[ids suggested N/A], never:[ids that may never be N/A], notes:[...] }.
+  function guideFor(tool, area) {
+    const out = { na: [], never: [], notes: [] };
+    const a = String(area || '').trim().toLowerCase();
+    ((tool && tool.naGuide) || []).forEach((g) => {
+      if (!g || !Array.isArray(g.areas) || !g.areas.some((x) => String(x).trim().toLowerCase() === a)) return;
+      (g.na || []).forEach((id) => { if (out.na.indexOf(id) < 0) out.na.push(id); });
+      (g.never || []).forEach((id) => { if (out.never.indexOf(id) < 0) out.never.push(id); });
+      if (g.note) out.notes.push(g.note);
+    });
+    return out;
+  }
+
+  /* ----------------------------------------------------------- one record --- */
+  function gradeOf(pct) {
+    if (!has(pct)) return null;
+    return GRADES.find((g) => pct >= g.min) || GRADES[GRADES.length - 1];
+  }
+  /* The result of one audited record. `criteria` = the audit's frozen list (or a tool's criteria).
+     Returns { yes, no, na, blank, applicable, pct, criticalFails:[ids], grade, gradeLabel, pass, action, complete }. */
+  function score(answers, criteria) {
+    const a = answers || {};
+    let yes = 0, no = 0, na = 0, blank = 0;
+    const criticalFails = [];
+    activeCriteria(criteria).forEach((c) => {
+      const v = a[c.id];
+      if (v === 'Y') yes++;
+      else if (v === 'N') { no++; if (c.critical) criticalFails.push(c.id); }
+      else if (v === 'NA') na++;
+      else blank++;
+    });
+    const applicable = yes + no;
+    const pct = applicable ? round1((yes / applicable) * 100) : null;
+    const g = gradeOf(pct);
+    const pass = pct != null && pct >= PASS_MARK && criticalFails.length === 0;
+    return {
+      yes, no, na, blank, applicable, pct, criticalFails,
+      grade: g ? g.id : null, gradeLabel: g ? g.label : '',
+      pass, result: pct == null ? '' : pass ? 'PASS' : 'FAIL',
+      action: criticalFails.length ? FAIL_ACTION : g ? g.action : '',
+      complete: blank === 0 && applicable + na > 0,
+    };
+  }
+
+  /* What stops an audit from being completed. `audit` = { deptId, date, uhid, nurse, answers, evidence, area };
+     `criteria` = its frozen list; `opts` = { today, tool (for the N/A guide), auditorStaffId }.
+     Returns [{ field, criterion?, message }] — empty = ready. */
+  function validate(audit, criteria, opts) {
+    const o = opts || {};
+    const x = audit || {};
+    const out = [];
+    const ans = x.answers || {}, ev = x.evidence || {};
+    if (!x.deptId) out.push({ field: 'deptId', message: 'Choose the department.' });
+    if (!isDate(x.date)) out.push({ field: 'date', message: 'Enter the audit date.' });
+    else if (o.today && x.date > o.today) out.push({ field: 'date', message: 'The audit date cannot be in the future.' });
+    if (!String(x.uhid || '').trim()) out.push({ field: 'uhid', message: 'Enter the patient UHID / MRN.' });
+    const n = x.nurse || {};
+    if (!n.staffId && !String(n.name || '').trim()) out.push({ field: 'nurse', message: 'Choose the nurse whose documentation was audited.' });
+    if (o.auditorStaffId != null && n.staffId != null && String(o.auditorStaffId) === String(n.staffId)) out.push({ field: 'nurse', message: 'Nurses do not audit their own documentation (policy 7.3).' });
+    const guide = o.tool ? guideFor(o.tool, x.area) : { never: [] };
+    activeCriteria(criteria).forEach((c) => {
+      const v = ans[c.id];
+      if (ANSWERS.indexOf(v) < 0) out.push({ field: 'answers', criterion: c.id, message: 'Criterion ' + c.no + ' is not answered (Yes, No or N/A).' });
+      else if (v === 'N' && String(ev[c.id] || '').trim().length < 3) out.push({ field: 'evidence', criterion: c.id, message: "Criterion " + c.no + " is 'No': write the evidence (what is missing, where, date/time)." });
+      else if (v === 'NA' && guide.never.indexOf(c.id) >= 0) out.push({ field: 'answers', criterion: c.id, message: 'Criterion ' + c.no + ' is never N/A in ' + x.area + ' (policy 7.3).' });
+    });
+    return out;
+  }
+
+  /* ------------------------------------------------------- KPIs & reports --- */
+  // A KPI over a list of audits (each with .answers, .criteria, .result). Returns { num, den, value, target, direction, met }.
+  function kpiValue(kpi, audits) {
+    const k = kpi || {};
+    const list = (audits || []).filter((a) => a && a.result);
+    let num = 0, den = 0;
+    if (k.formula === 'accuracy') list.forEach((a) => { num += a.result.yes; den += a.result.yes + a.result.no; });
+    else if (k.formula === 'pass') list.forEach((a) => { den++; if (a.result.pass) num++; });
+    else if (k.formula === 'full') list.forEach((a) => { den++; if (a.result.no === 0 && a.result.applicable > 0) num++; });
+    else if (k.formula === 'critical') list.forEach((a) => { den++; if ((a.result.criticalFails || []).length) num++; });
+    else if (k.formula === 'subset') {
+      const ids = Array.isArray(k.criteria) ? k.criteria : [];
+      list.forEach((a) => {
+        const live = new Set(activeCriteria(a.criteria).map((c) => c.id));
+        ids.forEach((id) => { if (!live.has(id)) return; const v = (a.answers || {})[id]; if (v === 'Y') { num++; den++; } else if (v === 'N') den++; });
+      });
+    }
+    const value = den > 0 ? round1((num / den) * 100) : null;
+    const target = has(k.target) ? Number(k.target) : null;
+    const lower = k.direction === 'lower';
+    const met = value == null || target == null ? null : lower ? value <= target : value >= target;
+    return { id: k.id, name: k.name, code: k.code || '', formula: k.formula, num, den, value, target, direction: lower ? 'lower' : 'higher', met };
+  }
+  /* One group of audits (a department-month, a hospital total…): counts, every KPI of the tool,
+     the criteria that failed most, and which KPIs are below target. */
+  function summarize(audits, kpis) {
+    const list = (audits || []).filter((a) => a && a.result);
+    const s = { records: list.length, yes: 0, no: 0, na: 0, pass: 0, criticalRecords: 0, fullyCompliant: 0, nurses: 0 };
+    const gaps = {};
+    const nurses = new Set();
+    list.forEach((a) => {
+      s.yes += a.result.yes; s.no += a.result.no; s.na += a.result.na;
+      if (a.result.pass) s.pass++;
+      if ((a.result.criticalFails || []).length) s.criticalRecords++;
+      if (a.result.no === 0 && a.result.applicable > 0) s.fullyCompliant++;
+      if (a.nurse) nurses.add(String(a.nurse.staffId != null ? 's' + a.nurse.staffId : 'n' + String(a.nurse.name || '').toLowerCase()));
+      const crit = {};
+      activeCriteria(a.criteria).forEach((c) => { crit[c.id] = c; });
+      Object.keys(a.answers || {}).forEach((id) => {
+        if (a.answers[id] !== 'N' || !crit[id]) return;
+        const g = gaps[id] || (gaps[id] = { id, no: crit[id].no, text: crit[id].text, critical: !!crit[id].critical, count: 0 });
+        g.count++;
+      });
+    });
+    s.nurses = nurses.size;
+    s.accuracy = s.yes + s.no > 0 ? round1((s.yes / (s.yes + s.no)) * 100) : null;
+    s.kpis = (kpis || []).map((k) => kpiValue(k, list));
+    s.belowTarget = s.kpis.filter((k) => k.met === false).map((k) => k.id);
+    s.gaps = Object.values(gaps).sort((x, y) => y.count - x.count || (x.no || 0) - (y.no || 0));
+    s.topFailing = s.gaps.slice(0, 3);
+    return s;
+  }
+  // The policy's CAP trigger (§9): the same KPI below target two months running. `prev`, `cur` = summaries.
+  function capDue(prev, cur) {
+    if (!prev || !cur || !prev.records || !cur.records) return [];
+    return cur.belowTarget.filter((id) => prev.belowTarget.indexOf(id) >= 0);
+  }
+  // Group audits by a key function: { key: [audits] }.
+  function groupBy(audits, fn) {
+    const out = {};
+    (audits || []).forEach((a) => { const k = fn(a); if (k == null) return; (out[k] = out[k] || []).push(a); });
+    return out;
+  }
+  const countsInKpi = (a) => !!a && !a.removedAt && a.status !== 'draft' && !!a.result;
+
+  const API = {
+    STATUSES, STATUS_LABEL, ANSWERS, PASS_MARK, GRADES, FAIL_ACTION, KPI_FORMULAS, KPI_FORMULA_LABEL, SHIFTS,
+    has, round1, isDate, isMonth, hospitalNow, addMonth, monthsBetween, fmtMonth, fmtDate, quarterOf,
+    isLiveTool, activeCriteria, freezeCriteria, guideFor, gradeOf, score, validate,
+    kpiValue, summarize, capDue, groupBy, countsInKpi,
+  };
+  if (typeof module !== 'undefined' && module.exports) module.exports = API;
+  if (root) root.UNICO_DA = API;
 })(typeof window !== 'undefined' ? window : null);
 
 ;
@@ -11124,6 +11342,12 @@ const UNICO_MODULES = [{
   short: 'KPI',
   icon: I.trend,
   home: 'kpiDashboard'
+}, {
+  id: 'docaudit',
+  label: 'Documentation Audit',
+  short: 'Doc audit',
+  icon: I.doc,
+  home: 'docAuditHome'
 }];
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
@@ -11140,6 +11364,7 @@ const UNICO_MODULE_VIEWS = {
   mydept: ['myDept'],
   devdays: ['devDaysEntry', 'devDaysReview', 'devDaysSummary', 'devDaysSettings'],
   kpi: ['kpiDashboard', 'kpiEntry', 'kpiReports', 'kpiManage', 'kpiActions', 'kpiSettings'],
+  docaudit: ['docAuditHome', 'docAuditNew', 'docAuditRegister', 'docAuditReports', 'docAuditTools', 'docAuditSettings'],
   medicine: ['medHome', 'medInfo', 'medBrowse', 'medBrand', 'medGeneric', 'medRxNew', 'medRxList', 'medRxPrint', 'medTemplates', 'medCatalog', 'medInteractions', 'medCalc', 'medAnalytics']
 };
 const UNICO_DS_SCREENS = [['missing', 'dsMissing', 'Missing data'], ['status', 'dsStatus', 'Submission status'], ['quality', 'dsQuality', 'Quality data'], ['patient', 'dsPatient', 'Patient statistics'], ['history', 'dsHistory', 'My submissions'], ['hh', 'dsHandHygiene', 'Hand Hygiene']];
@@ -11176,7 +11401,7 @@ function unicoModuleOf(view) {
   }
   return 'stats';
 }
-const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays', 'kpi'];
+const UNICO_ACCESS_MODULES = ['stats', 'quality', 'supervisor', 'staff', 'datacol', 'reports', 'users', 'perf', 'attrition', 'roster', 'medicine', 'datasubmit', 'staffapp', 'mydept', 'devdays', 'kpi', 'docaudit'];
 function unicoAccessModuleOf(view) {
   if (view === 'settings') return 'users';
   return unicoModuleOf(view);
@@ -11259,7 +11484,8 @@ function unicoSubMenus() {
     datacol: 'dcReview',
     reports: 'reports',
     devdays: 'devDaysEntry',
-    kpi: 'kpiDashboard'
+    kpi: 'kpiDashboard',
+    docaudit: 'docAuditHome'
   };
   Object.keys(SAMPLE).forEach(m => {
     unicoWorkspaceSubAll(SAMPLE[m]).forEach(s => {
@@ -11290,7 +11516,7 @@ function unicoAllowedModules() {
   return UNICO_ACCESS_MODULES.filter(m => unicoCan(m, 'view'));
 }
 function unicoFirstAllowedHome() {
-  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['datasubmit', 'dsHome'], ['perf', 'perfHome'], ['attrition', 'perfAttrition'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings'], ['mydept', 'myDept'], ['devdays', 'devDaysEntry'], ['kpi', 'kpiDashboard']];
+  const homes = [['stats', 'dashboard'], ['quality', 'quality'], ['supervisor', 'supHome'], ['medicine', 'medHome'], ['staff', 'nurseHome'], ['datacol', 'dcReview'], ['datasubmit', 'dsHome'], ['perf', 'perfHome'], ['attrition', 'perfAttrition'], ['roster', 'rosterHome'], ['reports', 'reports'], ['users', 'settings'], ['mydept', 'myDept'], ['devdays', 'devDaysEntry'], ['kpi', 'kpiDashboard'], ['docaudit', 'docAuditHome']];
   for (let i = 0; i < homes.length; i++) {
     if (unicoCanAccessModule(homes[i][0])) return unicoModuleLanding(homes[i][0], homes[i][1]);
   }
@@ -11657,6 +11883,14 @@ const UNICO_WS = [{
     badge: 'kpi',
     tag: 'NEW'
   }, {
+    id: 'docaudit',
+    label: 'Documentation Audit',
+    icon: I.doc,
+    home: 'docAuditHome',
+    on: v => unicoModuleOf(v) === 'docaudit',
+    badge: 'da',
+    tag: 'NEW'
+  }, {
     id: 'medicine',
     label: 'Medicine & Rx',
     icon: I.syringe,
@@ -11846,6 +12080,27 @@ function unicoWorkspaceSubAll(view) {
   }, ...(unicoUserPerms() === null ? [{
     label: 'Settings',
     view: 'kpiSettings',
+    adminOnly: true
+  }] : [])];
+  if (mod === 'docaudit') return [{
+    label: 'Dashboard',
+    view: 'docAuditHome'
+  }, {
+    label: 'New audit',
+    view: 'docAuditNew'
+  }, {
+    label: 'Register',
+    view: 'docAuditRegister'
+  }, {
+    label: 'Reports',
+    view: 'docAuditReports'
+  }, ...(unicoUserPerms() === null ? [{
+    label: 'Audit tools',
+    view: 'docAuditTools',
+    adminOnly: true
+  }, {
+    label: 'Settings',
+    view: 'docAuditSettings',
     adminOnly: true
   }] : [])];
   if (mod === 'devdays') return [{
@@ -12344,6 +12599,8 @@ function Sidebar({
   const ddBadge = ddAlerts ? (ddAlerts.total || 0) + (ddAlerts.pendingReview || 0) : 0;
   const kpiAlerts = unicoUseKpiAlerts(unicoCanAccessModule('kpi'));
   const kpiBadge = kpiAlerts ? kpiAlerts.total || 0 : 0;
+  const daAlerts = unicoUseDocAuditAlerts(unicoCanAccessModule('docaudit'));
+  const daBadge = daAlerts ? daAlerts.total || 0 : 0;
   const rosPend = unicoUseRosterPending(unicoCanAccessModule('roster'));
   const rosBadge = rosPend ? (rosPend.pending || 0) + (rosPend.returned || 0) : 0;
   const [dcBadge, setDcBadge] = React.useState(() => window.__UNICO_DC_PENDING__ || 0);
@@ -12403,7 +12660,7 @@ function Sidebar({
       className: "sb-sec"
     }, g.sec), items.map(it => {
       const active = it.on(view);
-      const badgeN = it.id === 'datacol' ? dcBadge : it.badge === 'sup' ? supBadge : it.badge === 'dd' ? ddBadge : it.badge === 'kpi' ? kpiBadge : it.badge === 'ros' ? rosBadge : it.badge === 'ds' ? dsBadge : it.badge ? qBadge : 0;
+      const badgeN = it.id === 'datacol' ? dcBadge : it.badge === 'sup' ? supBadge : it.badge === 'dd' ? ddBadge : it.badge === 'kpi' ? kpiBadge : it.badge === 'da' ? daBadge : it.badge === 'ros' ? rosBadge : it.badge === 'ds' ? dsBadge : it.badge ? qBadge : 0;
       const badge = badgeN > 0 ? badgeN : null;
       const auto = !!AUTO_OPEN[it.id];
       const itSub = auto && folded[it.id] ? [] : subFor(it, active);
@@ -12885,6 +13142,40 @@ function unicoUseKpiAlerts(enabled) {
       live = false;
       clearInterval(t);
       window.removeEventListener('unico:kpi-refresh', run);
+      document.removeEventListener('visibilitychange', vis);
+    };
+  }, [enabled]);
+  return enabled ? a : null;
+}
+function unicoUseDocAuditAlerts(enabled) {
+  const [a, setA] = React.useState(() => window.__UNICO_DA_ALERTS__ || null);
+  React.useEffect(() => {
+    if (!enabled) return;
+    let live = true;
+    const run = () => {
+      if (document.visibilityState === 'hidden') return;
+      fetch('/api/doc-audit/missing', {
+        credentials: 'same-origin',
+        cache: 'no-store'
+      }).then(r => r.ok ? r.json() : null).then(j => {
+        if (!live || !j || !j.ok) return;
+        setA(j);
+        try {
+          window.__UNICO_DA_ALERTS__ = j;
+        } catch (e) {}
+      }).catch(() => {});
+    };
+    run();
+    const t = setInterval(run, 300000);
+    const vis = () => {
+      if (document.visibilityState === 'visible') run();
+    };
+    window.addEventListener('unico:da-refresh', run);
+    document.addEventListener('visibilitychange', vis);
+    return () => {
+      live = false;
+      clearInterval(t);
+      window.removeEventListener('unico:da-refresh', run);
       document.removeEventListener('visibilitychange', vis);
     };
   }, [enabled]);
@@ -14769,6 +15060,155 @@ Object.assign(window, {
       }
     }, m.text);
   }
+  function MyDocAudits() {
+    const [d, setD] = useState(null);
+    const [open, setOpen] = useState(null);
+    const [busy, setBusy] = useState('');
+    const load = () => fetch('/api/doc-audit/mine', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(r => r.ok ? r.json() : null).then(j => setD(j && j.ok ? j : null)).catch(() => setD(null));
+    useEffect(() => {
+      load();
+    }, []);
+    if (!d || !d.linked || !d.audits.length) return null;
+    const fmt = x => {
+      try {
+        return new Date(x + 'T00:00:00Z').toLocaleDateString('en-GB', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+          timeZone: 'UTC'
+        });
+      } catch (e) {
+        return x;
+      }
+    };
+    const ack = async x => {
+      setBusy(x.id);
+      try {
+        const r = await fetch('/api/doc-audit/mine/' + encodeURIComponent(x.id) + '/ack', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            'content-type': 'application/json'
+          },
+          body: '{}'
+        });
+        const j = await r.json().catch(() => null);
+        if (!j || !j.ok) throw new Error(j && j.error || 'Could not record your acknowledgement.');
+        if (window.UI && window.UI.toast) window.UI.toast('Acknowledged — thank you.', 'success');
+        load();
+      } catch (e) {
+        if (window.UI && window.UI.toast) window.UI.toast(e.message, 'error');
+      } finally {
+        setBusy('');
+      }
+    };
+    const waiting = d.audits.filter(x => x.status === 'completed').length;
+    return React.createElement("div", {
+      className: "card"
+    }, React.createElement("div", {
+      className: "card-h"
+    }, React.createElement("h3", null, "My documentation audits"), React.createElement("span", {
+      className: "sub",
+      style: {
+        marginLeft: 'auto'
+      }
+    }, waiting ? waiting + ' waiting for your acknowledgement' : 'Feedback on your nursing records')), React.createElement("div", {
+      className: "card-b",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 0
+      }
+    }, d.audits.slice(0, 6).map(x => {
+      const r = x.result || {};
+      const pass = r.result === 'PASS';
+      const isOpen = open === x.id;
+      return React.createElement("div", {
+        key: x.id,
+        style: {
+          borderTop: '1px solid var(--line-2)',
+          padding: '8px 0'
+        }
+      }, React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          cursor: 'pointer'
+        },
+        onClick: () => setOpen(isOpen ? null : x.id)
+      }, React.createElement("span", {
+        style: {
+          fontSize: 12,
+          minWidth: 88
+        }
+      }, fmt(x.date)), React.createElement("span", {
+        style: {
+          flex: 1,
+          minWidth: 120,
+          fontSize: 12.5
+        }
+      }, x.deptName, React.createElement("span", {
+        style: {
+          color: 'var(--muted)'
+        }
+      }, x.auditor ? ' · audited by ' + x.auditor.name : '')), React.createElement("b", {
+        style: {
+          fontSize: 13
+        }
+      }, r.pct == null ? '—' : r.pct + '%'), React.createElement("span", {
+        style: {
+          fontSize: 10.5,
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 999,
+          background: pass ? '#e7f6ed' : '#fde4e8',
+          color: pass ? '#14713f' : '#a3172f'
+        }
+      }, r.result || '—'), x.status === 'completed' ? React.createElement("button", {
+        className: "btn pri sm",
+        disabled: busy === x.id,
+        onClick: e => {
+          e.stopPropagation();
+          ack(x);
+        }
+      }, "Acknowledge") : React.createElement("span", {
+        style: {
+          fontSize: 11,
+          color: 'var(--muted)'
+        }
+      }, x.status === 'signed' ? 'Signed off' : 'Acknowledged')), isOpen && React.createElement("div", {
+        style: {
+          marginTop: 8,
+          fontSize: 12,
+          lineHeight: 1.45,
+          background: 'var(--panel-2)',
+          borderRadius: 8,
+          padding: '8px 10px'
+        }
+      }, r.gradeLabel && React.createElement("div", null, React.createElement("b", null, r.gradeLabel), x.action ? ' — ' + x.action : ''), x.gaps && x.gaps.length ? React.createElement("ul", {
+        style: {
+          margin: '6px 0 0',
+          paddingLeft: 18
+        }
+      }, x.gaps.map(g => React.createElement("li", {
+        key: g.no
+      }, React.createElement("b", null, "#", g.no, g.critical ? ' (critical)' : ''), " ", g.text, g.evidence ? React.createElement("div", {
+        style: {
+          color: '#8f1d33'
+        }
+      }, g.evidence) : null))) : React.createElement("div", {
+        style: {
+          marginTop: 4,
+          color: '#14713f'
+        }
+      }, "Every applicable criterion was met.")));
+    })));
+  }
   function ProfileView() {
     const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
     const [photo, setPhoto] = useState(u && u.photo || null);
@@ -15111,7 +15551,7 @@ Object.assign(window, {
         flexDirection: 'column',
         gap: 16
       }
-    }, u && React.createElement("div", {
+    }, u && staff ? React.createElement(MyDocAudits, null) : null, u && React.createElement("div", {
       className: "card"
     }, React.createElement("div", {
       className: "card-h"
@@ -28379,6 +28819,7 @@ function App() {
     if (s.indexOf('quality') === 0 || s === 'reportsQuality' || s === 'gallery') return 'quality';
     if (s.indexOf('devDays') === 0) return 'devdays';
     if (s.indexOf('kpi') === 0) return 'kpi';
+    if (s.indexOf('docAudit') === 0) return 'docaudit';
     if (s.indexOf('dc') === 0 || s.indexOf('ds') === 0) return 'datacollection';
     if (s === 'reports' || s === 'settings' || s === 'users') return 'reports';
     if (s === 'staffProfile' || s === 'staffForm' || s === 'perfStaff' || s === 'staffH360') return 'staffprofile';
@@ -28537,6 +28978,24 @@ function App() {
       view: route.view,
       report: route.report,
       kpi: route.kpi,
+      setRoute: setRoute
+    }) : null;
+  } else if (route.view && route.view.indexOf('docAudit') === 0) {
+    const DA_TITLE = {
+      docAuditHome: 'Dashboard',
+      docAuditNew: route.audit ? 'Audit' : 'New audit',
+      docAuditRegister: 'Register',
+      docAuditReports: 'Reports',
+      docAuditTools: 'Audit tools',
+      docAuditSettings: 'Settings'
+    };
+    crumbs = ['UNICO', 'Documentation Audit', DA_TITLE[route.view] || 'Dashboard'];
+    body = typeof DocAuditView !== 'undefined' ? React.createElement(DocAuditView, {
+      view: route.view,
+      audit: route.audit,
+      dept: route.dept,
+      nurse: route.nurse,
+      month: route.month,
       setRoute: setRoute
     }) : null;
   } else if (route.view === 'settings') {

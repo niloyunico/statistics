@@ -13,7 +13,7 @@ const ST_INK = { met: 'FF14713F', near: 'FF8A5A00', off: 'FFA3172F', notarget: '
 const LVL_FILL = { error: 'FFFDE4E8', warn: 'FFFFF6E0', info: 'FFEEF2F6' };
 const LVL_INK = { error: 'FFA3172F', warn: 'FF8A5A00', info: 'FF5B6878' };
 const when = (t) => (t ? new Date(t).toLocaleString('en-GB', { timeZone: 'Asia/Dhaka', dateStyle: 'medium', timeStyle: 'short' }) : '');
-const SOURCE = { 'hh-audit': 'Hand hygiene audit', pooled: 'Quality data (all units)', hospital: 'Quality data (hospital)', partial: 'Denominator missing', manual: 'Entered', edited: 'Edited (system figure overridden)', missing: '' };
+const SOURCE = { 'hh-audit': 'Hand hygiene audit', 'doc-audit': 'Documentation audit (all departments)', pooled: 'Quality data (all units)', hospital: 'Quality data (hospital)', partial: 'Denominator missing', manual: 'Entered', edited: 'Edited (system figure overridden)', missing: '' };
 
 function sheet(wb, name, cols) {
   const ws = wb.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 1 }] });

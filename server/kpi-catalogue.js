@@ -224,10 +224,11 @@ const KPIS = [
   {
     id: 'kpi-documentation', code: '2C', pillar: 'workforce', name: 'Documentation Accuracy',
     objective: 'To move towards paperless documentation and improve accuracy in nursing records.',
-    source: { indId: 'ind-nursing-documentation-accuracy', indName: 'Nursing Documentation Accuracy', rule: 'hospital' },
+    // Filled from the Documentation Audit module (server/doc-audit.js) — policy UHP-NSG-QA-001 KPI-1.
+    source: { indId: 'ind-nursing-documentation-accuracy', indName: 'Nursing Documentation Accuracy', rule: 'docaudit' },
     unit: '%', formula: 'pct', goalDirection: 'higher_is_better', decimals: 1,
-    formulaText: '(Number of accurate nursing records ÷ Total nursing records audited) × 100',
-    numLabel: 'Accurate nursing records', denLabel: 'Nursing records audited',
+    formulaText: "Total 'Yes' ÷ (Total 'Yes' + Total 'No') × 100 across all audited records (Documentation Audit, UHP-NSG-QA-001 KPI-1)",
+    numLabel: "Criteria met ('Yes')", denLabel: "Criteria applicable ('Yes' + 'No')",
     baseline: { value: 60, note: 'KPI deck, slide 2C' },
     targets: [{ cycle: 1, value: 85 }, { cycle: 2, value: 85 }],
     actions: [
