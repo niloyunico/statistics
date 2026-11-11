@@ -164,7 +164,8 @@ function StaffRecordSheet({ e, perf, tenure, sel, onDone }){
      'fail' is a real outcome, not an error: a record with no photo on file, or a URL
      that no longer resolves, prints the initials tile below rather than the browser's
      broken-image glyph. */
-  const rawPhoto=(e&&e.photo&&e.photo.url)||'';
+  const shownPhoto=e&&window.unicoStaffPhoto?window.unicoStaffPhoto(e):(e&&e.photo);
+  const rawPhoto=(shownPhoto&&(typeof shownPhoto==='string'?shownPhoto:shownPhoto.url))||'';
   // A print needs the big derivative, not the 96px avatar one.
   const photoUrl=rawPhoto&&window.MK&&window.MK.cdnPhoto?window.MK.cdnPhoto(rawPhoto,320,'fit'):rawPhoto;
   const wantPhoto=!!(sel&&sel.photo);
@@ -948,7 +949,7 @@ function StaffProfile({store, empId, setRoute}){
                   {/* zoomable: clicking the portrait opens it LARGE in a photo-frame
                       lightbox — still strictly view-only. */}
                   <PhotoPicker
-                  value={e.photo||null}
+                  value={(window.unicoStaffPhoto?window.unicoStaffPhoto(e):e.photo)||null}
                   initials={badgeIni} name={e.name} kind="staff" hue={badgeHue}
                   w={104} h={120} radius={10} plain readOnly
                   zoomable zoomSub={desig||undefined}
@@ -970,6 +971,8 @@ function StaffProfile({store, empId, setRoute}){
                   );
                 })():null}
               </div>
+              {(()=>{ const p=window.unicoStaffPhoto&&window.unicoStaffPhoto(e);
+                return p&&p.source==='bnmc'?<div style={{fontSize:10.5,color:'var(--muted)',marginTop:7,textAlign:'center'}}>Photo from BNMC — add one in Edit profile to replace it</div>:null; })()}
               <h2 style={{margin:'14px 0 3px',fontSize:19,fontWeight:800,letterSpacing:'-.2px',textAlign:'center'}}>{e.name}</h2>
               <div style={{fontSize:12.5,color:'var(--blue-700)',fontWeight:700,textAlign:'center'}}>{desig||'—'}</div>
               <div style={{display:'flex',gap:6,marginTop:11,flexWrap:'wrap',justifyContent:'center'}}>

@@ -89,7 +89,8 @@
      falls back to initials instead of the browser's broken-image glyph. */
   function photoUrlOf(rec) {
     if (!rec) return '';
-    var p = rec.photo || rec.photo_url;
+    // Our photo, else the BNMC portrait of a verified record (staff-data.js unicoStaffPhoto).
+    var p = (typeof window !== 'undefined' && window.unicoStaffPhoto) ? window.unicoStaffPhoto(rec) : (rec.photo || rec.photo_url);
     if (!p) return '';
     return typeof p === 'string' ? p : (p.url || '');
   }

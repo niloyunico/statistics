@@ -295,7 +295,8 @@ function StaffRecordSheet({
   sel,
   onDone
 }) {
-  const rawPhoto = e && e.photo && e.photo.url || '';
+  const shownPhoto = e && window.unicoStaffPhoto ? window.unicoStaffPhoto(e) : e && e.photo;
+  const rawPhoto = shownPhoto && (typeof shownPhoto === 'string' ? shownPhoto : shownPhoto.url) || '';
   const photoUrl = rawPhoto && window.MK && window.MK.cdnPhoto ? window.MK.cdnPhoto(rawPhoto, 320, 'fit') : rawPhoto;
   const wantPhoto = !!(sel && sel.photo);
   const [photo, setPhoto] = React.useState(() => wantPhoto && photoUrl ? 'wait' : 'fail');
@@ -2221,7 +2222,7 @@ function StaffProfile({
       boxShadow: '0 6px 16px rgba(0,0,0,.13)'
     }
   }, React.createElement(PhotoPicker, {
-    value: e.photo || null,
+    value: (window.unicoStaffPhoto ? window.unicoStaffPhoto(e) : e.photo) || null,
     initials: badgeIni,
     name: e.name,
     kind: "staff",
@@ -2257,7 +2258,17 @@ function StaffProfile({
       c: "#fff",
       sw: 3
     }));
-  })() : null), React.createElement("h2", {
+  })() : null), (() => {
+    const p = window.unicoStaffPhoto && window.unicoStaffPhoto(e);
+    return p && p.source === 'bnmc' ? React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: 'var(--muted)',
+        marginTop: 7,
+        textAlign: 'center'
+      }
+    }, "Photo from BNMC \u2014 add one in Edit profile to replace it") : null;
+  })(), React.createElement("h2", {
     style: {
       margin: '14px 0 3px',
       fontSize: 19,

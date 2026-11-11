@@ -470,6 +470,31 @@ async function detect(number, opts) {
  * number within a week. They have nothing to do with how long a verification is kept:
  * what is stored here is kept until someone verifies that licence again.
  */
+/* ---------------------------------------- BNMC portraits, cached in our database ---
+   bnmcPhotos: { _id: the BNMC image URL, type, data (bytes), at }. Fetched from BNMC once
+   (paced like every other BNMC request), then served from here. */
+const PHOTO_MAX = 500 * 1024;
+async function portrait(href, opts) {
+  const fetchImpl = (opts && opts.fetch) || null;
+  const h = await getDbHandle();
+  const dbh = h && h.db ? h.db : h;
+  const col = dbh ? dbh.collection('bnmcPhotos') : null;
+  if (col) {
+    const kept = await col.findOne({ _id: href });
+    if (kept && kept.data) return { type: kept.type || 'image/jpeg', data: Buffer.from(kept.data.buffer || kept.data) };
+  }
+  await pace();
+  const r = fetchImpl ? await fetchImpl(href) : await hit(href, { headers: { 'User-Agent': UA, Referer: BASE } });
+  if (!r.ok) return null;
+  const type = r.headers.get('content-type') || 'image/jpeg';
+  if (!/^image\//i.test(type)) { const e = new Error('not an image'); e.status = 415; throw e; }
+  const data = Buffer.from(await r.arrayBuffer());
+  if (col && data.length && data.length <= PHOTO_MAX) {
+    await col.updateOne({ _id: href }, { $set: { type, data, at: new Date() } }, { upsert: true }).catch(() => {});
+  }
+  return { type, data };
+}
+
 async function storeVerification(staffId, empId, payload) {
   const h = await getDbHandle();
   const dbh = h && h.db ? h.db : h;
@@ -484,6 +509,9 @@ async function storeVerification(staffId, empId, payload) {
   if (payload.licence_program) set.licence_program = String(payload.licence_program);
   if (payload.licence_expiry) set.licence_expiry = String(payload.licence_expiry);
   const r = await dbh.collection('staff').updateOne(filter, { $set: set });
+  // Its portrait into our cache now, so the profile and lists show it at once (best effort).
+  const pic = payload.verification && payload.verification.person && payload.verification.person.photo;
+  if (pic) { try { if (new URL(pic).hostname === HOST) portrait(pic).catch(() => {}); } catch (e) { /* not a URL */ } }
   // Same reason as server/photos.js: a verification the cached roster does not carry
   // never reaches the browser, and the client merge cannot restore what it is not sent.
   try { await cache.bump('staff'); } catch (e) { /* best effort */ }
@@ -620,25 +648,25 @@ function mount(app, opts) {
   // Portrait proxy. BNMC serves photos over plain http, which the https app cannot
   // embed. The host is pinned so this parameter can never be aimed at an internal
   // address, and only image content types are passed back.
+  // A staff record with no photo of ours shows its BNMC portrait (renderer staff-data.js
+  // unicoStaffPhoto), so a directory can ask for dozens at once: each is fetched from BNMC
+  // once and then served from our database (bnmcPhotos).
   app.get('/api/bnmc/photo', requireApi, async (req, res) => {
     let u;
     try { u = new URL(String(req.query.u || '')); } catch (e) { return res.status(400).end(); }
     if (u.hostname !== HOST) return res.status(403).end();
     try {
-      await pace();
-      const r = await hit(u.href, { headers: { 'User-Agent': UA, Referer: BASE } });
-      if (!r.ok) return res.status(502).end();
-      const type = r.headers.get('content-type') || 'image/jpeg';
-      if (!/^image\//i.test(type)) return res.status(415).end();
-      res.set('Content-Type', type);
-      res.set('Cache-Control', 'public, max-age=86400');
-      res.end(Buffer.from(await r.arrayBuffer()));
-    } catch (e) { res.status(504).end(); }
+      const pic = await portrait(u.href);
+      if (!pic) return res.status(502).end();
+      res.set('Content-Type', pic.type);
+      res.set('Cache-Control', 'public, max-age=604800');
+      res.end(pic.data);
+    } catch (e) { res.status(e && e.status ? e.status : 504).end(); }
   });
 }
 
 module.exports = {
-  mount, lookup, detect, programs, storeVerification,
+  mount, lookup, detect, programs, storeVerification, portrait,
   parseResult, parseRows, parsePerson, parsePrograms, primaryOf,
   programsForEducation, candidateOrder, PROGRAMS_FALLBACK,
 };

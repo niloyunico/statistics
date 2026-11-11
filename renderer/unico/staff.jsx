@@ -12,6 +12,8 @@ function VaccBadge({status}){
 // uploaded (staff.photo = {url, publicId} from POST /api/upload) and falls back to
 // name-coloured initials otherwise — including when the url is dead or blocked, so a
 // list can never show the browser's broken-image glyph.
+// The photo to show: ours, else the BNMC portrait of a verified record (staff-data.js).
+function staffShownPhoto(e){ return window.unicoStaffPhoto?window.unicoStaffPhoto(e):(e&&e.photo); }
 function Avatar({name,size=34,fontSize,photo}){
   const url=typeof photo==='string'?photo:photo&&photo.url;
   const image=window.MK.usePhoto(url,size);
@@ -362,7 +364,7 @@ function StaffDeptChart({list, setRoute, tone='#0090ca', role='Nurse'}){
             {[...members[sel]].sort((a,b)=>String(a.name).localeCompare(String(b.name))).map(e=>(
               <div key={e.id} onClick={()=>setRoute&&setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
                 onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
-                <Avatar photo={e.photo} name={e.name} size={26}/>
+                <Avatar photo={staffShownPhoto(e)} name={e.name} size={26}/>
                 <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
                   <div style={{fontSize:10.5,color:'var(--muted)'}}>{e.designation||'—'}{e.emp_id?' · '+e.emp_id:''}</div></div>
                 {e.phone&&<span className="num" style={{fontSize:11,color:'var(--ink-2)'}}>{e.phone}</span>}
@@ -405,7 +407,7 @@ function StaffExpChart({list, setRoute, role='Nurse'}){
               {[...cur].sort((a,b)=>S.expYears(b)-S.expYears(a)).map(e=>(
                 <div key={e.id} onClick={()=>setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
                   onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
-                  <Avatar photo={e.photo} name={e.name} size={26}/>
+                  <Avatar photo={staffShownPhoto(e)} name={e.name} size={26}/>
                   <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
                     <div style={{fontSize:10.5,color:'var(--muted)'}}>{e.designation||'—'} · {staffDeptShow(e.current_department)}</div></div>
                   <span className="num" style={{fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>{S.expLabel(e)}</span>
@@ -454,7 +456,7 @@ function StaffDesigChart({list, setRoute, role='Nurse', onViewAll}){
               {[...curList].sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(e=>(
                 <div key={e.id} onClick={()=>setRoute({view:'staffProfile',emp:e.id})} style={{display:'flex',alignItems:'center',gap:9,padding:'6px 8px',borderRadius:7,cursor:'pointer',border:'1px solid var(--line-2)'}}
                   onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
-                  <Avatar photo={e.photo} name={e.name} size={26}/>
+                  <Avatar photo={staffShownPhoto(e)} name={e.name} size={26}/>
                   <div style={{minWidth:0,flex:1}}><div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
                     <div style={{fontSize:10.5,color:'var(--muted)'}}>{canon(e.designation)||'—'} · {staffDeptShow(e.current_department)}</div></div>
                   <span className="num" style={{fontSize:11.5,color:'var(--ink-2)',fontWeight:600}}>{S.expLabel(e)}</span>
@@ -532,7 +534,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse', group=role}){
   );
   const personRow=(e,sub,right)=>(
     <div key={e.id} className="ndb-row" onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-      <Avatar photo={e.photo} name={e.name} size={34}/>
+      <Avatar photo={staffShownPhoto(e)} name={e.name} size={34}/>
       <div style={{minWidth:0,flex:1}}>
         <div className="ndb-row-name">{e.name}</div>
         <div className="ndb-row-sub">{sub}</div>
@@ -687,7 +689,7 @@ function WorkforceDashboard({store, setRoute, role='Nurse', group=role}){
             </div>}
             {bdays.slice(0,5).map(({e,bday,turns,inDays})=>(
               <div key={e.id} className={'ndb-row'+(inDays===0?' ndb-row-today':'')} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-                <Avatar photo={e.photo} name={e.name} size={34}/>
+                <Avatar photo={staffShownPhoto(e)} name={e.name} size={34}/>
                 <div style={{minWidth:0,flex:1}}>
                   <div className="ndb-row-name">{inDays===0?'🎂 ':''}{e.name}</div>
                   <div className="ndb-row-sub">{e.current_department||'—'}{turns?' · turns '+turns:''}</div>
@@ -741,7 +743,7 @@ function StaffHighlight({list, role, tone, setRoute, onClose}){
   const Row=({e,right})=>(
     <div onClick={()=>go(e)} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 6px',borderBottom:'1px solid var(--line-2)',cursor:'pointer',borderRadius:6}}
       onMouseEnter={ev=>ev.currentTarget.style.background='var(--panel-2)'} onMouseLeave={ev=>ev.currentTarget.style.background='transparent'}>
-      <Avatar photo={e.photo} name={e.name} size={30}/>
+      <Avatar photo={staffShownPhoto(e)} name={e.name} size={30}/>
       <div style={{minWidth:0,flex:1}}>
         <div style={{fontSize:12.5,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
         <div style={{fontSize:10.5,color:'var(--muted)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.designation||'—'} · {e.current_department||'—'}</div>
@@ -845,7 +847,7 @@ function StaffDirectory({store, setRoute, initialFilter}){
             <tbody>
               {filtered.map(e=>(
                 <tr key={e.id} style={{cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-                  <td style={{textAlign:'left'}}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={e.photo} name={e.name} size={30}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div><div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification||'—'}</div></div></div></td>
+                  <td style={{textAlign:'left'}}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={staffShownPhoto(e)} name={e.name} size={30}/><div><div style={{fontWeight:600,color:'var(--ink)'}}>{e.name}</div><div style={{fontSize:10.5,color:'var(--faint)',fontFamily:"'IBM Plex Sans'"}}>{e.qualification||'—'}</div></div></div></td>
                   <td style={{textAlign:'left'}}><RoleBadge role={e.role}/></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
                   <td style={{textAlign:'left',fontFamily:"'IBM Plex Sans'"}}>{staffCanonDesig(e.designation)||'—'}</td>
@@ -876,7 +878,7 @@ function StaffCompliance({store, setRoute, role='Nurse'}){
         {rows.length===0?<div style={{padding:'24px',textAlign:'center',color:'var(--pos)',fontSize:13}}><Ic d={I.check} s={26} c="#1f9d57"/><div style={{marginTop:6}}>{emptyMsg}</div></div>:
         rows.map(e=>(
           <div key={e.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 14px',borderBottom:'1px solid var(--line-2)',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}>
-            <Avatar photo={e.photo} name={e.name} size={30}/>
+            <Avatar photo={staffShownPhoto(e)} name={e.name} size={30}/>
             <div style={{minWidth:0,flex:1}}><div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</div>
               <div style={{fontSize:11,color:'var(--muted)'}}>{e.designation} · {e.current_department}</div></div>
             <button className="btn sm" onClick={ev=>{ev.stopPropagation();setRoute({view:'staffForm',emp:e.id});}}>Fix</button>
@@ -1101,7 +1103,7 @@ function ManageStaff({store, setRoute, role, group=role, recentDays=0, recentKin
                 <tr key={e.id} style={{opacity:e.is_active?1:.55}}>
                   <td style={{textAlign:'center'}}><span onClick={ev=>{ev.stopPropagation(); if(!window.unicoCan||window.unicoCan('staff','edit')) store.toggleFav(e.id);}} style={{cursor:(!window.unicoCan||window.unicoCan('staff','edit'))?'pointer':'default',fontSize:16,color:e.fav?'#e0a81e':'#c4ccd6'}}>{e.fav?'★':'☆'}</span></td>
                   <td style={{textAlign:'left'}}>{e.emp_id}</td>
-                  <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={e.photo} name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)',display:'flex',alignItems:'center',gap:5}}><span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</span>{/* BNMC tick: the council's own answer on the day it was checked (staff-profile.jsx
+                  <td style={{textAlign:'left',cursor:'pointer'}} onClick={()=>setRoute({view:'staffProfile',emp:e.id})}><div style={{display:'flex',alignItems:'center',gap:10}}><Avatar photo={staffShownPhoto(e)} name={e.name} size={28}/><div><div style={{fontWeight:600,color:'var(--ink)',display:'flex',alignItems:'center',gap:5}}><span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{e.name}</span>{/* BNMC tick: the council's own answer on the day it was checked (staff-profile.jsx
                       shows it in full). Absent = never checked, which is NOT the same as failed, so
                       nothing is drawn. An EXPIRED registration is red: a green tick on a lapsed
                       licence would read as "cleared to practise" and is the one wrong thing to say. */}

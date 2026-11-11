@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=ab776dd130","reports":"/dist/reports.chunk.js?v=52c64e35db","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=65d770e321","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c4886a0d19","reports":"/dist/reports.chunk.js?v=52c64e35db","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=65d770e321","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -2380,11 +2380,25 @@ const SIMILAR_NAME = 0.55;  // under this: a different person
   // Duty Roster, HR…) but doesn't hold the staff record itself. Keyed by emp id and
   // by lowercase name; the value is the CDN url. Includes former staff — an exits
   // register still shows the person's face.
+  /* THE photo to show for a staff record. Our own photo always wins; with none, the portrait
+     of the BNMC verification on the record (through our cached proxy, /api/bnmc/photo) — but
+     never when that verification's BNMC name is somebody else's. A display fallback only:
+     nothing is written into `photo`, so adding our own photo replaces it everywhere at once. */
+  function staffPhotoOf(e){
+    if(!e) return null;
+    const own=e.photo||e.photo_url;
+    if(own&&(typeof own==='string'?own:own.url)) return own;
+    const v=e.licence_verified, pic=v&&v.person&&v.person.photo;
+    if(!pic||!/^https?:\/\/bncdb\.bnmc\.gov\.bd\//i.test(String(pic))) return null;
+    try{ if(window.UNICO_NAME&&window.UNICO_NAME.bnmcNameState(e,v)==='mismatch') return null; }catch(err){}
+    return { url:'/api/bnmc/photo?u='+encodeURIComponent(pic), source:'bnmc' };
+  }
+  window.unicoStaffPhoto=staffPhotoOf;
   function publishPhotos(list){
     try{
       const m={};
       (list||[]).forEach(e=>{
-        const p=e.photo||e.photo_url; const u=p?(typeof p==='string'?p:(p.url||'')):'';
+        const p=staffPhotoOf(e); const u=p?(typeof p==='string'?p:(p.url||'')):'';
         if(!u)return;
         if(e.emp_id)m['id:'+String(e.emp_id).trim()]=u;
         if(e.id!=null)m['id:'+String(e.id)]=u;
@@ -8932,7 +8946,8 @@ window.QI_CORRECTIONS_BY_DEFID = {
      falls back to initials instead of the browser's broken-image glyph. */
   function photoUrlOf(rec) {
     if (!rec) return '';
-    var p = rec.photo || rec.photo_url;
+    // Our photo, else the BNMC portrait of a verified record (staff-data.js unicoStaffPhoto).
+    var p = (typeof window !== 'undefined' && window.unicoStaffPhoto) ? window.unicoStaffPhoto(rec) : (rec.photo || rec.photo_url);
     if (!p) return '';
     return typeof p === 'string' ? p : (p.url || '');
   }
@@ -21685,6 +21700,9 @@ function VaccBadge({
     }
   }), cs);
 }
+function staffShownPhoto(e) {
+  return window.unicoStaffPhoto ? window.unicoStaffPhoto(e) : e && e.photo;
+}
 function Avatar({
   name,
   size = 34,
@@ -22418,7 +22436,7 @@ function StaffDeptChart({
     onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
     onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 26
   }), React.createElement("div", {
@@ -22562,7 +22580,7 @@ function StaffExpChart({
     onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
     onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 26
   }), React.createElement("div", {
@@ -22712,7 +22730,7 @@ function StaffDesigChart({
     onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
     onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 26
   }), React.createElement("div", {
@@ -22854,7 +22872,7 @@ function WorkforceDashboard({
       emp: e.id
     })
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 34
   }), React.createElement("div", {
@@ -23254,7 +23272,7 @@ function WorkforceDashboard({
       emp: e.id
     })
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 34
   }), React.createElement("div", {
@@ -23429,7 +23447,7 @@ function StaffHighlight({
     onMouseEnter: ev => ev.currentTarget.style.background = 'var(--panel-2)',
     onMouseLeave: ev => ev.currentTarget.style.background = 'transparent'
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 30
   }), React.createElement("div", {
@@ -23826,7 +23844,7 @@ function StaffDirectory({
       gap: 10
     }
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 30
   }), React.createElement("div", null, React.createElement("div", {
@@ -23960,7 +23978,7 @@ function StaffCompliance({
       emp: e.id
     })
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 30
   }), React.createElement("div", {
@@ -24635,7 +24653,7 @@ function ManageStaff({
       gap: 10
     }
   }, React.createElement(Avatar, {
-    photo: e.photo,
+    photo: staffShownPhoto(e),
     name: e.name,
     size: 28
   }), React.createElement("div", null, React.createElement("div", {
