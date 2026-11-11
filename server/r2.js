@@ -1,7 +1,10 @@
 /* Cloudflare R2 (S3-compatible) client for BACKUPS — no SDK, AWS SigV4 via node:crypto.
  *
- * Config (server/.env / Vercel env):
- *   R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+ * Config, first found wins:
+ *   1. server/.env / Vercel env: R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET,
+ *      R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+ *   2. what an administrator entered in Settings → System & Data → Cloud backup: Mongo
+ *      backupConfig {_id:'r2'}, the secret sealed (server/seal.js). load() reads it.
  *
  * Deliberately has NO delete: backups written here can only be added to, never removed by
  * the app (the "never lose saved data" rule — a bug or a stolen admin session cannot wipe
@@ -9,11 +12,51 @@
  */
 const crypto = require('crypto');
 
-function cfg() {
+const SEAL = require('./seal').sealer('unico-r2-backup');
+const endpointOf = (v) => { const s = String(v || '').trim().replace(/\/+$/, ''); return !s ? '' : /^https:\/\//i.test(s) ? s : 'https://' + s.replace(/[^a-z0-9]/gi, '') + '.r2.cloudflarestorage.com'; };
+let stored = null;      // { key, secret, bucket, endpoint, source:'saved', savedAt, savedBy } from the database
+let storedAt = 0;
+function envCfg() {
   const e = process.env;
-  return { key: e.R2_ACCESS_KEY_ID || '', secret: e.R2_SECRET_ACCESS_KEY || '', bucket: e.R2_BUCKET || '', endpoint: String(e.R2_ENDPOINT || '').replace(/\/+$/, '') };
+  return { key: e.R2_ACCESS_KEY_ID || '', secret: e.R2_SECRET_ACCESS_KEY || '', bucket: e.R2_BUCKET || '', endpoint: String(e.R2_ENDPOINT || '').replace(/\/+$/, ''), source: 'environment' };
 }
-function configured() { const c = cfg(); return !!(c.key && c.secret && c.bucket && c.endpoint); }
+const complete = (c) => !!(c && c.key && c.secret && c.bucket && c.endpoint);
+function cfg() { const e = envCfg(); return complete(e) ? e : (stored || e); }
+function configured() { return complete(cfg()); }
+function source() { const c = cfg(); return complete(c) ? c.source : ''; }
+
+// Read the administrator's saved settings (kept 60 s per process; `force` re-reads).
+async function load(force, dbIn) {
+  if (complete(envCfg())) return cfg();
+  if (!force && stored && Date.now() - storedAt < 60000) return cfg();
+  try {
+    let db = dbIn;
+    if (!db) { const h = await require('./db').getDbHandle(); db = h && h.db ? h.db : h; }
+    const doc = db ? await db.collection('backupConfig').findOne({ _id: 'r2' }) : null;
+    stored = doc && doc.secret && doc.keyId ? { key: doc.keyId, secret: SEAL.unseal(doc.secret), bucket: doc.bucket || 'unico-backups', endpoint: endpointOf(doc.endpoint || doc.accountId), source: 'saved', savedAt: doc.savedAt || null, savedBy: doc.savedBy || '' } : null;
+  } catch (e) { stored = null; }
+  storedAt = Date.now();
+  return cfg();
+}
+// Save the administrator's settings. A blank secret keeps the saved one.
+async function save(db, { accountId, endpoint, bucket, keyId, secret }, by) {
+  if (!SEAL.hasSecret()) throw new Error('This server has no secret to protect the key with (JWT_SECRET).');
+  const doc = (await db.collection('backupConfig').findOne({ _id: 'r2' })) || {};
+  const ep = endpointOf(endpoint || accountId || doc.endpoint || doc.accountId);
+  if (!ep) throw new Error('Enter the Cloudflare account ID (or the R2 endpoint).');
+  if (!String(keyId || doc.keyId || '').trim()) throw new Error('Enter the R2 Access Key ID.');
+  if (!secret && !doc.secret) throw new Error('Enter the R2 Secret Access Key.');
+  const set = { endpoint: ep, accountId: String(accountId || doc.accountId || '').trim(), bucket: String(bucket || doc.bucket || 'unico-backups').trim(), keyId: String(keyId || doc.keyId).trim(), savedAt: new Date(), savedBy: by || '' };
+  if (secret) set.secret = SEAL.seal(String(secret).trim());
+  await db.collection('backupConfig').updateOne({ _id: 'r2' }, { $set: set }, { upsert: true });
+  await load(true, db);
+  return publicConfig();
+}
+// What may be shown on screen: never the secret.
+function publicConfig() {
+  const c = cfg();
+  return { configured: complete(c), source: complete(c) ? c.source : '', endpoint: c.endpoint || '', bucket: c.bucket || '', keyId: c.key ? c.key.slice(0, 4) + '…' + c.key.slice(-4) : '', savedAt: c.savedAt || null, savedBy: c.savedBy || '' };
+}
 
 const sha256hex = (b) => crypto.createHash('sha256').update(b).digest('hex');
 const hmac = (k, s) => crypto.createHmac('sha256', k).update(s).digest();
@@ -23,7 +66,7 @@ const enc = (s) => encodeURIComponent(s).replace(/[!'()*]/g, (c) => '%' + c.char
 async function request(method, key, opts) {
   const o = opts || {};
   const c = cfg();
-  if (!configured()) throw new Error('R2 is not configured (set R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_ENDPOINT).');
+  if (!configured()) throw new Error('Cloudflare R2 is not set up — an administrator enters the R2 keys in Settings → System & Data → Cloud backup.');
   const host = new URL(c.endpoint).host;
   const path = '/' + enc(c.bucket) + (key ? '/' + String(key).split('/').map(enc).join('/') : '');
   const q = o.query || {};
@@ -83,4 +126,4 @@ async function list(prefix, max) {
   return all;
 }
 
-module.exports = { configured, putObject, getObject, headObject, list };
+module.exports = { configured, source, load, save, publicConfig, endpointOf, putObject, getObject, headObject, list, listPage };

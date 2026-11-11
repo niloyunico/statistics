@@ -146,4 +146,16 @@ async function readCachedAsset(pathname) {
   pendingReads.set(pathname, pending);
   try { return await pending; } finally { pendingReads.delete(pathname); }
 }
-module.exports = { uploadBuffer, deleteByPublicId, getAsset, isBlobId, listAssets, listFolders, ping, usage, status, readAsset, readCachedAsset, appUrl };
+// For the cloud backup (server/backup.js): one page of stored files, and a file's bytes.
+async function listPage(prefix, cursor) {
+  const page = await blob.list(options({ prefix: prefix || 'unico/', limit: 1000, ...(cursor ? { cursor } : {}) }));
+  return { files: page.blobs.map((f) => ({ pathname: f.pathname, size: f.size || 0 })), cursor: page.hasMore ? page.cursor : '' };
+}
+async function readBuffer(pathname) {
+  const result = await blob.get(pathname, options({ access: 'private', useCache: false }));
+  if (!result || result.statusCode !== 200) return null;
+  const chunks = [];
+  for await (const chunk of require('node:stream').Readable.fromWeb(result.stream)) chunks.push(chunk);
+  return { data: Buffer.concat(chunks), contentType: result.blob.contentType };
+}
+module.exports = { uploadBuffer, deleteByPublicId, getAsset, isBlobId, listAssets, listFolders, ping, usage, status, readAsset, readCachedAsset, appUrl, listPage, readBuffer, configured };

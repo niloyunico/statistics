@@ -6,29 +6,18 @@
 // (H360_SECRET, or JWT_SECRET). A server with a different secret cannot open
 // it, so each one (the hospital PC, the live site) keeps its own sealed copy.
 // HIS_USER / HIS_PASS in the environment are used instead when both are set.
-const crypto = require('crypto');
 
 const COLL = 'h360Settings';
 const LEVELS = ['sheet', 'all'];
 const memory = new Map(); // without a database (development only)
 
-const secret = () => process.env.H360_SECRET || process.env.JWT_SECRET || '';
-const sealKey = () => crypto.createHash('sha256').update('unico-h360-login|' + secret()).digest();
-// Which secret a copy was sealed with, without giving the secret away.
-const sealName = () => crypto.createHash('sha256').update('unico-h360-copy|' + secret()).digest('hex').slice(0, 12);
-
-function seal(value) {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', sealKey(), iv);
-  const data = Buffer.concat([cipher.update(String(value), 'utf8'), cipher.final()]);
-  return { iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: data.toString('base64') };
-}
-
-function unseal(sealed) {
-  const decipher = crypto.createDecipheriv('aes-256-gcm', sealKey(), Buffer.from(sealed.iv, 'base64'));
-  decipher.setAuthTag(Buffer.from(sealed.tag, 'base64'));
-  return Buffer.concat([decipher.update(Buffer.from(sealed.data, 'base64')), decipher.final()]).toString('utf8');
-}
+// The sealing itself is shared (server/seal.js); these labels are the H360 login's own, so
+// every copy sealed before the move still opens.
+const { sealer, secret } = require('../seal');
+const H360_SEAL = sealer('unico-h360-login', 'unico-h360-copy');
+const sealName = () => H360_SEAL.name();
+const seal = (value) => H360_SEAL.seal(value);
+const unseal = (sealed) => H360_SEAL.unseal(sealed);
 
 async function read(db, id) {
   if (!db) return memory.get(id) || null;

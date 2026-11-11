@@ -7976,6 +7976,508 @@ function ActivityLog() {
     }
   }, "Loading\u2026")));
 }
+function CloudBackup() {
+  const [st, setSt] = React.useState(null);
+  const [err, setErr] = React.useState('');
+  const [busy, setBusy] = React.useState('');
+  const [prog, setProg] = React.useState('');
+  const [form, setForm] = React.useState({
+    accountId: '',
+    bucket: 'unico-backups',
+    keyId: '',
+    secret: ''
+  });
+  const [editing, setEditing] = React.useState(false);
+  const [note, setNote] = React.useState('');
+  const api = async (url, opt) => {
+    const r = await fetch(url, {
+      method: opt && opt.method || 'GET',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json'
+      },
+      body: opt && opt.body ? JSON.stringify(opt.body) : undefined,
+      cache: 'no-store'
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || 'HTTP ' + r.status);
+    return j;
+  };
+  const load = () => api('/api/backup/status').then(j => {
+    setSt(j);
+    setErr('');
+  }).catch(e => setErr(e.message));
+  React.useEffect(() => {
+    load();
+  }, []);
+  const when = v => {
+    try {
+      return v ? new Date(v).toLocaleString('en-GB', {
+        timeZone: 'Asia/Dhaka',
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      }) : '—';
+    } catch (e) {
+      return '—';
+    }
+  };
+  const mb = b => b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + ' MB';
+  const changed = () => {
+    try {
+      window.dispatchEvent(new Event('unico:backup-changed'));
+    } catch (e) {}
+  };
+  const backupNow = async () => {
+    setBusy('run');
+    setErr('');
+    setNote('');
+    setProg('Starting…');
+    try {
+      const start = await api('/api/backup/run', {
+        method: 'POST',
+        body: {}
+      });
+      const id = start.run.id;
+      for (let i = 0; i < 300; i++) {
+        const s = await api('/api/backup/step', {
+          method: 'POST',
+          body: {
+            id
+          }
+        });
+        if (s.error) throw new Error(s.error);
+        if (s.done) {
+          setNote('Backup complete and verified.');
+          break;
+        }
+        setProg({
+          mongo: 'Copying the database…',
+          d1: 'Copying D1 tables…',
+          files: 'Copying photos and files…',
+          verify: 'Verifying (downloading and checking)…'
+        }[s.phase] || (s.busy ? 'Waiting for another backup step…' : 'Working…'));
+        if (s.busy) await new Promise(r => setTimeout(r, 5000));
+        if (i % 3 === 0) load();
+      }
+    } catch (e) {
+      setErr(e.message);
+    }
+    setBusy('');
+    setProg('');
+    load();
+    changed();
+  };
+  const save = async ev => {
+    ev.preventDefault();
+    setBusy('save');
+    setErr('');
+    setNote('');
+    try {
+      await api('/api/backup/config', {
+        method: 'POST',
+        body: form
+      });
+      setForm(f => ({
+        ...f,
+        secret: ''
+      }));
+      setEditing(false);
+      setNote('R2 settings saved. Press "Test connection", then "Back up now".');
+      await load();
+      changed();
+    } catch (e) {
+      setErr(e.message);
+    }
+    setBusy('');
+  };
+  const test = async () => {
+    setBusy('test');
+    setErr('');
+    setNote('');
+    try {
+      const j = await api('/api/backup/test', {
+        method: 'POST',
+        body: {}
+      });
+      setNote('Connection works: a test file was written to "' + j.bucket + '" and read back.');
+    } catch (e) {
+      setErr('Test failed: ' + e.message + (/403/.test(e.message) ? ' — the key is wrong or has no "Object Read & Write" permission on this bucket.' : ''));
+    }
+    setBusy('');
+  };
+  if (!st) return React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b"
+  }, err ? React.createElement("span", {
+    style: {
+      color: 'var(--rose)'
+    }
+  }, err) : 'Loading…'));
+  const tone = {
+    ok: '#1f9d57',
+    running: '#d48806',
+    stale: '#d48806',
+    pending: '#d48806',
+    failed: '#d23a52',
+    off: '#d23a52'
+  }[st.state] || '#6c7a8c';
+  const label = {
+    ok: 'Backed up and verified',
+    running: 'Backup in progress',
+    stale: 'Last backup is over a day old',
+    pending: 'Not run yet',
+    failed: 'Backup failed',
+    off: 'Not set up'
+  }[st.state] || st.state;
+  const cfg = st.config || {};
+  const pct = Math.min(100, Math.round(st.usage.bytes / st.usage.limit * 1000) / 10);
+  const lbl = {
+    fontSize: 10.5,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: .4,
+    color: 'var(--faint)'
+  };
+  const inp = {
+    border: '1px solid var(--line)',
+    borderRadius: 8,
+    padding: '8px 10px',
+    font: 'inherit',
+    fontSize: 13,
+    background: 'var(--panel)',
+    color: 'var(--ink)',
+    minWidth: 0
+  };
+  return React.createElement("div", {
+    style: {
+      display: 'grid',
+      gap: 14
+    }
+  }, React.createElement("div", {
+    className: "card",
+    style: {
+      borderLeft: '4px solid ' + tone
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("h3", null, "Cloud backup"), React.createElement("span", {
+    className: "sub"
+  }, "every day, to Cloudflare R2 \u2014 verified after every run"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      fontWeight: 800,
+      color: tone,
+      background: tone + '14',
+      border: '1px solid ' + tone + '44',
+      borderRadius: 999,
+      padding: '3px 10px'
+    }
+  }, label), React.createElement("button", {
+    className: "btn pri sm",
+    onClick: backupNow,
+    disabled: !!busy || !st.configured
+  }, busy === 'run' ? 'Backing up…' : 'Back up now')), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      gap: 12
+    }
+  }, busy === 'run' && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: 'var(--ink-2)'
+    }
+  }, prog), err && React.createElement("div", {
+    style: {
+      padding: '9px 12px',
+      borderRadius: 8,
+      background: '#fdf0f2',
+      border: '1px solid #f2c4cd',
+      color: '#8f1d30',
+      fontSize: 12.5
+    }
+  }, err), note && React.createElement("div", {
+    style: {
+      padding: '9px 12px',
+      borderRadius: 8,
+      background: '#eaf7ef',
+      border: '1px solid #c4e6d1',
+      color: '#13703d',
+      fontSize: 12.5
+    }
+  }, note), st.state !== 'ok' && React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      color: tone,
+      fontWeight: 600
+    }
+  }, st.message), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))',
+      gap: '10px 18px'
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    style: lbl
+  }, "Last verified backup"), st.lastGood ? when(st.lastGood.verifiedAt || st.lastGood.finishedAt) : 'none yet'), React.createElement("div", null, React.createElement("div", {
+    style: lbl
+  }, "Today"), st.today ? st.today.ok ? 'done ✓' : st.today.error ? 'retrying — ' + st.today.error.slice(0, 80) : 'in progress (' + st.today.phase + ')' : 'not started yet'), React.createElement("div", null, React.createElement("div", {
+    style: lbl
+  }, "Schedule"), st.schedule), React.createElement("div", null, React.createElement("div", {
+    style: lbl
+  }, "Photos & files kept"), st.usage.files || 0)), React.createElement("div", null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      justifyContent: 'space-between',
+      fontSize: 12,
+      marginBottom: 4
+    }
+  }, React.createElement("span", {
+    style: lbl
+  }, "Storage used"), React.createElement("span", null, mb(st.usage.bytes), " of 10 GB", st.usage.warn ? ' — nearly full' : '')), React.createElement("div", {
+    style: {
+      height: 8,
+      borderRadius: 5,
+      background: 'var(--line-2)',
+      overflow: 'hidden'
+    }
+  }, React.createElement("i", {
+    style: {
+      display: 'block',
+      height: '100%',
+      width: pct + '%',
+      background: st.usage.warn ? '#d23a52' : 'var(--blue)'
+    }
+  }))), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)'
+    }
+  }, "Not backed up (by decision): Supervisor Reports and the H360 patient data collected for them; caches. Everything else in the database, every D1 table, and every photo/file in Vercel Blob is backed up. Backups are only ever added to, never deleted by the app."))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("h3", null, "Cloudflare R2 settings"), React.createElement("span", {
+    className: "sub"
+  }, cfg.configured ? cfg.source === 'environment' ? 'from the server settings' : 'saved ' + when(cfg.savedAt) + (cfg.savedBy ? ' by ' + cfg.savedBy : '') : 'not set up'), React.createElement("span", {
+    className: "spacer"
+  }), cfg.configured && React.createElement("button", {
+    className: "btn sm",
+    onClick: test,
+    disabled: !!busy
+  }, busy === 'test' ? 'Testing…' : 'Test connection'), cfg.source !== 'environment' && React.createElement("button", {
+    className: "btn sm",
+    onClick: () => {
+      setEditing(!editing);
+      setForm({
+        accountId: '',
+        bucket: cfg.bucket || 'unico-backups',
+        keyId: '',
+        secret: ''
+      });
+    }
+  }, editing ? 'Cancel' : cfg.configured ? 'Change keys' : 'Enter keys')), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'grid',
+      gap: 10
+    }
+  }, cfg.configured && React.createElement("div", {
+    style: {
+      display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fill,minmax(190px,1fr))',
+      gap: '8px 18px',
+      fontSize: 12.5
+    }
+  }, React.createElement("div", {
+    style: {
+      wordBreak: 'break-all'
+    }
+  }, React.createElement("div", {
+    style: lbl
+  }, "Endpoint"), cfg.endpoint), React.createElement("div", null, React.createElement("div", {
+    style: lbl
+  }, "Bucket"), cfg.bucket), React.createElement("div", null, React.createElement("div", {
+    style: lbl
+  }, "Access Key ID"), cfg.keyId), React.createElement("div", null, React.createElement("div", {
+    style: lbl
+  }, "Secret"), "kept sealed \u2014 never shown")), (editing || !cfg.configured) && cfg.source !== 'environment' && React.createElement("form", {
+    onSubmit: save,
+    autoComplete: "off",
+    style: {
+      display: 'grid',
+      gap: 8
+    }
+  }, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("input", {
+    style: {
+      ...inp,
+      flex: '1 1 200px'
+    },
+    placeholder: "Cloudflare Account ID",
+    value: form.accountId,
+    onChange: e => setForm({
+      ...form,
+      accountId: e.target.value
+    })
+  }), React.createElement("input", {
+    style: {
+      ...inp,
+      flex: '1 1 150px'
+    },
+    placeholder: "Bucket (unico-backups)",
+    value: form.bucket,
+    onChange: e => setForm({
+      ...form,
+      bucket: e.target.value
+    })
+  })), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("input", {
+    style: {
+      ...inp,
+      flex: '1 1 200px'
+    },
+    placeholder: "R2 Access Key ID",
+    value: form.keyId,
+    onChange: e => setForm({
+      ...form,
+      keyId: e.target.value
+    }),
+    autoComplete: "off"
+  }), React.createElement("input", {
+    style: {
+      ...inp,
+      flex: '1 1 200px'
+    },
+    type: "password",
+    placeholder: cfg.configured ? 'R2 Secret Access Key (blank = keep)' : 'R2 Secret Access Key',
+    value: form.secret,
+    onChange: e => setForm({
+      ...form,
+      secret: e.target.value
+    }),
+    autoComplete: "new-password"
+  }), React.createElement("button", {
+    className: "btn pri sm",
+    type: "submit",
+    disabled: !!busy
+  }, busy === 'save' ? 'Saving…' : 'Save')), React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      lineHeight: 1.5
+    }
+  }, "In the Cloudflare dashboard: ", React.createElement("b", null, "R2 Object Storage"), " \u2192 create the bucket ", React.createElement("b", null, "unico-backups"), " (once) \u2192 ", React.createElement("b", null, "Manage R2 API Tokens"), " \u2192 ", React.createElement("b", null, "Create API token"), " \u2192 permission ", React.createElement("b", null, "Object Read & Write"), ", apply to the bucket ", React.createElement("b", null, "unico-backups"), " \u2192 copy the ", React.createElement("b", null, "Access Key ID"), " and ", React.createElement("b", null, "Secret Access Key"), " here. The Account ID is on the R2 overview page. The secret is sealed on the server and never shown again.")), cfg.source === 'environment' && React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)'
+    }
+  }, "This server takes the R2 keys from its own settings (R2_ACCESS_KEY_ID \u2026); change them there."))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-h"
+  }, React.createElement("h3", null, "History"), React.createElement("span", {
+    className: "sub"
+  }, "last 30 runs"), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: load
+  }, "Refresh")), React.createElement("div", {
+    className: "card-b",
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    style: {
+      width: '100%',
+      borderCollapse: 'collapse',
+      fontSize: 12.5
+    }
+  }, React.createElement("thead", null, React.createElement("tr", null, ['Started', 'Run', 'Result', 'Verified', 'New data', 'Note'].map(h => React.createElement("th", {
+    key: h,
+    style: {
+      textAlign: 'left',
+      padding: '7px 9px',
+      borderBottom: '1px solid var(--line)',
+      background: 'var(--panel-2)',
+      fontSize: 10.5,
+      textTransform: 'uppercase',
+      letterSpacing: .4,
+      color: 'var(--muted)'
+    }
+  }, h)))), React.createElement("tbody", null, (st.runs || []).map(r => React.createElement("tr", {
+    key: r.id
+  }, React.createElement("td", {
+    style: {
+      padding: '7px 9px',
+      borderBottom: '1px solid var(--line-2)',
+      whiteSpace: 'nowrap'
+    }
+  }, when(r.startedAt)), React.createElement("td", {
+    style: {
+      padding: '7px 9px',
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, r.reason, r.by ? ' · ' + r.by : ''), React.createElement("td", {
+    style: {
+      padding: '7px 9px',
+      borderBottom: '1px solid var(--line-2)',
+      fontWeight: 700,
+      color: r.ok ? '#13703d' : r.phase === 'abandoned' || r.phase === 'failed' || r.error ? '#b42339' : '#9a5a06'
+    }
+  }, r.ok ? '✓ done' : r.phase === 'abandoned' ? 'not finished' : r.error ? 'error — retried' : r.phase), React.createElement("td", {
+    style: {
+      padding: '7px 9px',
+      borderBottom: '1px solid var(--line-2)',
+      whiteSpace: 'nowrap'
+    }
+  }, r.verifiedAt ? when(r.verifiedAt) + (r.progress && r.progress.fullCheck ? ' (full)' : '') : '—'), React.createElement("td", {
+    style: {
+      padding: '7px 9px',
+      borderBottom: '1px solid var(--line-2)'
+    }
+  }, r.uploadedBytes ? mb(r.uploadedBytes) : '—'), React.createElement("td", {
+    style: {
+      padding: '7px 9px',
+      borderBottom: '1px solid var(--line-2)',
+      color: 'var(--muted)',
+      maxWidth: 360
+    }
+  }, r.error ? r.error.slice(0, 140) : r.progress ? r.progress.collections + ' collections · ' + r.progress.d1Parts + ' D1 parts · ' + r.progress.filesCopied + ' new files' : ''))))))), React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b",
+    style: {
+      fontSize: 12,
+      color: 'var(--muted)',
+      lineHeight: 1.6
+    }
+  }, React.createElement("b", {
+    style: {
+      color: 'var(--ink-2)'
+    }
+  }, "Restoring."), " On the hospital PC: ", React.createElement("code", null, "node scripts/restore-from-r2.js"), " checks the latest backup and compares it with the live database (it changes nothing). ", React.createElement("code", null, "--to-dir C:\\restore"), " saves every dataset as files; ", React.createElement("code", null, "--apply"), " puts back only documents that are missing \u2014 it never overwrites anything.")));
+}
 function CacheStats() {
   const [d, setD] = React.useState(null);
   const [err, setErr] = React.useState('');
@@ -9202,9 +9704,12 @@ function Settings({
   const [dbFile, setDbFile] = React.useState('');
   const [sysTab, setSysTab] = React.useState('activity');
   React.useEffect(() => {
-    if (['activity', 'database', 'monitor', 'data'].indexOf(tab) >= 0) {
+    if (['activity', 'database', 'monitor', 'data', 'backup'].indexOf(tab) >= 0) {
       setSysTab(tab);
       setTab('system');
+      try {
+        if (window.__UNICO_SETTINGS_TAB__ === tab) delete window.__UNICO_SETTINGS_TAB__;
+      } catch (e) {}
     }
   }, [tab]);
   const native = window.unicoNative;
@@ -9606,7 +10111,7 @@ function Settings({
     style: {
       flexWrap: 'wrap'
     }
-  }, [['activity', 'Activity Log', I.activity], ['database', 'Database', I.grid], ['monitor', 'System Monitor', I.activity], ['data', 'Data & Export', I.doc]].map(([id, l, ic]) => React.createElement("button", {
+  }, [['activity', 'Activity Log', I.activity], ['database', 'Database', I.grid], ['monitor', 'System Monitor', I.activity], ['data', 'Data & Export', I.doc], ['backup', 'Cloud backup', I.upload || I.doc]].map(([id, l, ic]) => React.createElement("button", {
     key: id,
     className: sysTab === id ? 'on' : '',
     onClick: () => setSysTab(id),
@@ -9618,7 +10123,7 @@ function Settings({
   }, React.createElement(Ic, {
     d: ic,
     s: 13
-  }), l))))), tab === 'system' && sysTab === 'activity' && React.createElement(ActivityLog, null), tab === 'system' && sysTab === 'database' && React.createElement(React.Fragment, null, React.createElement(CacheStats, null), React.createElement(DatabaseBrowser, null)), tab === 'system' && sysTab === 'monitor' && (window.SystemMonitor ? React.createElement(window.SystemMonitor, null) : React.createElement("div", {
+  }), l))))), tab === 'system' && sysTab === 'activity' && React.createElement(ActivityLog, null), tab === 'system' && sysTab === 'backup' && React.createElement(CloudBackup, null), tab === 'system' && sysTab === 'database' && React.createElement(React.Fragment, null, React.createElement(CacheStats, null), React.createElement(DatabaseBrowser, null)), tab === 'system' && sysTab === 'monitor' && (window.SystemMonitor ? React.createElement(window.SystemMonitor, null) : React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
     className: "card-b"

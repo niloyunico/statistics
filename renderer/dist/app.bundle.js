@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=434bb2f7f4","reports":"/dist/reports.chunk.js?v=52c64e35db","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=65d770e321","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=434bb2f7f4","reports":"/dist/reports.chunk.js?v=cb1b16497c","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=65d770e321","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -13016,6 +13016,95 @@ function unicoAgo(t) {
   const d = Math.round(h / 24);
   return d + ' day' + (d === 1 ? '' : 's') + ' ago';
 }
+const UNICO_CLOUD_ICON = 'M17.5 19H7a5 5 0 01-.6-9.96A7 7 0 0120 10.5 4.25 4.25 0 0117.5 19z';
+function UnicoBackupBadge({
+  setRoute
+}) {
+  const admin = (() => {
+    try {
+      return unicoUserPerms() === null;
+    } catch (e) {
+      return false;
+    }
+  })();
+  const [st, setSt] = React.useState(null);
+  React.useEffect(() => {
+    if (!admin) return;
+    let live = true;
+    const load = () => fetch('/api/backup/status', {
+      headers: {
+        accept: 'application/json'
+      },
+      cache: 'no-store'
+    }).then(r => r.ok ? r.json() : null).then(j => {
+      if (live && j) setSt(j);
+    }).catch(() => {});
+    load();
+    const iv = setInterval(load, 30 * 60 * 1000);
+    window.addEventListener('unico:backup-changed', load);
+    return () => {
+      live = false;
+      clearInterval(iv);
+      window.removeEventListener('unico:backup-changed', load);
+    };
+  }, [admin]);
+  if (!admin || !st) return null;
+  const tone = {
+    ok: '#1f9d57',
+    running: '#d48806',
+    stale: '#d48806',
+    pending: '#d48806',
+    failed: '#d23a52',
+    off: '#d23a52'
+  }[st.state] || '#9aa6b4';
+  const when = v => {
+    try {
+      return v ? new Date(v).toLocaleString('en-GB', {
+        timeZone: 'Asia/Dhaka',
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      }) : '';
+    } catch (e) {
+      return '';
+    }
+  };
+  const mb = b => (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + ' MB';
+  const lg = st.lastGood;
+  const title = st.state === 'ok' ? 'Cloud backup: verified ' + when(lg && (lg.verifiedAt || lg.finishedAt)) + ' · ' + mb(st.usage.bytes) + ' used of 10 GB' : 'Cloud backup: ' + (st.message || st.state) + (lg ? ' · last verified backup ' + when(lg.verifiedAt || lg.finishedAt) : '');
+  return React.createElement("button", {
+    className: "tb-icon",
+    title: title,
+    "aria-label": title,
+    style: {
+      position: 'relative'
+    },
+    onClick: () => {
+      try {
+        window.__UNICO_SETTINGS_TAB__ = 'backup';
+      } catch (e) {}
+      setRoute && setRoute({
+        view: 'settings'
+      });
+    }
+  }, React.createElement(Ic, {
+    d: UNICO_CLOUD_ICON,
+    s: 17,
+    c: tone
+  }), React.createElement("span", {
+    style: {
+      position: 'absolute',
+      right: 5,
+      bottom: 5,
+      width: 9,
+      height: 9,
+      borderRadius: '50%',
+      background: tone,
+      border: '2px solid var(--panel)',
+      display: 'grid',
+      placeItems: 'center'
+    }
+  }));
+}
 function TopBar({
   route,
   setRoute,
@@ -13622,7 +13711,9 @@ function TopBar({
   }, React.createElement(Ic, {
     d: I.input,
     s: 14
-  }), "Enter ", monthFull(currentKey), " data")))), (() => {
+  }), "Enter ", monthFull(currentKey), " data")))), React.createElement(UnicoBackupBadge, {
+    setRoute: setRoute
+  }), (() => {
     let ok = true;
     try {
       ok = !window.unicoCan || window.unicoCan(window.unicoAccessModuleOf ? window.unicoAccessModuleOf(route && route.view) : 'stats', 'print');

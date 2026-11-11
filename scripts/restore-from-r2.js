@@ -31,6 +31,9 @@ const TO_DIR = opt('--to-dir');
 const manifestArg = args.find((a) => a.endsWith('manifest.json'));
 
 (async () => {
+  // R2 keys: from server/.env, else the ones an administrator saved in Settings → Cloud backup.
+  await r2.load(true);
+  if (!r2.configured()) throw new Error('Cloudflare R2 is not set up (no R2 keys in server/.env or in the app).');
   if (flag('--list')) {
     const runs = (await r2.list(backup.ROOT + '/')).filter((o) => o.key.endsWith('/manifest.json')).sort((a, b) => a.key.localeCompare(b.key));
     runs.forEach((o) => console.log(o.lastModified + '  ' + o.key));
@@ -64,12 +67,20 @@ const manifestArg = args.find((a) => a.endsWith('manifest.json'));
   }
   for (const [name, entry] of Object.entries((manifest.d1 && manifest.d1.tables) || {})) {
     if (ONLY && name !== ONLY) continue;
-    const text = zlib.gunzipSync(await r2.getObject(entry.key)).toString('utf8');
-    const okHash = crypto.createHash('sha256').update(text).digest('hex') === entry.sha256;
-    const body = JSON.parse(text);
-    if (!okHash || body.rows.length !== entry.count) { problems++; console.log('  ✗ D1 ' + name + ': checksum/count mismatch'); continue; }
-    if (TO_DIR) fs.writeFileSync(path.join(TO_DIR, 'd1-' + name + '.json'), text);
-    console.log('  ✓ D1 ' + name.padEnd(33) + String(body.rows.length).padStart(7) + ' rows verified' + (APPLY ? ' (D1 restore is manual: use the saved JSON + schema)' : ''));
+    // Version 2 keeps a table in parts of 5,000 rows; version 1 in one object.
+    const parts = entry.parts || [{ key: entry.key, sha256: entry.sha256, count: entry.count }];
+    const rows = [];
+    let bad = false;
+    for (const part of parts) {
+      const text = zlib.gunzipSync(await r2.getObject(part.key)).toString('utf8');
+      const body = JSON.parse(text);
+      if (crypto.createHash('sha256').update(text).digest('hex') !== part.sha256 || body.rows.length !== part.count) { bad = true; break; }
+      rows.push(...body.rows);
+    }
+    if (bad || rows.length !== entry.count) { problems++; console.log('  ✗ D1 ' + name + ': checksum/count mismatch'); continue; }
+    if (TO_DIR) fs.writeFileSync(path.join(TO_DIR, 'd1-' + name + '.json'), JSON.stringify({ table: name, schema: entry.schema || '', rows }));
+    console.log('  ✓ D1 ' + name.padEnd(33) + String(rows.length).padStart(7) + ' rows verified' + (APPLY ? ' (D1 restore is manual: use the saved JSON + schema)' : ''));
   }
+  if (manifest.files) console.log('  files (photos/uploads) are kept under ' + manifest.files.prefix + ' — one copy per file');
   console.log(problems ? '\n' + problems + ' dataset(s) FAILED verification' : '\nall datasets verified' + (APPLY ? ' · inserted ' + inserted + ' missing documents' : ' (dry run — nothing written to the database)'));
 })().then(() => process.exit(0)).catch((e) => { console.error('RESTORE FAILED:', e.message); process.exit(1); });

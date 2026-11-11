@@ -3251,6 +3251,135 @@ function ActivityLog(){
    since boot: whether Redis is really connected in this deployment, the hit rate,
    and the failure counters that matter (lost bumps = invalidations that never
    reached the shared store, so other instances may serve pre-write data). */
+/* Settings → System & Data → Cloud backup (administrators). The daily verified backup to
+   Cloudflare R2 (server/backup.js): status, "Back up now", history, the R2 keys, restore notes. */
+function CloudBackup(){
+  const [st,setSt]=React.useState(null);
+  const [err,setErr]=React.useState('');
+  const [busy,setBusy]=React.useState('');
+  const [prog,setProg]=React.useState('');
+  const [form,setForm]=React.useState({accountId:'',bucket:'unico-backups',keyId:'',secret:''});
+  const [editing,setEditing]=React.useState(false);
+  const [note,setNote]=React.useState('');
+  const api=async(url,opt)=>{ const r=await fetch(url,{method:(opt&&opt.method)||'GET',headers:{'content-type':'application/json',accept:'application/json'},body:opt&&opt.body?JSON.stringify(opt.body):undefined,cache:'no-store'});
+    const j=await r.json().catch(()=>({})); if(!r.ok||j.ok===false) throw new Error(j.error||('HTTP '+r.status)); return j; };
+  const load=()=>api('/api/backup/status').then(j=>{ setSt(j); setErr(''); }).catch(e=>setErr(e.message));
+  React.useEffect(()=>{ load(); },[]);
+  const when=(v)=>{ try{ return v?new Date(v).toLocaleString('en-GB',{timeZone:'Asia/Dhaka',dateStyle:'medium',timeStyle:'short'}):'—'; }catch(e){ return '—'; } };
+  const mb=(b)=>b>=1073741824?(b/1073741824).toFixed(2)+' GB':(b/1048576).toFixed(b<10485760?1:0)+' MB';
+  const changed=()=>{ try{ window.dispatchEvent(new Event('unico:backup-changed')); }catch(e){} };
+  const backupNow=async()=>{
+    setBusy('run'); setErr(''); setNote(''); setProg('Starting…');
+    try{
+      const start=await api('/api/backup/run',{method:'POST',body:{}});
+      const id=start.run.id;
+      for(let i=0;i<300;i++){
+        const s=await api('/api/backup/step',{method:'POST',body:{id}});
+        if(s.error) throw new Error(s.error);
+        if(s.done){ setNote('Backup complete and verified.'); break; }
+        setProg({mongo:'Copying the database…',d1:'Copying D1 tables…',files:'Copying photos and files…',verify:'Verifying (downloading and checking)…'}[s.phase]||(s.busy?'Waiting for another backup step…':'Working…'));
+        if(s.busy) await new Promise(r=>setTimeout(r,5000));
+        if(i%3===0) load();
+      }
+    }catch(e){ setErr(e.message); }
+    setBusy(''); setProg(''); load(); changed();
+  };
+  const save=async(ev)=>{ ev.preventDefault(); setBusy('save'); setErr(''); setNote('');
+    try{ await api('/api/backup/config',{method:'POST',body:form}); setForm(f=>({...f,secret:''})); setEditing(false); setNote('R2 settings saved. Press "Test connection", then "Back up now".'); await load(); changed(); }
+    catch(e){ setErr(e.message); } setBusy(''); };
+  const test=async()=>{ setBusy('test'); setErr(''); setNote('');
+    try{ const j=await api('/api/backup/test',{method:'POST',body:{}}); setNote('Connection works: a test file was written to "'+j.bucket+'" and read back.'); }
+    catch(e){ setErr('Test failed: '+e.message+(/403/.test(e.message)?' — the key is wrong or has no "Object Read & Write" permission on this bucket.':'')); }
+    setBusy(''); };
+  if(!st) return <div className="card"><div className="card-b">{err?<span style={{color:'var(--rose)'}}>{err}</span>:'Loading…'}</div></div>;
+  const tone={ok:'#1f9d57',running:'#d48806',stale:'#d48806',pending:'#d48806',failed:'#d23a52',off:'#d23a52'}[st.state]||'#6c7a8c';
+  const label={ok:'Backed up and verified',running:'Backup in progress',stale:'Last backup is over a day old',pending:'Not run yet',failed:'Backup failed',off:'Not set up'}[st.state]||st.state;
+  const cfg=st.config||{};
+  const pct=Math.min(100,Math.round((st.usage.bytes/st.usage.limit)*1000)/10);
+  const lbl={fontSize:10.5,fontWeight:700,textTransform:'uppercase',letterSpacing:.4,color:'var(--faint)'};
+  const inp={border:'1px solid var(--line)',borderRadius:8,padding:'8px 10px',font:'inherit',fontSize:13,background:'var(--panel)',color:'var(--ink)',minWidth:0};
+  return (
+    <div style={{display:'grid',gap:14}}>
+      <div className="card" style={{borderLeft:'4px solid '+tone}}>
+        <div className="card-h" style={{flexWrap:'wrap'}}>
+          <h3>Cloud backup</h3><span className="sub">every day, to Cloudflare R2 — verified after every run</span>
+          <span className="spacer"/>
+          <span style={{fontSize:11.5,fontWeight:800,color:tone,background:tone+'14',border:'1px solid '+tone+'44',borderRadius:999,padding:'3px 10px'}}>{label}</span>
+          <button className="btn pri sm" onClick={backupNow} disabled={!!busy||!st.configured}>{busy==='run'?'Backing up…':'Back up now'}</button>
+        </div>
+        <div className="card-b" style={{display:'grid',gap:12}}>
+          {busy==='run'&&<div style={{fontSize:12.5,color:'var(--ink-2)'}}>{prog}</div>}
+          {err&&<div style={{padding:'9px 12px',borderRadius:8,background:'#fdf0f2',border:'1px solid #f2c4cd',color:'#8f1d30',fontSize:12.5}}>{err}</div>}
+          {note&&<div style={{padding:'9px 12px',borderRadius:8,background:'#eaf7ef',border:'1px solid #c4e6d1',color:'#13703d',fontSize:12.5}}>{note}</div>}
+          {st.state!=='ok'&&<div style={{fontSize:12.5,color:tone,fontWeight:600}}>{st.message}</div>}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:'10px 18px'}}>
+            <div><div style={lbl}>Last verified backup</div>{st.lastGood?when(st.lastGood.verifiedAt||st.lastGood.finishedAt):'none yet'}</div>
+            <div><div style={lbl}>Today</div>{st.today?(st.today.ok?'done ✓':st.today.error?'retrying — '+st.today.error.slice(0,80):'in progress ('+st.today.phase+')'):'not started yet'}</div>
+            <div><div style={lbl}>Schedule</div>{st.schedule}</div>
+            <div><div style={lbl}>Photos & files kept</div>{st.usage.files||0}</div>
+          </div>
+          <div>
+            <div style={{display:'flex',justifyContent:'space-between',fontSize:12,marginBottom:4}}><span style={lbl}>Storage used</span><span>{mb(st.usage.bytes)} of 10 GB{st.usage.warn?' — nearly full':''}</span></div>
+            <div style={{height:8,borderRadius:5,background:'var(--line-2)',overflow:'hidden'}}><i style={{display:'block',height:'100%',width:pct+'%',background:st.usage.warn?'#d23a52':'var(--blue)'}}/></div>
+          </div>
+          <div style={{fontSize:11.5,color:'var(--muted)'}}>Not backed up (by decision): Supervisor Reports and the H360 patient data collected for them; caches. Everything else in the database, every D1 table, and every photo/file in Vercel Blob is backed up. Backups are only ever added to, never deleted by the app.</div>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-h" style={{flexWrap:'wrap'}}>
+          <h3>Cloudflare R2 settings</h3>
+          <span className="sub">{cfg.configured?(cfg.source==='environment'?'from the server settings':'saved '+when(cfg.savedAt)+(cfg.savedBy?' by '+cfg.savedBy:'')):'not set up'}</span>
+          <span className="spacer"/>
+          {cfg.configured&&<button className="btn sm" onClick={test} disabled={!!busy}>{busy==='test'?'Testing…':'Test connection'}</button>}
+          {cfg.source!=='environment'&&<button className="btn sm" onClick={()=>{ setEditing(!editing); setForm({accountId:'',bucket:cfg.bucket||'unico-backups',keyId:'',secret:''}); }}>{editing?'Cancel':cfg.configured?'Change keys':'Enter keys'}</button>}
+        </div>
+        <div className="card-b" style={{display:'grid',gap:10}}>
+          {cfg.configured&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:'8px 18px',fontSize:12.5}}>
+            <div style={{wordBreak:'break-all'}}><div style={lbl}>Endpoint</div>{cfg.endpoint}</div><div><div style={lbl}>Bucket</div>{cfg.bucket}</div><div><div style={lbl}>Access Key ID</div>{cfg.keyId}</div><div><div style={lbl}>Secret</div>kept sealed — never shown</div>
+          </div>}
+          {(editing||!cfg.configured)&&cfg.source!=='environment'&&<form onSubmit={save} autoComplete="off" style={{display:'grid',gap:8}}>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              <input style={{...inp,flex:'1 1 200px'}} placeholder="Cloudflare Account ID" value={form.accountId} onChange={e=>setForm({...form,accountId:e.target.value})}/>
+              <input style={{...inp,flex:'1 1 150px'}} placeholder="Bucket (unico-backups)" value={form.bucket} onChange={e=>setForm({...form,bucket:e.target.value})}/>
+            </div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              <input style={{...inp,flex:'1 1 200px'}} placeholder="R2 Access Key ID" value={form.keyId} onChange={e=>setForm({...form,keyId:e.target.value})} autoComplete="off"/>
+              <input style={{...inp,flex:'1 1 200px'}} type="password" placeholder={cfg.configured?'R2 Secret Access Key (blank = keep)':'R2 Secret Access Key'} value={form.secret} onChange={e=>setForm({...form,secret:e.target.value})} autoComplete="new-password"/>
+              <button className="btn pri sm" type="submit" disabled={!!busy}>{busy==='save'?'Saving…':'Save'}</button>
+            </div>
+            <div style={{fontSize:11.5,color:'var(--muted)',lineHeight:1.5}}>
+              In the Cloudflare dashboard: <b>R2 Object Storage</b> → create the bucket <b>unico-backups</b> (once) → <b>Manage R2 API Tokens</b> → <b>Create API token</b> → permission <b>Object Read & Write</b>, apply to the bucket <b>unico-backups</b> → copy the <b>Access Key ID</b> and <b>Secret Access Key</b> here. The Account ID is on the R2 overview page. The secret is sealed on the server and never shown again.
+            </div>
+          </form>}
+          {cfg.source==='environment'&&<div style={{fontSize:12,color:'var(--muted)'}}>This server takes the R2 keys from its own settings (R2_ACCESS_KEY_ID …); change them there.</div>}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-h"><h3>History</h3><span className="sub">last 30 runs</span><span className="spacer"/><button className="btn sm" onClick={load}>Refresh</button></div>
+        <div className="card-b" style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:12.5}}>
+            <thead><tr>{['Started','Run','Result','Verified','New data','Note'].map(h=><th key={h} style={{textAlign:'left',padding:'7px 9px',borderBottom:'1px solid var(--line)',background:'var(--panel-2)',fontSize:10.5,textTransform:'uppercase',letterSpacing:.4,color:'var(--muted)'}}>{h}</th>)}</tr></thead>
+            <tbody>{(st.runs||[]).map(r=>(
+              <tr key={r.id}>
+                <td style={{padding:'7px 9px',borderBottom:'1px solid var(--line-2)',whiteSpace:'nowrap'}}>{when(r.startedAt)}</td>
+                <td style={{padding:'7px 9px',borderBottom:'1px solid var(--line-2)'}}>{r.reason}{r.by?' · '+r.by:''}</td>
+                <td style={{padding:'7px 9px',borderBottom:'1px solid var(--line-2)',fontWeight:700,color:r.ok?'#13703d':r.phase==='abandoned'||r.phase==='failed'||r.error?'#b42339':'#9a5a06'}}>{r.ok?'✓ done':r.phase==='abandoned'?'not finished':r.error?'error — retried':r.phase}</td>
+                <td style={{padding:'7px 9px',borderBottom:'1px solid var(--line-2)',whiteSpace:'nowrap'}}>{r.verifiedAt?when(r.verifiedAt)+(r.progress&&r.progress.fullCheck?' (full)':''):'—'}</td>
+                <td style={{padding:'7px 9px',borderBottom:'1px solid var(--line-2)'}}>{r.uploadedBytes?mb(r.uploadedBytes):'—'}</td>
+                <td style={{padding:'7px 9px',borderBottom:'1px solid var(--line-2)',color:'var(--muted)',maxWidth:360}}>{r.error?r.error.slice(0,140):r.progress?(r.progress.collections+' collections · '+r.progress.d1Parts+' D1 parts · '+r.progress.filesCopied+' new files'):''}</td>
+              </tr>))}</tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card"><div className="card-b" style={{fontSize:12,color:'var(--muted)',lineHeight:1.6}}>
+        <b style={{color:'var(--ink-2)'}}>Restoring.</b> On the hospital PC: <code>node scripts/restore-from-r2.js</code> checks the latest backup and compares it with the live database (it changes nothing). <code>--to-dir C:\restore</code> saves every dataset as files; <code>--apply</code> puts back only documents that are missing — it never overwrites anything.
+      </div></div>
+    </div>
+  );
+}
 function CacheStats(){
   const [d,setD]=React.useState(null);
   const [err,setErr]=React.useState('');
@@ -3745,7 +3874,9 @@ function Settings({depts, store, setRoute}){
   // with sub-tabs. Their old tab ids (deep links, window.__UNICO_SETTINGS_TAB__, setTab calls)
   // still work: they land on System & Data with the matching sub-tab open.
   const [sysTab,setSysTab]=React.useState('activity');
-  React.useEffect(()=>{ if(['activity','database','monitor','data'].indexOf(tab)>=0){ setSysTab(tab); setTab('system'); } },[tab]);
+  React.useEffect(()=>{ if(['activity','database','monitor','data','backup'].indexOf(tab)>=0){ setSysTab(tab); setTab('system');
+    // One-shot (the top-bar backup indicator sets it): later visits open Settings normally.
+    try{ if(window.__UNICO_SETTINGS_TAB__===tab) delete window.__UNICO_SETTINGS_TAB__; }catch(e){} } },[tab]);
   const native=window.unicoNative;
   React.useEffect(()=>{ if(native&&native.dbPath){ native.dbPath().then(setDbFile).catch(()=>{}); } },[]);
 
@@ -3853,9 +3984,10 @@ function Settings({depts, store, setRoute}){
               <div style={{fontSize:15,fontWeight:700,color:'var(--ink)'}}>System &amp; Data</div>
               <div style={{fontSize:11.5,color:'var(--muted)'}}>Activity history, the database, live system health, backups and exports.</div>
             </div>
-            <div className="seg" style={{flexWrap:'wrap'}}>{[['activity','Activity Log',I.activity],['database','Database',I.grid],['monitor','System Monitor',I.activity],['data','Data & Export',I.doc]].map(([id,l,ic])=><button key={id} className={sysTab===id?'on':''} onClick={()=>setSysTab(id)} style={{display:'inline-flex',alignItems:'center',gap:6}}><Ic d={ic} s={13}/>{l}</button>)}</div>
+            <div className="seg" style={{flexWrap:'wrap'}}>{[['activity','Activity Log',I.activity],['database','Database',I.grid],['monitor','System Monitor',I.activity],['data','Data & Export',I.doc],['backup','Cloud backup',I.upload||I.doc]].map(([id,l,ic])=><button key={id} className={sysTab===id?'on':''} onClick={()=>setSysTab(id)} style={{display:'inline-flex',alignItems:'center',gap:6}}><Ic d={ic} s={13}/>{l}</button>)}</div>
           </div></div>}
           {tab==='system'&&sysTab==='activity'&&<ActivityLog/>}
+          {tab==='system'&&sysTab==='backup'&&<CloudBackup/>}
           {tab==='system'&&sysTab==='database'&&<React.Fragment><CacheStats/><DatabaseBrowser/></React.Fragment>}
           {tab==='system'&&sysTab==='monitor'&&(window.SystemMonitor?<window.SystemMonitor/>:<div className="card"><div className="card-b">System Monitor is not loaded.</div></div>)}
           {tab==='media'&&<MediaBrowser/>}

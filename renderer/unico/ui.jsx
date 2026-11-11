@@ -1103,6 +1103,39 @@ function unicoAgo(t){
   const d=Math.round(h/24); return d+' day'+(d===1?'':'s')+' ago';
 }
 
+/* CLOUD BACKUP indicator (administrators only): has today's backup reached Cloudflare R2 and
+   been verified? green = verified within 26 h · amber = running / over a day old · red = failed,
+   never done, or not set up. Click → Settings → System & Data → Cloud backup. Data:
+   GET /api/backup/status (admin-only), on load and every 30 minutes. */
+const UNICO_CLOUD_ICON='M17.5 19H7a5 5 0 01-.6-9.96A7 7 0 0120 10.5 4.25 4.25 0 0117.5 19z';
+function UnicoBackupBadge({setRoute}){
+  const admin=(()=>{ try{ return unicoUserPerms()===null; }catch(e){ return false; } })();
+  const [st,setSt]=React.useState(null);
+  React.useEffect(()=>{
+    if(!admin) return;
+    let live=true;
+    const load=()=>fetch('/api/backup/status',{headers:{accept:'application/json'},cache:'no-store'}).then(r=>r.ok?r.json():null).then(j=>{ if(live&&j) setSt(j); }).catch(()=>{});
+    load();
+    const iv=setInterval(load,30*60*1000);
+    window.addEventListener('unico:backup-changed',load);
+    return ()=>{ live=false; clearInterval(iv); window.removeEventListener('unico:backup-changed',load); };
+  },[admin]);
+  if(!admin||!st) return null;
+  const tone={ok:'#1f9d57',running:'#d48806',stale:'#d48806',pending:'#d48806',failed:'#d23a52',off:'#d23a52'}[st.state]||'#9aa6b4';
+  const when=(v)=>{ try{ return v?new Date(v).toLocaleString('en-GB',{timeZone:'Asia/Dhaka',dateStyle:'medium',timeStyle:'short'}):''; }catch(e){ return ''; } };
+  const mb=(b)=>(b/1048576).toFixed(b<10485760?1:0)+' MB';
+  const lg=st.lastGood;
+  const title=st.state==='ok'
+    ? 'Cloud backup: verified '+when(lg&&(lg.verifiedAt||lg.finishedAt))+' · '+mb(st.usage.bytes)+' used of 10 GB'
+    : 'Cloud backup: '+(st.message||st.state)+(lg?' · last verified backup '+when(lg.verifiedAt||lg.finishedAt):'');
+  return (
+    <button className="tb-icon" title={title} aria-label={title} style={{position:'relative'}}
+      onClick={()=>{ try{ window.__UNICO_SETTINGS_TAB__='backup'; }catch(e){} setRoute&&setRoute({view:'settings'}); }}>
+      <Ic d={UNICO_CLOUD_ICON} s={17} c={tone}/>
+      <span style={{position:'absolute',right:5,bottom:5,width:9,height:9,borderRadius:'50%',background:tone,border:'2px solid var(--panel)',display:'grid',placeItems:'center'}}/>
+    </button>
+  );
+}
 function TopBar({route, setRoute, onBurger, menuExpanded, crumbs, actions, depts=[], onFill, period, setPeriod}){
   const [notifOpen,setNotifOpen]=React.useState(false);
   const reporting=depts.filter(d=>d.months&&d.months.length&&d.latest&&d.latest.month);
@@ -1261,6 +1294,7 @@ function TopBar({route, setRoute, onBurger, menuExpanded, crumbs, actions, depts
             </div>
           )}
         </div>
+        <UnicoBackupBadge setRoute={setRoute}/>
         {/* Printing takes the record off the screen and out of the building, so it follows
             the Print permission of whatever workspace is open — not merely the right to look
             at it. Administrators and the open local session are unrestricted. */}
