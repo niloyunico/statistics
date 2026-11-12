@@ -17,16 +17,17 @@ const crit = (rows) => rows.map(([no, sectionId, jci, critical, text]) => ({ id:
 const kpi = (id, code, name, formula, target, direction, criteria) => Object.assign({ id, code, name, formula, target, direction }, criteria ? { criteria } : {});
 const ids = (...n) => n.map((x) => 'c' + x);
 const range = (a, b) => { const out = []; for (let i = a; i <= b; i++) out.push('c' + i); return out; };
-// The post-operative / recovery record on the OT tool (a procedure-area choice).
+// The post-operative / recovery record used to be its own OT procedure-area choice; since the user asked
+// ("combine with OT") it is part of "OT". Kept for the earlier one-shot migrations.
 const POSTOP_AREA = 'Post-operative / Recovery (PACU)';
 const POSTOP_GUIDE = { areas: [POSTOP_AREA], never: ['c1', 'c20'], note: 'Post-operative / recovery record: Sections A and E apply; items of the operation itself (Sections B–C) that were not part of this record may be marked N/A.' };
 // The Aldrete post-anaesthesia recovery score (criterion 18 checks it is recorded): recorded with the audit, not scored.
-// The OT's procedure areas: one "OT" for major, minor and emergency cases (the user's choice), with
-// day-care, obstetric and the post-operative record kept apart. The guide never names item numbers
+// The OT's procedure areas: one "OT" for major, minor and emergency cases and the post-operative /
+// recovery record (the user's choice), with day-care and obstetric kept apart. The guide never names item numbers
 // (they renumber when a tool changes).
 const OT_AREAS_MERGED = ['Major OT', 'Minor OT', 'Emergency OT'];
 const OT_GUIDE = [
-  { areas: ['OT'], note: 'All sections apply. For an emergency case: emergency consent per policy, and patient identification, time-out, counts, medications, specimens and authentication are never N/A. Items not relevant to the case (e.g. tourniquet, implants) may be N/A.' },
+  { areas: ['OT'], never: ['c1', 'c20'], note: 'All sections apply, including the post-operative / recovery record. Patient identification and authentication are never N/A. For an emergency case: emergency consent per policy, and time-out, counts, medications and specimens are never N/A. Items not relevant to the case (e.g. tourniquet, implants) may be N/A; when only the recovery record is audited, items of the operation itself that were not part of it may be N/A.' },
   { areas: ['Obstetric OT'], note: 'All sections apply.' },
   { areas: ['Day-care OT'], note: 'All sections apply; items not relevant to the case (e.g. tourniquet, implants) may be N/A. The day-care discharge (escort, written instructions, follow-up) must be documented.' },
 ];
@@ -110,7 +111,7 @@ const OT = {
   cathSplit: true,
   header: {
     areaLabel: 'Procedure area',
-    areas: ['OT', 'Day-care OT', 'Obstetric OT', POSTOP_AREA],
+    areas: ['OT', 'Day-care OT', 'Obstetric OT'],
     bedLabel: 'OT / room no.',
     extra: [
       { id: 'procedure', label: 'Procedure', type: 'text' },
@@ -154,7 +155,6 @@ const OT = {
   ]),
   naGuide: [
     ...OT_GUIDE.map((g) => Object.assign({}, g)),
-    POSTOP_GUIDE,
   ],
 };
 // Section D (Cath Lab specific) is the Cath Lab tool's; on the OT tool it is switched off — kept, never deleted.

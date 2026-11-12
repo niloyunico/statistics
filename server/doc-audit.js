@@ -235,6 +235,39 @@ async function ensureOtAreaMerge(now) {
   await patchConfig({ otAreaMergeAt: now });
   return true;
 }
+/* The post-operative / recovery record is part of "OT" (the user: "combine with OT"). Once, on its
+   own marker: the stored OT tool loses the "Post-operative / Recovery (PACU)" area ("OT" first if
+   missing); guide rules only for that area go; the rule for "OT" alone becomes the new note (which
+   covers the recovery record); admin rules for other areas kept. Not a scoring change. Audits
+   already saved keep the area they were filled with. */
+async function ensureOtPostopMerge(now) {
+  const cfg = await getConfig();
+  if (cfg.otPostopMergeAt) return false;
+  const t = await getDoc(TOOLS, 'ot20');
+  if (t) {
+    const P = catalogue.POSTOP_AREA;
+    const h = t.header || {};
+    const old = h.areas || [];
+    if (old.indexOf(P) >= 0 || old.indexOf('OT') < 0) {
+      const areas = ['OT'].concat(old.filter((a) => a !== 'OT' && a !== P));
+      const otRule = catalogue.OT_GUIDE.find((g) => g.areas.length === 1 && g.areas[0] === 'OT');
+      const guide = [];
+      let placed = false;
+      (t.naGuide || []).forEach((g) => {
+        const ga = (g.areas || []).filter((a) => a !== P);
+        if (!ga.length) return;                                                    // the post-op rule
+        if (ga.length === 1 && ga[0] === 'OT') { if (!placed) guide.push(Object.assign({}, otRule)); placed = true; return; }
+        guide.push(Object.assign({}, g, { areas: ga }));
+      });
+      if (!placed) guide.unshift(Object.assign({}, otRule));
+      const next = Object.assign({}, t, { header: Object.assign({}, h, { areas }), naGuide: guide, updatedAt: now, updatedBy: 'system',
+        history: (t.history || []).concat([{ at: now, by: 'system', action: 'procedure areas: Post-operative / Recovery (PACU) merged into "OT"; guide updated' }]).slice(-100) });
+      if (!(await putDoc(TOOLS, next, t.updatedAt))) return false;   // changed meanwhile: try again next request
+    }
+  }
+  await patchConfig({ otPostopMergeAt: now });
+  return true;
+}
 async function liveTools() { return (await allDocs(TOOLS)).filter(DA.isLiveTool).sort((a, b) => (a.order || 0) - (b.order || 0)); }
 
 /* ------------------------------------------------------------ departments --- */
@@ -541,6 +574,7 @@ function mount(app, opts) {
     await ensureCathSplit(now());
     await ensureAldreteItem(now());
     await ensureOtAreaMerge(now());
+    await ensureOtPostopMerge(now());
     return a;
   };
   const admin = (res, a) => { if (a.unrestricted) return true; res.status(403).json({ ok: false, error: 'Only an administrator can do this.' }); return false; };
@@ -1229,4 +1263,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, cfgFor, _mem: mem };
+module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, cfgFor, _mem: mem };

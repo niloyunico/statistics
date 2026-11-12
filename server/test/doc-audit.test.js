@@ -64,7 +64,7 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.deepEqual(crit('ipd25'), [1, 2, 7, 8, 9, 11, 16, 17, 18, 19, 20, 21, 24], 'QA-001 §8.3: 13 critical');
   assert.deepEqual(catalogue.TOOLS.find((t) => t.id === 'cath20').criteria.filter((c) => c.critical).map((c) => c.id), ['c1', 'c3', 'c4', 'c5', 'c7', 'c8', 'c13', 'c15', 'c20'], 'QA-002: 9 critical (Cath Lab)');
   assert.deepEqual(catalogue.TOOLS.find((t) => t.id === 'ot20').criteria.filter((c) => c.active && c.critical).map((c) => c.id), ['c1', 'c3', 'c4', 'c5', 'c7', 'c8', 'c13', 'c15', 'c20'], 'OT: the same 9 critical (ids kept, renumbered)');
-  assert.ok(catalogue.TOOLS.find((t) => t.id === 'ot20').header.areas.indexOf('Post-operative / Recovery (PACU)') >= 0, 'OT has the post-operative area');
+  assert.ok(catalogue.TOOLS.find((t) => t.id === 'ot20').header.areas.indexOf('Post-operative / Recovery (PACU)') < 0, 'the post-operative record is part of "OT"');
   assert.equal(catalogue.guessTool({ id: 'cathlab', name: 'Cath Lab' }).toolId, 'cath20');
   assert.equal(DA.aldreteText({ a: 2, r: 2, c: 1, co: 1, o: 2 }), '8/10 (A2 R2 C1 Co1 O2)');
   assert.deepEqual(DA.cleanAldrete({ a: 9, r: '2' }), { r: 2, total: 2, complete: false }, 'each sign 0–2; total worked out');
@@ -95,9 +95,9 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(DA.score({}, IPD.criteria).blank, 25, 'unreviewed items stay blank — never N/A');
   let probs = DA.validate({ deptId: 'lvl9', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, answers: Object.assign(allYes(IPD), { c4: 'N' }), evidence: {} }, IPD.criteria, { today: '2026-11-11' });
   assert.equal(probs.length, 0, "evidence for a 'No' is optional");
-  probs = DA.validate({ deptId: 'er', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, area: 'Post-operative / Recovery (PACU)', answers: Object.assign({}, allYes(catalogue.TOOLS[1]), { c1: 'NA' }) }, catalogue.TOOLS[1].criteria, { tool: catalogue.TOOLS[1] });
-  assert.ok(probs.some((p) => p.criterion === 'c1'), 'identification is never N/A on a post-operative record');
-  assert.deepEqual(catalogue.TOOLS[1].header.areas, ['OT', 'Day-care OT', 'Obstetric OT', 'Post-operative / Recovery (PACU)'], 'one OT area (major / minor / emergency together)');
+  probs = DA.validate({ deptId: 'er', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, area: 'OT', answers: Object.assign({}, allYes(catalogue.TOOLS[1]), { c1: 'NA' }) }, catalogue.TOOLS[1].criteria, { tool: catalogue.TOOLS[1] });
+  assert.ok(probs.some((p) => p.criterion === 'c1'), 'identification is never N/A on an OT record (recovery included)');
+  assert.deepEqual(catalogue.TOOLS[1].header.areas, ['OT', 'Day-care OT', 'Obstetric OT'], 'one OT area (major / minor / emergency and the recovery record together)');
   assert.ok(!JSON.stringify(catalogue.TOOLS[1].naGuide).match(/Section D|item \d/), 'the OT guide names no Section D and no item numbers');
 
   /* ---- who may do what ---- */
@@ -371,7 +371,7 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.ok(logged.some((l) => l.action === 'docaudit_audit' && /published \(/.test(l.opts.detail)), 'each audit logged');
 
   /* ---- the Aldrete item on an OT audit; the one-shot migrations of an older install ---- */
-  res = await call('POST /api/doc-audit/audits', admin, { body: { deptId: 'lvl9', toolId: 'ot20', date: '2026-11-10', uhid: 'UH-OT1', area: 'Post-operative / Recovery (PACU)', nurse: { staffId: 1 }, extra: { aldreteIn: { a: 2 } }, answers: { c21: 'N' } } });
+  res = await call('POST /api/doc-audit/audits', admin, { body: { deptId: 'lvl9', toolId: 'ot20', date: '2026-11-10', uhid: 'UH-OT1', area: 'OT', nurse: { staffId: 1 }, extra: { aldreteIn: { a: 2 } }, answers: { c21: 'N' } } });
   assert.equal(res.body.audit.criteria.length, 19, 'a new OT audit has 19 criteria');
   assert.equal(res.body.audit.answers.c21, 'N', "the Aldrete item is answered like any other");
   assert.equal(res.body.audit.extra.aldreteIn, undefined, 'no Aldrete header boxes any more');
@@ -422,6 +422,15 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.ok(!/Section D/.test(JSON.stringify(o5.naGuide)) && /OT, Day-care OT/.test(o5.sample.note));
   assert.equal(o5.revision, rev, 'not a scoring change');
   assert.equal(await docAudit.ensureOtAreaMerge(9500), false, 'once only');
+  // then the post-operative / recovery area joins "OT"
+  docAudit._mem.cfg = Object.assign({}, docAudit._mem.cfg, { otPostopMergeAt: undefined });
+  assert.equal(await docAudit.ensureOtPostopMerge(10000), true);
+  const o6 = docAudit._mem.docAuditTools.get('ot20');
+  assert.deepEqual(o6.header.areas, ['OT', 'Day-care OT', 'Obstetric OT', 'Custom area']);
+  assert.deepEqual(o6.naGuide.map((g) => g.areas.join()), ['OT', 'Obstetric OT', 'Day-care OT', 'Custom area'], 'post-op rule gone, the admin rule kept');
+  assert.ok(/recovery record/.test(o6.naGuide[0].note) && o6.naGuide[0].never.indexOf('c1') >= 0, 'the OT note covers the recovery record');
+  assert.equal(o6.revision, rev, 'not a scoring change');
+  assert.equal(await docAudit.ensureOtPostopMerge(10500), false, 'once only');
 
   console.log('doc-audit: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });
