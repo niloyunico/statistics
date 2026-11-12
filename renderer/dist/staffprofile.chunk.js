@@ -1019,6 +1019,13 @@ const canDelPerf = () => {
     return true;
   }
 };
+const canEditPerf = () => {
+  try {
+    return window.unicoCan ? window.unicoCan('perf', 'edit') : true;
+  } catch (e) {
+    return true;
+  }
+};
 const canPrintStaff = () => {
   try {
     return window.unicoCan ? window.unicoCan('staff', 'print') : true;
@@ -1391,12 +1398,19 @@ function ConductDialog({
   already,
   categories,
   onClose,
-  onSaved
+  onSaved,
+  entry
 }) {
+  const ed = entry || null;
   const A = window.UNICO_APPRAISAL || {};
   const isAch = kind === 'achievement';
   const cfg = categories && (isAch ? categories.ach : categories.inc) || null;
-  const cats = Array.isArray(cfg) && cfg.length ? cfg : (isAch ? A.ACH_CATEGORIES : A.INC_CATEGORIES) || [];
+  const cats0 = Array.isArray(cfg) && cfg.length ? cfg : (isAch ? A.ACH_CATEGORIES : A.INC_CATEGORIES) || [];
+  const cats = ed && ed.category && !cats0.some(c => c.label === ed.category) ? cats0.concat([{
+    id: '_filed',
+    label: ed.category,
+    levels: ed.level ? [[ed.level, Number(ed.points) || 0]] : []
+  }]) : cats0;
   const sevs = A.SEVERITIES || [];
   const today = (() => {
     try {
@@ -1406,17 +1420,23 @@ function ConductDialog({
       return '';
     }
   })();
-  const [category, setCategory] = React.useState(cats[0] && cats[0].label || '');
-  const [level, setLevel] = React.useState(cats[0] && cats[0].levels && cats[0].levels[0][0] || '');
-  const [severity, setSeverity] = React.useState(sevs[0] && sevs[0][0] || 'Minor');
-  const [what, setWhat] = React.useState('');
-  const [date, setDate] = React.useState(today);
-  const [action, setAction] = React.useState('');
-  const [note, setNote] = React.useState('');
+  const [category, setCategory] = React.useState(ed && ed.category ? ed.category : cats[0] && cats[0].label || '');
+  const [level, setLevel] = React.useState(ed && ed.level ? ed.level : cats[0] && cats[0].levels && cats[0].levels[0][0] || '');
+  const [severity, setSeverity] = React.useState(ed && ed.severity ? ed.severity : sevs[0] && sevs[0][0] || 'Minor');
+  const [what, setWhat] = React.useState(ed ? ed.what || '' : '');
+  const [date, setDate] = React.useState(ed && ed.date ? ed.date : today);
+  const [action, setAction] = React.useState(ed ? (isAch ? ed.reward : ed.action) || '' : '');
+  const [note, setNote] = React.useState(ed ? ed.note || '' : '');
+  const [reason, setReason] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [err, setErr] = React.useState('');
   const levels = (cats.find(c => c.label === category) || {}).levels || [];
+  const firstCat = React.useRef(true);
   React.useEffect(() => {
+    if (firstCat.current) {
+      firstCat.current = false;
+      if (ed) return;
+    }
     if (isAch) setLevel(levels[0] && levels[0][0] || '');
   }, [category]);
   const points = isAch ? (levels.find(l => l[0] === level) || [null, 1])[1] : (sevs.find(x => x[0] === severity) || [null, 1])[1];
@@ -1454,8 +1474,52 @@ function ConductDialog({
       setErr(isAch ? 'Describe the achievement.' : 'Describe what happened.');
       return;
     }
+    if (ed && reason.trim().length < 5) {
+      setErr('Write why this ' + (isAch ? 'achievement' : 'incident') + ' is changed — it is kept with the entry.');
+      return;
+    }
     setBusy(true);
     setErr('');
+    if (ed) {
+      const upd = {
+        date,
+        category,
+        what: what.trim(),
+        note,
+        points,
+        reason: reason.trim(),
+        ...(isAch ? {
+          level,
+          reward: action
+        } : {
+          severity,
+          action
+        })
+      };
+      try {
+        const r = await fetch('/api/performance/' + (isAch ? 'achievements' : 'incidents') + '/' + encodeURIComponent(ed.id), {
+          method: 'PUT',
+          headers: {
+            'content-type': 'application/json'
+          },
+          credentials: 'same-origin',
+          body: JSON.stringify(upd)
+        });
+        const j = await r.json().catch(() => ({
+          ok: false
+        }));
+        if (!r.ok || !j.ok) throw new Error(j && j.error || 'Could not save the change.');
+        try {
+          window.UI && window.UI.toast && window.UI.toast(j.unchanged ? 'Nothing was changed' : (isAch ? 'Achievement' : 'Incident') + ' corrected for ' + e.name, j.unchanged ? 'info' : 'success');
+        } catch (ex) {}
+      } catch (ex) {
+        setBusy(false);
+        setErr(String(ex && ex.message || ex));
+        return;
+      }
+      onSaved();
+      return;
+    }
     const body = {
       empId: perfId,
       staffId: String(e.id),
@@ -1537,7 +1601,7 @@ function ConductDialog({
     style: {
       color: tone
     }
-  }, isAch ? 'Add an achievement' : 'Record a mistake or incident'), React.createElement("span", {
+  }, ed ? isAch ? 'Edit achievement' : 'Edit incident' : isAch ? 'Add an achievement' : 'Record a mistake or incident'), React.createElement("span", {
     className: "spacer"
   }), React.createElement("button", {
     className: "icon-btn",
@@ -1694,7 +1758,26 @@ function ConductDialog({
     style: {
       color: '#b5670a'
     }
-  }, " Only ", effective, " of these ", points, " points will change the score."))), !cycleId && React.createElement("div", {
+  }, " Only ", effective, " of these ", points, " points will change the score."))), ed && React.createElement("div", {
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 4
+    }
+  }, lab('Why is this changed? *'), React.createElement("input", {
+    style: {
+      ...inp,
+      borderColor: reason.trim().length >= 5 ? undefined : '#d23a52'
+    },
+    value: reason,
+    onChange: ev => setReason(ev.target.value),
+    placeholder: "e.g. Wrong date entered / severity reviewed by the Nurse Manager"
+  }), React.createElement("span", {
+    style: {
+      fontSize: 11,
+      color: 'var(--muted)'
+    }
+  }, "Kept with the entry together with what it said before.")), !ed && !cycleId && React.createElement("div", {
     style: {
       fontSize: 12,
       color: '#b5670a'
@@ -1717,7 +1800,7 @@ function ConductDialog({
     onClick: onClose
   }, "Cancel"), React.createElement("button", {
     className: "btn",
-    disabled: busy || !what.trim(),
+    disabled: busy || !what.trim() || ed && reason.trim().length < 5,
     onClick: save,
     style: {
       background: tone,
@@ -1725,7 +1808,7 @@ function ConductDialog({
       color: '#fff',
       fontWeight: 700
     }
-  }, busy ? 'Saving...' : isAch ? 'Save achievement' : 'Save incident')))));
+  }, busy ? 'Saving...' : ed ? 'Save changes' : isAch ? 'Save achievement' : 'Save incident')))));
   return window.ReactDOM && window.ReactDOM.createPortal ? window.ReactDOM.createPortal(body, document.body) : body;
 }
 function StaffDocAuditCard({
@@ -1914,6 +1997,7 @@ function StaffProfile({
   const [note, setNote] = React.useState('');
   const [discontinuing, setDiscontinuing] = React.useState(false);
   const [conduct, setConduct] = React.useState(null);
+  const [conductEdit, setConductEdit] = React.useState(null);
   const [printing, setPrinting] = React.useState(false);
   const perfId = e ? e.emp_id || String(e.id) : null;
   const perf = useStaffPerf(perfId);
@@ -2286,6 +2370,18 @@ function StaffProfile({
     onClose: () => setConduct(null),
     onSaved: () => {
       setConduct(null);
+      if (perf && perf.reload) perf.reload();
+    }
+  }), conductEdit && canEditPerf() && React.createElement(ConductDialog, {
+    kind: conductEdit.kind,
+    entry: conductEdit.entry,
+    e: e,
+    perfId: perfId,
+    categories: perf && perf.categories,
+    already: (perf ? conductEdit.kind === 'achievement' ? perf.achievements : perf.incidents : []).filter(x => x.id !== conductEdit.entry.id).reduce((n, x) => n + (Number(x.points) || 0), 0),
+    onClose: () => setConductEdit(null),
+    onSaved: () => {
+      setConductEdit(null);
       if (perf && perf.reload) perf.reload();
     }
   }), printing && React.createElement(StaffRecordPrint, {
@@ -3497,7 +3593,37 @@ function StaffProfile({
       fontSize: 11,
       color: 'var(--muted)'
     }
-  }, [a.date, a.category, a.level, a.points ? '+' + a.points + ' pts' : null].filter(Boolean).join(' · '))), canDelPerf() && a.id && React.createElement("button", {
+  }, [a.date, a.category, a.level, a.points ? '+' + a.points + ' pts' : null].filter(Boolean).join(' · '), a.editedAt && React.createElement("span", {
+    title: 'Edited by ' + (a.editedBy || '—') + (a.edits && a.edits.length ? ' — “' + a.edits[a.edits.length - 1].reason + '”' : ''),
+    style: {
+      color: '#8a5a00'
+    }
+  }, " \xB7 edited ", (() => {
+    try {
+      return new Date(a.editedAt).toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
+    } catch (err) {
+      return '';
+    }
+  })()))), canEditPerf() && a.id && React.createElement("button", {
+    className: "icon-btn",
+    title: "Edit this achievement \u2014 a reason is asked and kept",
+    style: {
+      width: 24,
+      height: 24,
+      flexShrink: 0
+    },
+    onClick: () => setConductEdit({
+      kind: 'achievement',
+      entry: a
+    })
+  }, React.createElement(Ic, {
+    d: I.edit,
+    s: 13
+  })), canDelPerf() && a.id && React.createElement("button", {
     className: "icon-btn danger",
     title: "Remove this achievement \u2014 filed by mistake",
     style: {
@@ -3550,7 +3676,37 @@ function StaffProfile({
       fontSize: 11,
       color: 'var(--muted)'
     }
-  }, [a.date, a.category, a.severity, a.points ? a.points + ' pts' : null].filter(Boolean).join(' · '))), canDelPerf() && a.id && React.createElement("button", {
+  }, [a.date, a.category, a.severity, a.points ? a.points + ' pts' : null].filter(Boolean).join(' · '), a.editedAt && React.createElement("span", {
+    title: 'Edited by ' + (a.editedBy || '—') + (a.edits && a.edits.length ? ' — “' + a.edits[a.edits.length - 1].reason + '”' : ''),
+    style: {
+      color: '#8a5a00'
+    }
+  }, " \xB7 edited ", (() => {
+    try {
+      return new Date(a.editedAt).toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric'
+      });
+    } catch (err) {
+      return '';
+    }
+  })()))), canEditPerf() && a.id && React.createElement("button", {
+    className: "icon-btn",
+    title: "Edit this incident \u2014 a reason is asked and kept",
+    style: {
+      width: 24,
+      height: 24,
+      flexShrink: 0
+    },
+    onClick: () => setConductEdit({
+      kind: 'incident',
+      entry: a
+    })
+  }, React.createElement(Ic, {
+    d: I.edit,
+    s: 13
+  })), canDelPerf() && a.id && React.createElement("button", {
     className: "icon-btn danger",
     title: "Remove this incident \u2014 filed by mistake",
     style: {

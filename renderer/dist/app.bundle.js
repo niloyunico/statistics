@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c924946988","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=ca75ebfb4a","docaudit":"/dist/docaudit.chunk.js?v=fa3138620e","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=06cc02e6a9","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=e2c518d336","docaudit":"/dist/docaudit.chunk.js?v=c326eb8769","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -11974,7 +11974,8 @@ const UNICO_WS = [{
     tag: 'NEW'
   }, {
     id: 'docaudit',
-    label: 'Nursing Documentation KPI Audit',
+    label: 'Documentation KPI Audit',
+    title: 'Nursing Documentation KPI Audit',
     icon: I.doc,
     home: 'docAuditHome',
     on: v => unicoModuleOf(v) === 'docaudit',
@@ -12761,7 +12762,7 @@ function Sidebar({
         onClick: () => setRoute({
           view: wsHome(it)
         }),
-        title: it.label
+        title: it.title || it.label
       }, React.createElement(Ic, {
         d: it.icon,
         s: 18

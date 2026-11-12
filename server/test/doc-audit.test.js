@@ -262,6 +262,26 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.ok(res.body.audits[0].gaps.some((g) => g.no === 9 && g.critical)); assert.equal(res.body.audits[0].myPending, true);
   res = await call('POST /api/doc-audit/mine/:id/ack', nurseAcct, { params: { id: A2.id } });
   assert.equal(res.body.audit.ack.method, 'account'); assert.equal(res.body.audit.status, 'signed', 'acknowledging keeps it published');
+  // An administrator corrects a PUBLISHED audit with a reason: it stays published, the reason is kept,
+  // and the nurse who acknowledged the old result acknowledges the corrected one again.
+  const A2s = res.body.audit;
+  assert.equal((await call('PUT /api/doc-audit/audits/:id', incharge, { params: { id: A2.id }, body: { remarks: 'x', editReason: 'Typing mistake' } })).body.code, 'locked', 'only an administrator corrects a published audit');
+  res = await call('PUT /api/doc-audit/audits/:id', admin, { params: { id: A2.id }, body: { remarks: 'x' } });
+  assert.equal(res.status, 400); assert.equal(res.body.code, 'reason', 'a reason is required');
+  const A2ans = Object.assign({}, A2s.answers); const flip = Object.keys(A2ans).find((k) => A2ans[k] === 'Y');
+  A2ans[flip] = 'N';
+  res = await call('PUT /api/doc-audit/audits/:id', admin, { params: { id: A2.id }, body: { answers: A2ans, evidence: Object.assign({}, A2s.evidence, { [flip]: 'Found missing on recheck' }), editReason: 'Recheck of the record found one more gap' } });
+  assert.equal(res.status, 200, JSON.stringify(res.body)); assert.equal(res.body.audit.status, 'signed', 'still published');
+  assert.ok(res.body.audit.signoff && res.body.audit.signoff.name === 'incharge', 'publication kept');
+  assert.equal(res.body.audit.ack, null); assert.deepEqual(res.body.audit.acks, {}, 'acknowledgement asked again');
+  assert.ok(/corrected after publishing — Recheck of the record found one more gap/.test(res.body.audit.history[res.body.audit.history.length - 1].action));
+  assert.equal(res.body.audit.corrections.length, 1);
+  assert.equal((await call('GET /api/doc-audit/mine', nurseAcct)).body.audits.find((x) => x.id === A2.id).myPending, true, 'waiting for the nurse again');
+  // corrected back (the figures further down count A2 as it was)
+  res = await call('PUT /api/doc-audit/audits/:id', admin, { params: { id: A2.id }, body: { answers: A2s.answers, evidence: A2s.evidence, editReason: 'Second recheck: the first was right' } });
+  assert.equal(res.status, 200); assert.equal(res.body.audit.result.pct, A2s.result.pct);
+  res = await call('POST /api/doc-audit/mine/:id/ack', nurseAcct, { params: { id: A2.id } });
+  assert.equal(res.body.audit.status, 'signed');
   assert.equal((await call('POST /api/doc-audit/mine/:id/ack', nurseAcct, { params: { id: A1.id } })).status, 409, 'an unpublished audit is not hers to acknowledge yet');
   assert.equal((await call('POST /api/doc-audit/mine/:id/ack', nurseAcct, { params: { id: A3.id } })).status, 403, 'not her audit');
 

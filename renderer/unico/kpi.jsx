@@ -1427,9 +1427,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           toast('Report finalised.', 'success'); refreshBadge(); setTick((t) => t + 1);
         }
         if (kind === 'reopen') {
-          const ok = await confirmBox({ title: 'Re-open this report?', message: 'It becomes a draft again: its figures go live and can change. This is recorded in the activity log.', confirmLabel: 'Re-open', danger: true });
+          const ok = await confirmBox({ title: 'Edit this final report?', message: 'The report becomes a draft so you can change it: its figures go live (corrections made in Data Update show), and the commentary and sign-off can be edited. Press Finalise again when you are done. The earlier final is kept in the history and the activity log.', confirmLabel: 'Edit the report' });
           if (!ok) return;
-          setBusy(kind); await api('/api/kpi/report/' + id + '/reopen', { method: 'POST' }); toast('Re-opened.', 'success'); setTick((t) => t + 1);
+          setBusy(kind); await api('/api/kpi/report/' + id + '/reopen', { method: 'POST' }); toast('Open for editing — Finalise again when done.', 'success'); setTick((t) => t + 1);
         }
         if (kind === 'remove') {
           const ok = await confirmBox({ title: 'Remove this report?', message: 'The saved report for ' + K.fmtRange(rep.from, rep.to) + ' is removed from the list (kept in the history). The KPI figures are not touched.', confirmLabel: 'Remove', danger: true });
@@ -1475,7 +1475,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           <div className="kp-chips"><button className={'kp-chip' + (layout === 'full' ? ' on' : '')} onClick={() => setLayout('full')} title="One page per KPI, like the deck">Detailed</button><button className={'kp-chip' + (layout === 'summary' ? ' on' : '')} onClick={() => setLayout('summary')} title="Scorecard and one page per pillar">Summary</button><button className={'kp-chip' + (layout === 'calc' ? ' on' : '')} onClick={() => setLayout('calc')} title="Detailed, plus how every figure was calculated (units, who sent and approved it) and the data checks">Detailed + calculations</button></div>
           {rep.state !== 'final' && (meta.canAdd || meta.canEdit) && <Btn disabled={!!busy} onClick={() => act('refresh')}>{rep.stored ? '↻ Refresh figures' : 'Save as draft'}</Btn>}
           {rep.state !== 'final' && meta.canEdit && <Btn pri disabled={!!busy} onClick={() => act('finalize')}>Finalise</Btn>}
-          {rep.state === 'final' && meta.isAdmin && <Btn disabled={!!busy} onClick={() => act('reopen')}>Re-open</Btn>}
+          {rep.state === 'final' && meta.isAdmin && <Btn disabled={!!busy} onClick={() => act('reopen')} title="Open the final report for changes; Finalise it again when done">✎ Edit (administrator)</Btn>}
           {meta.canPrint && <>
             <Btn disabled={!!busy} onClick={() => act('print')}>Print</Btn>
             <Btn disabled={!!busy} onClick={() => act('pdf')}>{busy === 'pdf' ? 'Making PDF…' : 'PDF'}</Btn>
@@ -1484,10 +1484,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           </>}
           {rep.stored && meta.canDelete && (rep.state !== 'final' || meta.isAdmin) && <Btn danger disabled={!!busy} onClick={() => act('remove')}>Remove</Btn>}
         </div>
+        {rep.state === 'draft' && rep.reopenedAt && <div className="kp-banner info"><span style={{ fontSize: 16 }}>✎</span><div><b>Open for editing</b> — re-opened from final by {rep.reopenedBy || '—'} · {when(rep.reopenedAt)}. Make the changes, then press <b>Finalise</b> again.</div></div>}
         {rep.state === 'preview' && <div className="kp-banner info">This is a preview. Press “Save as draft” (or start typing a comment) to keep it with its commentary and sign-off.</div>}
         {rep.state !== 'final' && rep.quality && rep.quality.unresolved.length > 0 && <div className="kp-banner"><span style={{ fontSize: 16 }}>⚑</span><div><b>{rep.quality.unresolved.length} data error{rep.quality.unresolved.length > 1 ? 's' : ''} must be fixed or acknowledged before this report can be final.</b> {meta.canEdit && <button onClick={() => setAckItems(rep.quality.unresolved)}>Review them</button>}</div></div>}
         {rep.state !== 'final' && rep.quality && !rep.quality.unresolved.length && <div className="kp-banner ok"><span style={{ fontSize: 16 }}>✓</span><div>All data checks are settled{rep.quality.acknowledged ? ' (' + rep.quality.acknowledged + ' acknowledged with a reason)' : ''}{rep.quality.warns ? ' · ' + rep.quality.warns + ' warning(s) are printed on the report' : ''}.</div></div>}
-        {rep.state === 'final' && rep.changedSince && rep.changedSince.length > 0 && <div className="kp-banner info"><span style={{ fontSize: 16 }}>ⓘ</span><div><b>The source data has changed since this report was finalised</b> for: {rep.changedSince.map((x) => { const r = rows.find((y) => y.kpiId === x.kpiId); return (r ? r.code + ' ' + r.name : x.kpiId) + ' (' + K.fmtMonth(x.ym) + ')'; }).join(', ')}. This report still shows the figures as they were when it was finalised{rep.finalizedAt ? ' on ' + when(rep.finalizedAt) : ''}. An administrator can re-open it to bring them up to date.</div></div>}
+        {rep.state === 'final' && rep.changedSince && rep.changedSince.length > 0 && <div className="kp-banner info"><span style={{ fontSize: 16 }}>ⓘ</span><div><b>The source data has changed since this report was finalised</b> for: {rep.changedSince.map((x) => { const r = rows.find((y) => y.kpiId === x.kpiId); return (r ? r.code + ' ' + r.name : x.kpiId) + ' (' + K.fmtMonth(x.ym) + ')'; }).join(', ')}. This report still shows the figures as they were when it was finalised{rep.finalizedAt ? ' on ' + when(rep.finalizedAt) : ''}. An administrator can bring them up to date with ✎ Edit (administrator).</div></div>}
         <div className="kp-scroll"><div className="kp-doc" ref={docRef}>
           {/* cover + summary */}
           <Sheet kicker={(rep.from === rep.to ? 'Monthly report' : 'Report') + ' · ' + period} title={title} foot={foot} page={pg()}>

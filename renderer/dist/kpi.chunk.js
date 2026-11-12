@@ -3718,17 +3718,16 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         }
         if (kind === 'reopen') {
           const ok = await confirmBox({
-            title: 'Re-open this report?',
-            message: 'It becomes a draft again: its figures go live and can change. This is recorded in the activity log.',
-            confirmLabel: 'Re-open',
-            danger: true
+            title: 'Edit this final report?',
+            message: 'The report becomes a draft so you can change it: its figures go live (corrections made in Data Update show), and the commentary and sign-off can be edited. Press Finalise again when you are done. The earlier final is kept in the history and the activity log.',
+            confirmLabel: 'Edit the report'
           });
           if (!ok) return;
           setBusy(kind);
           await api('/api/kpi/report/' + id + '/reopen', {
             method: 'POST'
           });
-          toast('Re-opened.', 'success');
+          toast('Open for editing — Finalise again when done.', 'success');
           setTick(t => t + 1);
         }
         if (kind === 'remove') {
@@ -3882,8 +3881,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       onClick: () => act('finalize')
     }, "Finalise"), rep.state === 'final' && meta.isAdmin && React.createElement(Btn, {
       disabled: !!busy,
-      onClick: () => act('reopen')
-    }, "Re-open"), meta.canPrint && React.createElement(React.Fragment, null, React.createElement(Btn, {
+      onClick: () => act('reopen'),
+      title: "Open the final report for changes; Finalise it again when done"
+    }, "\u270E Edit (administrator)"), meta.canPrint && React.createElement(React.Fragment, null, React.createElement(Btn, {
       disabled: !!busy,
       onClick: () => act('print')
     }, "Print"), React.createElement(Btn, {
@@ -3900,7 +3900,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       danger: true,
       disabled: !!busy,
       onClick: () => act('remove')
-    }, "Remove")), rep.state === 'preview' && React.createElement("div", {
+    }, "Remove")), rep.state === 'draft' && rep.reopenedAt && React.createElement("div", {
+      className: "kp-banner info"
+    }, React.createElement("span", {
+      style: {
+        fontSize: 16
+      }
+    }, "\u270E"), React.createElement("div", null, React.createElement("b", null, "Open for editing"), " \u2014 re-opened from final by ", rep.reopenedBy || '—', " \xB7 ", when(rep.reopenedAt), ". Make the changes, then press ", React.createElement("b", null, "Finalise"), " again.")), rep.state === 'preview' && React.createElement("div", {
       className: "kp-banner info"
     }, "This is a preview. Press \u201CSave as draft\u201D (or start typing a comment) to keep it with its commentary and sign-off."), rep.state !== 'final' && rep.quality && rep.quality.unresolved.length > 0 && React.createElement("div", {
       className: "kp-banner"
@@ -3925,7 +3931,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     }, "\u24D8"), React.createElement("div", null, React.createElement("b", null, "The source data has changed since this report was finalised"), " for: ", rep.changedSince.map(x => {
       const r = rows.find(y => y.kpiId === x.kpiId);
       return (r ? r.code + ' ' + r.name : x.kpiId) + ' (' + K.fmtMonth(x.ym) + ')';
-    }).join(', '), ". This report still shows the figures as they were when it was finalised", rep.finalizedAt ? ' on ' + when(rep.finalizedAt) : '', ". An administrator can re-open it to bring them up to date.")), React.createElement("div", {
+    }).join(', '), ". This report still shows the figures as they were when it was finalised", rep.finalizedAt ? ' on ' + when(rep.finalizedAt) : '', ". An administrator can bring them up to date with \u270E Edit (administrator).")), React.createElement("div", {
       className: "kp-scroll"
     }, React.createElement("div", {
       className: "kp-doc",

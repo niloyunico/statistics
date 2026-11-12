@@ -533,6 +533,8 @@ const canAddPerf=()=>{ try{ return window.unicoCan?window.unicoCan('perf','add')
 // Removing an entry takes points back off somebody's appraisal, so it is a 'perf'
 // DELETE — a step above being allowed to file one.
 const canDelPerf=()=>{ try{ return window.unicoCan?window.unicoCan('perf','delete'):true; }catch(e){ return true; } };
+// Correcting an entry changes somebody's file too: a 'perf' EDIT, with a reason that is kept.
+const canEditPerf=()=>{ try{ return window.unicoCan?window.unicoCan('perf','edit'):true; }catch(e){ return true; } };
 /* PRINTING IS ITS OWN PERMISSION. A printed record leaves the system: it goes into a
    folder, a meeting, an envelope, and nothing in the app can withdraw it afterwards.
    So 'may read this on screen' and 'may take it away on paper' are separate grants —
@@ -680,28 +682,35 @@ function DiscontinueDialog({e,onClose,onDone}){
    Points are CAPPED PER CYCLE (5 bonus, 5 penalty) by the server. The dialog says how
    much of the cap is already used, so nobody files a 3-point award expecting 3 marks
    when only 1 is left. */
-function ConductDialog({kind,e,perfId,already,categories,onClose,onSaved}){
+function ConductDialog({kind,e,perfId,already,categories,onClose,onSaved,entry}){
+  // `entry` = correcting one already on file (PUT): opened with its values, a reason is required.
+  const ed=entry||null;
   const A=window.UNICO_APPRAISAL||{};
   const isAch=kind==='achievement';
   // What this hospital files under: the administrator's list from the server, with the
   // shipped spec as the fallback until it arrives (or if it was never customised).
   const cfg=(categories&&(isAch?categories.ach:categories.inc))||null;
-  const cats=(Array.isArray(cfg)&&cfg.length)?cfg:((isAch?A.ACH_CATEGORIES:A.INC_CATEGORIES)||[]);
+  const cats0=(Array.isArray(cfg)&&cfg.length)?cfg:((isAch?A.ACH_CATEGORIES:A.INC_CATEGORIES)||[]);
+  // An entry filed under a category that was renamed or retired since stays choosable while it is corrected.
+  const cats=(ed&&ed.category&&!cats0.some(c=>c.label===ed.category))?cats0.concat([{id:'_filed',label:ed.category,levels:ed.level?[[ed.level,Number(ed.points)||0]]:[]}]):cats0;
   const sevs=A.SEVERITIES||[];
   const today=(()=>{try{const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);}catch(err){return '';}})();
-  const [category,setCategory]=React.useState((cats[0]&&cats[0].label)||'');
-  const [level,setLevel]=React.useState((cats[0]&&cats[0].levels&&cats[0].levels[0][0])||'');
-  const [severity,setSeverity]=React.useState((sevs[0]&&sevs[0][0])||'Minor');
-  const [what,setWhat]=React.useState('');
-  const [date,setDate]=React.useState(today);
-  const [action,setAction]=React.useState('');
-  const [note,setNote]=React.useState('');
+  const [category,setCategory]=React.useState(ed&&ed.category?ed.category:((cats[0]&&cats[0].label)||''));
+  const [level,setLevel]=React.useState(ed&&ed.level?ed.level:((cats[0]&&cats[0].levels&&cats[0].levels[0][0])||''));
+  const [severity,setSeverity]=React.useState(ed&&ed.severity?ed.severity:((sevs[0]&&sevs[0][0])||'Minor'));
+  const [what,setWhat]=React.useState(ed?(ed.what||''):'');
+  const [date,setDate]=React.useState(ed&&ed.date?ed.date:today);
+  const [action,setAction]=React.useState(ed?((isAch?ed.reward:ed.action)||''):'');
+  const [note,setNote]=React.useState(ed?(ed.note||''):'');
+  const [reason,setReason]=React.useState('');
   const [busy,setBusy]=React.useState(false);
   const [err,setErr]=React.useState('');
 
   // The level list belongs to the CHOSEN category, so changing category re-points it.
   const levels=(cats.find(c=>c.label===category)||{}).levels||[];
-  React.useEffect(()=>{ if(isAch) setLevel((levels[0]&&levels[0][0])||''); },[category]);
+  // (not on opening an entry to correct it: that keeps the level it was filed with)
+  const firstCat=React.useRef(true);
+  React.useEffect(()=>{ if(firstCat.current){ firstCat.current=false; if(ed) return; } if(isAch) setLevel((levels[0]&&levels[0][0])||''); },[category]);
 
   const points=isAch
     ? ((levels.find(l=>l[0]===level)||[null,1])[1])
@@ -720,7 +729,19 @@ function ConductDialog({kind,e,perfId,already,categories,onClose,onSaved}){
 
   const save=async()=>{
     if(!what.trim()){ setErr(isAch?'Describe the achievement.':'Describe what happened.'); return; }
+    if(ed&&reason.trim().length<5){ setErr('Write why this '+(isAch?'achievement':'incident')+' is changed — it is kept with the entry.'); return; }
     setBusy(true); setErr('');
+    if(ed){
+      const upd={ date, category, what:what.trim(), note, points, reason:reason.trim(), ...(isAch?{level,reward:action}:{severity,action}) };
+      try{
+        const r=await fetch('/api/performance/'+(isAch?'achievements':'incidents')+'/'+encodeURIComponent(ed.id),
+          {method:'PUT',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify(upd)});
+        const j=await r.json().catch(()=>({ok:false}));
+        if(!r.ok||!j.ok) throw new Error((j&&j.error)||'Could not save the change.');
+        try{ window.UI&&window.UI.toast&&window.UI.toast(j.unchanged?'Nothing was changed':((isAch?'Achievement':'Incident')+' corrected for '+e.name),j.unchanged?'info':'success'); }catch(ex){}
+      }catch(ex){ setBusy(false); setErr(String((ex&&ex.message)||ex)); return; }
+      onSaved(); return;
+    }
     // The full identity travels with the entry: the employee number the appraisal
     // matches on, the record id that says WHICH person (numbers are not unique), and
     // the department / designation as they stand today.
@@ -746,7 +767,7 @@ function ConductDialog({kind,e,perfId,already,categories,onClose,onSaved}){
       <div className="card" style={{width:'min(520px,96vw)',maxHeight:'92vh',overflow:'auto'}}>
         <div className="card-h" style={{background:isAch?'rgba(31,157,87,.07)':'rgba(210,58,82,.06)'}}>
           <span style={{display:'inline-grid',placeItems:'center',width:30,height:30,borderRadius:9,background:isAch?'rgba(31,157,87,.13)':'rgba(210,58,82,.12)',color:tone,marginRight:7,fontSize:15}}>{isAch?'★':'⚠'}</span>
-          <h3 style={{color:tone}}>{isAch?'Add an achievement':'Record a mistake or incident'}</h3><span className="spacer"/>
+          <h3 style={{color:tone}}>{ed?(isAch?'Edit achievement':'Edit incident'):(isAch?'Add an achievement':'Record a mistake or incident')}</h3><span className="spacer"/>
           <button className="icon-btn" onClick={onClose}><Ic d={I.x} s={15}/></button>
         </div>
         <div className="card-b" style={{display:'flex',flexDirection:'column',gap:12}}>
@@ -788,12 +809,16 @@ function ConductDialog({kind,e,perfId,already,categories,onClose,onSaved}){
             </div>
           </div>
 
-          {!cycleId && <div style={{fontSize:12,color:'#b5670a'}}>No appraisal window is open for this person yet - the entry is filed and attaches to their first window.</div>}
+          {ed&&<div style={{display:'flex',flexDirection:'column',gap:4}}>{lab('Why is this changed? *')}
+            <input style={{...inp,borderColor:reason.trim().length>=5?undefined:'#d23a52'}} value={reason} onChange={ev=>setReason(ev.target.value)}
+              placeholder="e.g. Wrong date entered / severity reviewed by the Nurse Manager"/>
+            <span style={{fontSize:11,color:'var(--muted)'}}>Kept with the entry together with what it said before.</span></div>}
+          {!ed && !cycleId && <div style={{fontSize:12,color:'#b5670a'}}>No appraisal window is open for this person yet - the entry is filed and attaches to their first window.</div>}
           {err&&<div style={{fontSize:12.5,color:'#d23a52',fontWeight:600}}>{err}</div>}
           <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
             <button className="btn" disabled={busy} onClick={onClose}>Cancel</button>
-            <button className="btn" disabled={busy||!what.trim()} onClick={save}
-              style={{background:tone,borderColor:tone,color:'#fff',fontWeight:700}}>{busy?'Saving...':(isAch?'Save achievement':'Save incident')}</button>
+            <button className="btn" disabled={busy||!what.trim()||(ed&&reason.trim().length<5)} onClick={save}
+              style={{background:tone,borderColor:tone,color:'#fff',fontWeight:700}}>{busy?'Saving...':ed?'Save changes':(isAch?'Save achievement':'Save incident')}</button>
           </div>
         </div>
       </div>
@@ -858,6 +883,7 @@ function StaffProfile({store, empId, setRoute}){
   const [note,setNote]=React.useState('');
   const [discontinuing,setDiscontinuing]=React.useState(false);
   const [conduct,setConduct]=React.useState(null);   // 'achievement' | 'incident' | null
+  const [conductEdit,setConductEdit]=React.useState(null);   // { kind, entry } — correcting one on file
   const [printing,setPrinting]=React.useState(false); // the official record sheet + its section picker
   // Resolved before the early return below, so the hook order never changes.
   const perfId=e?(e.emp_id||String(e.id)):null;
@@ -965,6 +991,10 @@ function StaffProfile({store, empId, setRoute}){
         already={(perf?(conduct==='achievement'?perf.achievements:perf.incidents):[]).reduce((n,x)=>n+(Number(x.points)||0),0)}
         onClose={()=>setConduct(null)}
         onSaved={()=>{ setConduct(null); if(perf&&perf.reload) perf.reload(); }}/>}
+      {conductEdit&&canEditPerf()&&<ConductDialog kind={conductEdit.kind} entry={conductEdit.entry} e={e} perfId={perfId} categories={perf&&perf.categories}
+        already={(perf?(conductEdit.kind==='achievement'?perf.achievements:perf.incidents):[]).filter(x=>x.id!==conductEdit.entry.id).reduce((n,x)=>n+(Number(x.points)||0),0)}
+        onClose={()=>setConductEdit(null)}
+        onSaved={()=>{ setConductEdit(null); if(perf&&perf.reload) perf.reload(); }}/>}
       {printing&&<StaffRecordPrint e={e} perf={perf} tenure={tenure} onClose={()=>setPrinting(false)}/>}
       {discontinuing&&<DiscontinueDialog e={e} onClose={()=>setDiscontinuing(false)}
         onDone={(reasonText)=>{ setDiscontinuing(false); store.remove(empId,reasonText);
@@ -1435,8 +1465,11 @@ function StaffProfile({store, empId, setRoute}){
                               <span style={{width:8,height:8,borderRadius:'50%',background:'#1f9d57',marginTop:5,flexShrink:0}}/>
                               <div style={{minWidth:0,flex:1}}>
                                 <div style={{fontSize:12.5,fontWeight:600,color:'var(--ink)'}}>{a.what||'Achievement'}</div>
-                                <div style={{fontSize:11,color:'var(--muted)'}}>{[a.date,a.category,a.level,a.points?'+'+a.points+' pts':null].filter(Boolean).join(' · ')}</div>
+                                <div style={{fontSize:11,color:'var(--muted)'}}>{[a.date,a.category,a.level,a.points?'+'+a.points+' pts':null].filter(Boolean).join(' · ')}{a.editedAt&&<span title={'Edited by '+(a.editedBy||'—')+((a.edits&&a.edits.length)?' — “'+a.edits[a.edits.length-1].reason+'”':'')} style={{color:'#8a5a00'}}> · edited {(()=>{ try{ return new Date(a.editedAt).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); }catch(err){ return ''; } })()}</span>}</div>
                               </div>
+                              {canEditPerf()&&a.id&&<button className="icon-btn" title="Edit this achievement — a reason is asked and kept"
+                                style={{width:24,height:24,flexShrink:0}} onClick={()=>setConductEdit({kind:'achievement',entry:a})}>
+                                <Ic d={I.edit} s={13}/></button>}
                               {canDelPerf()&&a.id&&<button className="icon-btn danger" title="Remove this achievement — filed by mistake"
                                 style={{width:24,height:24,flexShrink:0}}
                                 onClick={()=>removeConductEntry('achievement',a,e.name).then(done=>{ if(done&&perf&&perf.reload) perf.reload(); })}>
@@ -1452,8 +1485,11 @@ function StaffProfile({store, empId, setRoute}){
                               <span style={{width:8,height:8,borderRadius:'50%',background:'#e08a1e',marginTop:5,flexShrink:0}}/>
                               <div style={{minWidth:0,flex:1}}>
                                 <div style={{fontSize:12.5,fontWeight:600,color:'var(--ink)'}}>{a.what||'Incident'}</div>
-                                <div style={{fontSize:11,color:'var(--muted)'}}>{[a.date,a.category,a.severity,a.points?a.points+' pts':null].filter(Boolean).join(' · ')}</div>
+                                <div style={{fontSize:11,color:'var(--muted)'}}>{[a.date,a.category,a.severity,a.points?a.points+' pts':null].filter(Boolean).join(' · ')}{a.editedAt&&<span title={'Edited by '+(a.editedBy||'—')+((a.edits&&a.edits.length)?' — “'+a.edits[a.edits.length-1].reason+'”':'')} style={{color:'#8a5a00'}}> · edited {(()=>{ try{ return new Date(a.editedAt).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); }catch(err){ return ''; } })()}</span>}</div>
                               </div>
+                              {canEditPerf()&&a.id&&<button className="icon-btn" title="Edit this incident — a reason is asked and kept"
+                                style={{width:24,height:24,flexShrink:0}} onClick={()=>setConductEdit({kind:'incident',entry:a})}>
+                                <Ic d={I.edit} s={13}/></button>}
                               {canDelPerf()&&a.id&&<button className="icon-btn danger" title="Remove this incident — filed by mistake"
                                 style={{width:24,height:24,flexShrink:0}}
                                 onClick={()=>removeConductEntry('incident',a,e.name).then(done=>{ if(done&&perf&&perf.reload) perf.reload(); })}>

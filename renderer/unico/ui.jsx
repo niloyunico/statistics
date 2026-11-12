@@ -457,7 +457,7 @@ const UNICO_WS = [
     { id:'kpi',         label:'Nursing KPI',     icon:I.trend,  home:'kpiDashboard', on:v=>unicoModuleOf(v)==='kpi', badge:'kpi', tag:'NEW' },
     // Badge: audits waiting for the nurse's acknowledgement / the In-charge's sign-off, own drafts,
     // and (after the 20th) departments short of their monthly sample.
-    { id:'docaudit',    label:'Nursing Documentation KPI Audit', icon:I.doc, home:'docAuditHome', on:v=>unicoModuleOf(v)==='docaudit', badge:'da', tag:'NEW' },
+    { id:'docaudit',    label:'Documentation KPI Audit', title:'Nursing Documentation KPI Audit', icon:I.doc, home:'docAuditHome', on:v=>unicoModuleOf(v)==='docaudit', badge:'da', tag:'NEW' },
     // Drug index (21.7k Bangladeshi brands / 1.7k generic monographs) + prescriptions.
     { id:'medicine',    label:'Medicine & Rx',   icon:I.syringe,home:'medHome',     on:v=>unicoModuleOf(v)==='medicine', tag:'NEW' },
   ]},
@@ -841,7 +841,7 @@ function Sidebar({route, setRoute, collapsed, depts}){
               const itSub = auto && folded[it.id] ? [] : subFor(it, active);
               return (
                 <React.Fragment key={it.id}>
-                  <div className={'sb-item'+(active?' active':'')} onClick={()=>setRoute({view:wsHome(it)})} title={it.label}>
+                  <div className={'sb-item'+(active?' active':'')} onClick={()=>setRoute({view:wsHome(it)})} title={it.title||it.label}>
                     <Ic d={it.icon} s={18}/><span className="lbl">{it.label}</span>
                     {it.tag && <span className="lbl" style={{marginLeft:6,fontSize:8.6,fontWeight:800,letterSpacing:.6,padding:'2px 6px',borderRadius:5,color:'#0d1b2e',background:'linear-gradient(135deg,#5fd3c4,#3ab5a7)'}}>{it.tag}</span>}
                     {badge!=null && <span className="badge alert num">{badge}</span>}

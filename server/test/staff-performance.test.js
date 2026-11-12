@@ -115,8 +115,25 @@ const ACHIEVEMENT = {
   const noWhat = await call('POST', '/api/performance/achievements', Object.assign({}, ACHIEVEMENT, { what: '   ' }));
   ok('refuses an entry with nothing described', noWhat.code === 400, noWhat.body);
 
+  // ---- correcting an entry (PUT, the Performance "Edit" right) ----------------
+  const noWhy = await call('PUT', '/api/performance/incidents/:id', { what: 'Changed', reason: '' }, { id: inc.id });
+  ok('an edit without a reason is refused', noWhy.code === 400, noWhy.body);
+  const ed = await call('PUT', '/api/performance/incidents/:id', { what: 'Late for the morning handover three times.', severity: 'Moderate', points: 2, staffName: 'Somebody Else', empId: '99999', reason: 'Third late arrival found on the sheet' }, { id: inc.id });
+  ok('an incident can be corrected', ed.code === 200 && ed.body.ok, ed.body);
+  const e1 = ed.body.incident || {};
+  ok('the correction is saved', e1.what === 'Late for the morning handover three times.' && e1.severity === 'Moderate' && e1.points === 2, e1);
+  ok('who it is about is kept as filed', e1.staffName === 'Adory Lakra' && e1.empId === '11376' && e1.staffId === '482' && e1.cycleId === INCIDENT.cycleId, e1);
+  ok('the points follow the edit', ed.body.points && ed.body.points.rawPenalty === 2, ed.body.points);
+  ok('the edit is recorded with its reason and the values before', (e1.edits || []).length === 1 && e1.edits[0].reason === 'Third late arrival found on the sheet' && e1.edits[0].before.severity === 'Minor' && e1.edits[0].before.points === 1 && e1.editedBy === 'Test Admin', e1.edits);
+  const same = await call('PUT', '/api/performance/incidents/:id', { reason: 'Nothing really changed here' }, { id: inc.id });
+  ok('an edit that changes nothing writes nothing', same.body.unchanged === true && (same.body.incident.edits || []).length === 1, same.body);
+  const edA = await call('PUT', '/api/performance/achievements/:id', { level: 'International', points: 3, reason: 'It was the international course' }, { id: ach.id });
+  ok('an achievement can be corrected', edA.code === 200 && edA.body.achievement.level === 'International' && edA.body.points.rawBonus === 3, edA.body);
+  const nf = await call('PUT', '/api/performance/achievements/:id', { what: 'x', reason: 'no such entry here' }, { id: 'ach-nope' });
+  ok('editing a missing entry is not-found', nf.code === 404, nf.body);
+
   // ---- removing one filed by mistake ---------------------------------------
-  const del = await call('DELETE', '/api/performance/incidents/:id', null, { id: inc.id });
+  const del =await call('DELETE', '/api/performance/incidents/:id', null, { id: inc.id });
   ok('a mistaken incident can be removed', del.code === 200 && del.body.ok, del.body);
   const g2 = await call('GET', '/api/performance');
   ok('and it is gone from the register', (g2.body.incidents || []).length === 0, g2.body.incidents);

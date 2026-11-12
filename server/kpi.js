@@ -300,6 +300,7 @@ function reportOut(doc, live, cfg, extra) {
     commentary: base.commentary || {}, overall: base.overall || '', signoff: base.signoff || {},
     generatedAt: base.generatedAt || null, generatedBy: base.generatedByName || base.generatedBy || null,
     finalizedAt: base.finalizedAt || null, finalizedBy: base.finalizedByName || base.finalizedBy || null,
+    reopenedAt: base.reopenedAt || null, reopenedBy: base.reopenedBy || null,
     updatedAt: base.updatedAt || null, title: K.cfgOf(cfg).reportTitle, hospitalName: K.cfgOf(cfg).hospitalName,
     pillars: K.cfgOf(cfg).pillars, history: (base.history || []).slice(-20),
     acks, quality: qualityOf(body.rows, acks), dataFingerprint: body.dataFingerprint || null,

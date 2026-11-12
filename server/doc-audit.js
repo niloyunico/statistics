@@ -778,7 +778,13 @@ function mount(app, opts) {
     const me = actor(req, a);
     // Who may write: a draft — the Add right; a completed audit — Edit, or its own auditor with
     // Add before the nurse has acknowledged it; acknowledged — Edit; signed — nobody (reopen first).
-    if (cur && cur.status === 'signed') return res.status(409).json({ ok: false, code: 'locked', error: 'This audit is signed off and locked. An administrator can reopen it.' });
+    // Published: locked — except an ADMINISTRATOR correcting it with a written reason. It stays
+    // published; the history keeps the reason and what changed.
+    const editReason = cur && cur.status === 'signed' ? str(b.editReason, 400) : '';
+    if (cur && cur.status === 'signed') {
+      if (!a.unrestricted) return res.status(409).json({ ok: false, code: 'locked', error: 'This audit is published and locked. An administrator can correct it.' });
+      if (editReason.length < 5) return res.status(400).json({ ok: false, code: 'reason', error: 'Write why the published audit is corrected.' });
+    }
     const canAdd = access.can(a, 'docaudit', 'add'), canEdit = access.can(a, 'docaudit', 'edit');
     const own = cur && cur.auditor && cur.auditor.username === me;
     const mayWrite = !cur ? canAdd : cur.status === 'draft' ? (canAdd || canEdit) : cur.status === 'completed' ? (canEdit || (own && canAdd)) : canEdit;
@@ -892,6 +898,14 @@ function mount(app, opts) {
     // The nurse acknowledged what the audit said; if what it says changes, that no longer holds.
     if (cur && cur.status === 'acknowledged' && changes.some((c) => SCORED.some((k) => c.indexOf(k) === 0))) {
       next.status = 'completed'; next.ackPrevious = cur.ack; next.acksPrevious = DA.acksOf(cur); next.ack = null; next.acks = {}; action += ' — acknowledgements cleared, the nurse(s) acknowledge again';
+    }
+    if (cur && cur.status === 'signed') {
+      action = 'corrected after publishing — ' + editReason;
+      // Still published; a nurse who acknowledged the old result acknowledges the corrected one again.
+      if (changes.some((c) => SCORED.some((k) => c.indexOf(k) === 0)) && Object.keys(DA.acksOf(cur)).length) {
+        next.ackPrevious = cur.ack; next.acksPrevious = DA.acksOf(cur); next.ack = null; next.acks = {}; action += ' — acknowledgements cleared, the nurse(s) acknowledge again';
+      }
+      next.corrections = (cur.corrections || []).concat([{ at: t, by: me, reason: editReason }]).slice(-30);
     }
     next.history = ((cur && cur.history) || []).concat([{ at: t, by: me, action, changes: changes.join('; ').slice(0, 900) || 'new' }]).slice(-100);
     if (!(await putDoc(AUDITS, next, cur ? cur.updatedAt : null))) return res.status(409).json({ ok: false, code: 'stale', error: 'Someone else changed this audit. Reload to see their version.' });

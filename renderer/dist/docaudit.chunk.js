@@ -1369,7 +1369,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       const rr = r || meta;
       if (!a) return meta.canAdd;
       const own = a.auditor && a.auditor.username === meta.user;
-      if (a.status === 'signed') return false;
+      if (a.status === 'signed') return !!meta.isAdmin;
       if (a.status === 'draft') return rr.canAdd || rr.canEdit;
       if (a.status === 'completed') return rr.canEdit || own && rr.canAdd;
       return rr.canEdit;
@@ -1483,11 +1483,24 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         });
         if (!ok) return;
       }
+      let editReason;
+      if (audit && audit.status === 'signed') {
+        editReason = await askText({
+          title: 'Correct this published audit?',
+          message: 'It stays published. The reason and what changed are kept in its history' + (DA.nursesOf(audit).length ? '; if the result changes, the nurse acknowledges it again.' : '.'),
+          confirmLabel: 'Save correction',
+          min: 5,
+          placeholder: 'Why is it corrected?'
+        });
+        if (!editReason) return;
+      }
       setBusy(true);
       try {
         const payload = Object.assign({}, form, {
           complete: !!complete
-        });
+        }, editReason ? {
+          editReason
+        } : {});
         let j;
         if (audit) j = await post('/api/doc-audit/audits/' + encodeURIComponent(audit.id), Object.assign(payload, {
           baseUpdatedAt: audit.updatedAt
@@ -1928,7 +1941,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-btn sm ok",
       disabled: busy,
       onClick: sign
-    }, "Publish"))))), (audit.reopened || []).length > 0 && React.createElement("div", {
+    }, "Publish"))))), (audit.corrections || []).length > 0 && React.createElement("div", {
+      className: "da-sub",
+      style: {
+        marginTop: 6
+      }
+    }, "Corrected after publishing ", audit.corrections.length, "\xD7, last by ", audit.corrections[audit.corrections.length - 1].by, " \xB7 ", when(audit.corrections[audit.corrections.length - 1].at), ": \u201C", audit.corrections[audit.corrections.length - 1].reason, "\u201D"), (audit.reopened || []).length > 0 && React.createElement("div", {
       className: "da-sub",
       style: {
         marginTop: 6
@@ -1965,7 +1983,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, "Changing the answers clears the nurse\u2019s acknowledgement: the nurse acknowledges the corrected audit again.")), !editing && audit && mayWrite(audit) && React.createElement("button", {
       className: "da-btn",
       onClick: () => setEditing(true)
-    }, audit.status === 'draft' ? 'Continue' : 'Correct this audit'), audit && audit.status !== 'draft' && meta.canPrint && React.createElement("div", {
+    }, audit.status === 'draft' ? 'Continue' : audit.status === 'signed' ? 'Edit (administrator)' : 'Correct this audit'), audit && audit.status !== 'draft' && meta.canPrint && React.createElement("div", {
       style: {
         display: 'flex',
         gap: 6

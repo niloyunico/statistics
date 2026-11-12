@@ -564,7 +564,7 @@
       const rr = r || meta;
       if (!a) return meta.canAdd;
       const own = a.auditor && a.auditor.username === meta.user;
-      if (a.status === 'signed') return false;
+      if (a.status === 'signed') return !!meta.isAdmin;   // an administrator corrects a published audit (with a reason)
       if (a.status === 'draft') return rr.canAdd || rr.canEdit;
       if (a.status === 'completed') return rr.canEdit || (own && rr.canAdd);
       return rr.canEdit;
@@ -609,9 +609,15 @@
         const ok = await confirmBox({ title: 'Complete with a critical failure?', message: 'This record FAILS: critical criteria ' + res.criticalFails.map((id) => '#' + (criteria.find((c) => c.id === id) || {}).no).join(', ') + ' are marked No. Policy 9: correct the record today where possible, escalate to the Nurse In-charge, and file an incident report if there was harm or a near miss.', confirmLabel: 'Complete audit' });
         if (!ok) return;
       }
+      // A published audit: an administrator's correction, with the reason kept in its history.
+      let editReason;
+      if (audit && audit.status === 'signed') {
+        editReason = await askText({ title: 'Correct this published audit?', message: 'It stays published. The reason and what changed are kept in its history' + (DA.nursesOf(audit).length ? '; if the result changes, the nurse acknowledges it again.' : '.'), confirmLabel: 'Save correction', min: 5, placeholder: 'Why is it corrected?' });
+        if (!editReason) return;
+      }
       setBusy(true);
       try {
-        const payload = Object.assign({}, form, { complete: !!complete });
+        const payload = Object.assign({}, form, { complete: !!complete }, editReason ? { editReason } : {});
         let j;
         if (audit) j = await post('/api/doc-audit/audits/' + encodeURIComponent(audit.id), Object.assign(payload, { baseUpdatedAt: audit.updatedAt }), 'PUT');
         else j = await post('/api/doc-audit/audits', Object.assign(payload, { toolId: tool.id }));
@@ -735,7 +741,8 @@
           <div className={'da-step ' + (audit.signoff ? 'done' : (audit.status === 'acknowledged' ? 'now' : ''))}><i /><div><b>Published</b> <span className="da-sub">(released to the nurse)</span>{audit.signoff ? <small>by {audit.signoff.name} · {when(audit.signoff.at)}{audit.signoff.note ? ' · “' + audit.signoff.note + '”' : ''}</small> : <small>{own && !meta.isAdmin ? 'Another person publishes your audit' : 'Not yet — the nurse does not see it'}</small>}
             {!audit.signoff && meta.canEdit && (audit.status === 'acknowledged' || (meta.isAdmin && audit.status === 'completed') || (!meta.config.ackRequired && audit.status === 'completed')) && (!own || meta.isAdmin) && <div style={{ marginTop: 5 }}><button className="da-btn sm ok" disabled={busy} onClick={sign}>Publish</button></div>}</div></div>
         </div>
-        {(audit.reopened || []).length > 0 && <div className="da-sub" style={{ marginTop: 6 }}>Reopened {audit.reopened.length}×, last: “{audit.reopened[audit.reopened.length - 1].reason}”</div>}
+        {(audit.corrections || []).length > 0 && <div className="da-sub" style={{ marginTop: 6 }}>Corrected after publishing {audit.corrections.length}×, last by {audit.corrections[audit.corrections.length - 1].by} · {when(audit.corrections[audit.corrections.length - 1].at)}: “{audit.corrections[audit.corrections.length - 1].reason}”</div>}
+        {(audit.reopened || []).length > 0 &&<div className="da-sub" style={{ marginTop: 6 }}>Reopened {audit.reopened.length}×, last: “{audit.reopened[audit.reopened.length - 1].reason}”</div>}
       </div>) : null;
     const actions = (
       <div className="da-card da-pad" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -745,7 +752,7 @@
           {audit && audit.status !== 'draft' && <button className="da-btn" disabled={busy} onClick={() => { setForm(fromAudit(audit)); setEditing(false); setShowErr(false); }}>Cancel</button>}
           {audit && audit.status === 'acknowledged' && <div className="da-sub">Changing the answers clears the nurse’s acknowledgement: the nurse acknowledges the corrected audit again.</div>}
         </>}
-        {!editing && audit && mayWrite(audit) && <button className="da-btn" onClick={() => setEditing(true)}>{audit.status === 'draft' ? 'Continue' : 'Correct this audit'}</button>}
+        {!editing && audit && mayWrite(audit) && <button className="da-btn" onClick={() => setEditing(true)}>{audit.status === 'draft' ? 'Continue' : audit.status === 'signed' ? 'Edit (administrator)' : 'Correct this audit'}</button>}
         {audit && audit.status !== 'draft' && meta.canPrint && <div style={{ display: 'flex', gap: 6 }}><button className="da-btn" style={{ flex: 1, justifyContent: 'center' }} onClick={() => printAudit(audit, tool)}>Print</button><button className="da-btn" style={{ flex: 1, justifyContent: 'center' }} onClick={() => pdfAudit(audit, tool).catch((e) => toast(e.message, 'error'))}>PDF</button></div>}
         {audit && audit.status === 'signed' && meta.isAdmin && <button className="da-btn" disabled={busy} onClick={reopen}>Reopen (administrator)</button>}
         {audit && audit.status === 'acknowledged' && meta.isAdmin && <button className="da-btn" disabled={busy} onClick={reopen}>Reopen acknowledgement…</button>}

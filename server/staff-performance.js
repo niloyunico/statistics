@@ -641,6 +641,33 @@ function mount(app, opts) {
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not remove the entry.' }); }
   });
 
+  /* EDIT an entry (Performance "Edit" right — PUT). What happened, its category, severity / level,
+     points and date can be corrected; WHO it is about and its cycle stay as filed. A reason is
+     required and every edit is kept on the entry (`edits`, the last 20) with the values before. */
+  const editEntry = (name, norm, fields, label) => async (req, res) => {
+    try {
+      const id = s(req.params.id, 80);
+      const cur = await findEntry(name, id);
+      if (!cur) return res.status(404).json({ ok: false, error: 'Entry not found.' });
+      const b = obj(req.body);
+      const reason = s(b.reason, 400).trim();
+      if (reason.length < 5) return res.status(400).json({ ok: false, error: 'Write why the ' + label + ' is changed.' });
+      if (await isFiled(cur, cur.cycleId)) return res.status(409).json({ ok: false, error: FILED_MSG });
+      const fresh = norm(Object.assign({}, cur, b));
+      if (!fresh.what.trim()) return res.status(400).json({ ok: false, error: label === 'incident' ? 'Describe what happened.' : 'Describe the achievement.' });
+      const set = {}, before = {};
+      fields.forEach((k) => { if (JSON.stringify(fresh[k]) !== JSON.stringify(cur[k])) { set[k] = fresh[k]; before[k] = cur[k] === undefined ? null : cur[k]; } });
+      if (!Object.keys(set).length) return res.json({ ok: true, unchanged: true, [label]: cur, points: await pointsFor(cur, cur.cycleId) });
+      const t = Date.now(), by = who(req);
+      set.editedAt = t; set.editedBy = by;
+      set.edits = (Array.isArray(cur.edits) ? cur.edits : []).concat([{ at: t, by, reason, before }]).slice(-20);
+      const saved = await upsert(name, id, set);
+      res.json({ ok: true, [label]: saved, points: await pointsFor(saved, saved.cycleId) });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not save the change.' }); }
+  };
+  app.put('/api/performance/incidents/:id', guard, editEntry(INCIDENTS, normIncident, ['date', 'category', 'severity', 'what', 'action', 'note', 'points'], 'incident'));
+  app.put('/api/performance/achievements/:id', guard, editEntry(ACHIEVEMENTS, normAchievement, ['date', 'category', 'level', 'what', 'reward', 'note', 'certificate', 'points'], 'achievement'));
+
   // --- achievement register ---
   app.post('/api/performance/achievements', guard, async (req, res) => {
     try {
