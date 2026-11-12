@@ -95,8 +95,10 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(DA.score({}, IPD.criteria).blank, 25, 'unreviewed items stay blank — never N/A');
   let probs = DA.validate({ deptId: 'lvl9', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, answers: Object.assign(allYes(IPD), { c4: 'N' }), evidence: {} }, IPD.criteria, { today: '2026-11-11' });
   assert.equal(probs.length, 0, "evidence for a 'No' is optional");
-  probs = DA.validate({ deptId: 'er', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, area: 'Emergency OT', answers: Object.assign({}, allYes(catalogue.TOOLS[1]), { c7: 'NA' }) }, catalogue.TOOLS[1].criteria, { tool: catalogue.TOOLS[1] });
-  assert.ok(probs.some((p) => p.criterion === 'c7'), 'time-out is never N/A in an emergency OT (QA-002 §7.3)');
+  probs = DA.validate({ deptId: 'er', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, area: 'Post-operative / Recovery (PACU)', answers: Object.assign({}, allYes(catalogue.TOOLS[1]), { c1: 'NA' }) }, catalogue.TOOLS[1].criteria, { tool: catalogue.TOOLS[1] });
+  assert.ok(probs.some((p) => p.criterion === 'c1'), 'identification is never N/A on a post-operative record');
+  assert.deepEqual(catalogue.TOOLS[1].header.areas, ['OT', 'Day-care OT', 'Obstetric OT', 'Post-operative / Recovery (PACU)'], 'one OT area (major / minor / emergency together)');
+  assert.ok(!JSON.stringify(catalogue.TOOLS[1].naGuide).match(/Section D|item \d/), 'the OT guide names no Section D and no item numbers');
 
   /* ---- who may do what ---- */
   let res = await call('GET /api/doc-audit/meta', auditor);
@@ -405,6 +407,21 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(o3.header.extra.filter((f) => f.type === 'aldrete').length, 0); assert.equal(o3.revision, 3);
   assert.equal(docAudit._mem.docAuditTools.get('cath20').criteria.filter((c) => c.active !== false).length, 21);
   assert.equal(await docAudit.ensureAldreteItem(8000), false, 'once only');
+  // then the OT areas: Major / Minor / Emergency OT become one "OT"
+  docAudit._mem.cfg = Object.assign({}, docAudit._mem.cfg, { otAreaMergeAt: undefined });
+  const o4 = docAudit._mem.docAuditTools.get('ot20');
+  o4.header.areas = ['Major OT', 'Minor OT', 'Emergency OT', 'Day-care OT', 'Obstetric OT', 'Post-operative / Recovery (PACU)'];
+  o4.naGuide = [{ areas: ['Major OT', 'Obstetric OT'], note: 'Section D (items 16–17) = N/A.' }, { areas: ['Emergency OT'], never: ['c7'], note: 'x' }, catalogue.POSTOP_GUIDE, { areas: ['Custom area'], note: 'admin rule' }];
+  o4.header.areas.push('Custom area'); o4.sample = { minRecords: 10, note: 'Minimum 10 records per area per month (Major OT, …)' };
+  docAudit._mem.docAuditTools.set('ot20', o4);
+  const rev = o4.revision;
+  assert.equal(await docAudit.ensureOtAreaMerge(9000), true);
+  const o5 = docAudit._mem.docAuditTools.get('ot20');
+  assert.deepEqual(o5.header.areas, ['OT', 'Day-care OT', 'Obstetric OT', 'Post-operative / Recovery (PACU)', 'Custom area']);
+  assert.deepEqual(o5.naGuide.map((g) => g.areas.join()), ['OT', 'Obstetric OT', 'Day-care OT', 'Post-operative / Recovery (PACU)', 'Custom area'], 'guide rebuilt, post-op and the admin rule kept');
+  assert.ok(!/Section D/.test(JSON.stringify(o5.naGuide)) && /OT, Day-care OT/.test(o5.sample.note));
+  assert.equal(o5.revision, rev, 'not a scoring change');
+  assert.equal(await docAudit.ensureOtAreaMerge(9500), false, 'once only');
 
   console.log('doc-audit: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

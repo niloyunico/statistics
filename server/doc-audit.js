@@ -208,6 +208,33 @@ async function ensureAldreteItem(now) {
   await patchConfig({ aldreteItemAt: now });
   return true;
 }
+/* One "OT" procedure area instead of Major / Minor / Emergency OT (the user: "need all OT in one").
+   Once, on its own marker: the stored OT tool's three areas become "OT"; its guide is rebuilt (no
+   item numbers, no Section D), the post-operative rule and any rule for other areas kept; the sample
+   note follows. Not a scoring change. Audits already saved keep the area they were filled with. */
+async function ensureOtAreaMerge(now) {
+  const cfg = await getConfig();
+  if (cfg.otAreaMergeAt) return false;
+  const t = await getDoc(TOOLS, 'ot20');
+  if (t) {
+    const merged = catalogue.OT_AREAS_MERGED;
+    const h = t.header || {};
+    const old = h.areas || [];
+    if (old.some((a) => merged.indexOf(a) >= 0) || old.indexOf('OT') < 0) {
+      const areas = ['OT'].concat(old.filter((a) => a !== 'OT' && merged.indexOf(a) < 0));
+      const std = merged.concat(['Day-care OT', 'Obstetric OT']);
+      const keep = (t.naGuide || []).filter((g) => !(g.areas || []).some((a) => std.indexOf(a) >= 0));
+      const guide = catalogue.OT_GUIDE.filter((g) => g.areas.every((a) => areas.indexOf(a) >= 0)).map((g) => Object.assign({}, g)).concat(keep);
+      const sample = Object.assign({}, t.sample || {});
+      if (/Major OT/.test(String(sample.note || ''))) sample.note = catalogue.OT_SAMPLE_NOTE;
+      const next = Object.assign({}, t, { header: Object.assign({}, h, { areas }), naGuide: guide, sample, updatedAt: now, updatedBy: 'system',
+        history: (t.history || []).concat([{ at: now, by: 'system', action: 'procedure areas: Major / Minor / Emergency OT merged into "OT"; guide updated' }]).slice(-100) });
+      if (!(await putDoc(TOOLS, next, t.updatedAt))) return false;   // changed meanwhile: try again next request
+    }
+  }
+  await patchConfig({ otAreaMergeAt: now });
+  return true;
+}
 async function liveTools() { return (await allDocs(TOOLS)).filter(DA.isLiveTool).sort((a, b) => (a.order || 0) - (b.order || 0)); }
 
 /* ------------------------------------------------------------ departments --- */
@@ -513,6 +540,7 @@ function mount(app, opts) {
     await ensureSeed(now());
     await ensureCathSplit(now());
     await ensureAldreteItem(now());
+    await ensureOtAreaMerge(now());
     return a;
   };
   const admin = (res, a) => { if (a.unrestricted) return true; res.status(403).json({ ok: false, error: 'Only an administrator can do this.' }); return false; };
@@ -1201,4 +1229,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, cfgFor, _mem: mem };
+module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, cfgFor, _mem: mem };

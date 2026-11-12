@@ -21,6 +21,16 @@ const range = (a, b) => { const out = []; for (let i = a; i <= b; i++) out.push(
 const POSTOP_AREA = 'Post-operative / Recovery (PACU)';
 const POSTOP_GUIDE = { areas: [POSTOP_AREA], never: ['c1', 'c20'], note: 'Post-operative / recovery record: Sections A and E apply; items of the operation itself (Sections B–C) that were not part of this record may be marked N/A.' };
 // The Aldrete post-anaesthesia recovery score (criterion 18 checks it is recorded): recorded with the audit, not scored.
+// The OT's procedure areas: one "OT" for major, minor and emergency cases (the user's choice), with
+// day-care, obstetric and the post-operative record kept apart. The guide never names item numbers
+// (they renumber when a tool changes).
+const OT_AREAS_MERGED = ['Major OT', 'Minor OT', 'Emergency OT'];
+const OT_GUIDE = [
+  { areas: ['OT'], note: 'All sections apply. For an emergency case: emergency consent per policy, and patient identification, time-out, counts, medications, specimens and authentication are never N/A. Items not relevant to the case (e.g. tourniquet, implants) may be N/A.' },
+  { areas: ['Obstetric OT'], note: 'All sections apply.' },
+  { areas: ['Day-care OT'], note: 'All sections apply; items not relevant to the case (e.g. tourniquet, implants) may be N/A. The day-care discharge (escort, written instructions, follow-up) must be documented.' },
+];
+const OT_SAMPLE_NOTE = 'Minimum 10 records per area per month (OT, Day-care OT, Obstetric OT), randomly selected across all shifts and surgeons. Include at least 2 emergency / after-hours cases where available, and at least 1 case with implant or specimen. Each OT nurse is audited at least once per quarter.';
 // The Aldrete score as a CHECKLIST item on the OT and Cath Lab tools (was it documented?) — not critical.
 const ALDRETE_ITEM = { id: 'c21', no: 0, sectionId: 'E', jci: ['ASC', 'COP'], critical: false, active: true,
   text: "Aldrete score is documented on arrival in recovery and before discharge from recovery (score ≥ 9 to discharge, or the reason and the anaesthetist's approval are recorded)." };
@@ -100,7 +110,7 @@ const OT = {
   cathSplit: true,
   header: {
     areaLabel: 'Procedure area',
-    areas: ['Major OT', 'Minor OT', 'Emergency OT', 'Day-care OT', 'Obstetric OT', POSTOP_AREA],
+    areas: ['OT', 'Day-care OT', 'Obstetric OT', POSTOP_AREA],
     bedLabel: 'OT / room no.',
     extra: [
       { id: 'procedure', label: 'Procedure', type: 'text' },
@@ -108,7 +118,7 @@ const OT = {
       { id: 'caseType', label: 'Case (sample rule 7.1)', type: 'select', options: ['', 'Elective', 'Emergency / after-hours', 'With implant or specimen'] },
     ],
   },
-  sample: { minRecords: 10, note: 'Minimum 10 records per area per month (Major OT, Minor OT, Emergency OT, Day-care OT, Obstetric OT, Cath Lab), randomly selected across all shifts and surgeons/cardiologists. Include at least 2 emergency / after-hours cases per area where available, and at least 1 case with implant or specimen. Each OT / Cath Lab nurse is audited at least once per quarter.' },
+  sample: { minRecords: 10, note: OT_SAMPLE_NOTE },
   sections: [
     sec('A', 'Pre-procedure check', 'IPSG, AOP, ASC, PCC'),
     sec('B', 'Surgical safety checklist', 'IPSG, ASC'),
@@ -143,9 +153,7 @@ const OT = {
     kpi('kpi4', 'KPI-4', 'Surgical Safety Checklist Compliance', 'subset', 95, 'higher', range(6, 9)),
   ]),
   naGuide: [
-    { areas: ['Major OT', 'Obstetric OT'], note: 'All sections A–C and E apply.' },
-    { areas: ['Minor OT', 'Day-care OT'], note: 'Sections A–C and E apply; item 3 may be the local-anaesthesia / sedation assessment; items not relevant to the case (e.g. tourniquet, implants) = N/A. Day-care discharge (item 19) must be documented.' },
-    { areas: ['Emergency OT'], never: ids(1, 7, 8, 13, 15, 20), note: 'All items apply; emergency consent per policy (item 4). Patient identification, time-out, counts, medications, specimens and authentication are never N/A.' },
+    ...OT_GUIDE.map((g) => Object.assign({}, g)),
     POSTOP_GUIDE,
   ],
 };
@@ -315,4 +323,4 @@ function guessTool(dept) {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const seedTools = () => TOOLS.map(clone);
 
-module.exports = { TOOLS, seedTools, guessTool, POSTOP_AREA, POSTOP_GUIDE, ALDRETE_FIELDS, ALDRETE_ITEM };
+module.exports = { TOOLS, seedTools, guessTool, POSTOP_AREA, POSTOP_GUIDE, ALDRETE_FIELDS, ALDRETE_ITEM, OT_AREAS_MERGED, OT_GUIDE, OT_SAMPLE_NOTE };
