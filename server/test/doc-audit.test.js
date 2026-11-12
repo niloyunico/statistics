@@ -99,6 +99,11 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.ok(probs.some((p) => p.criterion === 'c1'), 'identification is never N/A on an OT record (recovery included)');
   assert.deepEqual(catalogue.TOOLS[1].header.areas, ['OT', 'Day-care OT', 'Obstetric OT'], 'one OT area (major / minor / emergency and the recovery record together)');
   assert.ok(!JSON.stringify(catalogue.TOOLS[1].naGuide).match(/Section D|item \d/), 'the OT guide names no Section D and no item numbers');
+  const CATH = catalogue.TOOLS.find((t) => t.id === 'cath20');
+  assert.deepEqual(CATH.header.areas, ['Cardiac Cath Lab'], 'one Cath Lab area (the recovery record included)');
+  assert.ok(!JSON.stringify(CATH.naGuide).match(/item \d/), 'the Cath Lab guide names no item numbers');
+  probs = DA.validate({ deptId: 'er', date: '2026-11-10', uhid: 'U1', nurse: { staffId: '1' }, area: 'Cardiac Cath Lab', answers: Object.assign({}, allYes(CATH), { c20: 'NA' }) }, CATH.criteria, { tool: CATH });
+  assert.ok(probs.some((p) => p.criterion === 'c20'), 'authentication is never N/A on a Cath Lab record');
 
   /* ---- who may do what ---- */
   let res = await call('GET /api/doc-audit/meta', auditor);
@@ -431,6 +436,20 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.ok(/recovery record/.test(o6.naGuide[0].note) && o6.naGuide[0].never.indexOf('c1') >= 0, 'the OT note covers the recovery record');
   assert.equal(o6.revision, rev, 'not a scoring change');
   assert.equal(await docAudit.ensureOtPostopMerge(10500), false, 'once only');
+  // and the Cath Lab's post-procedure / recovery area joins "Cardiac Cath Lab"
+  docAudit._mem.cfg = Object.assign({}, docAudit._mem.cfg, { cathPostopMergeAt: undefined });
+  const c1 = docAudit._mem.docAuditTools.get('cath20');
+  c1.header.areas = ['Cardiac Cath Lab', 'Post-procedure / Recovery', 'Hybrid lab'];
+  c1.naGuide = [{ areas: ['Cardiac Cath Lab'], note: 'All sections apply, including Section D. Counts (item 8) cover sharps.' }, { areas: ['Post-procedure / Recovery'], never: ['c1', 'c20'], note: 'recovery' }, { areas: ['Hybrid lab'], note: 'admin rule' }];
+  docAudit._mem.docAuditTools.set('cath20', c1);
+  const crev = c1.revision;
+  assert.equal(await docAudit.ensureCathPostopMerge(11000), true);
+  const c2 = docAudit._mem.docAuditTools.get('cath20');
+  assert.deepEqual(c2.header.areas, ['Cardiac Cath Lab', 'Hybrid lab']);
+  assert.deepEqual(c2.naGuide.map((g) => g.areas.join()), ['Cardiac Cath Lab', 'Hybrid lab'], 'recovery rule gone, the admin rule kept');
+  assert.ok(/recovery record/.test(c2.naGuide[0].note) && c2.naGuide[0].never.indexOf('c20') >= 0 && !/item \d/.test(c2.naGuide[0].note));
+  assert.equal(c2.revision, crev, 'not a scoring change');
+  assert.equal(await docAudit.ensureCathPostopMerge(11500), false, 'once only');
 
   console.log('doc-audit: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

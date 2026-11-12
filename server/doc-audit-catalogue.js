@@ -163,6 +163,11 @@ OT.criteria = OT.criteria.map((c) => (c.id === 'c16' || c.id === 'c17' ? Object.
 OT.criteria.splice(OT.criteria.findIndex((c) => c.id === 'c18') + 1, 0, Object.assign({}, ALDRETE_ITEM));
 OT.criteria.filter((c) => c.active).forEach((c, i) => { c.no = i + 1; });
 
+// The Cath Lab's one procedure area: the post-procedure / recovery record is part of it (the user's
+// choice, as for "OT"). The guide never names item numbers (they renumber when a tool changes).
+const CATH_POSTOP_AREA = 'Post-procedure / Recovery';
+const CATH_GUIDE = { areas: ['Cardiac Cath Lab'], never: ['c1', 'c20'], note: 'All sections apply, including Section D and the post-procedure / recovery record. Counts cover sharps, guidewires, sheaths and swabs used. Patient identification and authentication are never N/A. When only the recovery record is audited, items of the procedure itself that were not part of it may be N/A.' };
+
 /* The Cath Lab: the same QA-002 checklist, word for word, all 20 criteria including Section D. */
 const CATH = {
   id: 'cath20', code: 'UHP-NSG-QA-002 (Cath Lab)', version: '1.0', order: 25,
@@ -171,7 +176,7 @@ const CATH = {
   scope: 'The Cardiac Cath Lab (Appendix A of UHP-NSG-QA-002, all sections including Section D).',
   header: {
     areaLabel: 'Procedure area',
-    areas: ['Cardiac Cath Lab', 'Post-procedure / Recovery'],
+    areas: ['Cardiac Cath Lab'],
     bedLabel: 'Cath Lab / room no.',
     extra: [
       { id: 'procedure', label: 'Procedure', type: 'text' },
@@ -184,8 +189,7 @@ const CATH = {
   criteria: OT.criteria.map((c, i) => Object.assign({}, c, { active: true, no: i + 1 })),
   kpis: OT.kpis.map((k) => Object.assign({}, k)),
   naGuide: [
-    { areas: ['Cardiac Cath Lab'], note: 'All sections apply, including Section D. Counts (item 8) cover sharps, guidewires, sheaths and swabs used.' },
-    { areas: ['Post-procedure / Recovery'], never: ids(1, 20), note: 'Post-procedure / recovery record: Sections A, D (access site, sheath removal, distal pulses) and E apply; items of the procedure itself that were not part of this record may be marked N/A.' },
+    Object.assign({}, CATH_GUIDE),
   ],
 };
 
@@ -323,4 +327,4 @@ function guessTool(dept) {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const seedTools = () => TOOLS.map(clone);
 
-module.exports = { TOOLS, seedTools, guessTool, POSTOP_AREA, POSTOP_GUIDE, ALDRETE_FIELDS, ALDRETE_ITEM, OT_AREAS_MERGED, OT_GUIDE, OT_SAMPLE_NOTE };
+module.exports = { TOOLS, seedTools, guessTool, POSTOP_AREA, POSTOP_GUIDE, ALDRETE_FIELDS, ALDRETE_ITEM, OT_AREAS_MERGED, OT_GUIDE, OT_SAMPLE_NOTE, CATH_POSTOP_AREA, CATH_GUIDE };

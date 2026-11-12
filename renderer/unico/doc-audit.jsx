@@ -517,6 +517,13 @@
     const res = useMemo(() => DA.score(form ? form.answers : {}, criteria), [form, criteria]);
     const problems = useMemo(() => (form ? DA.validate(form, criteria, { today: meta.today, tool, auditorStaffId: meta.staffId, evidenceRequired: meta.config.evidenceRequired }) : []), [form, criteria, tool]);
     const guide = useMemo(() => DA.guideFor(tool, form && form.area), [tool, form && form.area]);
+    // A tool with one procedure area (e.g. the Cath Lab): a new audit starts with it chosen. Runs when
+    // the tool changes, so clearing the area by hand afterwards is respected.
+    useEffect(() => {
+      if (auditId || !form || form.area) return;
+      const as = (tool && tool.header && tool.header.areas) || [];
+      if (as.length === 1) setForm((f) => (f && !f.area ? Object.assign({}, f, { area: as[0] }) : f));
+    }, [toolId, !!form]);
     const bad = (field, cid) => showErr && problems.some((p) => p.field === field && (cid == null || p.criterion === cid));
 
     function mayWrite(a, r) {

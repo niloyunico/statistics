@@ -268,6 +268,37 @@ async function ensureOtPostopMerge(now) {
   await patchConfig({ otPostopMergeAt: now });
   return true;
 }
+/* The same for the Cath Lab (the user: "here also combine one"): the stored Cath Lab tool loses the
+   "Post-procedure / Recovery" area; its guide rules only for that area go; the rule for "Cardiac
+   Cath Lab" alone becomes the new note (which covers the recovery record); admin rules for other
+   areas kept. Once, on its own marker. Not a scoring change; saved audits keep their area. */
+async function ensureCathPostopMerge(now) {
+  const cfg = await getConfig();
+  if (cfg.cathPostopMergeAt) return false;
+  const t = await getDoc(TOOLS, 'cath20');
+  if (t) {
+    const P = catalogue.CATH_POSTOP_AREA, MAIN = 'Cardiac Cath Lab';
+    const h = t.header || {};
+    const old = h.areas || [];
+    if (old.indexOf(P) >= 0 || old.indexOf(MAIN) < 0) {
+      const areas = [MAIN].concat(old.filter((a) => a !== MAIN && a !== P));
+      const guide = [];
+      let placed = false;
+      (t.naGuide || []).forEach((g) => {
+        const ga = (g.areas || []).filter((a) => a !== P);
+        if (!ga.length) return;                                                    // the recovery rule
+        if (ga.length === 1 && ga[0] === MAIN) { if (!placed) guide.push(Object.assign({}, catalogue.CATH_GUIDE)); placed = true; return; }
+        guide.push(Object.assign({}, g, { areas: ga }));
+      });
+      if (!placed) guide.unshift(Object.assign({}, catalogue.CATH_GUIDE));
+      const next = Object.assign({}, t, { header: Object.assign({}, h, { areas }), naGuide: guide, updatedAt: now, updatedBy: 'system',
+        history: (t.history || []).concat([{ at: now, by: 'system', action: 'procedure areas: Post-procedure / Recovery merged into "Cardiac Cath Lab"; guide updated' }]).slice(-100) });
+      if (!(await putDoc(TOOLS, next, t.updatedAt))) return false;   // changed meanwhile: try again next request
+    }
+  }
+  await patchConfig({ cathPostopMergeAt: now });
+  return true;
+}
 async function liveTools() { return (await allDocs(TOOLS)).filter(DA.isLiveTool).sort((a, b) => (a.order || 0) - (b.order || 0)); }
 
 /* ------------------------------------------------------------ departments --- */
@@ -575,6 +606,7 @@ function mount(app, opts) {
     await ensureAldreteItem(now());
     await ensureOtAreaMerge(now());
     await ensureOtPostopMerge(now());
+    await ensureCathPostopMerge(now());
     return a;
   };
   const admin = (res, a) => { if (a.unrestricted) return true; res.status(403).json({ ok: false, error: 'Only an administrator can do this.' }); return false; };
@@ -1263,4 +1295,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, cfgFor, _mem: mem };
+module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, ensureCathPostopMerge, cfgFor, _mem: mem };
