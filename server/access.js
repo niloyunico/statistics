@@ -745,6 +745,10 @@ function deptsOfStaff(rec) {
   const out = [];
   raw.forEach((v) => {
     if (!v) return;
+    // The whole value too: a unit whose own name has a comma ("Labour , Delivery & Recovery
+    // Room") would otherwise only be read as two units that match nothing.
+    const whole = squash(v);
+    if (whole) out.push(whole);
     String(v).split(/[,;/]/).forEach((part) => {
       const k = squash(part);
       if (!k) return;

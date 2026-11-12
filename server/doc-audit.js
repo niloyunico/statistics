@@ -791,6 +791,12 @@ function mount(app, opts) {
         let snap = null;
         if (bn.staffId != null && bn.staffId !== '') {
           snap = had['s:' + String(bn.staffId)] || null;
+          if (snap && snap.fromOtherDept) {
+            // A nurse wrongly flagged before the matcher read comma names whole: re-check and clear it.
+            roster = roster || await loadRoster();
+            const rec = roster.find((p) => String(p.id) === String(bn.staffId));
+            if (rec && thinStaff([rec], [dept], false).length) { snap = Object.assign({}, snap); delete snap.fromOtherDept; delete snap.homeDept; delete snap.assignment; }
+          }
           if (!snap) {
             roster = roster || await loadRoster();
             const rec = roster.find((p) => String(p.id) === String(bn.staffId));
