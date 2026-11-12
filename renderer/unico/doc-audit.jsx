@@ -1346,7 +1346,7 @@
       + (extra ? '<tr><td class="k">Published to nurses</td><td>' + pub + ' of ' + extra.audits.length + '</td><td class="k"></td><td></td></tr>' : '')
       + '</table>';
   };
-  const signBlock = () => { const sig = sigNames(); return '<div class="signs blk"><div><span>Prepared by</span>' + esc(sig.prepared || '') + '</div><div><span>Reviewed by (Nursing Quality Committee)</span>' + esc(sig.reviewed || '') + '</div><div><span>Approved by (Chief Nursing Officer)</span>' + esc(sig.approved || '') + '</div></div>'; };
+  const signBlock = () => { const sig = sigNames(); return '<div class="signs blk"><div><span>Prepared by</span>' + esc(sig.prepared || '') + '</div><div><span>Reviewed by (Nursing Quality Committee)</span>' + esc(sig.reviewed || '') + '</div><div><span>Approved by (Chief Executive Officer, CEO)</span>' + esc(sig.approved || '') + '</div></div>'; };
   const reportHead = (data, kind) => { const tools = toolsIn(data); return letterhead('Nursing Quality & Patient Safety', 'Nursing Documentation KPI Audit' + (kind ? ' — ' + kind : '') + ' — ' + periodLabel(data.months), (codesOf(tools) || 'Nursing Documentation KPI Audit') + ' · Appendix C' + (data.deptName ? ' · ' + data.deptName : '')); };
 
   // The department KPI report of a period (Appendix C), one table per tool.

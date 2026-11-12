@@ -4039,7 +4039,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   };
   const signBlock = () => {
     const sig = sigNames();
-    return '<div class="signs blk"><div><span>Prepared by</span>' + esc(sig.prepared || '') + '</div><div><span>Reviewed by (Nursing Quality Committee)</span>' + esc(sig.reviewed || '') + '</div><div><span>Approved by (Chief Nursing Officer)</span>' + esc(sig.approved || '') + '</div></div>';
+    return '<div class="signs blk"><div><span>Prepared by</span>' + esc(sig.prepared || '') + '</div><div><span>Reviewed by (Nursing Quality Committee)</span>' + esc(sig.reviewed || '') + '</div><div><span>Approved by (Chief Executive Officer, CEO)</span>' + esc(sig.approved || '') + '</div></div>';
   };
   const reportHead = (data, kind) => {
     const tools = toolsIn(data);
