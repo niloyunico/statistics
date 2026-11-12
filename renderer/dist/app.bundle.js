@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c924946988","reports":"/dist/reports.chunk.js?v=485741b79f","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=7add9c37b8","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c924946988","reports":"/dist/reports.chunk.js?v=485741b79f","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=04baeaba15","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7599,6 +7599,35 @@ window.QI_CORRECTIONS_BY_DEFID = {
     return out;
   }
 
+  /* ------------------------------------------------------- the Aldrete score --- */
+  /* The (modified) Aldrete post-anaesthesia recovery score — five signs scored 0–2, total 0–10;
+     9 or more meets the discharge criteria. A header field of type 'aldrete' records it with an
+     OT / Cath Lab audit (recorded, not scored). Value: { a, r, c, co, o, total }. */
+  const ALDRETE = [
+    { k: 'a', label: 'Activity', short: 'A', opts: ['Unable to move any limb', 'Moves 2 limbs on command', 'Moves all 4 limbs on command'] },
+    { k: 'r', label: 'Respiration', short: 'R', opts: ['Apnoeic', 'Dyspnoea / shallow, limited breathing', 'Breathes deeply and coughs freely'] },
+    { k: 'c', label: 'Circulation', short: 'C', opts: ['BP ± 50% or more of pre-anaesthetic level', 'BP ± 20–49% of pre-anaesthetic level', 'BP ± 20% of pre-anaesthetic level'] },
+    { k: 'co', label: 'Consciousness', short: 'Co', opts: ['Not responding', 'Arousable on calling', 'Fully awake'] },
+    { k: 'o', label: 'O₂ saturation', short: 'O', opts: ['SpO₂ < 90% even with O₂', 'Needs O₂ to keep SpO₂ > 90%', 'SpO₂ > 92% on room air'] },
+  ];
+  const ALDRETE_DISCHARGE = 9;
+  // A clean value (each sign 0–2, the total worked out here), or null when nothing was scored.
+  function cleanAldrete(v) {
+    if (!v || typeof v !== 'object') return null;
+    const out = {}; let any = false, total = 0, all = true;
+    ALDRETE.forEach((x) => { const n = v[x.k]; if (n === 0 || n === 1 || n === 2 || n === '0' || n === '1' || n === '2') { out[x.k] = +n; total += +n; any = true; } else all = false; });
+    if (!any) return null;
+    out.total = total; out.complete = all;
+    return out;
+  }
+  // "8/10 (A2 R2 C1 Co1 O2)" — with "meets discharge criteria" at 9 or more when fully scored.
+  function aldreteText(v, withVerdict) {
+    const c = cleanAldrete(v);
+    if (!c) return '';
+    const parts = ALDRETE.map((x) => x.short + (c[x.k] == null ? '–' : c[x.k])).join(' ');
+    return c.total + '/10 (' + parts + ')' + (withVerdict && c.complete ? (c.total >= ALDRETE_DISCHARGE ? ' · meets discharge criteria' : ' · below discharge criteria (≥ 9)') : '');
+  }
+
   /* ------------------------------------------------------ the nurses audited --- */
   /* One patient record can be documented by several nurses (day + night, scrub + circulating): an
      audit lists them all, shares ONE checklist and score, and shows on every listed nurse's record.
@@ -7742,6 +7771,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
   const API = {
     STATUSES, STATUS_LABEL, ANSWERS, PASS_MARK, GRADES, FAIL_ACTION, KPI_FORMULAS, KPI_FORMULA_LABEL, SHIFTS,
     has, round1, isDate, isMonth, hospitalNow, addMonth, monthsBetween, fmtMonth, fmtDate, quarterOf,
+    ALDRETE, ALDRETE_DISCHARGE, cleanAldrete, aldreteText,
     MAX_NURSES, nursesOf, nurseKey, acksOf, pendingAcks, nurseNames,
     isLiveTool, activeCriteria, freezeCriteria, guideFor, gradeOf, score, validate,
     kpiValue, summarize, capDue, groupBy, countsInKpi,

@@ -132,6 +132,49 @@ async function ensureSeed(now) {
   await patchConfig({ seededAt: now });
   return n;
 }
+/* OT and Cath Lab used to share one tool (ot20 "OT & Cath Lab"). Once, on its own marker: the Cath
+   Lab gets its own tool (cath20, all 20 criteria); ot20 (its id is a data key — kept) becomes the
+   OT tool: Section D switched off (kept), the Cath Lab area out, the post-operative / recovery area
+   and the Aldrete fields in; departments set to ot20 whose id or name says Cath Lab move to cath20.
+   Audits already filled keep their frozen criteria; old Cath Lab audits stay under ot20. */
+async function ensureCathSplit(now) {
+  const cfg = await getConfig();
+  if (cfg.cathSplitAt) return false;
+  const seeds = catalogue.seedTools();
+  const cathSeed = seeds.find((t) => t.id === 'cath20'), otSeed = seeds.find((t) => t.id === 'ot20');
+  if (!(await getDoc(TOOLS, 'cath20'))) {
+    const { id, ...rest } = cathSeed;
+    await putDoc(TOOLS, Object.assign({ _id: id }, rest, { revision: 1, createdAt: now, createdBy: 'system', updatedAt: now, updatedBy: 'system', history: [{ at: now, by: 'system', action: 'created — the Cath Lab now has its own tool (split from OT & Cath Lab)' }] }), null);
+  }
+  const ot = await getDoc(TOOLS, 'ot20');
+  if (ot && !ot.cathSplit) {
+    const h = ot.header || {};
+    const areas = (h.areas || []).filter((x) => !/^cath/i.test(String(x)));
+    if (areas.indexOf(catalogue.POSTOP_AREA) < 0) areas.push(catalogue.POSTOP_AREA);
+    const extra = (h.extra || []).slice();
+    catalogue.ALDRETE_FIELDS.forEach((f) => { if (!extra.some((x) => x.id === f.id)) extra.push(Object.assign({}, f)); });
+    const crits = (ot.criteria || []).map((c) => (c.id === 'c16' || c.id === 'c17' ? Object.assign({}, c, { active: false }) : Object.assign({}, c)));
+    crits.filter((c) => c.active !== false).forEach((c, i) => { c.no = i + 1; });
+    let guide = (ot.naGuide || []).map((g) => Object.assign({}, g, { areas: (g.areas || []).filter((x) => !/^cath/i.test(String(x))), na: (g.na || []).filter((x) => x !== 'c16' && x !== 'c17') }))
+      .filter((g) => g.areas.length);
+    if (!guide.some((g) => (g.areas || []).indexOf(catalogue.POSTOP_AREA) >= 0)) guide = guide.concat([Object.assign({}, catalogue.POSTOP_GUIDE)]);
+    const renamed = /cath/i.test(ot.name || '');
+    const next = Object.assign({}, ot, {
+      name: renamed ? otSeed.name : ot.name, short: /cath/i.test(ot.short || '') ? otSeed.short : ot.short, scope: renamed ? otSeed.scope : ot.scope,
+      header: Object.assign({}, h, { areas, extra }), criteria: crits, naGuide: guide, cathSplit: now,
+      sections: (ot.sections || []).map((x) => (x.id === 'D' ? Object.assign({}, x, { title: 'Cath Lab specific (not used for OT — see the Cath Lab tool)' }) : x)),
+      revision: (ot.revision || 1) + 1, updatedAt: now, updatedBy: 'system',
+      history: (ot.history || []).concat([{ at: now, by: 'system', action: 'split: the Cath Lab moved to its own tool; Section D off; post-operative / recovery area and Aldrete score added — revision ' + ((ot.revision || 1) + 1) }]).slice(-100),
+    });
+    if (!(await putDoc(TOOLS, next, ot.updatedAt))) return false;   // changed meanwhile: try again next request
+  }
+  // Departments already set to the shared tool: the Cath Lab ones move to the Cath Lab tool.
+  const depts = Object.assign({}, cfg.depts || {});
+  const names = {}; (await allDepts()).forEach((d) => { names[d.id] = d.name; });
+  Object.keys(depts).forEach((id) => { if (depts[id] && depts[id].toolId === 'ot20' && /cath/i.test(id + ' ' + (names[id] || ''))) depts[id] = Object.assign({}, depts[id], { toolId: 'cath20' }); });
+  await patchConfig({ cathSplitAt: now, depts });
+  return true;
+}
 async function liveTools() { return (await allDocs(TOOLS)).filter(DA.isLiveTool).sort((a, b) => (a.order || 0) - (b.order || 0)); }
 
 /* ------------------------------------------------------------ departments --- */
@@ -212,7 +255,10 @@ function pickAudit(b, tool, criteria) {
   Object.keys(be).forEach((k) => { const v = str(be[k], 800); if (ids.has(k) && v) evidence[k] = v; });
   const xs = ((tool && tool.header && tool.header.extra) || []);
   const bx = (b.extra && typeof b.extra === 'object') ? b.extra : {};
-  xs.forEach((f) => { const v = str(bx[f.id], 200); if (v) extra[f.id] = v; });
+  xs.forEach((f) => {
+    if (f.type === 'aldrete') { const v = DA.cleanAldrete(bx[f.id]); if (v) extra[f.id] = v; return; }   // each sign 0–2, total worked out here
+    const v = str(bx[f.id], 200); if (v) extra[f.id] = v;
+  });
   return {
     area: str(b.area, 120), date: DA.isDate(b.date) ? b.date : '', shift: DA.SHIFTS.indexOf(b.shift) >= 0 ? b.shift : '',
     uhid: str(b.uhid, 40), bed: str(b.bed, 60), extra, answers, evidence, remarks: str(b.remarks, 2000),
@@ -298,7 +344,7 @@ function pickTool(b, cur) {
     if (!f || !str(f.label, 80)) return;
     let id = SLUG(f.id) || SLUG(f.label);
     if (!id || extra.some((x) => x.id === id) || ['area', 'date', 'shift', 'uhid', 'bed'].indexOf(id) >= 0) id = 'f' + (extra.length + 1);
-    const type = f.type === 'select' ? 'select' : 'text';
+    const type = f.type === 'select' ? 'select' : f.type === 'aldrete' ? 'aldrete' : 'text';
     const row = { id, label: str(f.label, 80), type };
     if (type === 'select') { const opts = (Array.isArray(f.options) ? f.options : String(f.options || '').split(/\n|;/)).map((o) => str(o, 80)).filter((o, j, arr) => arr.indexOf(o) === j).slice(0, 20); row.options = [''].concat(opts.filter(Boolean)); }
     extra.push(row);
@@ -432,6 +478,7 @@ function mount(app, opts) {
       return null;
     }
     await ensureSeed(now());
+    await ensureCathSplit(now());
     return a;
   };
   const admin = (res, a) => { if (a.unrestricted) return true; res.status(403).json({ ok: false, error: 'Only an administrator can do this.' }); return false; };
@@ -837,7 +884,7 @@ function mount(app, opts) {
       const tools = (await allDocs(TOOLS)).filter((t) => !t.removedAt);
       const out = buildSummary(audits, tools, months, depts, { toolId });
       const by = ['area', 'shift', 'nurse', 'auditor'].indexOf(req.query.by) >= 0 ? req.query.by : null;
-      res.json({ ok: true, months, tools: tools.map((t) => ({ id: t._id, name: t.name, short: t.short, code: t.code, kpis: t.kpis, sample: t.sample, disabled: !!t.disabled })),
+      res.json({ ok: true, months, tools: tools.map((t) => ({ id: t._id, name: t.name, short: t.short, code: t.code, version: t.version, kpis: t.kpis, sample: t.sample, disabled: !!t.disabled })),
         ...out, breakdown: by ? breakdown(audits, tools, by) : null, by, today: today() });
     } catch (e) { fail(res, e, 'Could not build the report.'); }
   });
@@ -1016,7 +1063,7 @@ function mount(app, opts) {
         if (!inScope(a, x.deptId)) return notMine(res);
         target = x.deptName + ' · ' + (DA.nurseNames(x) || '—') + ' · ' + x.date;
       } else if (b.dept) { if (!inScope(a, b.dept)) return notMine(res); target = String(b.dept); }
-      activity.log(req, 'docaudit_print', { target, detail: kind + (kind === 'blank' && +b.copies > 1 ? ' · ' + Math.min(30, +b.copies) + ' copies' : '') + (b.from ? ' · ' + b.from + (b.to ? ' → ' + b.to : '') : '') + (b.pdf ? ' · PDF' : '') });
+      activity.log(req, 'docaudit_print', { target, detail: kind + (b.complete ? ' (complete report)' : '') + (kind === 'blank' && +b.copies > 1 ? ' · ' + Math.min(30, +b.copies) + ' copies' : '') + (b.from ? ' · ' + b.from + (b.to ? ' → ' + b.to : '') : '') + (b.pdf ? ' · PDF' : '') });
       res.json({ ok: true });
     } catch (e) { fail(res, e, 'Could not record the print.'); }
   });
@@ -1120,4 +1167,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, cfgFor, _mem: mem };
+module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, cfgFor, _mem: mem };

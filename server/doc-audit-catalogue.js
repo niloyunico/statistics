@@ -4,7 +4,8 @@
  * the policy documents word for word — do not reword it here.
  *
  *   ipd25   UHP-NSG-QA-001 v2.0  Nursing Documentation Accuracy — 25 points (all in-patient units)
- *   ot20    UHP-NSG-QA-002 v1.0  OT & Cath Lab — 20 points
+ *   ot20    UHP-NSG-QA-002 v1.0  OT — 18 points (Section D, Cath Lab specific, switched off)
+ *   cath20  UHP-NSG-QA-002 v1.0  Cath Lab — 20 points (the same checklist, Section D on)
  *   dial20  UHP-NSG-QA-003 v1.0  Dialysis & Endoscopy — 20 points
  *   ed20    UHP-NSG-QA-004 v1.0  Emergency Department — 20 points
  *
@@ -16,6 +17,14 @@ const crit = (rows) => rows.map(([no, sectionId, jci, critical, text]) => ({ id:
 const kpi = (id, code, name, formula, target, direction, criteria) => Object.assign({ id, code, name, formula, target, direction }, criteria ? { criteria } : {});
 const ids = (...n) => n.map((x) => 'c' + x);
 const range = (a, b) => { const out = []; for (let i = a; i <= b; i++) out.push('c' + i); return out; };
+// The post-operative / recovery record on the OT tool (a procedure-area choice).
+const POSTOP_AREA = 'Post-operative / Recovery (PACU)';
+const POSTOP_GUIDE = { areas: [POSTOP_AREA], never: ['c1', 'c20'], note: 'Post-operative / recovery record: Sections A and E apply; items of the operation itself (Sections B–C) that were not part of this record may be marked N/A.' };
+// The Aldrete post-anaesthesia recovery score (criterion 18 checks it is recorded): recorded with the audit, not scored.
+const ALDRETE_FIELDS = [
+  { id: 'aldreteIn', label: 'Aldrete score — on arrival in recovery', type: 'aldrete' },
+  { id: 'aldreteOut', label: 'Aldrete score — at discharge from recovery', type: 'aldrete' },
+];
 const STD_KPIS = [
   kpi('kpi1', 'KPI-1', 'Documentation Accuracy Rate', 'accuracy', 90, 'higher'),
   kpi('kpi2', 'KPI-2', 'Audit Pass Rate', 'pass', 85, 'higher'),
@@ -81,18 +90,19 @@ const IPD = {
 
 const OT = {
   id: 'ot20', code: 'UHP-NSG-QA-002', version: '1.0', order: 20,
-  name: 'OT & Cath Lab Documentation Accuracy Audit (20 points)',
-  short: 'OT & Cath Lab 20-point',
-  scope: 'Every OT (major, minor, emergency, day-care, obstetric) and the Cardiac Cath Lab (Appendix A of UHP-NSG-QA-002).',
+  name: 'OT Documentation Accuracy Audit (18 points)',
+  short: 'OT 18-point',
+  scope: 'Every OT (major, minor, emergency, day-care, obstetric) and the post-operative / recovery record (Appendix A of UHP-NSG-QA-002; the Cath Lab has its own tool).',
+  cathSplit: true,
   header: {
     areaLabel: 'Procedure area',
-    areas: ['Major OT', 'Minor OT', 'Emergency OT', 'Day-care OT', 'Obstetric OT', 'Cath Lab'],
+    areas: ['Major OT', 'Minor OT', 'Emergency OT', 'Day-care OT', 'Obstetric OT', POSTOP_AREA],
     bedLabel: 'OT / room no.',
     extra: [
       { id: 'procedure', label: 'Procedure', type: 'text' },
       { id: 'anaesthesia', label: 'Anaesthesia type', type: 'select', options: ['', 'GA', 'Regional', 'LA', 'Sedation'] },
       { id: 'caseType', label: 'Case (sample rule 7.1)', type: 'select', options: ['', 'Elective', 'Emergency / after-hours', 'With implant or specimen'] },
-    ],
+    ].concat(ALDRETE_FIELDS),
   },
   sample: { minRecords: 10, note: 'Minimum 10 records per area per month (Major OT, Minor OT, Emergency OT, Day-care OT, Obstetric OT, Cath Lab), randomly selected across all shifts and surgeons/cardiologists. Include at least 2 emergency / after-hours cases per area where available, and at least 1 case with implant or specimen. Each OT / Cath Lab nurse is audited at least once per quarter.' },
   sections: [
@@ -129,10 +139,39 @@ const OT = {
     kpi('kpi4', 'KPI-4', 'Surgical Safety Checklist Compliance', 'subset', 95, 'higher', range(6, 9)),
   ]),
   naGuide: [
-    { areas: ['Major OT', 'Obstetric OT'], na: ids(16, 17), note: 'All sections A–C and E apply. Section D (items 16–17) = N/A.' },
-    { areas: ['Minor OT', 'Day-care OT'], na: ids(16, 17), note: 'Sections A–C and E apply; item 3 may be the local-anaesthesia / sedation assessment; items not relevant to the case (e.g. tourniquet, implants) = N/A. Day-care discharge (item 19) must be documented.' },
-    { areas: ['Emergency OT'], na: ids(16, 17), never: ids(1, 7, 8, 13, 15, 20), note: 'All items apply; emergency consent per policy (item 4). Patient identification, time-out, counts, medications, specimens and authentication are never N/A.' },
-    { areas: ['Cath Lab'], note: 'All sections apply, including Section D. Counts (item 8) cover sharps, guidewires, sheaths and swabs used.' },
+    { areas: ['Major OT', 'Obstetric OT'], note: 'All sections A–C and E apply.' },
+    { areas: ['Minor OT', 'Day-care OT'], note: 'Sections A–C and E apply; item 3 may be the local-anaesthesia / sedation assessment; items not relevant to the case (e.g. tourniquet, implants) = N/A. Day-care discharge (item 19) must be documented.' },
+    { areas: ['Emergency OT'], never: ids(1, 7, 8, 13, 15, 20), note: 'All items apply; emergency consent per policy (item 4). Patient identification, time-out, counts, medications, specimens and authentication are never N/A.' },
+    POSTOP_GUIDE,
+  ],
+};
+// Section D (Cath Lab specific) is the Cath Lab tool's; on the OT tool it is switched off — kept, never deleted.
+OT.criteria = OT.criteria.map((c) => (c.id === 'c16' || c.id === 'c17' ? Object.assign({}, c, { active: false }) : c));
+OT.criteria.filter((c) => c.active).forEach((c, i) => { c.no = i + 1; });
+
+/* The Cath Lab: the same QA-002 checklist, word for word, all 20 criteria including Section D. */
+const CATH = {
+  id: 'cath20', code: 'UHP-NSG-QA-002 (Cath Lab)', version: '1.0', order: 25,
+  name: 'Cath Lab Documentation Accuracy Audit (20 points)',
+  short: 'Cath Lab 20-point',
+  scope: 'The Cardiac Cath Lab (Appendix A of UHP-NSG-QA-002, all sections including Section D).',
+  header: {
+    areaLabel: 'Procedure area',
+    areas: ['Cardiac Cath Lab', 'Post-procedure / Recovery'],
+    bedLabel: 'Cath Lab / room no.',
+    extra: [
+      { id: 'procedure', label: 'Procedure', type: 'text' },
+      { id: 'anaesthesia', label: 'Sedation / anaesthesia', type: 'select', options: ['', 'LA', 'Sedation', 'GA'] },
+      { id: 'caseType', label: 'Case (sample rule 7.1)', type: 'select', options: ['', 'Elective', 'Emergency / after-hours', 'With implant or device'] },
+    ].concat(ALDRETE_FIELDS),
+  },
+  sample: { minRecords: 10, note: 'Minimum 10 Cath Lab records per month, randomly selected across all shifts and cardiologists. Include at least 2 emergency / after-hours cases where available, and at least 1 case with an implant or device. Each Cath Lab nurse is audited at least once per quarter.' },
+  sections: OT.sections.map((x) => (x.id === 'D' ? Object.assign({}, x, { title: 'Cath Lab specific' }) : Object.assign({}, x))),
+  criteria: OT.criteria.map((c, i) => Object.assign({}, c, { active: true, no: +c.id.slice(1) })),
+  kpis: OT.kpis.map((k) => Object.assign({}, k)),
+  naGuide: [
+    { areas: ['Cardiac Cath Lab'], note: 'All sections apply, including Section D. Counts (item 8) cover sharps, guidewires, sheaths and swabs used.' },
+    { areas: ['Post-procedure / Recovery'], never: ids(1, 20), note: 'Post-procedure / recovery record: Sections A, D (access site, sheath removal, distal pulses) and E apply; items of the procedure itself that were not part of this record may be marked N/A.' },
   ],
 };
 
@@ -249,7 +288,7 @@ const ED = {
   ],
 };
 
-const TOOLS = [IPD, OT, DIAL, ED];
+const TOOLS = [IPD, OT, CATH, DIAL, ED];
 
 /* Which tool a department audits with, guessed from its id / name until an administrator sets
    it in Documentation Audit → Settings. null = not audited (out-patient, quality-only areas). */
@@ -259,7 +298,7 @@ function guessTool(dept) {
   const s = id + ' ' + nm;
   if (/\b(opd|homecare)\b|out[\s-]*patient|home\s*care|family medicine|infection|administrative/.test(s)) return null;
   if (id === 'er' || /emergency/.test(nm)) return { toolId: 'ed20', minRecords: 30 };
-  if (/cath/.test(s)) return { toolId: 'ot20', minRecords: 10 };
+  if (/cath/.test(s)) return { toolId: 'cath20', minRecords: 10 };
   if (/\b(ot|ctot|ctvs)\b|operation|theatre/.test(s)) return { toolId: 'ot20', minRecords: 10 };
   if (/endoscop/.test(s)) return { toolId: 'dial20', minRecords: 10 };
   if (/dialysis/.test(s)) return { toolId: 'dial20', minRecords: 15 };
@@ -270,4 +309,4 @@ function guessTool(dept) {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const seedTools = () => TOOLS.map(clone);
 
-module.exports = { TOOLS, seedTools, guessTool };
+module.exports = { TOOLS, seedTools, guessTool, POSTOP_AREA, POSTOP_GUIDE, ALDRETE_FIELDS };

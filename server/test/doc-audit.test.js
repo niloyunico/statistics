@@ -53,9 +53,14 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
 (async () => {
   /* ---- the four tools are the policies' ---- */
   const crit = (id) => catalogue.TOOLS.find((t) => t.id === id).criteria.filter((c) => c.critical).map((c) => c.no);
-  assert.deepEqual(catalogue.TOOLS.map((t) => [t.id, t.criteria.length]), [['ipd25', 25], ['ot20', 20], ['dial20', 20], ['ed20', 20]]);
+  assert.deepEqual(catalogue.TOOLS.map((t) => [t.id, t.criteria.filter((c) => c.active).length]), [['ipd25', 25], ['ot20', 18], ['cath20', 20], ['dial20', 20], ['ed20', 20]], 'OT 18 (Section D off), Cath Lab 20');
   assert.deepEqual(crit('ipd25'), [1, 2, 7, 8, 9, 11, 16, 17, 18, 19, 20, 21, 24], 'QA-001 §8.3: 13 critical');
-  assert.deepEqual(crit('ot20'), [1, 3, 4, 5, 7, 8, 13, 15, 20], 'QA-002: 9 critical');
+  assert.deepEqual(crit('cath20'), [1, 3, 4, 5, 7, 8, 13, 15, 20], 'QA-002: 9 critical (Cath Lab, all 20)');
+  assert.deepEqual(catalogue.TOOLS.find((t) => t.id === 'ot20').criteria.filter((c) => c.active && c.critical).map((c) => c.id), ['c1', 'c3', 'c4', 'c5', 'c7', 'c8', 'c13', 'c15', 'c20'], 'OT: the same 9 critical (ids kept, renumbered)');
+  assert.ok(catalogue.TOOLS.find((t) => t.id === 'ot20').header.areas.indexOf('Post-operative / Recovery (PACU)') >= 0, 'OT has the post-operative area');
+  assert.equal(catalogue.guessTool({ id: 'cathlab', name: 'Cath Lab' }).toolId, 'cath20');
+  assert.equal(DA.aldreteText({ a: 2, r: 2, c: 1, co: 1, o: 2 }), '8/10 (A2 R2 C1 Co1 O2)');
+  assert.deepEqual(DA.cleanAldrete({ a: 9, r: '2' }), { r: 2, total: 2, complete: false }, 'each sign 0–2; total worked out');
   assert.deepEqual(crit('dial20'), [1, 2, 3, 4, 6, 8, 12, 15, 16, 18, 20], 'QA-003: 11 critical');
   assert.deepEqual(crit('ed20'), [1, 3, 5, 8, 9, 12, 13, 15, 20], 'QA-004: 9 critical');
   const sub = (tid, k) => catalogue.TOOLS.find((t) => t.id === tid).kpis.find((x) => x.id === k).criteria;
@@ -90,7 +95,7 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   let res = await call('GET /api/doc-audit/meta', auditor);
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.departments.map((d) => d.id), ['lvl9'], 'only my departments');
-  assert.equal(res.body.tools.length, 4, 'the four tools are seeded');
+  assert.equal(res.body.tools.length, 5, 'the five tools are seeded');
   assert.equal(res.body.staffId, '3');
   res = await call('GET /api/doc-audit/staff', auditor, { query: { dept: 'lvl9' } });
   assert.deepEqual(res.body.staff.map((p) => p.id), [3, 1, 5, 6], 'Level 9 staff, nurses first and the PCA last — never a former one');
@@ -355,6 +360,32 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal((await call('POST /api/doc-audit/print', outsider, { body: { kind: 'bulk', ids: [d2.id] } })).status, 403);
   assert.equal((await call('POST /api/doc-audit/print', admin, { body: { kind: 'bulk', ids: [d1.id, d2.id] } })).status, 200);
   assert.ok(logged.some((l) => l.action === 'docaudit_audit' && /published \(/.test(l.opts.detail)), 'each audit logged');
+
+  /* ---- Aldrete on an OT audit; the one-shot OT / Cath Lab split of an older install ---- */
+  res = await call('POST /api/doc-audit/audits', admin, { body: { deptId: 'lvl9', toolId: 'ot20', date: '2026-11-10', uhid: 'UH-OT1', area: 'Post-operative / Recovery (PACU)', nurse: { staffId: 1 }, extra: { aldreteIn: { a: 2, r: 2, c: 1, co: 1, o: 2, total: 99 }, aldreteOut: { a: 'x' } }, answers: {} } });
+  assert.deepEqual(res.body.audit.extra.aldreteIn, { a: 2, r: 2, c: 1, co: 1, o: 2, total: 8, complete: true }, 'Aldrete kept, total recomputed');
+  assert.equal(res.body.audit.extra.aldreteOut, undefined, 'nothing scored = nothing kept');
+  assert.equal(res.body.audit.criteria.length, 18, 'a new OT audit has 18 criteria');
+  await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id } });
+  // an install from before the split: one shared tool, the Cath Lab department set to it
+  const old = catalogue.seedTools().find((t) => t.id === 'ot20');
+  old.criteria = old.criteria.map((c) => Object.assign({}, c, { active: true, no: +c.id.slice(1) }));
+  delete old.cathSplit; old.name = 'OT & Cath Lab Documentation Accuracy Audit (20 points)'; old.short = 'OT & Cath Lab 20-point';
+  old.header.areas = ['Major OT', 'Minor OT', 'Emergency OT', 'Day-care OT', 'Obstetric OT', 'Cath Lab']; old.header.extra = old.header.extra.filter((f) => f.type !== 'aldrete');
+  old.naGuide = [{ areas: ['Major OT', 'Obstetric OT'], na: ['c16', 'c17'], note: 'D = N/A' }, { areas: ['Cath Lab'], note: 'All apply' }];
+  const { id: oldId, ...oldRest } = old;
+  docAudit._mem.docAuditTools.set('ot20', Object.assign({ _id: 'ot20' }, oldRest, { revision: 1, updatedAt: 1 }));
+  docAudit._mem.docAuditTools.delete('cath20');
+  docAudit._mem.cfg = Object.assign({}, docAudit._mem.cfg, { cathSplitAt: undefined, depts: { cathlab: { toolId: 'ot20', enabled: true, minRecords: 10 }, ot: { toolId: 'ot20', enabled: true, minRecords: 10 } } });
+  assert.equal(await docAudit.ensureCathSplit(5000), true);
+  const ot20 = docAudit._mem.docAuditTools.get('ot20');
+  assert.equal(ot20.criteria.filter((c) => c.active !== false).length, 18); assert.equal(ot20.revision, 2); assert.equal(ot20.name, 'OT Documentation Accuracy Audit (18 points)');
+  assert.ok(ot20.header.areas.indexOf('Cath Lab') < 0 && ot20.header.areas.indexOf('Post-operative / Recovery (PACU)') >= 0);
+  assert.equal(ot20.header.extra.filter((f) => f.type === 'aldrete').length, 2);
+  assert.deepEqual(ot20.naGuide.map((g) => g.areas.join()), ['Major OT,Obstetric OT', 'Post-operative / Recovery (PACU)']);
+  assert.ok(docAudit._mem.docAuditTools.get('cath20'), 'the Cath Lab tool is created');
+  assert.deepEqual([docAudit._mem.cfg.depts.cathlab.toolId, docAudit._mem.cfg.depts.ot.toolId], ['cath20', 'ot20'], 'the Cath Lab department moves to its own tool');
+  assert.equal(await docAudit.ensureCathSplit(6000), false, 'once only');
 
   console.log('doc-audit: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

@@ -48,7 +48,7 @@ async function build(data) {
     { header: 'Yes', key: 'yes', width: 6 }, { header: 'No', key: 'no', width: 6 }, { header: 'N/A', key: 'na', width: 6 }, { header: 'Applicable', key: 'app', width: 9 },
     { header: 'Score %', key: 'pct', width: 8 }, { header: 'Grade', key: 'grade', width: 16 }, { header: 'Result', key: 'result', width: 8 },
     { header: 'Critical criteria marked No', key: 'crit', width: 18 }, { header: "Criteria marked 'No' (evidence)", key: 'gaps', width: 60 },
-    { header: 'Status', key: 'status', width: 13 }, { header: 'Acknowledged', key: 'ack', width: 20 }, { header: 'Signed off (In-charge)', key: 'sign', width: 22 },
+    { header: 'Aldrete (arrival / discharge)', key: 'aldrete', width: 26 }, { header: 'Status', key: 'status', width: 13 }, { header: 'Acknowledged', key: 'ack', width: 20 }, { header: 'Signed off (In-charge)', key: 'sign', width: 22 },
   ]);
   audits.slice().sort((x, y) => (x.date || '').localeCompare(y.date || '') || String(x.deptName).localeCompare(String(y.deptName))).forEach((x) => {
     const r = x.result || {};
@@ -62,6 +62,7 @@ async function build(data) {
       auditor: (x.auditor && x.auditor.name) || '', tool: x.toolName || x.toolId,
       yes: r.yes, no: r.no, na: r.na, app: r.applicable, pct: r.pct, grade: r.gradeLabel || '', result: r.result || '',
       crit: (r.criticalFails || []).map((k) => '#' + ((byId[k] || {}).no || k)).join(', '), gaps,
+      aldrete: Object.keys(x.extra || {}).filter((k) => /^aldrete/i.test(k) && DA.cleanAldrete(x.extra[k])).map((k) => (/out|dis/i.test(k) ? 'Discharge ' : 'Arrival ') + DA.aldreteText(x.extra[k])).join('\n'),
       status: DA.STATUS_LABEL[x.status] || x.status,
       ack: DA.nursesOf(x).map((n) => { const k = DA.acksOf(x)[DA.nurseKey(n)]; return k ? (DA.nursesOf(x).length > 1 ? n.name + ': ' : '') + (k.method === 'account' ? 'own account · ' : 'in person · ') + when(k.at) : ''; }).filter(Boolean).join('\n'),
       sign: x.signoff ? x.signoff.name + ' · ' + when(x.signoff.at) : '',

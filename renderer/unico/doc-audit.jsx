@@ -432,6 +432,27 @@
     </div>;
   }
 
+  /* The Aldrete post-anaesthesia recovery score: five signs 0–2, the total live; ≥ 9 meets the
+     discharge criteria. Recorded with the audit (criterion 18 checks it is documented), not scored. */
+  function AldreteField({ value, onChange, readOnly }) {
+    const v = value && typeof value === 'object' ? value : {};
+    const c = DA.cleanAldrete(v);
+    const verdict = c && c.complete ? (c.total >= DA.ALDRETE_DISCHARGE ? { t: 'meets discharge criteria', bg: '#e7f6ed', fg: '#14713f' } : { t: 'below discharge criteria (≥ 9)', bg: '#fde4e8', fg: '#a3172f' }) : null;
+    if (readOnly) return <div style={{ fontSize: 13, paddingTop: 6 }}>{c ? <><b>{DA.aldreteText(v)}</b>{verdict && <span className="da-chip" style={{ marginLeft: 6, background: verdict.bg, color: verdict.fg }}>{verdict.t}</span>}</> : '—'}</div>;
+    const setSign = (k, n) => { const next = Object.assign({}, v); if (next[k] === n) delete next[k]; else next[k] = n; onChange(DA.cleanAldrete(next)); };
+    return <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+      {DA.ALDRETE.map((x) => <div key={x.k} style={{ minWidth: 150, flex: '1 1 150px' }}>
+        <div className="da-sub" style={{ fontWeight: 700, marginBottom: 3 }}>{x.label}</div>
+        <div className="da-yn" style={{ display: 'flex' }}>{[2, 1, 0].map((n) => <button key={n} type="button" title={x.opts[n]} className={(v[x.k] === n ? 'on ' : '') + (n === 2 ? 'Y' : n === 1 ? 'NA' : 'N')} style={{ flex: 1, minWidth: 0 }} onClick={() => setSign(x.k, n)}>{n}</button>)}</div>
+        <div className="da-sub" style={{ marginTop: 2, minHeight: 14 }}>{v[x.k] != null ? x.opts[v[x.k]] : ''}</div>
+      </div>)}
+      <div style={{ minWidth: 120, alignSelf: 'center' }}>
+        <div style={{ fontSize: 22, fontWeight: 800, color: verdict ? verdict.fg : 'var(--ink)' }}>{c ? c.total : '—'}<span className="da-sub" style={{ fontSize: 12 }}>/10</span></div>
+        {verdict ? <span className="da-chip" style={{ background: verdict.bg, color: verdict.fg }}>{verdict.t}</span> : <span className="da-sub">{c ? 'score every sign' : 'optional'}</span>}
+      </div>
+    </div>;
+  }
+
   /* ========================================================= result panel === */
   function ResultPanel({ res, criteria, problems }) {
     const total = DA.activeCriteria(criteria).length;
@@ -585,7 +606,10 @@
             : <div className="seg">{DA.SHIFTS.map((s) => <button key={s} className={form.shift === s ? 'on' : ''} onClick={() => set('shift', form.shift === s ? '' : s)}>{s}</button>)}</div>}</div>
           <div className="da-f"><label>Patient UHID / MRN</label>{readOnly ? <div style={{ fontSize: 13, paddingTop: 6 }}>{form.uhid || '—'}</div> : <input className={'da-in' + (bad('uhid') ? ' bad' : '')} value={form.uhid} onChange={(e) => set('uhid', e.target.value)} />}</div>
           <div className="da-f"><label>{(tool.header && tool.header.bedLabel) || 'Ward / bed no.'}</label>{readOnly ? <div style={{ fontSize: 13, paddingTop: 6 }}>{form.bed || '—'}</div> : <input className="da-in" value={form.bed} onChange={(e) => set('bed', e.target.value)} />}</div>
-          {((tool.header && tool.header.extra) || []).map((f) => <div className="da-f" key={f.id}><label>{f.label}</label>
+          {((tool.header && tool.header.extra) || []).map((f) => f.type === 'aldrete'
+            ? <div className="da-f" key={f.id} style={{ gridColumn: '1 / -1' }}><label>{f.label}</label>
+                <AldreteField value={form.extra[f.id]} readOnly={readOnly} onChange={(v) => set('extra', Object.assign({}, form.extra, { [f.id]: v }))} /></div>
+            : <div className="da-f" key={f.id}><label>{f.label}</label>
             {readOnly ? <div style={{ fontSize: 13, paddingTop: 6 }}>{form.extra[f.id] || '—'}</div>
               : f.type === 'select' ? <select className="da-sel" value={form.extra[f.id] || ''} onChange={(e) => set('extra', Object.assign({}, form.extra, { [f.id]: e.target.value }))}>{(f.options || ['']).map((o) => <option key={o} value={o}>{o || '—'}</option>)}</select>
                 : <input className="da-in" value={form.extra[f.id] || ''} onChange={(e) => set('extra', Object.assign({}, form.extra, { [f.id]: e.target.value }))} />}</div>)}
@@ -892,7 +916,13 @@
           <input type="month" className="da-in" value={p.to} min={p.from} max={ym} onChange={(e) => e.target.value && set('to', e.target.value)} />
           <select className="da-sel" value={p.dept} onChange={(e) => set('dept', e.target.value)}><option value="">All my departments</option>{meta.departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>
           <span style={{ flex: 1 }} />
-          {meta.canPrint && data && <><button className="da-btn" onClick={() => printReport(data, label)}>Print</button><button className="da-btn" onClick={() => pdfReport(data, label).catch((e) => toast(e.message, 'error'))}>PDF</button><button className="da-btn" onClick={excel}>Excel</button></>}
+          {meta.canPrint && data && <>
+            <span className="da-sub">KPI report</span>
+            <button className="da-btn" onClick={() => printReport(data)}>Print</button><button className="da-btn" onClick={() => pdfReport(data).catch((e) => toast(e.message, 'error'))}>PDF</button>
+            <span className="da-sub" style={{ marginLeft: 6 }}>Complete report</span>
+            <button className="da-btn pri" title="Summary, KPI tables, trend, criterion gaps, action plans, results by nurse and the full audit register" onClick={() => completeReport(data, p.dept, false)}>Print</button>
+            <button className="da-btn" onClick={() => completeReport(data, p.dept, true).catch((e) => toast(e.message, 'error'))}>PDF</button>
+            <button className="da-btn" onClick={excel}>Excel</button></>}
         </div>
         {err && <div className="da-banner red">{err}</div>}
         {!data ? <div className="da-card da-empty">Building the report…</div> : <>
@@ -1118,7 +1148,7 @@
                 {((d.header || {}).extra || []).map((f, i) => { const sf = (k, v) => set('header', Object.assign({}, d.header, { extra: d.header.extra.map((x, j) => (j === i ? Object.assign({}, x, { [k]: v }) : x)) }));
                   return <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px,1fr) 100px minmax(140px,2fr) auto', gap: 8, marginBottom: 6 }}>
                     <input className="da-in" value={f.label} placeholder="Label" onChange={(e) => sf('label', e.target.value)} />
-                    <select className="da-sel" value={f.type} onChange={(e) => sf('type', e.target.value)}><option value="text">Text</option><option value="select">Choice</option></select>
+                    <select className="da-sel" value={f.type} onChange={(e) => sf('type', e.target.value)}><option value="text">Text</option><option value="select">Choice</option><option value="aldrete">Aldrete scale</option></select>
                     {f.type === 'select' ? <input className="da-in" placeholder="Choices separated by ;" value={(f.options || []).filter(Boolean).join('; ')} onChange={(e) => sf('options', [''].concat(e.target.value.split(';').map((x) => x.trim())))} /> : <span />}
                     <button className="da-btn sm danger" onClick={() => set('header', Object.assign({}, d.header, { extra: d.header.extra.filter((_, j) => j !== i) }))}>×</button></div>; })}
                 <button className="da-btn sm" onClick={() => set('header', Object.assign({}, d.header, { extra: ((d.header || {}).extra || []).concat([{ id: '', label: '', type: 'text' }]) }))}>+ Field</button></div>
@@ -1206,7 +1236,13 @@
     + '.dap .signs{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:22px;font-size:8pt}.dap .signs div{border-top:.75pt solid #111;padding-top:4px;min-height:44px}.dap .signs span{display:block;font-size:6.8pt;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#444}'
     + '.dap .end{margin-top:12px;padding-top:5px;border-top:.5pt solid #999;display:flex;justify-content:space-between;font-size:7pt;color:#555}.dap .cr{margin-top:4px;text-align:center;font-size:6.2pt;color:#888}'
     + '.dap h2{font-size:10pt;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px}.dap td.n,.dap th.n{text-align:right}.dap tr.tot td{font-weight:800;background:#eee}.dap .off{font-weight:800;text-decoration:underline}'
-    + '.dap .note{font-size:7.5pt;color:#333;margin-top:6px}';
+    + '.dap .note{font-size:7.5pt;color:#333;margin-top:6px}'
+    + '.dap h2{break-after:avoid;page-break-after:avoid}.dap h3.sec{font-size:11.5pt;margin:18px 0 6px;padding-bottom:3px;border-bottom:1pt solid #111;break-after:avoid;page-break-after:avoid}'
+    + '.dap table.kt{font-size:8pt}.dap table.kt td.d{min-width:120px}.dap .legend{font-size:7pt;color:#333;margin:4px 0 2px;line-height:1.45}.dap .none{font-size:7.5pt;color:#555;margin:3px 0 8px}'
+    + '.dap table.kv{font-size:8.5pt;margin:6px 0}.dap table.kv td.k{background:#f2f2f2;font-weight:700;width:18%}'
+    + '.dap .gb{height:7px;background:#e6e6e6;width:120px}.dap .gb i{display:block;height:100%;background:#555}.dap .gb i.c{background:#111}'
+    + '.dap td.b95{background:#dff1e5}.dap td.b90{background:#eef7f1}.dap td.b80{background:#fff3d9}.dap td.blow{background:#fde4e8}.dap td small{display:block;font-size:6.5pt;color:#555;font-weight:400}'
+    + '.dap table.rg{font-size:7.5pt}.dap .chip{font-size:6.5pt;font-weight:700;border:.5pt solid #555;padding:0 3px;border-radius:2px;white-space:nowrap}';
   const logo = () => '<img src="' + esc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals">';
   const letterhead = (kind, title, code) => '<header class="lh">' + logo() + '<div class="tt"><div class="kind">' + esc(kind) + '</div><h1>' + esc(title) + '</h1>' + (code ? '<div class="code">' + esc(code) + '</div>' : '') + '</div></header>';
   const footer = () => {
@@ -1225,7 +1261,9 @@
       + items.map((c) => '<tr><td class="no">' + c.no + '</td><td>' + esc(c.text) + '</td><td class="jci">' + esc((c.jci || []).join(', ')) + '</td><td class="crit">' + (c.critical ? 'Critical' : '') + '</td><td class="c">' + tick(c, 'Y') + '</td><td class="c">' + tick(c, 'N') + '</td><td class="c">' + tick(c, 'NA') + '</td><td class="ev">' + esc(ev[c.id] || '') + '</td></tr>').join('')).join('');
     const H = tool.header || {};
     const v = (x) => (a ? esc(x || '—') : x ? esc(x) : '&nbsp;');   // a blank form keeps only what was pre-filled
-    const extra = (H.extra || []).map((f) => [f.label, a ? (a.extra || {})[f.id] : '']);
+    const extra = (H.extra || []).map((f) => [f.label, f.type === 'aldrete'
+      ? (a ? DA.aldreteText((a.extra || {})[f.id], true) : 'A__ R__ C__ Co__ O__ = ___/10 (≥ 9 = discharge)')
+      : (a ? (a.extra || {})[f.id] : '')]);
     const pairs = [['Department', a ? a.deptName : o.deptName], ['Audit date / shift', a && (DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : ''))], ['Patient UHID / MRN', a && a.uhid],
       [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map((n) => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '') + otherText(n)).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed],
       [H.areaLabel || 'Area', a && a.area]].concat(extra);
@@ -1250,28 +1288,118 @@
     const title = a ? 'Documentation audit — ' + DA.nurseNames(a) + ' — ' + a.date : tool.name + ' (blank form)';
     return { body, title, file: a ? 'Documentation-Audit_' + a.deptName.replace(/\W+/g, '-') + '_' + a.date : 'Documentation-Audit-form_' + (tool.short || tool.id).replace(/\W+/g, '-') };
   }
-  // Appendix C — the department KPI report of a period, one table per tool, plus the action plans due.
-  function reportDoc(data, label) {
-    const sig = sigNames();
-    const tools = data.tools.filter((t) => data.rows.some((r) => r.toolId === t.id));
-    const kv = (k, n) => (!n || k.value == null ? '—' : '<span class="' + (k.met === false ? 'off' : '') + '">' + k.value + '%</span>');
-    const parts = tools.map((t) => {
-      const rows = data.rows.filter((r) => r.toolId === t.id);
-      const h = data.hospital[t.id];
-      return '<h2>' + esc(t.name) + (t.code ? ' · ' + esc(t.code) : '') + '</h2><table><thead><tr><th>Department</th><th class="n">Records audited</th>'
-        + t.kpis.map((k) => '<th class="n">' + esc((k.code ? k.code + ' ' : '') + k.name) + '<br>' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%</th>').join('') + '<th>Top 3 failing criteria / action</th></tr></thead><tbody>'
-        + rows.map((r) => '<tr><td>' + esc(r.name) + '</td><td class="n">' + r.total.records + '</td>' + r.total.kpis.map((k) => '<td class="n">' + kv(k, r.total.records) + '</td>').join('') + '<td>' + esc(r.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + (r.caps.length ? ' · <b>CAP due</b>' : '') + '</td></tr>').join('')
-        + (h ? '<tr class="tot"><td>HOSPITAL TOTAL</td><td class="n">' + h.total.records + '</td>' + h.total.kpis.map((k) => '<td class="n">' + kv(k, h.total.records) + '</td>').join('') + '<td>' + esc(h.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>' : '')
+  /* ---------------- reports (Appendix C) ----------------
+     periodLabel: "November 2026" · "Sep – Nov 2026" · "Year 2026". */
+  function periodLabel(months) {
+    const m = months || [];
+    if (!m.length) return '';
+    if (m.length === 1) return DA.fmtMonth(m[0]);
+    if (m.length === 12 && m[0].slice(5) === '01' && m[11].slice(5) === '12' && m[0].slice(0, 4) === m[11].slice(0, 4)) return 'Year ' + m[0].slice(0, 4);
+    const a = DA.fmtMonth(m[0]), b = DA.fmtMonth(m[m.length - 1]);
+    return a.slice(-4) === b.slice(-4) ? a.slice(0, 3) + ' – ' + b : a + ' – ' + b;
+  }
+  const toolsIn = (data) => data.tools.filter((t) => data.rows.some((r) => r.toolId === t.id && r.total.records > 0));
+  const codesOf = (tools) => tools.map((t) => [t.code, t.version ? 'v' + t.version : ''].filter(Boolean).join(' ')).filter(Boolean).join(' · ');
+  const kv = (k, n) => (!n || k.value == null ? '—' : '<span class="' + (k.met === false ? 'off' : '') + '">' + k.value + '%</span>');
+  // One tool's KPI table: only the departments that audited; the others named in one line; a KPI legend.
+  function kpiSection(data, t, n) {
+    const rows = data.rows.filter((r) => r.toolId === t.id);
+    const audited = rows.filter((r) => r.total.records > 0), idle = rows.filter((r) => !r.total.records);
+    const h = data.hospital[t.id];
+    return '<h2>' + (n ? n + ' ' : '') + esc(t.name) + (t.code ? ' · ' + esc(t.code) + (t.version ? ' v' + esc(t.version) : '') : '') + '</h2>'
+      + '<table class="kt"><thead><tr><th>Department</th><th class="n">Records</th><th class="n">Nurses</th>' + t.kpis.map((k) => '<th class="n">' + esc(k.code || k.name) + '<br>' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%</th>').join('') + '<th>Top 3 failing criteria</th></tr></thead><tbody>'
+      + audited.map((r) => '<tr><td class="d">' + esc(r.name) + (r.caps.length ? ' <span class="chip">CAP due</span>' : '') + (r.minRecords && r.total.records < r.minRecords * data.months.length ? '<br><small>' + r.total.records + ' of min ' + r.minRecords * data.months.length + '</small>' : '') + '</td><td class="n">' + r.total.records + '</td><td class="n">' + r.total.nurses + '</td>'
+        + r.total.kpis.map((k) => '<td class="n">' + kv(k, r.total.records) + '</td>').join('') + '<td>' + esc(r.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count + (g.critical ? ' (C)' : '')).join(', ') || '—') + '</td></tr>').join('')
+      + (h ? '<tr class="tot"><td>HOSPITAL TOTAL</td><td class="n">' + h.total.records + '</td><td class="n">' + h.total.nurses + '</td>' + h.total.kpis.map((k) => '<td class="n">' + kv(k, h.total.records) + '</td>').join('') + '<td>' + esc(h.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>' : '')
+      + '</tbody></table>'
+      + (idle.length ? '<div class="none blk"><b>No audits in this period:</b> ' + esc(idle.map((r) => r.name).join(', ')) + '</div>' : '')
+      + '<div class="legend blk">' + t.kpis.map((k) => '<b>' + esc(k.code || '') + '</b> ' + esc(k.name) + ' = ' + esc(DA.KPI_FORMULA_LABEL[k.formula] || '') + (k.criteria && k.criteria.length ? ' (criteria ' + k.criteria.map((c) => '#' + c.replace('c', '')).join(', ') + ')' : '')).join(' · ') + ' · underlined = below target · (C) = critical criterion.</div>';
+  }
+  const summaryTable = (data, extra) => {
+    const ov = data.overall.total;
+    const pct = (a, b) => (b ? DA.round1(a / b * 100) + '%' : '—');
+    const caps = data.rows.filter((r) => r.caps.length).map((r) => r.name);
+    const pub = extra ? extra.audits.filter((x) => x.status === 'signed').length : null;
+    return '<table class="kv blk"><tr><td class="k">Reporting period</td><td>' + esc(periodLabel(data.months)) + '</td><td class="k">Departments audited</td><td>' + data.rows.filter((r) => r.total.records).length + ' of ' + data.rows.length + '</td></tr>'
+      + '<tr><td class="k">Records audited</td><td>' + ov.records + ' · ' + ov.nurses + ' nurse(s)</td><td class="k">KPI-1 Accuracy (all tools)</td><td><b>' + (ov.accuracy == null ? '—' : ov.accuracy + '%') + '</b> (target ≥ 90%)</td></tr>'
+      + '<tr><td class="k">Audit pass rate</td><td>' + pct(ov.pass, ov.records) + ' (target ≥ 85%)</td><td class="k">Critical-failure rate</td><td>' + pct(ov.criticalRecords, ov.records) + ' · ' + ov.criticalRecords + ' record(s) (target ≤ 5%)</td></tr>'
+      + (extra ? '<tr><td class="k">Published to nurses</td><td>' + pub + ' of ' + extra.audits.length + '</td><td class="k">Action plans due</td><td>' + (caps.length ? esc(caps.join(', ')) : 'None') + '</td></tr>' : '')
+      + '</table>';
+  };
+  const signBlock = () => { const sig = sigNames(); return '<div class="signs blk"><div><span>Prepared by</span>' + esc(sig.prepared || '') + '</div><div><span>Reviewed by (Nursing Quality Committee)</span>' + esc(sig.reviewed || '') + '</div><div><span>Approved by (Chief Nursing Officer)</span>' + esc(sig.approved || '') + '</div></div>'; };
+  const reportHead = (data, kind) => { const tools = toolsIn(data); return letterhead('Nursing Quality & Patient Safety', 'Documentation Accuracy ' + kind + ' — ' + periodLabel(data.months), (codesOf(tools) || 'Documentation Audit') + ' · Appendix C' + (data.deptName ? ' · ' + data.deptName : '')); };
+
+  // The department KPI report of a period (Appendix C), one table per tool.
+  function reportDoc(data) {
+    const tools = toolsIn(data);
+    const body = reportHead(data, 'KPI Report') + summaryTable(data)
+      + (tools.length ? tools.map((t) => kpiSection(data, t)).join('') : '<p>No audit in this period.</p>')
+      + '<p class="note blk">Results go to the Nursing Quality Committee by the 10th of the following month. A department below target for 2 consecutive months submits a corrective action plan (Appendix B) for its top 3 failing criteria.</p>'
+      + signBlock() + footer();
+    const label = periodLabel(data.months);
+    return { body, title: 'Documentation Accuracy KPI report — ' + label, file: 'Documentation-Audit-KPI-report_' + label.replace(/\W+/g, '-') };
+  }
+
+  /* The COMPLETE report: summary, KPI tables, trend by month, criterion gaps, action plans due,
+     results by nurse and the full audit register. `extra` = { nurses (breakdown by nurse), audits, more }. */
+  function completeDoc(data, extra) {
+    const tools = toolsIn(data);
+    const label = periodLabel(data.months);
+    let n = 0;
+    const sec = (title) => '<h3 class="sec">' + (++n) + '. ' + esc(title) + '</h3>';
+    const band = (v) => (v == null ? '' : v >= 95 ? 'b95' : v >= 90 ? 'b90' : v >= 80 ? 'b80' : 'blow');
+    // 3. trend
+    let trend;
+    if (data.months.length < 2) trend = '<p class="note">One month only — choose a longer period (e.g. Last 3 months) for the trend.</p>';
+    else {
+      const audited = data.rows.filter((r) => r.total.records > 0);
+      trend = '<table class="kt"><thead><tr><th>Department</th>' + data.months.map((m) => '<th class="n">' + esc(DA.fmtMonth(m)) + '</th>').join('') + '<th class="n">Period</th></tr></thead><tbody>'
+        + audited.map((r) => '<tr><td class="d">' + esc(r.name) + '</td>' + data.months.map((m) => { const s2 = r.months[m]; return '<td class="n ' + band(s2.accuracy) + '">' + (s2.accuracy == null ? '·' : s2.accuracy + '%') + (s2.records ? '<small>' + s2.records + ' rec.</small>' : '') + '</td>'; }).join('')
+          + '<td class="n ' + band(r.total.accuracy) + '"><b>' + (r.total.accuracy == null ? '—' : r.total.accuracy + '%') + '</b><small>' + r.total.records + ' rec.</small></td></tr>').join('')
+        + '<tr class="tot"><td>ALL DEPARTMENTS</td>' + data.months.map((m) => { const s2 = data.overall.months[m]; return '<td class="n">' + (s2.accuracy == null ? '·' : s2.accuracy + '%') + '<small>' + s2.records + ' rec.</small></td>'; }).join('') + '<td class="n">' + (data.overall.total.accuracy == null ? '—' : data.overall.total.accuracy + '%') + '</td></tr></tbody></table>'
+        + '<div class="legend">KPI-1 accuracy = Σ Yes ÷ Σ (Yes + No). Shading: ≥ 95% · ≥ 90% · ≥ 80% · below 80%.</div>';
+    }
+    // 4. criterion gaps per tool
+    const gaps = tools.map((t) => {
+      const h = data.hospital[t.id]; const gs = h ? h.total.gaps.slice(0, 10) : [];
+      if (!gs.length) return '<h2>' + esc(t.name) + '</h2><p class="note">No criterion was marked \'No\'.</p>';
+      const max = Math.max(1, ...gs.map((g) => g.count));
+      return '<h2>' + esc(t.name) + '</h2><table class="kt"><thead><tr><th class="n">No.</th><th>Criterion</th><th>Critical</th><th class="n">Times \'No\'</th><th class="n">% of records</th><th></th></tr></thead><tbody>'
+        + gs.map((g) => '<tr><td class="n"><b>' + g.no + '</b></td><td>' + esc(g.text) + '</td><td>' + (g.critical ? '<b>Critical</b>' : '') + '</td><td class="n">' + g.count + '</td><td class="n">' + (h.total.records ? DA.round1(g.count / h.total.records * 100) : 0) + '%</td><td><div class="gb"><i class="' + (g.critical ? 'c' : '') + '" style="width:' + Math.round(g.count / max * 100) + '%"></i></div></td></tr>').join('')
         + '</tbody></table>';
     }).join('');
-    const ov = data.overall.total;
-    const body = letterhead('Nursing Quality & Patient Safety', 'Monthly Department KPI Report — Documentation Accuracy', 'Appendix C · UHP-NSG-QA-001 · ' + label)
-      + '<table class="hd"><tr><td class="k">Reporting period</td><td>' + esc(label) + '</td><td class="k">Prepared by</td><td>' + esc(sig.prepared || me()) + '</td></tr>'
-      + '<tr><td class="k">Records audited</td><td>' + ov.records + ' · ' + ov.nurses + ' nurse(s)</td><td class="k">Hospital accuracy (KPI-1)</td><td><b>' + (ov.accuracy == null ? '—' : ov.accuracy + '%') + '</b> · pass ' + (ov.records ? DA.round1(ov.pass / ov.records * 100) + '%' : '—') + ' · critical ' + ov.criticalRecords + '</td></tr></table>'
-      + (parts || '<p>No audit in this period.</p>')
-      + '<p class="note">Underlined = below target. Results go to the Nursing Quality Committee by the 10th of the following month. A department below target for 2 consecutive months submits a corrective action plan (Appendix B) for its top 3 failing criteria.</p>'
-      + '<div class="signs blk"><div><span>Prepared by</span>' + esc(sig.prepared || '') + '</div><div><span>Reviewed by (Nursing Quality Committee)</span>' + esc(sig.reviewed || '') + '</div><div><span>Approved by (Chief Nursing Officer)</span>' + esc(sig.approved || '') + '</div></div>' + footer();
-    return { body, title: 'Documentation Accuracy KPI report — ' + label, file: 'Documentation-Audit-KPI-report_' + label.replace(/\W+/g, '-') };
+    // 5. CAPs due
+    const capRows = data.rows.filter((r) => r.caps.length);
+    const toolKpi = (tid, id) => { const t = data.tools.find((x) => x.id === tid); const k = t && t.kpis.find((x) => x.id === id); return k ? (k.code || '') + ' ' + k.name : id; };
+    const caps = capRows.length ? '<table class="kt"><thead><tr><th>Department</th><th>Month</th><th>Below target two months running</th><th>Top failing criteria (period)</th></tr></thead><tbody>'
+      + capRows.map((r) => r.caps.map((c) => '<tr><td class="d">' + esc(r.name) + '</td><td>' + esc(DA.fmtMonth(c.month)) + '</td><td>' + esc(c.kpis.map((id) => toolKpi(r.toolId, id)).join(', ')) + '</td><td>' + esc(r.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>').join('')).join('') + '</tbody></table>'
+      : '<p class="note">No department was below target two months running in this period.</p>';
+    // 6. by nurse
+    const nurseRows = (extra.nurses || []);
+    const otherOf = (staffId) => { const hit = extra.audits.map((x) => DA.nursesOf(x).find((y) => String(y.staffId) === String(staffId) && y.fromOtherDept)).find(Boolean); return hit ? (hit.homeDept || 'other dept') + ' · ' + (hit.assignment || 'Deployed') : ''; };
+    const nurses = nurseRows.length ? '<table class="kt"><thead><tr><th>#</th><th>Nurse</th><th>ID · designation</th><th class="n">Records</th><th class="n">Accuracy</th><th class="n">Pass rate</th><th class="n">Critical</th><th>Top failing</th></tr></thead><tbody>'
+      + nurseRows.map((b, i) => { const s2 = b.summary; const o = b.staffId ? otherOf(b.staffId) : '';
+        return '<tr><td class="n">' + (i + 1) + '</td><td><b>' + esc(b.label) + '</b>' + (o ? '<br><small>from ' + esc(o) + '</small>' : '') + '</td><td>' + esc(b.sub || '') + '</td><td class="n">' + s2.records + '</td><td class="n ' + band(s2.accuracy) + '">' + (s2.accuracy == null ? '—' : s2.accuracy + '%') + '</td><td class="n">' + (s2.records ? DA.round1(s2.pass / s2.records * 100) + '%' : '—') + '</td><td class="n">' + (s2.criticalRecords || '') + '</td><td>' + esc(s2.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>'; }).join('')
+      + '</tbody></table><div class="legend">A shared record counts under each of its nurses.</div>' : '<p class="note">No nurse audited.</p>';
+    // 7. register
+    const audits = extra.audits.slice().sort((x, y) => (x.date || '').localeCompare(y.date || '') || String(x.deptName).localeCompare(String(y.deptName)));
+    const register = audits.length ? '<table class="kt rg"><thead><tr><th>#</th><th>Date</th><th>Department / area</th><th>UHID</th><th>Nurse(s)</th><th>Auditor</th><th class="n">Y/N/NA</th><th class="n">Score</th><th>Grade</th><th>Result</th><th>Status</th></tr></thead><tbody>'
+      + audits.map((x, i) => { const r = x.result || {};
+        return '<tr><td class="n">' + (i + 1) + '</td><td>' + esc(DA.fmtDate(x.date)) + (x.shift ? '<small>' + esc(x.shift) + '</small>' : '') + '</td><td>' + esc(x.deptName) + (x.area ? '<small>' + esc(x.area) + '</small>' : '') + '</td><td>' + esc(x.uhid || '') + '</td><td>'
+          + DA.nursesOf(x).map((y) => esc(y.name) + (y.empId ? ' (' + esc(y.empId) + ')' : '') + (y.fromOtherDept ? ' <span class="chip">other dept</span>' : '')).join('<br>') + '</td><td>' + esc((x.auditor && x.auditor.name) || '') + '</td><td class="n">' + (r.yes != null ? r.yes + '/' + r.no + '/' + r.na : '') + '</td><td class="n"><b>' + (r.pct == null ? '—' : r.pct + '%') + '</b></td><td>' + esc(r.gradeLabel || '') + ((r.criticalFails || []).length ? '<small>' + r.criticalFails.length + ' critical</small>' : '') + '</td><td><b>' + esc(r.result || '') + '</b></td><td>' + esc(DA.STATUS_LABEL[x.status] || x.status) + '</td></tr>'; }).join('')
+      + '</tbody></table>' + (extra.more ? '<p class="note">Only the newest 500 audits are listed — choose a shorter period for the full register.</p>' : '') : '<p class="note">No audit in this period.</p>';
+
+    const body = reportHead(data, 'Complete Audit Report')
+      + sec('Summary') + summaryTable(data, extra)
+      + sec('Department KPI report') + (tools.length ? tools.map((t) => kpiSection(data, t)).join('') : '<p class="note">No audit in this period.</p>')
+      + sec('Trend by month') + trend
+      + sec('Criterion gap analysis — the criteria most often marked \'No\'') + (gaps || '<p class="note">No audit in this period.</p>')
+      + sec('Corrective action plans due') + caps
+      + sec('Results by nurse') + nurses
+      + sec('Audit register') + register
+      + '<p class="note blk">Grades: ≥ 95% Excellent · 90–94.9% Good · 80–89.9% Needs improvement · < 80% Unsatisfactory. PASS = ≥ 90% and no critical criterion marked \'No\'. N/A is excluded from scoring.</p>'
+      + signBlock() + footer();
+    return { body, title: 'Documentation Audit complete report — ' + label, file: 'Documentation-Audit-complete-report_' + label.replace(/\W+/g, '-') };
   }
   async function openPrint(log, doc, landscape) {
     const w = window.open('', '_blank');   // inside the click (pop-up blockers); filled once the server has logged it
@@ -1343,8 +1471,26 @@
   }
   const printAudit = (a, tool) => openPrint(a ? { kind: 'audit', id: a.id } : { kind: 'blank' }, auditDoc(a, tool), false);
   const pdfAudit = (a, tool) => pdfFrom({ kind: 'audit', id: a.id }, auditDoc(a, tool), false);
-  const printReport = (data, label) => openPrint({ kind: 'report', from: data.months[0], to: data.months[data.months.length - 1] }, reportDoc(data, label), true);
-  const pdfReport = (data, label) => pdfFrom({ kind: 'report', from: data.months[0], to: data.months[data.months.length - 1] }, reportDoc(data, label), true);
+  const printReport = (data) => openPrint({ kind: 'report', from: data.months[0], to: data.months[data.months.length - 1] }, reportDoc(data), true);
+  const pdfReport = (data) => pdfFrom({ kind: 'report', from: data.months[0], to: data.months[data.months.length - 1] }, reportDoc(data), true);
+  // The complete report needs the nurse breakdown and the audit list too: fetched, then printed.
+  async function completeReport(data, dept, pdf) {
+    const from = data.months[0], to = data.months[data.months.length - 1];
+    const q = 'from=' + from + '&to=' + to + (dept ? '&dept=' + encodeURIComponent(dept) : '');
+    const log = { kind: 'report', complete: true, from, to, dept: dept || undefined };
+    const w = pdf ? null : window.open('', '_blank');   // inside the click: pop-up blockers
+    try {
+      const [s2, a2] = await Promise.all([api('/api/doc-audit/summary?' + q + '&by=nurse'), api('/api/doc-audit/audits?from=' + from + '-01&to=' + to + '-31' + (dept ? '&dept=' + encodeURIComponent(dept) : ''))]);
+      const extra = { nurses: s2.breakdown || [], audits: (a2.audits || []).filter((x) => x.status !== 'draft'), more: !!a2.more };
+      const doc = completeDoc(Object.assign({}, data, { deptName: dept ? ((data.rows.find((r) => r.deptId === dept) || {}).name || '') : '' }), extra);
+      if (pdf) return pdfFrom(log, doc, true);
+      await post('/api/doc-audit/print', log);
+      if (!w) { toast('Allow pop-ups for this site to print.', 'error'); return; }
+      w.document.open();
+      w.document.write('<!doctype html><html><head><meta charset="utf-8"><title>' + esc(doc.title) + '</title><style>@page{size:A4 landscape;margin:11mm}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{margin:0;padding:14px}@media print{body{padding:0}}' + PRINT_CSS + '</style></head><body><div class="dap">' + doc.body + '</div><script>window.onload=function(){setTimeout(function(){window.print();},250);};<\/script></body></html>');
+      w.document.close();
+    } catch (e) { if (w) w.close(); toast(e.message, 'error'); }
+  }
 
   /* ============================================================ the shell === */
   function DocAuditView({ view, audit, dept, nurse, setRoute }) {
