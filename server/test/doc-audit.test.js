@@ -502,5 +502,21 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   // the tool editor can no longer add one
   assert.deepEqual(DA.KPI_FORMULAS, ['accuracy', 'critical', 'subset']);
 
+  /* ---- anaesthesia type: Epidural + a typed answer (Other) ---- */
+  const otSeed = catalogue.TOOLS.find((t) => t.id === 'ot20').header.extra.find((f) => f.id === 'anaesthesia');
+  assert.ok(otSeed.other && otSeed.options.indexOf('Epidural') >= 0, 'new installs: OT offers Epidural and Other');
+  const ot = docAudit._mem.docAuditTools.get('ot20');
+  ot.header = Object.assign({}, ot.header, { extra: ot.header.extra.map((f) => (f.id === 'anaesthesia' ? { id: 'anaesthesia', label: 'Anaesthesia type', type: 'select', options: ['', 'GA', 'Regional', 'LA', 'Sedation', 'Admin own'] } : f)) });
+  docAudit._mem.docAuditTools.set('ot20', ot);
+  const otRev = ot.revision;
+  docAudit._mem.cfg = Object.assign({}, docAudit._mem.cfg, { anaesOtherAt: undefined });
+  assert.equal(await docAudit.ensureAnaesOther(13000), true);
+  const an = docAudit._mem.docAuditTools.get('ot20').header.extra.find((f) => f.id === 'anaesthesia');
+  assert.deepEqual(an.options, ['', 'GA', 'Regional', 'Epidural', 'LA', 'Sedation', 'Admin own'], 'Epidural after Regional, the admin choice kept');
+  assert.equal(an.other, true);
+  assert.equal(docAudit._mem.docAuditTools.get('ot20').revision, otRev, 'header only: no revision bump');
+  assert.equal(docAudit._mem.docAuditTools.get('cath20').header.extra.find((f) => f.id === 'anaesthesia').other, true, 'Cath Lab: Other too');
+  assert.equal(await docAudit.ensureAnaesOther(13500), false, 'once only');
+
   console.log('doc-audit: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

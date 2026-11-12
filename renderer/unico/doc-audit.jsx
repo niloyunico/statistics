@@ -495,6 +495,24 @@
     </div>;
   }
 
+  /* A choice field; with `other` on, "Other — type…" opens a text box and the typed words are the answer. */
+  const OTHER = '__other__';
+  function ChoiceField({ f, value, onChange }) {
+    const opts = f.options || [''];
+    const v = value || '';
+    const typed = !!v && opts.indexOf(v) < 0;
+    const [typing, setTyping] = useState(typed);
+    const showBox = f.other && (typing || typed);
+    return <div>
+      <select className="da-sel" value={showBox ? OTHER : v} onChange={(e) => { if (e.target.value === OTHER) { setTyping(true); onChange(''); } else { setTyping(false); onChange(e.target.value); } }}>
+        {opts.map((o) => <option key={o} value={o}>{o || '—'}</option>)}
+        {f.other && <option value={OTHER}>Other — type…</option>}
+        {!f.other && typed && <option value={v}>{v}</option>}
+      </select>
+      {showBox && <input className="da-in" style={{ marginTop: 6 }} autoFocus={!typed} placeholder={'Type the ' + String(f.label || 'answer').toLowerCase()} value={v} maxLength={200} onChange={(e) => onChange(e.target.value)} />}
+    </div>;
+  }
+
   /* ============================================================ audit form === */
   function AuditForm({ meta, auditId, initialDept, setRoute }) {
     const [loaded, setLoaded] = useState(!auditId ? { audit: null, tool: null } : null);
@@ -653,7 +671,7 @@
                 <AldreteField value={form.extra[f.id]} readOnly={readOnly} onChange={(v) => set('extra', Object.assign({}, form.extra, { [f.id]: v }))} /></div>
             : <div className="da-f" key={f.id}><label>{f.label}</label>
             {readOnly ? <div style={{ fontSize: 13, paddingTop: 6 }}>{form.extra[f.id] || '—'}</div>
-              : f.type === 'select' ? <select className="da-sel" value={form.extra[f.id] || ''} onChange={(e) => set('extra', Object.assign({}, form.extra, { [f.id]: e.target.value }))}>{(f.options || ['']).map((o) => <option key={o} value={o}>{o || '—'}</option>)}</select>
+              : f.type === 'select' ? <ChoiceField f={f} value={form.extra[f.id]} onChange={(v) => set('extra', Object.assign({}, form.extra, { [f.id]: v }))} />
                 : <input className="da-in" value={form.extra[f.id] || ''} onChange={(e) => set('extra', Object.assign({}, form.extra, { [f.id]: e.target.value }))} />}</div>)}
           <div className="da-f" style={{ gridColumn: '1 / -1' }}><label>Nurse(s) audited (auditees)</label>
             <NursePicker meta={meta} deptId={form.deptId} value={form.nurses} onChange={(l) => set('nurses', l)} bad={bad('nurse')} disabled={readOnly} excludeId={meta.isAdmin ? form.auditorStaffId : null} />
@@ -1204,7 +1222,8 @@
                   return <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(140px,1fr) 100px minmax(140px,2fr) auto', gap: 8, marginBottom: 6 }}>
                     <input className="da-in" value={f.label} placeholder="Label" onChange={(e) => sf('label', e.target.value)} />
                     <select className="da-sel" value={f.type} onChange={(e) => sf('type', e.target.value)}><option value="text">Text</option><option value="select">Choice</option><option value="aldrete">Aldrete scale</option></select>
-                    {f.type === 'select' ? <input className="da-in" placeholder="Choices separated by ;" value={(f.options || []).filter(Boolean).join('; ')} onChange={(e) => sf('options', [''].concat(e.target.value.split(';').map((x) => x.trim())))} /> : <span />}
+                    {f.type === 'select' ? <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input className="da-in" style={{ flex: 1 }} placeholder="Choices separated by ;" value={(f.options || []).filter(Boolean).join('; ')} onChange={(e) => sf('options', [''].concat(e.target.value.split(';').map((x) => x.trim())))} />
+                      <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: 11.5, whiteSpace: 'nowrap' }} title="Adds 'Other — type…': the auditor can type an answer that is not in the list"><input type="checkbox" checked={!!f.other} onChange={(e) => sf('other', e.target.checked)} />Other (typed)</label></div> : <span />}
                     <button className="da-btn sm danger" onClick={() => set('header', Object.assign({}, d.header, { extra: d.header.extra.filter((_, j) => j !== i) }))}>×</button></div>; })}
                 <button className="da-btn sm" onClick={() => set('header', Object.assign({}, d.header, { extra: ((d.header || {}).extra || []).concat([{ id: '', label: '', type: 'text' }]) }))}>+ Field</button></div>
             </div>

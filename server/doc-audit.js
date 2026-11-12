@@ -318,6 +318,32 @@ async function ensureKpiTrim(now) {
   await patchConfig({ kpiTrimAt: now });
   return true;
 }
+/* The anaesthesia type of the OT and Cath Lab tools takes a typed answer too ("Other — type…"),
+   and the OT list offers Epidural. Once, by the anaesOtherAt marker; header only, no revision bump;
+   an administrator's own choices are kept. */
+async function ensureAnaesOther(now) {
+  const cfg = await getConfig();
+  if (cfg.anaesOtherAt) return false;
+  for (const t of await allDocs(TOOLS)) {
+    const id = t._id || t.id;
+    if (id !== 'ot20' && id !== 'cath20') continue;
+    const h = t.header || {};
+    let changed = false;
+    const extra = (h.extra || []).map((f) => {
+      if (!f || f.id !== 'anaesthesia' || f.type !== 'select') return f;
+      const o = Object.assign({}, f, { options: (f.options || ['']).slice() });
+      if (!o.other) { o.other = true; changed = true; }
+      if (id === 'ot20' && o.options.indexOf('Epidural') < 0) { const at = o.options.indexOf('Regional'); o.options.splice(at >= 0 ? at + 1 : o.options.length, 0, 'Epidural'); changed = true; }
+      return o;
+    });
+    if (!changed) continue;
+    const next = Object.assign({}, t, { header: Object.assign({}, h, { extra }), updatedAt: now, updatedBy: 'system',
+      history: (t.history || []).concat([{ at: now, by: 'system', action: 'Anaesthesia type: ' + (id === 'ot20' ? 'Epidural added; ' : '') + 'a typed answer allowed (Other)' }]).slice(-100) });
+    if (!(await putDoc(TOOLS, next, t.updatedAt))) return false;   // changed meanwhile: try again next request
+  }
+  await patchConfig({ anaesOtherAt: now });
+  return true;
+}
 async function liveTools() { return (await allDocs(TOOLS)).filter(DA.isLiveTool).sort((a, b) => (a.order || 0) - (b.order || 0)); }
 
 /* ------------------------------------------------------------ departments --- */
@@ -489,7 +515,7 @@ function pickTool(b, cur) {
     if (!id || extra.some((x) => x.id === id) || ['area', 'date', 'shift', 'uhid', 'bed'].indexOf(id) >= 0) id = 'f' + (extra.length + 1);
     const type = f.type === 'select' ? 'select' : f.type === 'aldrete' ? 'aldrete' : 'text';
     const row = { id, label: str(f.label, 80), type };
-    if (type === 'select') { const opts = (Array.isArray(f.options) ? f.options : String(f.options || '').split(/\n|;/)).map((o) => str(o, 80)).filter((o, j, arr) => arr.indexOf(o) === j).slice(0, 20); row.options = [''].concat(opts.filter(Boolean)); }
+    if (type === 'select') { const opts = (Array.isArray(f.options) ? f.options : String(f.options || '').split(/\n|;/)).map((o) => str(o, 80)).filter((o, j, arr) => arr.indexOf(o) === j).slice(0, 20); row.options = [''].concat(opts.filter(Boolean)); if (f.other) row.other = true; }
     extra.push(row);
   });
   out.header = {
@@ -627,6 +653,7 @@ function mount(app, opts) {
     await ensureOtPostopMerge(now());
     await ensureCathPostopMerge(now());
     await ensureKpiTrim(now());
+    await ensureAnaesOther(now());
     return a;
   };
   const admin = (res, a) => { if (a.unrestricted) return true; res.status(403).json({ ok: false, error: 'Only an administrator can do this.' }); return false; };
@@ -1326,4 +1353,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, ensureCathPostopMerge, ensureKpiTrim, cfgFor, _mem: mem };
+module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, ensureCathPostopMerge, ensureKpiTrim, ensureAnaesOther, cfgFor, _mem: mem };

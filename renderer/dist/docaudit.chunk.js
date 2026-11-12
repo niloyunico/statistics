@@ -1227,6 +1227,48 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       key: i
     }, p.message)), problems.length > 5 && React.createElement("li", null, "\u2026and ", problems.length - 5, " more"))));
   }
+  const OTHER = '__other__';
+  function ChoiceField({
+    f,
+    value,
+    onChange
+  }) {
+    const opts = f.options || [''];
+    const v = value || '';
+    const typed = !!v && opts.indexOf(v) < 0;
+    const [typing, setTyping] = useState(typed);
+    const showBox = f.other && (typing || typed);
+    return React.createElement("div", null, React.createElement("select", {
+      className: "da-sel",
+      value: showBox ? OTHER : v,
+      onChange: e => {
+        if (e.target.value === OTHER) {
+          setTyping(true);
+          onChange('');
+        } else {
+          setTyping(false);
+          onChange(e.target.value);
+        }
+      }
+    }, opts.map(o => React.createElement("option", {
+      key: o,
+      value: o
+    }, o || '—')), f.other && React.createElement("option", {
+      value: OTHER
+    }, "Other \u2014 type\u2026"), !f.other && typed && React.createElement("option", {
+      value: v
+    }, v)), showBox && React.createElement("input", {
+      className: "da-in",
+      style: {
+        marginTop: 6
+      },
+      autoFocus: !typed,
+      placeholder: 'Type the ' + String(f.label || 'answer').toLowerCase(),
+      value: v,
+      maxLength: 200,
+      onChange: e => onChange(e.target.value)
+    }));
+  }
   function AuditForm({
     meta,
     auditId,
@@ -1686,16 +1728,13 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         fontSize: 13,
         paddingTop: 6
       }
-    }, form.extra[f.id] || '—') : f.type === 'select' ? React.createElement("select", {
-      className: "da-sel",
-      value: form.extra[f.id] || '',
-      onChange: e => set('extra', Object.assign({}, form.extra, {
-        [f.id]: e.target.value
+    }, form.extra[f.id] || '—') : f.type === 'select' ? React.createElement(ChoiceField, {
+      f: f,
+      value: form.extra[f.id],
+      onChange: v => set('extra', Object.assign({}, form.extra, {
+        [f.id]: v
       }))
-    }, (f.options || ['']).map(o => React.createElement("option", {
-      key: o,
-      value: o
-    }, o || '—'))) : React.createElement("input", {
+    }) : React.createElement("input", {
       className: "da-in",
       value: form.extra[f.id] || '',
       onChange: e => set('extra', Object.assign({}, form.extra, {
@@ -3738,12 +3777,34 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         value: "select"
       }, "Choice"), React.createElement("option", {
         value: "aldrete"
-      }, "Aldrete scale")), f.type === 'select' ? React.createElement("input", {
+      }, "Aldrete scale")), f.type === 'select' ? React.createElement("div", {
+        style: {
+          display: 'flex',
+          gap: 8,
+          alignItems: 'center'
+        }
+      }, React.createElement("input", {
         className: "da-in",
+        style: {
+          flex: 1
+        },
         placeholder: "Choices separated by ;",
         value: (f.options || []).filter(Boolean).join('; '),
         onChange: e => sf('options', [''].concat(e.target.value.split(';').map(x => x.trim())))
-      }) : React.createElement("span", null), React.createElement("button", {
+      }), React.createElement("label", {
+        style: {
+          display: 'flex',
+          gap: 4,
+          alignItems: 'center',
+          fontSize: 11.5,
+          whiteSpace: 'nowrap'
+        },
+        title: "Adds 'Other \u2014 type\u2026': the auditor can type an answer that is not in the list"
+      }, React.createElement("input", {
+        type: "checkbox",
+        checked: !!f.other,
+        onChange: e => sf('other', e.target.checked)
+      }), "Other (typed)")) : React.createElement("span", null), React.createElement("button", {
         className: "da-btn sm danger",
         onClick: () => set('header', Object.assign({}, d.header, {
           extra: d.header.extra.filter((_, j) => j !== i)

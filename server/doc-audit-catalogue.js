@@ -115,7 +115,7 @@ const OT = {
     bedLabel: 'OT / room no.',
     extra: [
       { id: 'procedure', label: 'Procedure', type: 'text' },
-      { id: 'anaesthesia', label: 'Anaesthesia type', type: 'select', options: ['', 'GA', 'Regional', 'LA', 'Sedation'] },
+      { id: 'anaesthesia', label: 'Anaesthesia type', type: 'select', options: ['', 'GA', 'Regional', 'Epidural', 'LA', 'Sedation'], other: true },
       { id: 'caseType', label: 'Case (sample rule 7.1)', type: 'select', options: ['', 'Elective', 'Emergency / after-hours', 'With implant or specimen'] },
     ],
   },
@@ -180,7 +180,7 @@ const CATH = {
     bedLabel: 'Cath Lab / room no.',
     extra: [
       { id: 'procedure', label: 'Procedure', type: 'text' },
-      { id: 'anaesthesia', label: 'Sedation / anaesthesia', type: 'select', options: ['', 'LA', 'Sedation', 'GA'] },
+      { id: 'anaesthesia', label: 'Sedation / anaesthesia', type: 'select', options: ['', 'LA', 'Sedation', 'GA'], other: true },
       { id: 'caseType', label: 'Case (sample rule 7.1)', type: 'select', options: ['', 'Elective', 'Emergency / after-hours', 'With implant or device'] },
     ],
   },
