@@ -891,7 +891,9 @@
   function Reports({ meta, setRoute }) {
     const ym = meta.month;
     const PRESETS = [['m0', 'This month', ym, ym], ['m1', 'Last month', DA.addMonth(ym, -1), DA.addMonth(ym, -1)], ['q', 'Last 3 months', DA.addMonth(ym, -2), ym], ['h', 'Last 6 months', DA.addMonth(ym, -5), ym], ['y', 'This year', ym.slice(0, 4) + '-01', ym]];
-    const [p, setP] = useState({ from: DA.addMonth(ym, -1), to: DA.addMonth(ym, -1), dept: '', by: '' });
+    // Opens on THIS month — the month audits are being done (Last month was empty for a new module).
+    const [p, setP] = useState({ from: ym, to: ym, dept: '', by: '' });
+    const [latest, setLatest] = useState(null);
     const [data, setData] = useState(null);
     const [err, setErr] = useState('');
     const [tab, setTab] = useState(null);
@@ -901,6 +903,19 @@
       api('/api/doc-audit/summary?from=' + p.from + '&to=' + p.to + (p.dept ? '&dept=' + encodeURIComponent(p.dept) : '') + (p.by ? '&by=' + p.by : '')).then(setData).catch((e) => setErr(e.message));
     }, [p.from, p.to, p.dept, p.by]);
     useEffect(() => { load(); }, [load]);
+    // An empty period: where are the latest audits? (newest first; drafts are not results)
+    useEffect(() => {
+      setLatest(null);
+      if (!data || data.overall.total.records > 0) return;
+      let live = true;
+      api('/api/doc-audit/audits?from=' + DA.addMonth(ym, -11) + '-01' + (p.dept ? '&dept=' + encodeURIComponent(p.dept) : '')).then((j) => {
+        const done = (j.audits || []).filter((x) => x.status !== 'draft');
+        if (!live || !done.length) return;
+        const m = done[0].month;
+        setLatest({ month: m, n: done.filter((x) => x.month === m).length });
+      }).catch(() => {});
+      return () => { live = false; };
+    }, [data]);
     const set = (k, v) => setP((x) => Object.assign({}, x, { [k]: v }));
     const toolsShown = data ? data.tools.filter((t) => data.rows.some((r) => r.toolId === t.id)) : [];
     const cur = toolsShown.find((t) => t.id === tab) || toolsShown[0];
@@ -925,6 +940,8 @@
             <button className="da-btn" onClick={excel}>Excel</button></>}
         </div>
         {err && <div className="da-banner red">{err}</div>}
+        {data && latest && <div className="da-banner blue"><div style={{ flex: 1 }}>No completed audit in <b>{periodLabel(data.months)}</b>. Your latest audits are in <b>{DA.fmtMonth(latest.month)}</b> ({latest.n}).</div>
+          <button className="da-btn sm pri" onClick={() => setP((x) => Object.assign({}, x, { from: latest.month, to: latest.month }))}>Show {DA.fmtMonth(latest.month)}</button></div>}
         {!data ? <div className="da-card da-empty">Building the report…</div> : <>
           <div className="da-tiles">
             <div className="da-tile"><span>Records audited</span><b>{data.overall.total.records}</b><small>{label}</small></div>

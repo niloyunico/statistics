@@ -2530,11 +2530,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const ym = meta.month;
     const PRESETS = [['m0', 'This month', ym, ym], ['m1', 'Last month', DA.addMonth(ym, -1), DA.addMonth(ym, -1)], ['q', 'Last 3 months', DA.addMonth(ym, -2), ym], ['h', 'Last 6 months', DA.addMonth(ym, -5), ym], ['y', 'This year', ym.slice(0, 4) + '-01', ym]];
     const [p, setP] = useState({
-      from: DA.addMonth(ym, -1),
-      to: DA.addMonth(ym, -1),
+      from: ym,
+      to: ym,
       dept: '',
       by: ''
     });
+    const [latest, setLatest] = useState(null);
     const [data, setData] = useState(null);
     const [err, setErr] = useState('');
     const [tab, setTab] = useState(null);
@@ -2546,6 +2547,23 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     useEffect(() => {
       load();
     }, [load]);
+    useEffect(() => {
+      setLatest(null);
+      if (!data || data.overall.total.records > 0) return;
+      let live = true;
+      api('/api/doc-audit/audits?from=' + DA.addMonth(ym, -11) + '-01' + (p.dept ? '&dept=' + encodeURIComponent(p.dept) : '')).then(j => {
+        const done = (j.audits || []).filter(x => x.status !== 'draft');
+        if (!live || !done.length) return;
+        const m = done[0].month;
+        setLatest({
+          month: m,
+          n: done.filter(x => x.month === m).length
+        });
+      }).catch(() => {});
+      return () => {
+        live = false;
+      };
+    }, [data]);
     const set = (k, v) => setP(x => Object.assign({}, x, {
       [k]: v
     }));
@@ -2634,7 +2652,19 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       onClick: excel
     }, "Excel"))), err && React.createElement("div", {
       className: "da-banner red"
-    }, err), !data ? React.createElement("div", {
+    }, err), data && latest && React.createElement("div", {
+      className: "da-banner blue"
+    }, React.createElement("div", {
+      style: {
+        flex: 1
+      }
+    }, "No completed audit in ", React.createElement("b", null, periodLabel(data.months)), ". Your latest audits are in ", React.createElement("b", null, DA.fmtMonth(latest.month)), " (", latest.n, ")."), React.createElement("button", {
+      className: "da-btn sm pri",
+      onClick: () => setP(x => Object.assign({}, x, {
+        from: latest.month,
+        to: latest.month
+      }))
+    }, "Show ", DA.fmtMonth(latest.month))), !data ? React.createElement("div", {
       className: "da-card da-empty"
     }, "Building the report\u2026") : React.createElement(React.Fragment, null, React.createElement("div", {
       className: "da-tiles"

@@ -152,7 +152,7 @@ async function ensureCathSplit(now) {
     const areas = (h.areas || []).filter((x) => !/^cath/i.test(String(x)));
     if (areas.indexOf(catalogue.POSTOP_AREA) < 0) areas.push(catalogue.POSTOP_AREA);
     const extra = (h.extra || []).slice();
-    catalogue.ALDRETE_FIELDS.forEach((f) => { if (!extra.some((x) => x.id === f.id)) extra.push(Object.assign({}, f)); });
+    // (the Aldrete score is a checklist item since ensureAldreteItem — no header boxes)
     const crits = (ot.criteria || []).map((c) => (c.id === 'c16' || c.id === 'c17' ? Object.assign({}, c, { active: false }) : Object.assign({}, c)));
     crits.filter((c) => c.active !== false).forEach((c, i) => { c.no = i + 1; });
     let guide = (ot.naGuide || []).map((g) => Object.assign({}, g, { areas: (g.areas || []).filter((x) => !/^cath/i.test(String(x))), na: (g.na || []).filter((x) => x !== 'c16' && x !== 'c17') }))
@@ -173,6 +173,39 @@ async function ensureCathSplit(now) {
   const names = {}; (await allDepts()).forEach((d) => { names[d.id] = d.name; });
   Object.keys(depts).forEach((id) => { if (depts[id] && depts[id].toolId === 'ot20' && /cath/i.test(id + ' ' + (names[id] || ''))) depts[id] = Object.assign({}, depts[id], { toolId: 'cath20' }); });
   await patchConfig({ cathSplitAt: now, depts });
+  return true;
+}
+/* The Aldrete score is a CHECKLIST item on the OT and Cath Lab tools ("documented on arrival and
+   before discharge from recovery"), not header scoring boxes. Once, on its own marker: c21 added
+   after the recovery record (c18), the aldreteIn / aldreteOut header fields dropped, default names
+   updated, criteria renumbered, revision +1. Audits already filled keep their frozen criteria. */
+async function ensureAldreteItem(now) {
+  const cfg = await getConfig();
+  if (cfg.aldreteItemAt) return false;
+  const names = { ot20: ['OT Documentation Accuracy Audit (19 points)', 'OT 19-point', /^OT Documentation Accuracy Audit \(18 points\)$/, /^OT 18-point$/],
+    cath20: ['Cath Lab Documentation Accuracy Audit (21 points)', 'Cath Lab 21-point', /^Cath Lab Documentation Accuracy Audit \(20 points\)$/, /^Cath Lab 20-point$/] };
+  for (const id of ['ot20', 'cath20']) {
+    const t = await getDoc(TOOLS, id);
+    if (!t) continue;
+    const crits = (t.criteria || []).map((c) => Object.assign({}, c));
+    const had = crits.some((c) => c.id === 'c21' || /aldrete/i.test(String(c.text || '')) && c.id !== 'c18');
+    if (!had) {
+      const at = crits.findIndex((c) => c.id === 'c18');
+      crits.splice(at >= 0 ? at + 1 : crits.length, 0, Object.assign({}, catalogue.ALDRETE_ITEM));
+    }
+    const order = (t.sections || []).map((x) => x.id);
+    crits.filter((c) => c.active !== false).sort((p, q) => order.indexOf(p.sectionId) - order.indexOf(q.sectionId) || crits.indexOf(p) - crits.indexOf(q)).forEach((c, i) => { c.no = i + 1; });
+    const h = t.header || {};
+    const extra = (h.extra || []).filter((f) => !(f.type === 'aldrete' && (f.id === 'aldreteIn' || f.id === 'aldreteOut')));
+    const n = names[id];
+    if (had && extra.length === (h.extra || []).length) continue;
+    const next = Object.assign({}, t, { criteria: crits, header: Object.assign({}, h, { extra }),
+      name: n[2].test(t.name || '') ? n[0] : t.name, short: n[3].test(t.short || '') ? n[1] : t.short,
+      revision: (t.revision || 1) + (had ? 0 : 1), updatedAt: now, updatedBy: 'system',
+      history: (t.history || []).concat([{ at: now, by: 'system', action: (had ? '' : 'Aldrete score added as checklist item (not critical) — revision ' + ((t.revision || 1) + 1) + '; ') + 'Aldrete header boxes removed' }]).slice(-100) });
+    if (!(await putDoc(TOOLS, next, t.updatedAt))) return false;   // changed meanwhile: try again next request
+  }
+  await patchConfig({ aldreteItemAt: now });
   return true;
 }
 async function liveTools() { return (await allDocs(TOOLS)).filter(DA.isLiveTool).sort((a, b) => (a.order || 0) - (b.order || 0)); }
@@ -479,6 +512,7 @@ function mount(app, opts) {
     }
     await ensureSeed(now());
     await ensureCathSplit(now());
+    await ensureAldreteItem(now());
     return a;
   };
   const admin = (res, a) => { if (a.unrestricted) return true; res.status(403).json({ ok: false, error: 'Only an administrator can do this.' }); return false; };
@@ -1167,4 +1201,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, cfgFor, _mem: mem };
+module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, cfgFor, _mem: mem };

@@ -21,6 +21,10 @@ const range = (a, b) => { const out = []; for (let i = a; i <= b; i++) out.push(
 const POSTOP_AREA = 'Post-operative / Recovery (PACU)';
 const POSTOP_GUIDE = { areas: [POSTOP_AREA], never: ['c1', 'c20'], note: 'Post-operative / recovery record: Sections A and E apply; items of the operation itself (Sections B–C) that were not part of this record may be marked N/A.' };
 // The Aldrete post-anaesthesia recovery score (criterion 18 checks it is recorded): recorded with the audit, not scored.
+// The Aldrete score as a CHECKLIST item on the OT and Cath Lab tools (was it documented?) — not critical.
+const ALDRETE_ITEM = { id: 'c21', no: 0, sectionId: 'E', jci: ['ASC', 'COP'], critical: false, active: true,
+  text: "Aldrete score is documented on arrival in recovery and before discharge from recovery (score ≥ 9 to discharge, or the reason and the anaesthetist's approval are recorded)." };
+// Kept for the tool editor's "Aldrete scale" field type; no longer on the OT / Cath Lab headers.
 const ALDRETE_FIELDS = [
   { id: 'aldreteIn', label: 'Aldrete score — on arrival in recovery', type: 'aldrete' },
   { id: 'aldreteOut', label: 'Aldrete score — at discharge from recovery', type: 'aldrete' },
@@ -90,8 +94,8 @@ const IPD = {
 
 const OT = {
   id: 'ot20', code: 'UHP-NSG-QA-002', version: '1.0', order: 20,
-  name: 'OT Documentation Accuracy Audit (18 points)',
-  short: 'OT 18-point',
+  name: 'OT Documentation Accuracy Audit (19 points)',
+  short: 'OT 19-point',
   scope: 'Every OT (major, minor, emergency, day-care, obstetric) and the post-operative / recovery record (Appendix A of UHP-NSG-QA-002; the Cath Lab has its own tool).',
   cathSplit: true,
   header: {
@@ -102,7 +106,7 @@ const OT = {
       { id: 'procedure', label: 'Procedure', type: 'text' },
       { id: 'anaesthesia', label: 'Anaesthesia type', type: 'select', options: ['', 'GA', 'Regional', 'LA', 'Sedation'] },
       { id: 'caseType', label: 'Case (sample rule 7.1)', type: 'select', options: ['', 'Elective', 'Emergency / after-hours', 'With implant or specimen'] },
-    ].concat(ALDRETE_FIELDS),
+    ],
   },
   sample: { minRecords: 10, note: 'Minimum 10 records per area per month (Major OT, Minor OT, Emergency OT, Day-care OT, Obstetric OT, Cath Lab), randomly selected across all shifts and surgeons/cardiologists. Include at least 2 emergency / after-hours cases per area where available, and at least 1 case with implant or specimen. Each OT / Cath Lab nurse is audited at least once per quarter.' },
   sections: [
@@ -147,13 +151,15 @@ const OT = {
 };
 // Section D (Cath Lab specific) is the Cath Lab tool's; on the OT tool it is switched off — kept, never deleted.
 OT.criteria = OT.criteria.map((c) => (c.id === 'c16' || c.id === 'c17' ? Object.assign({}, c, { active: false }) : c));
+// The Aldrete item right after the recovery record (c18).
+OT.criteria.splice(OT.criteria.findIndex((c) => c.id === 'c18') + 1, 0, Object.assign({}, ALDRETE_ITEM));
 OT.criteria.filter((c) => c.active).forEach((c, i) => { c.no = i + 1; });
 
 /* The Cath Lab: the same QA-002 checklist, word for word, all 20 criteria including Section D. */
 const CATH = {
   id: 'cath20', code: 'UHP-NSG-QA-002 (Cath Lab)', version: '1.0', order: 25,
-  name: 'Cath Lab Documentation Accuracy Audit (20 points)',
-  short: 'Cath Lab 20-point',
+  name: 'Cath Lab Documentation Accuracy Audit (21 points)',
+  short: 'Cath Lab 21-point',
   scope: 'The Cardiac Cath Lab (Appendix A of UHP-NSG-QA-002, all sections including Section D).',
   header: {
     areaLabel: 'Procedure area',
@@ -163,11 +169,11 @@ const CATH = {
       { id: 'procedure', label: 'Procedure', type: 'text' },
       { id: 'anaesthesia', label: 'Sedation / anaesthesia', type: 'select', options: ['', 'LA', 'Sedation', 'GA'] },
       { id: 'caseType', label: 'Case (sample rule 7.1)', type: 'select', options: ['', 'Elective', 'Emergency / after-hours', 'With implant or device'] },
-    ].concat(ALDRETE_FIELDS),
+    ],
   },
   sample: { minRecords: 10, note: 'Minimum 10 Cath Lab records per month, randomly selected across all shifts and cardiologists. Include at least 2 emergency / after-hours cases where available, and at least 1 case with an implant or device. Each Cath Lab nurse is audited at least once per quarter.' },
   sections: OT.sections.map((x) => (x.id === 'D' ? Object.assign({}, x, { title: 'Cath Lab specific' }) : Object.assign({}, x))),
-  criteria: OT.criteria.map((c, i) => Object.assign({}, c, { active: true, no: +c.id.slice(1) })),
+  criteria: OT.criteria.map((c, i) => Object.assign({}, c, { active: true, no: i + 1 })),
   kpis: OT.kpis.map((k) => Object.assign({}, k)),
   naGuide: [
     { areas: ['Cardiac Cath Lab'], note: 'All sections apply, including Section D. Counts (item 8) cover sharps, guidewires, sheaths and swabs used.' },
@@ -309,4 +315,4 @@ function guessTool(dept) {
 const clone = (x) => JSON.parse(JSON.stringify(x));
 const seedTools = () => TOOLS.map(clone);
 
-module.exports = { TOOLS, seedTools, guessTool, POSTOP_AREA, POSTOP_GUIDE, ALDRETE_FIELDS };
+module.exports = { TOOLS, seedTools, guessTool, POSTOP_AREA, POSTOP_GUIDE, ALDRETE_FIELDS, ALDRETE_ITEM };
