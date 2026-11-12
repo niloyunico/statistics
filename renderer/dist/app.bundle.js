@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c924946988","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=ca75ebfb4a","docaudit":"/dist/docaudit.chunk.js?v=3b08d3556f","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c924946988","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=ca75ebfb4a","docaudit":"/dist/docaudit.chunk.js?v=d0237b8f84","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7602,6 +7602,42 @@ window.QI_CORRECTIONS_BY_DEFID = {
     return out;
   }
 
+  /* -------------------------------------------- ward / unit ↔ department --- */
+  /* The tool's Ward / unit list ("Cabin Level 11", "Labour, Delivery & Recovery (LDR)") and the
+     department register ("IPD Cabin 11", id ldr) spell units differently. Keys that meet:
+     the squashed text, the text without its bracket, the abbreviation in brackets, and cabinN
+     for any cabin / level / lvl + number. */
+  const sq = (s) => String(s == null ? '' : s).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '');
+  function unitKeys(text) {
+    const t = String(text == null ? '' : text);
+    const out = new Set();
+    const add = (k) => { if (k) out.add(k); };
+    add(sq(t));
+    add(sq(t.replace(/\([^)]*\)/g, '')));
+    const ab = /\(([^)]+)\)/.exec(t); if (ab) add(sq(ab[1]));
+    const n = /(?:cabin|level|lvl)\D{0,8}?(\d+)/i.exec(t); if (n) add('cabin' + Number(n[1]));
+    return out;
+  }
+  const deptKeys = (d) => { const k = unitKeys(d && d.name); unitKeys(d && d.id).forEach((x) => k.add(x)); return k; };
+  const meets = (a, b) => { for (const x of a) if (b.has(x)) return true; return false; };
+  // Only a tool whose list IS the units (IPD "Ward / unit") links it to the department; an OT
+  // "Procedure area" or an ED zone is a part of any department, never a department.
+  const areasAreUnits = (tool) => /ward|unit/i.test(String((tool && tool.header && tool.header.areaLabel) || ''));
+  // The one ward / unit of the list that is this department; null when none or several match.
+  function areaOfDept(dept, areas) {
+    if (!dept) return null;
+    const dk = deptKeys(dept);
+    const hit = (areas || []).filter((a) => meets(unitKeys(a), dk));
+    return hit.length === 1 ? hit[0] : null;
+  }
+  // The one department of the list that is this ward / unit; null when none or several match.
+  function deptOfArea(area, depts) {
+    if (!area) return null;
+    const ak = unitKeys(area);
+    const hit = (depts || []).filter((d) => meets(ak, deptKeys(d)));
+    return hit.length === 1 ? hit[0] : null;
+  }
+
   /* ------------------------------------------------------- the Aldrete score --- */
   /* The (modified) Aldrete post-anaesthesia recovery score — five signs scored 0–2, total 0–10;
      9 or more meets the discharge criteria. A header field of type 'aldrete' records it with an
@@ -7776,7 +7812,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     has, round1, isDate, isMonth, hospitalNow, addMonth, monthsBetween, fmtMonth, fmtDate, quarterOf,
     ALDRETE, ALDRETE_DISCHARGE, cleanAldrete, aldreteText,
     MAX_NURSES, nursesOf, nurseKey, acksOf, pendingAcks, nurseNames,
-    isLiveTool, activeCriteria, freezeCriteria, guideFor, gradeOf, score, validate,
+    isLiveTool, activeCriteria, freezeCriteria, guideFor, unitKeys, areasAreUnits, areaOfDept, deptOfArea, gradeOf, score, validate,
     kpiValue, summarize, capDue, groupBy, countsInKpi,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;

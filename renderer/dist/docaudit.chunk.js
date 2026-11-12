@@ -519,6 +519,32 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const extra = others.filter(p => !localIds.has(String(p.id)));
     const choices = hits.concat(extra);
     const isOther = p => !all && !localIds.has(String(p.id));
+    useEffect(() => {
+      if (!list || all || disabled) return;
+      let changed = false;
+      const next = picked.map(n => {
+        if (!n || n.staffId == null || n.staffId === '' || n.linked === false) return n;
+        const own = localIds.has(String(n.staffId));
+        if (own && n.fromOtherDept) {
+          changed = true;
+          const o = Object.assign({}, n);
+          delete o.fromOtherDept;
+          delete o.homeDept;
+          delete o.assignment;
+          return o;
+        }
+        if (!own && !n.fromOtherDept) {
+          changed = true;
+          return Object.assign({}, n, {
+            fromOtherDept: true,
+            homeDept: n.department || '',
+            assignment: 'Deployed'
+          });
+        }
+        return n;
+      });
+      if (changed) onChange(next);
+    }, [list]);
     const pick = p => {
       if (self(p) || isPicked(p) || full) return;
       const other = isOther(p);
@@ -1236,9 +1262,14 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       if (auditId) return;
       const d = depts.find(x => x.id === initialDept) || depts.find(x => x.id === lsGet('da_dept')) || depts[0];
       if (!d) return;
-      setForm(blankForm(d.id));
+      setForm(Object.assign(blankForm(d.id), {
+        area: ownArea(d, toolOf(meta, d.cfg.toolId))
+      }));
       setToolId(d.cfg.toolId);
     }, [auditId]);
+    function ownArea(d, t) {
+      return t && DA.areasAreUnits(t) && DA.areaOfDept(d, t.header.areas) || '';
+    }
     function blankForm(deptId) {
       return {
         deptId,
@@ -1329,15 +1360,35 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         [cid]: v
       })
     }));
-    const changeDept = id => {
+    const changeDept = (id, keepArea) => {
       const d = depts.find(x => x.id === id);
       lsSet('da_dept', id);
+      const t = d && !audit ? toolOf(meta, d.cfg.toolId) || tool : tool;
+      const own = d ? ownArea(d, t) : '';
       setForm(f => Object.assign({}, f, {
-        deptId: id,
-        nurses: []
-      }));
+        deptId: id
+      }, keepArea ? {} : own ? {
+        area: own
+      } : DA.areasAreUnits(t) ? {
+        area: ''
+      } : {}));
       if (d && !audit) setToolId(d.cfg.toolId);
     };
+    const changeArea = v => {
+      set('area', v);
+      if (audit || !v || !DA.areasAreUnits(tool)) return;
+      const d = DA.deptOfArea(v, depts);
+      if (d && d.id !== form.deptId) {
+        changeDept(d.id, true);
+        toast('Department set to ' + d.name + ' to match the ward / unit.', 'success');
+      }
+    };
+    const curDept = audit ? {
+      id: audit.deptId,
+      name: audit.deptName
+    } : depts.find(d => d.id === form.deptId);
+    const curOwn = curDept ? ownArea(curDept, tool) : '';
+    const areaClash = !!(form.area && curOwn && form.area !== curOwn);
     const sections = (tool.sections || []).map(s => ({
       s,
       items: criteria.filter(c => c.sectionId === s.id)
@@ -1529,11 +1580,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-sel",
       value: toolId || '',
       onChange: e => {
-        setToolId(e.target.value);
+        const nt = e.target.value;
+        setToolId(nt);
         setForm(f => Object.assign({}, f, {
           answers: {},
           evidence: {},
-          area: '',
+          area: ownArea(depts.find(d => d.id === f.deptId), toolOf(meta, nt)),
           extra: {}
         }));
       }
@@ -1550,7 +1602,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, form.area || '—') : tool.header && tool.header.areas && tool.header.areas.length ? React.createElement("select", {
       className: "da-sel",
       value: form.area,
-      onChange: e => set('area', e.target.value)
+      onChange: e => changeArea(e.target.value)
     }, React.createElement("option", {
       value: ""
     }, "\u2014"), tool.header.areas.map(x => React.createElement("option", {
@@ -1559,7 +1611,14 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-in",
       value: form.area,
       onChange: e => set('area', e.target.value)
-    })), React.createElement("div", {
+    }), areaClash && React.createElement("div", {
+      style: {
+        marginTop: 4,
+        fontSize: 11.5,
+        color: '#8a5a00',
+        lineHeight: 1.35
+      }
+    }, form.area, " is not ", curDept.name, "; nurses and results are counted for ", curDept.name, ".")), React.createElement("div", {
       className: "da-f"
     }, React.createElement("label", null, "Audit date"), readOnly ? React.createElement("div", {
       style: {

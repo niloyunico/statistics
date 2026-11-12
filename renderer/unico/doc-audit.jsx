@@ -296,6 +296,20 @@
     const extra = others.filter((p) => !localIds.has(String(p.id)));
     const choices = hits.concat(extra);
     const isOther = (p) => !all && !localIds.has(String(p.id));
+    // The department's own staff loaded (or the department changed): every register nurse already
+    // picked is judged again against it — "Other dept" dropped for its own nurses, added for others.
+    useEffect(() => {
+      if (!list || all || disabled) return;
+      let changed = false;
+      const next = picked.map((n) => {
+        if (!n || n.staffId == null || n.staffId === '' || n.linked === false) return n;
+        const own = localIds.has(String(n.staffId));
+        if (own && n.fromOtherDept) { changed = true; const o = Object.assign({}, n); delete o.fromOtherDept; delete o.homeDept; delete o.assignment; return o; }
+        if (!own && !n.fromOtherDept) { changed = true; return Object.assign({}, n, { fromOtherDept: true, homeDept: n.department || '', assignment: 'Deployed' }); }
+        return n;
+      });
+      if (changed) onChange(next);
+    }, [list]);
     const pick = (p) => { if (self(p) || isPicked(p) || full) return; const other = isOther(p);
       add(Object.assign({ staffId: String(p.id), empId: String(p.emp_id || ''), name: p.name, designation: p.designation || '', department: p.current_department || '', linked: true },
         other ? { fromOtherDept: true, homeDept: p.current_department || '', assignment: 'Deployed' } : {})); setQ(''); setHi(0); };
@@ -505,9 +519,11 @@
       if (auditId) return;
       const d = depts.find((x) => x.id === initialDept) || depts.find((x) => x.id === lsGet('da_dept')) || depts[0];
       if (!d) return;
-      setForm(blankForm(d.id));
+      setForm(Object.assign(blankForm(d.id), { area: ownArea(d, toolOf(meta, d.cfg.toolId)) }));
       setToolId(d.cfg.toolId);
     }, [auditId]);
+    // The department's own ward / unit in the tool's list ('' when the list is not of units or none matches).
+    function ownArea(d, t) { return (t && DA.areasAreUnits(t) && DA.areaOfDept(d, t.header.areas)) || ''; }
 
     function blankForm(deptId) { return { deptId, area: '', date: meta.today, shift: '', uhid: '', bed: '', extra: {}, nurses: [], answers: {}, evidence: {}, remarks: '', auditorName: meta.name, auditorStaffId: meta.staffId }; }
     function fromAudit(a) { return { deptId: a.deptId, area: a.area || '', date: a.date, shift: a.shift || '', uhid: a.uhid || '', bed: a.bed || '', extra: a.extra || {}, nurses: DA.nursesOf(a), answers: a.answers || {}, evidence: a.evidence || {}, remarks: a.remarks || '', auditorName: (a.auditor && a.auditor.name) || '', auditorStaffId: (a.auditor && a.auditor.staffId) || null }; }
@@ -543,7 +559,25 @@
     const set = (k, v) => setForm((f) => Object.assign({}, f, { [k]: v }));
     const setAns = (cid, v) => setForm((f) => { const answers = Object.assign({}, f.answers); if (answers[cid] === v) delete answers[cid]; else answers[cid] = v; return Object.assign({}, f, { answers }); });
     const setEv = (cid, v) => setForm((f) => Object.assign({}, f, { evidence: Object.assign({}, f.evidence, { [cid]: v }) }));
-    const changeDept = (id) => { const d = depts.find((x) => x.id === id); lsSet('da_dept', id); setForm((f) => Object.assign({}, f, { deptId: id, nurses: [] })); if (d && !audit) setToolId(d.cfg.toolId); };
+    // A new department: its own ward / unit is chosen with it. The nurses stay — the picker judges
+    // them again ("Other dept" or not) against the new department's staff.
+    const changeDept = (id, keepArea) => {
+      const d = depts.find((x) => x.id === id); lsSet('da_dept', id);
+      const t = d && !audit ? toolOf(meta, d.cfg.toolId) || tool : tool;
+      const own = d ? ownArea(d, t) : '';
+      setForm((f) => Object.assign({}, f, { deptId: id }, keepArea ? {} : (own ? { area: own } : (DA.areasAreUnits(t) ? { area: '' } : {}))));
+      if (d && !audit) setToolId(d.cfg.toolId);
+    };
+    // A ward / unit that is another of my departments: the department follows it, so the two never disagree.
+    const changeArea = (v) => {
+      set('area', v);
+      if (audit || !v || !DA.areasAreUnits(tool)) return;
+      const d = DA.deptOfArea(v, depts);
+      if (d && d.id !== form.deptId) { changeDept(d.id, true); toast('Department set to ' + d.name + ' to match the ward / unit.', 'success'); }
+    };
+    const curDept = audit ? { id: audit.deptId, name: audit.deptName } : depts.find((d) => d.id === form.deptId);
+    const curOwn = curDept ? ownArea(curDept, tool) : '';
+    const areaClash = !!(form.area && curOwn && form.area !== curOwn);
     const sections = (tool.sections || []).map((s) => ({ s, items: criteria.filter((c) => c.sectionId === s.id) })).filter((x) => x.items.length);
     const orphan = criteria.filter((c) => !(tool.sections || []).some((s) => s.id === c.sectionId));
     if (orphan.length) sections.push({ s: { id: '_', title: 'Other criteria', jci: '' }, items: orphan });
@@ -602,12 +636,13 @@
             {readOnly || audit ? <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 6 }}>{audit ? audit.deptName : (depts.find((d) => d.id === form.deptId) || {}).name}</div>
               : <select className="da-sel" value={form.deptId} onChange={(e) => changeDept(e.target.value)}>{depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select>}</div>
           {!audit && meta.tools.length > 1 && (meta.isAdmin || meta.allStaff) && <div className="da-f"><label>Audit tool</label>
-            <select className="da-sel" value={toolId || ''} onChange={(e) => { setToolId(e.target.value); setForm((f) => Object.assign({}, f, { answers: {}, evidence: {}, area: '', extra: {} })); }}>{meta.tools.map((t) => <option key={t.id} value={t.id}>{t.short || t.name}</option>)}</select></div>}
+            <select className="da-sel" value={toolId || ''} onChange={(e) => { const nt = e.target.value; setToolId(nt); setForm((f) => Object.assign({}, f, { answers: {}, evidence: {}, area: ownArea(depts.find((d) => d.id === f.deptId), toolOf(meta, nt)), extra: {} })); }}>{meta.tools.map((t) => <option key={t.id} value={t.id}>{t.short || t.name}</option>)}</select></div>}
           <div className="da-f"><label>{(tool.header && tool.header.areaLabel) || 'Area'}</label>
             {readOnly ? <div style={{ fontSize: 13, paddingTop: 6 }}>{form.area || '—'}</div>
               : (tool.header && tool.header.areas && tool.header.areas.length
-                ? <select className="da-sel" value={form.area} onChange={(e) => set('area', e.target.value)}><option value="">—</option>{tool.header.areas.map((x) => <option key={x}>{x}</option>)}</select>
-                : <input className="da-in" value={form.area} onChange={(e) => set('area', e.target.value)} />)}</div>
+                ? <select className="da-sel" value={form.area} onChange={(e) => changeArea(e.target.value)}><option value="">—</option>{tool.header.areas.map((x) => <option key={x}>{x}</option>)}</select>
+                : <input className="da-in" value={form.area} onChange={(e) => set('area', e.target.value)} />)}
+            {areaClash && <div style={{ marginTop: 4, fontSize: 11.5, color: '#8a5a00', lineHeight: 1.35 }}>{form.area} is not {curDept.name}; nurses and results are counted for {curDept.name}.</div>}</div>
           <div className="da-f"><label>Audit date</label>{readOnly ? <div style={{ fontSize: 13, paddingTop: 6 }}>{DA.fmtDate(form.date)}</div> : <input type="date" className={'da-in' + (bad('date') ? ' bad' : '')} max={meta.today} value={form.date} onChange={(e) => set('date', e.target.value)} />}</div>
           <div className="da-f"><label>Shift</label>{readOnly ? <div style={{ fontSize: 13, paddingTop: 6 }}>{form.shift || '—'}</div>
             : <div className="seg">{DA.SHIFTS.map((s) => <button key={s} className={form.shift === s ? 'on' : ''} onClick={() => set('shift', form.shift === s ? '' : s)}>{s}</button>)}</div>}</div>

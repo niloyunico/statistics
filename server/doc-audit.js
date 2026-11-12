@@ -791,11 +791,16 @@ function mount(app, opts) {
         let snap = null;
         if (bn.staffId != null && bn.staffId !== '') {
           snap = had['s:' + String(bn.staffId)] || null;
-          if (snap && snap.fromOtherDept) {
-            // A nurse wrongly flagged before the matcher read comma names whole: re-check and clear it.
+          if (snap) {
+            // Already on the audit: judged again on every save (the department may have changed, or the
+            // matcher learned a spelling). A nurse who has left the register keeps the stored judgement.
             roster = roster || await loadRoster();
             const rec = roster.find((p) => String(p.id) === String(bn.staffId));
-            if (rec && thinStaff([rec], [dept], false).length) { snap = Object.assign({}, snap); delete snap.fromOtherDept; delete snap.homeDept; delete snap.assignment; }
+            if (rec) {
+              const other = !thinStaff([rec], [dept], false).length;
+              if (!other && snap.fromOtherDept) { snap = Object.assign({}, snap, { fromOtherDept: false }); delete snap.homeDept; delete snap.assignment; }
+              else if (other && !snap.fromOtherDept) snap = Object.assign({}, snap, { fromOtherDept: true, homeDept: String(rec.current_department || '') });
+            }
           }
           if (!snap) {
             roster = roster || await loadRoster();

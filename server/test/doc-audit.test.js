@@ -140,6 +140,33 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   res = await call('POST /api/doc-audit/audits', auditor, { body: Object.assign({}, base, { nurses: [{ staffId: 2 }], answers: allYes(IPD) }) });
   assert.equal(res.body.audit.nurses[0].assignment, 'Deployed', 'default reason: deployed');
   await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id } });
+  // A stored judgement is redone on every save: a wrongly flagged own nurse is cleared, a wrongly
+  // unflagged one from another unit is flagged.
+  res = await call('POST /api/doc-audit/audits', auditor, { body: Object.assign({}, base, { nurses: [{ staffId: 1 }, { staffId: 2 }], answers: {} }) });
+  const rjId = res.body.audit.id;
+  const rj = docAudit._mem.docAudits.get(rjId);
+  rj.nurses = [Object.assign({}, rj.nurses[0], { fromOtherDept: true, homeDept: 'Level 9', assignment: 'Overtime' }), Object.assign({}, rj.nurses[1], { fromOtherDept: false })];
+  delete rj.nurses[1].homeDept; delete rj.nurses[1].assignment;
+  docAudit._mem.docAudits.set(rjId, rj);
+  res = await call('PUT /api/doc-audit/audits/:id', auditor, { params: { id: rjId }, body: { nurses: [{ staffId: 1 }, { staffId: 2 }] } });
+  assert.deepEqual(res.body.audit.nurses.map((n) => [n.fromOtherDept, n.homeDept, n.assignment]), [[false, undefined, undefined], [true, 'Emergency', 'Deployed']], 're-judged on save');
+  await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: rjId } });
+
+  /* ---- ward / unit ↔ department (the IPD list and the register spell units differently) ---- */
+  const REG = [['lvl10', 'IPD Cabin Level 10'], ['lvl9', 'IPD Cabin Level 9'], ['ldr', 'Labour , Delivery & Recovery Room'], ['nicu', 'Neonatal ICU'], ['cticu', 'CTVS ICU'], ['ctvs', 'CTVS OT'], ['ot', 'General OT'], ['cust_x', 'IPD Cabin 11']].map(([id, name]) => ({ id, name }));
+  const WARDS = catalogue.TOOLS.find((t) => t.id === 'ipd25').header.areas;
+  const ofName = (n) => REG.find((d) => d.name === n);
+  assert.equal(DA.areaOfDept(ofName('IPD Cabin Level 9'), WARDS), 'Cabin Level 9');
+  assert.equal(DA.areaOfDept(ofName('IPD Cabin 11'), WARDS), 'Cabin Level 11');
+  assert.equal(DA.areaOfDept(ofName('Labour , Delivery & Recovery Room'), WARDS), 'Labour, Delivery & Recovery (LDR)');
+  assert.equal(DA.areaOfDept(ofName('Neonatal ICU'), WARDS), 'Neonatal ICU (NICU)');
+  assert.equal(DA.areaOfDept(ofName('CTVS ICU'), WARDS), 'Cardiac ICU (CT ICU)');
+  assert.equal(DA.areaOfDept(ofName('CTVS OT'), WARDS), null, 'no ward of its own');
+  assert.equal(DA.deptOfArea('Cabin Level 11', REG).id, 'cust_x');
+  assert.equal(DA.deptOfArea('Cabin Level 10', REG).id, 'lvl10');
+  assert.equal(DA.deptOfArea('Cabin Level 10', REG.concat([{ id: 'l10b', name: 'Level 10 Annex' }])), null, 'two matches = none');
+  assert.ok(DA.areasAreUnits(IPD), 'IPD: a list of units');
+  assert.ok(!DA.areasAreUnits(catalogue.TOOLS.find((t) => t.id === 'ot20')), 'OT: procedure areas, never a department');
   res = await call('POST /api/doc-audit/audits', outsider, { body: Object.assign({}, base, { nurse: { staffId: 1 } }) });
   assert.equal(res.status, 403, 'not my department');
   res = await call('POST /api/doc-audit/audits', viewer, { body: Object.assign({}, base, { nurse: { staffId: 1 } }) });

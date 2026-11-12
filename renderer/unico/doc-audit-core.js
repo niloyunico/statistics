@@ -86,6 +86,42 @@
     return out;
   }
 
+  /* -------------------------------------------- ward / unit ↔ department --- */
+  /* The tool's Ward / unit list ("Cabin Level 11", "Labour, Delivery & Recovery (LDR)") and the
+     department register ("IPD Cabin 11", id ldr) spell units differently. Keys that meet:
+     the squashed text, the text without its bracket, the abbreviation in brackets, and cabinN
+     for any cabin / level / lvl + number. */
+  const sq = (s) => String(s == null ? '' : s).toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '');
+  function unitKeys(text) {
+    const t = String(text == null ? '' : text);
+    const out = new Set();
+    const add = (k) => { if (k) out.add(k); };
+    add(sq(t));
+    add(sq(t.replace(/\([^)]*\)/g, '')));
+    const ab = /\(([^)]+)\)/.exec(t); if (ab) add(sq(ab[1]));
+    const n = /(?:cabin|level|lvl)\D{0,8}?(\d+)/i.exec(t); if (n) add('cabin' + Number(n[1]));
+    return out;
+  }
+  const deptKeys = (d) => { const k = unitKeys(d && d.name); unitKeys(d && d.id).forEach((x) => k.add(x)); return k; };
+  const meets = (a, b) => { for (const x of a) if (b.has(x)) return true; return false; };
+  // Only a tool whose list IS the units (IPD "Ward / unit") links it to the department; an OT
+  // "Procedure area" or an ED zone is a part of any department, never a department.
+  const areasAreUnits = (tool) => /ward|unit/i.test(String((tool && tool.header && tool.header.areaLabel) || ''));
+  // The one ward / unit of the list that is this department; null when none or several match.
+  function areaOfDept(dept, areas) {
+    if (!dept) return null;
+    const dk = deptKeys(dept);
+    const hit = (areas || []).filter((a) => meets(unitKeys(a), dk));
+    return hit.length === 1 ? hit[0] : null;
+  }
+  // The one department of the list that is this ward / unit; null when none or several match.
+  function deptOfArea(area, depts) {
+    if (!area) return null;
+    const ak = unitKeys(area);
+    const hit = (depts || []).filter((d) => meets(ak, deptKeys(d)));
+    return hit.length === 1 ? hit[0] : null;
+  }
+
   /* ------------------------------------------------------- the Aldrete score --- */
   /* The (modified) Aldrete post-anaesthesia recovery score — five signs scored 0–2, total 0–10;
      9 or more meets the discharge criteria. A header field of type 'aldrete' records it with an
@@ -260,7 +296,7 @@
     has, round1, isDate, isMonth, hospitalNow, addMonth, monthsBetween, fmtMonth, fmtDate, quarterOf,
     ALDRETE, ALDRETE_DISCHARGE, cleanAldrete, aldreteText,
     MAX_NURSES, nursesOf, nurseKey, acksOf, pendingAcks, nurseNames,
-    isLiveTool, activeCriteria, freezeCriteria, guideFor, gradeOf, score, validate,
+    isLiveTool, activeCriteria, freezeCriteria, guideFor, unitKeys, areasAreUnits, areaOfDept, deptOfArea, gradeOf, score, validate,
     kpiValue, summarize, capDue, groupBy, countsInKpi,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
