@@ -2277,6 +2277,8 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
   // Documentation Audit: which departments they audit ('*' = every department).
   const [audDepts,setAudDepts]=useState(editing&&Array.isArray(initial.auditDepartments)?initial.auditDepartments.slice():[]);
   const [audDeptQ,setAudDeptQ]=useState('');
+  // Documentation audits on staff profiles: its own grant, independent of the module.
+  const [audProfile,setAudProfile]=useState(editing&&initial.auditProfileView===true);
   const toggleAudDept=(id)=>setAudDepts(ds=>id==='*'?(ds.indexOf('*')>=0?[]:['*']):(ds.indexOf(id)>=0?ds.filter(x=>x!==id):[...ds.filter(x=>x!=='*'),id]));
   const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
   const isAdmin=!isPortalAcct&&accessType==='full';
@@ -2527,6 +2529,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
         payload.myDepartments=asActions(perms.mydept).length?myDepts:[];
         payload.deviceDepartments=asActions(perms.devdays).length?devDepts:[];
         payload.auditDepartments=asActions(perms.docaudit).length?audDepts:[];
+        payload.auditProfileView=audProfile===true;
         if(staffLinkDirty){ payload.staffId=staffId!==''?Number(staffId):null; const rec=allStaff.find(x=>String(x.id)===String(staffId)); payload.staffEmpId=(rec&&rec.emp_id)?rec.emp_id:''; }
       }
       // Sent only for the one role the toggle is shown for, so no other kind of account is
@@ -2955,6 +2958,13 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                 {!audDepts.length&&<div style={{fontSize:10.5,color:'var(--rose)',marginTop:6}}>Pick at least one department, or set Documentation Audit back to None.</div>}
               </div>
               ); })()}
+            {!isAdmin&&!isColl&&<div style={{borderTop:'1px solid var(--line-2)',paddingTop:14,marginTop:14}}>
+              <label style={{display:'flex',gap:9,alignItems:'flex-start',cursor:'pointer'}}>
+                <input type="checkbox" checked={audProfile} onChange={e=>setAudProfile(e.target.checked)} style={{marginTop:2}}/>
+                <span><span style={{fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>See documentation audits on staff profiles</span>
+                  <span style={{display:'block',fontSize:10.5,color:'var(--muted)',marginTop:2}}>The "Documentation audits" card on a nurse's staff profile — every department's audits of that nurse. Separate from the Documentation Audit module; administrators always see it.</span></span>
+              </label>
+            </div>}
           </div>
           )}
           {curSec==='data'&&collects&&scopeBlock}

@@ -3407,7 +3407,7 @@ function StaffProfile({
         cycleId: h.cycleId
       })
     }, "Print")))))))))));
-  })(), window.unicoCan && window.unicoCan('docaudit', 'view') && React.createElement(StaffDocAuditCard, {
+  })(), (window.unicoUserPerms && window.unicoUserPerms() === null || window.__UNICO_USER__ && window.__UNICO_USER__.auditProfileView === true) && React.createElement(StaffDocAuditCard, {
     emp: e,
     setRoute: setRoute
   }), canSeePerf() && React.createElement("div", {

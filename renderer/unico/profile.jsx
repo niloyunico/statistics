@@ -123,7 +123,7 @@
     const waiting = d.audits.filter((x) => x.myPending).length;
     return (
       <div className="card">
-        <div className="card-h"><h3>My documentation audits</h3><span className="sub" style={{ marginLeft: 'auto' }}>{waiting ? waiting + ' waiting for your acknowledgement' : 'Feedback on your nursing records'}</span></div>
+        <div className="card-h"><h3>My documentation audits</h3><span className="sub" style={{ marginLeft: 'auto' }}>{waiting ? waiting + ' new — please read and acknowledge' : 'Feedback on your nursing records (published audits)'}</span></div>
         <div className="card-b" style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
           {d.audits.slice(0, 6).map((x) => { const r = x.result || {}; const pass = r.result === 'PASS'; const isOpen = open === x.id;
             return <div key={x.id} style={{ borderTop: '1px solid var(--line-2)', padding: '8px 0' }}>
@@ -133,7 +133,7 @@
                 <b style={{ fontSize: 13 }}>{r.pct == null ? '—' : r.pct + '%'}</b>
                 <span style={{ fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: pass ? '#e7f6ed' : '#fde4e8', color: pass ? '#14713f' : '#a3172f' }}>{r.result || '—'}</span>
                 {x.myPending ? <button className="btn pri sm" disabled={busy === x.id} onClick={(e) => { e.stopPropagation(); ack(x); }}>Acknowledge</button>
-                  : <span style={{ fontSize: 11, color: 'var(--muted)' }}>{x.status === 'signed' ? 'Signed off' : x.status === 'completed' && x.othersPending ? 'Acknowledged — waiting for ' + x.othersPending + ' colleague' + (x.othersPending > 1 ? 's' : '') : 'Acknowledged'}</span>}
+                  : <span style={{ fontSize: 11, color: 'var(--muted)' }}>{'Acknowledged ✓'}</span>}
               </div>
               {isOpen && <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.45, background: 'var(--panel-2)', borderRadius: 8, padding: '8px 10px' }}>
                 {r.gradeLabel && <div><b>{r.gradeLabel}</b>{x.action ? ' — ' + x.action : ''}</div>}

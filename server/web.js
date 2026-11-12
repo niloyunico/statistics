@@ -389,7 +389,8 @@ async function serveIndex(req, res) {
         workDepartment: scopeUser.workDepartment || null,
         myDepartments: Array.isArray(scopeUser.myDepartments) ? scopeUser.myDepartments : [],
         deviceDepartments: Array.isArray(scopeUser.deviceDepartments) ? scopeUser.deviceDepartments : [],
-        auditDepartments: Array.isArray(scopeUser.auditDepartments) ? scopeUser.auditDepartments : [] }
+        auditDepartments: Array.isArray(scopeUser.auditDepartments) ? scopeUser.auditDepartments : [],
+        auditProfileView: scopeUser.auditProfileView === true }
     : (req.user ? { username: req.user.sub, name: req.user.name, role: req.user.role } : null);
 
   // Canonical quality-formula master: the DB catalogue expanded to the

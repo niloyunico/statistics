@@ -262,7 +262,7 @@ const cleanRosterRole = access.cleanRosterRole || require('./roster-workflow').c
 
 // Changing any of these must invalidate every token the account already holds —
 // otherwise a revoked permission stays live for the rest of the 12h token TTL.
-const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'rosterRole', 'unitLead', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen', 'myDepartments', 'deviceDepartments', 'auditDepartments'];
+const SECURITY_FIELDS = ['role', 'active', 'perms', 'departments', 'qualityAreas', 'allQualityAreas', 'qualityIndicators', 'staffScope', 'staffId', 'staffEmpId', 'rosterScope', 'rosterDepartments', 'rosterEdit', 'rosterRole', 'unitLead', 'submitKinds', 'dsScreens', 'subMenus', 'enterDen', 'myDepartments', 'deviceDepartments', 'auditDepartments', 'auditProfileView'];
 // Compare only what actually CHANGED. The update object always carries a few scope
 // fields (qualityAreas, allQualityAreas...) whether or not they differ, so testing for
 // mere presence signed a user out every time an admin fixed a typo in their name.
@@ -380,6 +380,7 @@ function safe(u) {
     myDepartments: cleanMyDepts(u.myDepartments),
     deviceDepartments: cleanMyDepts(u.deviceDepartments),
     auditDepartments: cleanMyDepts(u.auditDepartments),
+    auditProfileView: u.auditProfileView === true,
     // Which tier of the hierarchy this account sits at (see BUILTIN_TIERS). A ceiling,
     // not a grant: `perms` above is what the server enforces. null = a row written before
     // the hierarchy existed; readers resolve it to the widest console tier.
@@ -827,6 +828,7 @@ function mount(app, opts) {
         // Device Days: which departments they send / review there ('*' = all).
         deviceDepartments: role === 'Administrator' ? [] : cleanMyDepts(b.deviceDepartments),
         auditDepartments: role === 'Administrator' ? [] : cleanMyDepts(b.auditDepartments),
+        auditProfileView: role === 'User' && b.auditProfileView === true,
         passwordHash: await auth.hash(password),
         // Bumped whenever access changes; every issued token carries the value it was
         // signed with, so raising it signs the account out everywhere.
@@ -946,6 +948,7 @@ function mount(app, opts) {
         if (b.myDepartments !== undefined) set.myDepartments = cleanMyDepts(b.myDepartments);
         if (b.deviceDepartments !== undefined) set.deviceDepartments = cleanMyDepts(b.deviceDepartments);
         if (b.auditDepartments !== undefined) set.auditDepartments = cleanMyDepts(b.auditDepartments);
+        if (b.auditProfileView !== undefined) set.auditProfileView = role === 'User' && b.auditProfileView === true;
       }
 
       // Per-module access levels. Only the 'User' role carries a perms map; Administrators
@@ -993,6 +996,7 @@ function mount(app, opts) {
       const devDaysOf = (x) => { const p = (x.perms || {}).devdays; return (Array.isArray(p) ? p.join('+') : (p && p !== 'none' ? p : 'none')) + ' · ' + ((x.deviceDepartments || []).join(', ') || 'no departments'); };
       if (devDaysOf(after) !== devDaysOf(u)) activity.log(req, 'devdays_access', { target: username, detail: 'Device Days: ' + devDaysOf(u) + ' → ' + devDaysOf(after) });
       const docAuditOf = (x) => { const p = (x.perms || {}).docaudit; return (Array.isArray(p) ? p.join('+') : (p && p !== 'none' ? p : 'none')) + ' · ' + ((x.auditDepartments || []).join(', ') || 'no departments'); };
+      if ((after.auditProfileView === true) !== (u.auditProfileView === true)) activity.log(req, 'docaudit_access', { target: username, detail: 'Documentation audits on staff profiles: ' + (after.auditProfileView === true ? 'given' : 'taken away') });
       if (docAuditOf(after) !== docAuditOf(u)) activity.log(req, 'docaudit_access', { target: username, detail: 'Documentation Audit: ' + docAuditOf(u) + ' → ' + docAuditOf(after) });
       if (plan && plan.responsibleId) {
         try { await dc().applyResponsibleSync(plan, after, scope); }

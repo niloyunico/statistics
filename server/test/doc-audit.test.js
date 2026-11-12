@@ -41,7 +41,8 @@ async function call(route, a, { params = {}, query = {}, body = {} } = {}) {
 }
 const person = (username, acts, depts, staffId) => ({ unrestricted: false, username, name: username, role: 'User', perms: { docaudit: acts }, auditDepartments: depts, staffId: staffId == null ? null : staffId });
 const auditor = person('auditor', ['view', 'add'], ['lvl9'], 3);
-const incharge = person('incharge', ['view', 'add', 'edit', 'delete'], ['lvl9'], null);
+const incharge = Object.assign(person('incharge', ['view', 'add', 'edit', 'delete'], ['lvl9'], null), { auditProfileView: true });
+const incharge2 = person('incharge2', ['view', 'add', 'edit'], ['lvl9'], null);
 const outsider = person('outsider', ['view', 'add'], ['er'], null);
 const viewer = person('viewer', ['view'], ['lvl9'], null);
 const nurseAcct = { unrestricted: false, username: 'rina', name: 'Rina Akter', role: 'User', perms: {}, staffId: 1 };
@@ -170,20 +171,34 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(res.status, 200); assert.equal(res.body.audit.auditor.name, 'auditor', "a non-admin's auditorStaffId is ignored");
   await call('DELETE /api/doc-audit/audits/:id', admin, { params: { id: res.body.audit.id } });
 
-  /* ---- the sign-off chain ---- */
+  /* ---- evidence: optional unless the administrator requires it ---- */
+  await call('PUT /api/doc-audit/config', admin, { body: { evidenceRequired: true } });
+  assert.equal((await call('GET /api/doc-audit/meta', auditor)).body.config.evidenceRequired, true);
+  res = await call('POST /api/doc-audit/audits', auditor, { body: Object.assign({}, base, { uhid: 'UH-E1', nurse: { staffId: 1 }, answers: Object.assign(allYes(IPD), { c6: 'N' }), complete: true }) });
+  assert.equal(res.status, 400); assert.equal(res.body.code, 'incomplete', "switched on: a 'No' needs its evidence");
+  await call('PUT /api/doc-audit/config', admin, { body: { evidenceRequired: false } });
+  assert.equal((await call('GET /api/doc-audit/meta', auditor)).body.config.evidenceRequired, false, 'off by default / switched back');
+
+  /* ---- publishing (the In-charge's sign-off) ---- */
+  assert.equal((await call('GET /api/doc-audit/meta', auditor)).body.config.ackRequired, false, 'acknowledgement optional by default');
+  await call('PUT /api/doc-audit/config', admin, { body: { ackRequired: true } });
   res = await call('POST /api/doc-audit/audits/:id/sign', incharge, { params: { id: A1.id } });
-  assert.equal(res.status, 409); assert.equal(res.body.code, 'ack', 'the nurse acknowledges first');
+  assert.equal(res.status, 409); assert.equal(res.body.code, 'ack', 'switched on: the nurse acknowledges first');
   res = await call('POST /api/doc-audit/audits/:id/ack', auditor, { params: { id: A1.id }, body: { note: 'Feedback given at the station' } });
   assert.equal(res.body.audit.status, 'acknowledged'); assert.equal(res.body.audit.ack.method, 'in-person');
-  assert.equal((await call('POST /api/doc-audit/audits/:id/sign', auditor, { params: { id: A1.id } })).status, 403, 'sign-off needs Edit');
+  assert.equal((await call('POST /api/doc-audit/audits/:id/sign', auditor, { params: { id: A1.id } })).status, 403, 'publishing needs Edit');
   await call('POST /api/doc-audit/audits/:id/ack', incharge, { params: { id: A3.id } });
   res = await call('POST /api/doc-audit/audits/:id/sign', incharge, { params: { id: A3.id } });
-  assert.equal(res.body.code, 'own', 'nobody signs off their own audit');
+  assert.equal(res.body.code, 'own', 'nobody publishes their own audit');
   res = await call('POST /api/doc-audit/audits/:id/sign', incharge, { params: { id: A1.id }, body: { note: 'Reviewed' } });
-  assert.equal(res.body.audit.status, 'signed');
+  assert.equal(res.body.audit.status, 'signed'); assert.equal(DA.STATUS_LABEL.signed, 'Published'); assert.equal(res.body.audit.signoff.name, 'incharge');
+  await call('PUT /api/doc-audit/config', admin, { body: { ackRequired: false } });
+  // switched off (the default): published without any acknowledgement
+  res = await call('POST /api/doc-audit/audits/:id/sign', incharge, { params: { id: A2.id } });
+  assert.equal(res.status, 200); assert.equal(res.body.audit.status, 'signed', 'published without acknowledgement');
   res = await call('PUT /api/doc-audit/audits/:id', incharge, { params: { id: A1.id }, body: { remarks: 'x' } });
   assert.equal(res.status, 409); assert.equal(res.body.code, 'locked', 'signed = locked');
-  assert.equal((await call('DELETE /api/doc-audit/audits/:id', incharge, { params: { id: A1.id } })).status, 409, 'only an admin removes a signed audit');
+  assert.equal((await call('DELETE /api/doc-audit/audits/:id', incharge, { params: { id: A1.id } })).status, 409, 'only an admin removes a published audit');
   assert.equal((await call('POST /api/doc-audit/audits/:id/reopen', incharge, { params: { id: A1.id }, body: { reason: 'wrong date' } })).status, 403);
   res = await call('POST /api/doc-audit/audits/:id/reopen', admin, { params: { id: A1.id }, body: { reason: 'Wrong patient UHID' } });
   assert.equal(res.body.audit.status, 'acknowledged'); assert.equal(res.body.audit.reopened.length, 1);
@@ -197,9 +212,11 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
 
   /* ---- the nurse's own audits ---- */
   res = await call('GET /api/doc-audit/mine', nurseAcct);
-  assert.equal(res.body.linked, true); assert.equal(res.body.audits.length, 2, 'drafts are not shown');
-  assert.ok(res.body.audits.find((x) => x.id === A2.id).gaps.some((g) => g.no === 9 && g.critical));
-  assert.equal((await call('POST /api/doc-audit/mine/:id/ack', nurseAcct, { params: { id: A2.id } })).body.audit.ack.method, 'account');
+  assert.equal(res.body.linked, true); assert.deepEqual(res.body.audits.map((x) => x.id), [A2.id], 'only PUBLISHED audits reach the nurse');
+  assert.ok(res.body.audits[0].gaps.some((g) => g.no === 9 && g.critical)); assert.equal(res.body.audits[0].myPending, true);
+  res = await call('POST /api/doc-audit/mine/:id/ack', nurseAcct, { params: { id: A2.id } });
+  assert.equal(res.body.audit.ack.method, 'account'); assert.equal(res.body.audit.status, 'signed', 'acknowledging keeps it published');
+  assert.equal((await call('POST /api/doc-audit/mine/:id/ack', nurseAcct, { params: { id: A1.id } })).status, 409, 'an unpublished audit is not hers to acknowledge yet');
   assert.equal((await call('POST /api/doc-audit/mine/:id/ack', nurseAcct, { params: { id: A3.id } })).status, 403, 'not her audit');
 
   /* ---- a tool edit is a new revision; old audits keep their criteria ---- */
@@ -261,7 +278,9 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   res = await call('GET /api/doc-audit/staff/:staffId', incharge, { params: { staffId: '1' } });
   assert.equal(res.body.audits.length, 3); assert.equal(res.body.thisQuarter, 3);
   assert.ok(!('uhid' in res.body.audits[0]), 'the profile card carries no patient identifier');
-  assert.equal((await call('GET /api/doc-audit/staff/:staffId', outsider, { params: { staffId: '1' } })).body.audits.length, 0, 'only audits of my departments');
+  assert.equal((await call('GET /api/doc-audit/staff/:staffId', outsider, { params: { staffId: '1' } })).status, 403, 'the profile card needs its own grant');
+  assert.equal((await call('GET /api/doc-audit/staff/:staffId', admin, { params: { staffId: '1' } })).status, 200, 'administrators always');
+  assert.equal((await call('GET /api/doc-audit/staff/:staffId', { unrestricted: false, username: 'hr', name: 'HR', role: 'User', perms: {}, auditProfileView: true }, { params: { staffId: '1' } })).body.audits.length, 3, 'given it, no module needed');
   assert.equal((await call('POST /api/doc-audit/print', auditor, { body: { kind: 'audit', id: A2.id } })).status, 403, 'Print is its own grant');
   res = await call('POST /api/doc-audit/print', admin, { body: { kind: 'audit', id: A2.id } });
   assert.equal(res.status, 200); assert.equal(logged[logged.length - 1].action, 'docaudit_print');
@@ -269,14 +288,14 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.equal(Buffer.isBuffer(res.body) && res.body.slice(0, 2).toString(), 'PK', 'an xlsx file');
   assert.equal(logged[logged.length - 1].action, 'docaudit_export');
   res = await call('GET /api/doc-audit/missing', incharge);
-  assert.ok(res.body.awaitingAck >= 1, 'completed audits wait for the nurse');
+  assert.equal(res.body.awaitingAck, 0, 'no acknowledgement queue while it is optional');
+  assert.ok(res.body.awaitingSign >= 1, 'completed audits are ready to publish');
   res = await call('DELETE /api/doc-audit/audits/:id', incharge, { params: { id: A3.id }, body: { reason: 'duplicate' } });
   assert.equal(res.status, 200);
   assert.equal((await call('GET /api/doc-audit/audits/:id', incharge, { params: { id: A3.id } })).status, 404, 'removed = gone from the register, kept in the store');
   assert.ok(docAudit._mem.docAudits.get(A3.id).removedAt, 'never hard-deleted');
 
   /* ---- several nurses on one audit (1 record : 3 nurses) ---- */
-  const incharge2 = person('incharge2', ['view', 'add', 'edit'], ['lvl9'], null);
   const shapla = { unrestricted: false, username: 'shapla', name: 'Shapla Khatun', role: 'User', perms: {}, staffId: 5 };
   const before = (await docAudit.monthlyFigures(['2026-11']))['2026-11'].records;
   res = await call('POST /api/doc-audit/audits', incharge, { body: Object.assign({}, base, { uhid: 'UH-300', nurses: [{ staffId: 1 }, { staffId: 5 }, { staffId: '5' }, { name: 'Agency Nurse B', empId: 'X9' }], answers: Object.assign(allYes(IPD), { c4: 'N' }), complete: true }) });
@@ -295,24 +314,47 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   res = await call('GET /api/doc-audit/summary', incharge, { query: { from: '2026-11', to: '2026-11', by: 'nurse' } });
   assert.equal(res.body.breakdown.find((b) => b.label === 'Shapla Khatun').summary.records, 1, 'counted under each nurse');
   assert.ok(res.body.breakdown.find((b) => b.label === 'Agency Nurse B'));
-  let mine = (await call('GET /api/doc-audit/mine', shapla)).body.audits.find((x) => x.id === M.id);
-  assert.deepEqual([mine.myPending, mine.othersPending], [true, 2]);
-  // two of three acknowledge in person: still waiting, no sign-off yet
+  assert.ok(!(await call('GET /api/doc-audit/mine', shapla)).body.audits.some((x) => x.id === M.id), 'not released before it is published');
+  // two of three acknowledge in person; with the switch on, publishing waits and names who is missing
   res = await call('POST /api/doc-audit/audits/:id/ack', incharge, { params: { id: M.id }, body: { keys: ['s:1', 'n:agency nurse b'] } });
   assert.equal(res.body.audit.status, 'completed'); assert.equal(Object.keys(res.body.audit.acks).length, 2);
+  await call('PUT /api/doc-audit/config', admin, { body: { ackRequired: true } });
   res = await call('POST /api/doc-audit/audits/:id/sign', incharge2, { params: { id: M.id } });
   assert.equal(res.status, 409); assert.equal(res.body.code, 'ack'); assert.ok(/Shapla/.test(res.body.error), 'names who is missing');
-  // the third from her own account → acknowledged → signed
-  res = await call('POST /api/doc-audit/mine/:id/ack', shapla, { params: { id: M.id } });
-  assert.equal(res.body.audit.status, 'acknowledged'); assert.equal(res.body.audit.ack.complete, true); assert.equal(res.body.audit.acks['s:5'].method, 'account');
-  assert.equal((await call('POST /api/doc-audit/mine/:id/ack', shapla, { params: { id: M.id } })).status, 409, 'once');
+  await call('PUT /api/doc-audit/config', admin, { body: { ackRequired: false } });
   res = await call('POST /api/doc-audit/audits/:id/sign', incharge2, { params: { id: M.id } });
-  assert.equal(res.body.audit.status, 'signed');
+  assert.equal(res.body.audit.status, 'signed', 'published with one acknowledgement outstanding');
+  let mine = (await call('GET /api/doc-audit/mine', shapla)).body.audits.find((x) => x.id === M.id);
+  assert.deepEqual([mine.myPending, mine.othersPending], [true, 0]);
+  res = await call('POST /api/doc-audit/mine/:id/ack', shapla, { params: { id: M.id } });
+  assert.equal(res.body.audit.status, 'signed'); assert.equal(res.body.audit.ack.complete, true); assert.equal(res.body.audit.acks['s:5'].method, 'account');
+  assert.equal((await call('POST /api/doc-audit/mine/:id/ack', shapla, { params: { id: M.id } })).status, 409, 'once');
   // an older single-nurse audit reads as a list of one
   res = await call('GET /api/doc-audit/audits/:id', incharge, { params: { id: A2.id } });
   assert.equal(res.body.audit.nurses.length, 1); assert.equal(res.body.audit.nurses[0].name, 'Rina Akter');
   res = await call('GET /api/doc-audit/xlsx', admin, { query: { from: '2026-11', to: '2026-11' } });
   assert.equal(res.body.slice(0, 2).toString(), 'PK');
+
+  /* ---- bulk on the Register ---- */
+  const mk = async (who, uhid, ans, complete) => (await call('POST /api/doc-audit/audits', who, { body: Object.assign({}, base, { uhid, nurse: { staffId: 1 }, answers: ans, complete: !!complete }) })).body.audit;
+  const d1 = await mk(auditor, 'UH-B1', allYes(IPD)), d2 = await mk(auditor, 'UH-B2', allYes(IPD)), d3 = await mk(auditor, 'UH-B3', { c1: 'Y' });
+  const own = await mk(incharge, 'UH-B4', allYes(IPD), true);
+  res = await call('POST /api/doc-audit/bulk', auditor, { body: { action: 'complete', ids: [d1.id, d2.id, d3.id] } });
+  assert.equal(res.body.done, 2); assert.equal(res.body.skipped.length, 1); assert.ok(/not answered/.test(res.body.skipped[0].why), 'an unfinished draft is skipped with why');
+  assert.equal((await call('POST /api/doc-audit/bulk', auditor, { body: { action: 'publish', ids: [d1.id] } })).status, 403, 'bulk publish needs Edit');
+  res = await call('POST /api/doc-audit/bulk', incharge, { body: { action: 'publish', ids: [d1.id, d2.id, own.id, 'nope'] } });
+  assert.equal(res.body.done, 2); assert.deepEqual(res.body.skipped.map((x) => x.why).sort(), ['You filled this audit, so another person must publish it.', 'not found'].sort());
+  assert.equal((await call('GET /api/doc-audit/audits/:id', incharge, { params: { id: d1.id } })).body.audit.status, 'signed');
+  res = await call('POST /api/doc-audit/bulk', outsider, { body: { action: 'complete', ids: [d3.id] } });
+  assert.equal(res.body.skipped[0].why, 'This department is not one of yours.');
+  res = await call('POST /api/doc-audit/bulk', incharge, { body: { action: 'remove', ids: [d1.id, d3.id], reason: 'test' } });
+  assert.equal(res.body.done, 1); assert.ok(/administrator/.test(res.body.skipped[0].why), 'a published audit is removed only by an administrator');
+  res = await call('GET /api/doc-audit/xlsx', admin, { query: { ids: [d1.id, d2.id, d3.id].join(',') } });
+  assert.equal(res.body.slice(0, 2).toString(), 'PK', 'Excel of the ticked audits (the removed one left out)');
+  assert.ok(/2 audit/.test(logged[logged.length - 1].opts.detail));
+  assert.equal((await call('POST /api/doc-audit/print', outsider, { body: { kind: 'bulk', ids: [d2.id] } })).status, 403);
+  assert.equal((await call('POST /api/doc-audit/print', admin, { body: { kind: 'bulk', ids: [d1.id, d2.id] } })).status, 200);
+  assert.ok(logged.some((l) => l.action === 'docaudit_audit' && /published \(/.test(l.opts.detail)), 'each audit logged');
 
   console.log('doc-audit: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

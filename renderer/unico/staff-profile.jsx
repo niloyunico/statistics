@@ -1400,7 +1400,8 @@ function StaffProfile({store, empId, setRoute}){
             </div>;
           })()}
 
-          {window.unicoCan&&window.unicoCan('docaudit','view')&&<StaffDocAuditCard emp={e} setRoute={setRoute}/>}
+          {/* Its own grant (Access Control → "See documentation audits on staff profiles"); administrators always. */}
+          {((window.unicoUserPerms&&window.unicoUserPerms()===null)||(window.__UNICO_USER__&&window.__UNICO_USER__.auditProfileView===true))&&<StaffDocAuditCard emp={e} setRoute={setRoute}/>}
 
           {/* Conduct — the achievements and incidents on this person's file. Shown
               side by side on purpose: a register that only lists what went wrong is

@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=e7a2e28d38","reports":"/dist/reports.chunk.js?v=642a509d61","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=840bf2205a","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c924946988","reports":"/dist/reports.chunk.js?v=485741b79f","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=7add9c37b8","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7531,7 +7531,8 @@ window.QI_CORRECTIONS_BY_DEFID = {
    (Asia/Dhaka, UTC+6, no DST). */
 (function (root) {
   const STATUSES = ['draft', 'completed', 'acknowledged', 'signed'];
-  const STATUS_LABEL = { draft: 'Draft', completed: 'Completed', acknowledged: 'Acknowledged', signed: 'Signed off' };
+  // 'signed' = PUBLISHED: released to the nurse(s) and locked (the stored value is kept from before).
+  const STATUS_LABEL = { draft: 'Draft', completed: 'Completed', acknowledged: 'Acknowledged', signed: 'Published' };
   const ANSWERS = ['Y', 'N', 'NA'];
   const PASS_MARK = 90;
   const GRADES = [
@@ -7665,8 +7666,9 @@ window.QI_CORRECTIONS_BY_DEFID = {
     const guide = o.tool ? guideFor(o.tool, x.area) : { never: [] };
     activeCriteria(criteria).forEach((c) => {
       const v = ans[c.id];
-      // Evidence for a 'No' is optional (the user's choice, 2026-11-11): the box is offered, never required.
+      // Evidence for a 'No' is optional unless an administrator requires it (Settings).
       if (ANSWERS.indexOf(v) < 0) out.push({ field: 'answers', criterion: c.id, message: 'Criterion ' + c.no + ' is not answered (Yes, No or N/A).' });
+      else if (o.evidenceRequired && v === 'N' && String(ev[c.id] || '').trim().length < 3) out.push({ field: 'evidence', criterion: c.id, message: 'Criterion ' + c.no + " is 'No': write the evidence (what is missing, where, date/time)." });
       else if (v === 'NA' && guide.never.indexOf(c.id) >= 0) out.push({ field: 'answers', criterion: c.id, message: 'Criterion ' + c.no + ' is never N/A in ' + x.area + ' (policy 7.3).' });
     });
     return out;
@@ -15134,7 +15136,7 @@ Object.assign(window, {
       style: {
         marginLeft: 'auto'
       }
-    }, waiting ? waiting + ' waiting for your acknowledgement' : 'Feedback on your nursing records')), React.createElement("div", {
+    }, waiting ? waiting + ' new — please read and acknowledge' : 'Feedback on your nursing records (published audits)')), React.createElement("div", {
       className: "card-b",
       style: {
         display: 'flex',
@@ -15200,7 +15202,7 @@ Object.assign(window, {
           fontSize: 11,
           color: 'var(--muted)'
         }
-      }, x.status === 'signed' ? 'Signed off' : x.status === 'completed' && x.othersPending ? 'Acknowledged — waiting for ' + x.othersPending + ' colleague' + (x.othersPending > 1 ? 's' : '') : 'Acknowledged')), isOpen && React.createElement("div", {
+      }, 'Acknowledged ✓')), isOpen && React.createElement("div", {
         style: {
           marginTop: 8,
           fontSize: 12,

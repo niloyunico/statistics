@@ -15,7 +15,8 @@
    (Asia/Dhaka, UTC+6, no DST). */
 (function (root) {
   const STATUSES = ['draft', 'completed', 'acknowledged', 'signed'];
-  const STATUS_LABEL = { draft: 'Draft', completed: 'Completed', acknowledged: 'Acknowledged', signed: 'Signed off' };
+  // 'signed' = PUBLISHED: released to the nurse(s) and locked (the stored value is kept from before).
+  const STATUS_LABEL = { draft: 'Draft', completed: 'Completed', acknowledged: 'Acknowledged', signed: 'Published' };
   const ANSWERS = ['Y', 'N', 'NA'];
   const PASS_MARK = 90;
   const GRADES = [
@@ -149,8 +150,9 @@
     const guide = o.tool ? guideFor(o.tool, x.area) : { never: [] };
     activeCriteria(criteria).forEach((c) => {
       const v = ans[c.id];
-      // Evidence for a 'No' is optional (the user's choice, 2026-11-11): the box is offered, never required.
+      // Evidence for a 'No' is optional unless an administrator requires it (Settings).
       if (ANSWERS.indexOf(v) < 0) out.push({ field: 'answers', criterion: c.id, message: 'Criterion ' + c.no + ' is not answered (Yes, No or N/A).' });
+      else if (o.evidenceRequired && v === 'N' && String(ev[c.id] || '').trim().length < 3) out.push({ field: 'evidence', criterion: c.id, message: 'Criterion ' + c.no + " is 'No': write the evidence (what is missing, where, date/time)." });
       else if (v === 'NA' && guide.never.indexOf(c.id) >= 0) out.push({ field: 'answers', criterion: c.id, message: 'Criterion ' + c.no + ' is never N/A in ' + x.area + ' (policy 7.3).' });
     });
     return out;

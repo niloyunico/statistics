@@ -293,6 +293,8 @@ async function forRequest(req) {
     deviceDepartments: Array.isArray(u.deviceDepartments) ? u.deviceDepartments.map(String) : [],
     // Documentation Audit: the departments this person audits ('*' = every department).
     auditDepartments: Array.isArray(u.auditDepartments) ? u.auditDepartments.map(String) : [],
+    // May see the "Documentation audits" card on staff profiles (its own grant, independent of the module).
+    auditProfileView: u.auditProfileView === true,
   };
 }
 

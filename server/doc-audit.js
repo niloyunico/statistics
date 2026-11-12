@@ -461,7 +461,7 @@ function mount(app, opts) {
       const tools = await liveTools();
       const me = await myStaffId(a);
       res.json({ ok: true, departments: await myDepts(a, cfg), tools: tools.map(cleanTool), today: today(), month: DA.hospitalNow(now()).month,
-        config: { kpiLink: cfg.kpiLink !== false, ackRequired: cfg.ackRequired !== false }, assignments: ASSIGNMENTS, user: actor(req, a), name: nameOf(req, a),
+        config: { kpiLink: cfg.kpiLink !== false, ackRequired: cfg.ackRequired === true, evidenceRequired: cfg.evidenceRequired === true }, assignments: ASSIGNMENTS, user: actor(req, a), name: nameOf(req, a),
         staffId: me ? me.id : null, allStaff: access.auditDeptIds(a) === null, ...rights(a) });
     } catch (e) { fail(res, e, 'Could not load Documentation Audit.'); }
   });
@@ -491,14 +491,15 @@ function mount(app, opts) {
     } catch (e) { fail(res, e, 'Could not load the staff list.'); }
   });
 
-  // One nurse's audits — the "Documentation audits" card on the staff profile. Only the audits
-  // of departments this person may see.
+  /* One nurse's audits — the "Documentation audits" card on the staff profile. Its own grant
+     (users.auditProfileView, ticked in Access Control; administrators always), independent of the
+     module: every department's audits of that nurse. */
   app.get('/api/doc-audit/staff/:staffId', guard, async (req, res) => {
     res.set('Cache-Control', 'no-store');
     try {
-      const a = await resolve(req, res, 'view'); if (!a) return;
-      const ids = access.auditDeptIds(a);
-      const list = (await findAudits({ staffId: String(req.params.staffId), depts: ids, limit: 300 }));
+      const a = await resolve(req, res, null); if (!a) return;
+      if (!a.unrestricted && a.auditProfileView !== true) return res.status(403).json({ ok: false, error: 'Seeing documentation audits on staff profiles has not been given to you.' });
+      const list = (await findAudits({ staffId: String(req.params.staffId), limit: 300 }));
       const q = DA.quarterOf(today());
       res.json({ ok: true, audits: list.map(thinAudit), thisQuarter: list.filter((x) => DA.quarterOf(x.date) === q).length, quarter: q,
         summary: DA.summarize(list.filter(DA.countsInKpi), []) });
@@ -647,7 +648,7 @@ function mount(app, opts) {
     next.result = DA.score(next.answers, criteria);
     const wantComplete = b.complete === true;
     if (wantComplete || (cur && cur.status !== 'draft')) {
-      const problems = DA.validate(next, criteria, { today: today(), tool });
+      const problems = DA.validate(next, criteria, { today: today(), tool, evidenceRequired: cfg.evidenceRequired === true });
       if (problems.length) return res.status(400).json({ ok: false, code: 'incomplete', error: problems[0].message, problems });
     } else if (next.date > today()) return res.status(400).json({ ok: false, error: 'The audit date cannot be in the future.' });
     const changes = changesOf(cur, next);
@@ -667,8 +668,47 @@ function mount(app, opts) {
   app.post('/api/doc-audit/audits', guard, async (req, res) => { try { await saveAudit(req, res, null); } catch (e) { fail(res, e, 'Could not save the audit.'); } });
   app.put('/api/doc-audit/audits/:id', guard, async (req, res) => { try { await saveAudit(req, res, String(req.params.id)); } catch (e) { fail(res, e, 'Could not save the audit.'); } });
 
+  /* PUBLISH — releases the audit to the nurse(s) and locks it (stored status 'signed'; the record of
+     who published is `signoff`). The one rule for the single and the bulk action. Returns null when
+     allowed, else { status, code, error }. */
+  async function publishBlock(a, x, cfg) {
+    const me = a.username;
+    if (!inScope(a, x.deptId)) return { status: 403, code: 'scope', error: 'This department is not one of yours.' };
+    if (x.status === 'draft') return { status: 409, code: 'state', error: 'Complete the audit first.' };
+    if (x.status === 'signed') return { status: 409, code: 'state', error: 'This audit is already published.' };
+    if (cfg.ackRequired === true && !a.unrestricted && x.status === 'completed') {
+      const p = DA.pendingAcks(x).map((n) => n.name);
+      return { status: 409, code: 'ack', error: (p.length > 1 ? p.length + ' nurses have' : (p[0] || 'The nurse') + ' has') + ' not acknowledged this audit yet' + (p.length > 1 ? ' (' + p.join(', ') + ').' : '.') };
+    }
+    if (!a.unrestricted && x.auditor && x.auditor.username === me) return { status: 409, code: 'own', error: 'You filled this audit, so another person must publish it.' };
+    const mine = await myStaffId(a);
+    if (!a.unrestricted && mine && DA.nursesOf(x).some((n) => String(n.staffId) === mine.id)) return { status: 409, code: 'self', error: 'This audit is of your own documentation.' };
+    return null;
+  }
+  const publishSet = (req, a, x, note) => {
+    const t = now();
+    return { by: actor(req, a), action: 'published' + (DA.pendingAcks(x).length ? ' (acknowledgement optional — not all nurses had acknowledged)' : ''), note: str(note, 300),
+      set: { status: 'signed', publishedAt: t, signoff: { at: t, by: actor(req, a), name: nameOf(req, a), note: str(note, 300) } } };
+  };
+  // COMPLETE a draft: every criterion answered (and evidence, if the administrator requires it).
+  async function completeBlock(a, x, cfg) {
+    if (!inScope(a, x.deptId)) return { status: 403, code: 'scope', error: 'This department is not one of yours.' };
+    if (x.status !== 'draft') return { status: 409, code: 'state', error: 'Only a draft can be completed.' };
+    if (!access.can(a, 'docaudit', 'add') && !access.can(a, 'docaudit', 'edit')) return { status: 403, code: 'rights', error: 'Completing needs the Add permission.' };
+    const tool = await getDoc(TOOLS, x.toolId);
+    const problems = DA.validate(x, x.criteria, { today: today(), tool, evidenceRequired: cfg.evidenceRequired === true });
+    if (problems.length) return { status: 400, code: 'incomplete', error: problems[0].message + (problems.length > 1 ? ' (+' + (problems.length - 1) + ' more)' : '') };
+    return null;
+  }
+  // REMOVE (soft): a published audit only by an administrator.
+  function removeBlock(a, x) {
+    if (!inScope(a, x.deptId)) return { status: 403, code: 'scope', error: 'This department is not one of yours.' };
+    if (x.status === 'signed' && !a.unrestricted) return { status: 409, code: 'locked', error: 'A published audit can only be removed by an administrator.' };
+    return null;
+  }
+
   /* Record acknowledgements for some of an audit's nurses (keys = DA.nurseKey). The audit becomes
-     Acknowledged only when every listed nurse has acknowledged. */
+     Acknowledged only when every listed nurse has acknowledged; a published audit stays Published. */
   function ackSet(x, keys, entry) {
     const acks = Object.assign({}, DA.acksOf(x));
     keys.forEach((k) => { const n = DA.nursesOf(x).find((y) => DA.nurseKey(y) === k); acks[k] = Object.assign({}, entry, { name: (n && n.name) || entry.name || '' }); });
@@ -676,7 +716,7 @@ function mount(app, opts) {
     const names = keys.map((k) => acks[k].name).join(', ');
     const left = DA.nursesOf(x).filter((n) => !acks[DA.nurseKey(n)]).length;
     return { acks, done, names, left,
-      set: { acks, status: done ? 'acknowledged' : 'completed', ack: done ? { at: entry.at, by: entry.by, byName: entry.byName, method: entry.method, complete: true, count: DA.nursesOf(x).length, name: DA.nurseNames(x), note: entry.note } : null } };
+      set: { acks, status: x.status === 'signed' ? 'signed' : done ? 'acknowledged' : 'completed', ack: done ? { at: entry.at, by: entry.by, byName: entry.byName, method: entry.method, complete: true, count: DA.nursesOf(x).length, name: DA.nurseNames(x), note: entry.note } : null } };
   }
   // A step in the sign-off chain on one audit.
   async function step(req, res, fn) {
@@ -696,9 +736,10 @@ function mount(app, opts) {
       const a = await resolve(req, res, 'add'); if (!a) return;
       await step(req, res, async (x) => {
         if (!inScope(a, x.deptId)) { notMine(res); return null; }
-        if (x.status !== 'completed') { res.status(409).json({ ok: false, code: 'state', error: x.status === 'draft' ? 'Complete the audit first.' : 'This audit has already been acknowledged.' }); return null; }
+        if (x.status === 'draft') { res.status(409).json({ ok: false, code: 'state', error: 'Complete the audit first.' }); return null; }
         const b = body(req);
         const pending = DA.pendingAcks(x).map(DA.nurseKey);
+        if (!pending.length) { res.status(409).json({ ok: false, code: 'state', error: 'Every nurse has already acknowledged this audit.' }); return null; }
         const keys = Array.isArray(b.keys) && b.keys.length ? b.keys.map(String).filter((k) => pending.indexOf(k) >= 0) : pending;
         if (!keys.length) { res.status(400).json({ ok: false, error: 'Choose the nurse(s) who acknowledged.' }); return null; }
         const t = now(), me = actor(req, a);
@@ -707,26 +748,17 @@ function mount(app, opts) {
       });
     } catch (e) { fail(res, e, 'Could not record the acknowledgement.'); }
   });
-  // Nurse In-charge sign-off: the end of the chain; the audit is locked after it.
+  // PUBLISH (the In-charge's sign-off): releases the audit to the nurse(s); locked after it.
   app.post('/api/doc-audit/audits/:id/sign', guard, async (req, res) => {
     try {
       const a = await resolve(req, res, 'edit'); if (!a) return;
       const cfg = await getConfig();
       await step(req, res, async (x) => {
-        if (!inScope(a, x.deptId)) { notMine(res); return null; }
-        const me = actor(req, a);
-        const ackNeeded = cfg.ackRequired !== false && !a.unrestricted;
-        if (x.status === 'draft') { res.status(409).json({ ok: false, code: 'state', error: 'Complete the audit first.' }); return null; }
-        if (x.status === 'signed') { res.status(409).json({ ok: false, code: 'state', error: 'This audit is already signed off.' }); return null; }
-        if (x.status === 'completed' && ackNeeded) { const p = DA.pendingAcks(x).map((n) => n.name); res.status(409).json({ ok: false, code: 'ack', error: (p.length > 1 ? p.length + ' nurses have' : (p[0] || 'The nurse') + ' has') + ' not acknowledged this audit yet' + (p.length > 1 ? ' (' + p.join(', ') + ').' : '.') }); return null; }
-        if (!a.unrestricted && x.auditor && x.auditor.username === me) { res.status(409).json({ ok: false, code: 'own', error: 'You filled this audit, so another person must sign it off.' }); return null; }
-        const mine = await myStaffId(a);
-        if (!a.unrestricted && mine && DA.nursesOf(x).some((n) => String(n.staffId) === mine.id)) { res.status(409).json({ ok: false, code: 'self', error: 'This audit is of your own documentation.' }); return null; }
-        const t = now();
-        return { by: me, action: 'signed off' + (x.status === 'completed' ? ' (without the nurse’s acknowledgement)' : ''), note: str(body(req).note, 300),
-          set: { status: 'signed', signoff: { at: t, by: me, name: nameOf(req, a), note: str(body(req).note, 300) } } };
+        const no = await publishBlock(a, x, cfg);
+        if (no) { res.status(no.status).json({ ok: false, code: no.code, error: no.error }); return null; }
+        return publishSet(req, a, x, body(req).note);
       });
-    } catch (e) { fail(res, e, 'Could not sign off the audit.'); }
+    } catch (e) { fail(res, e, 'Could not publish the audit.'); }
   });
   app.post('/api/doc-audit/audits/:id/reopen', guard, async (req, res) => {
     try {
@@ -735,7 +767,7 @@ function mount(app, opts) {
       const reason = str(body(req).reason, 400);
       if (reason.length < 5) return res.status(400).json({ ok: false, error: 'Write why the audit is reopened.' });
       await step(req, res, async (x) => {
-        if (x.status !== 'signed' && x.status !== 'acknowledged') { res.status(409).json({ ok: false, code: 'state', error: 'Only an acknowledged or signed-off audit can be reopened.' }); return null; }
+        if (x.status !== 'signed' && x.status !== 'acknowledged') { res.status(409).json({ ok: false, code: 'state', error: 'Only an acknowledged or published audit can be reopened.' }); return null; }
         const me = actor(req, a), t = now();
         return { by: me, action: 'reopened', note: reason,
           set: { status: x.ack ? 'acknowledged' : 'completed', signoff: null, reopened: (x.reopened || []).concat([{ at: t, by: me, reason, signoff: x.signoff || null }]) } };
@@ -748,7 +780,8 @@ function mount(app, opts) {
       const x = await getDoc(AUDITS, String(req.params.id));
       if (!x || x.removedAt) return res.status(404).json({ ok: false, error: 'This audit does not exist.' });
       if (!inScope(a, x.deptId)) return notMine(res);
-      if (x.status === 'signed' && !a.unrestricted) return res.status(409).json({ ok: false, code: 'locked', error: 'A signed-off audit can only be removed by an administrator.' });
+      const no = removeBlock(a, x);
+      if (no) return res.status(no.status).json({ ok: false, code: no.code, error: no.error });
       const reason = str(body(req).reason || req.query.reason, 300);
       const t = now(), me = actor(req, a);
       const doc = Object.assign({}, x, { removedAt: t, removedBy: me, updatedAt: t, history: (x.history || []).concat([{ at: t, by: me, action: 'removed', changes: reason || x.status }]).slice(-100) });
@@ -766,10 +799,11 @@ function mount(app, opts) {
       const a = await resolve(req, res, null); if (!a) return;
       const me = await myStaffId(a);
       if (!me) return res.json({ ok: true, linked: false, audits: [] });
-      const list = await findAudits({ staffId: me.id, limit: 60 });
+      // Released to the nurse = published.
+      const list = (await findAudits({ staffId: me.id, limit: 60, statuses: ['signed'] }));
       const myKey = 's:' + me.id;
       res.json({ ok: true, linked: true, audits: list.map((x) => Object.assign(thinAudit(x), {
-        myPending: x.status === 'completed' && !DA.acksOf(x)[myKey], othersPending: DA.pendingAcks(x).filter((n) => DA.nurseKey(n) !== myKey).length, gaps: (x.criteria || []).filter((c) => (x.answers || {})[c.id] === 'N').map((c) => ({ no: c.no, text: c.text, critical: c.critical, evidence: (x.evidence || {})[c.id] || '' })), action: x.result ? x.result.action : '' })) });
+        myPending: !DA.acksOf(x)[myKey], othersPending: DA.pendingAcks(x).filter((n) => DA.nurseKey(n) !== myKey).length, gaps: (x.criteria || []).filter((c) => (x.answers || {})[c.id] === 'N').map((c) => ({ no: c.no, text: c.text, critical: c.critical, evidence: (x.evidence || {})[c.id] || '' })), action: x.result ? x.result.action : '' })) });
     } catch (e) { fail(res, e, 'Could not load your audits.'); }
   });
   app.post('/api/doc-audit/mine/:id/ack', guard, async (req, res) => {
@@ -779,7 +813,7 @@ function mount(app, opts) {
       await step(req, res, async (x) => {
         if (!me || !DA.nursesOf(x).some((n) => String(n.staffId) === me.id)) { res.status(403).json({ ok: false, error: 'This audit is not of your documentation.' }); return null; }
         const key = 's:' + me.id;
-        if (x.status !== 'completed' || DA.acksOf(x)[key]) { res.status(409).json({ ok: false, code: 'state', error: 'This audit is not waiting for your acknowledgement.' }); return null; }
+        if (x.status !== 'signed' || DA.acksOf(x)[key]) { res.status(409).json({ ok: false, code: 'state', error: 'This audit is not waiting for your acknowledgement.' }); return null; }
         const t = now(), who = actor(req, a);
         const r = ackSet(x, [key], { at: t, by: who, byName: nameOf(req, a), method: 'account', note: str(body(req).note, 300) });
         return { by: who, action: 'acknowledged by ' + r.names + ' (own account)' + (r.done ? '' : ' — ' + r.left + ' nurse(s) still to acknowledge'), note: str(body(req).note, 300), set: r.set };
@@ -937,7 +971,7 @@ function mount(app, opts) {
       } catch (e) { people = null; }
       res.json({ ok: true, departments: depts.map((d) => Object.assign({}, d, { cfg: cfgFor(cfg, d), guess: catalogue.guessTool(d) })),
         tools: (await liveTools()).map((t) => ({ id: t._id, name: t.name, short: t.short })),
-        kpiLink: cfg.kpiLink !== false, ackRequired: cfg.ackRequired !== false, people, peopleAvailable: !!people });
+        kpiLink: cfg.kpiLink !== false, ackRequired: cfg.ackRequired === true, evidenceRequired: cfg.evidenceRequired === true, people, peopleAvailable: !!people });
     } catch (e) { fail(res, e, 'Could not load the settings.'); }
   });
   app.put('/api/doc-audit/config', guard, async (req, res) => {
@@ -957,7 +991,8 @@ function mount(app, opts) {
       });
       const set = { depts, updatedAt: now(), updatedBy: actor(req, a) };
       if (typeof b.kpiLink === 'boolean' && b.kpiLink !== (cfg.kpiLink !== false)) { set.kpiLink = b.kpiLink; changed.push('Nursing KPI link ' + (b.kpiLink ? 'on' : 'off')); }
-      if (typeof b.ackRequired === 'boolean' && b.ackRequired !== (cfg.ackRequired !== false)) { set.ackRequired = b.ackRequired; changed.push('acknowledgement ' + (b.ackRequired ? 'required' : 'optional')); }
+      if (typeof b.ackRequired === 'boolean' && b.ackRequired !== (cfg.ackRequired === true)) { set.ackRequired = b.ackRequired; changed.push('acknowledgement ' + (b.ackRequired ? 'required' : 'optional')); }
+      if (typeof b.evidenceRequired === 'boolean' && b.evidenceRequired !== (cfg.evidenceRequired === true)) { set.evidenceRequired = b.evidenceRequired; changed.push("evidence for a 'No' " + (b.evidenceRequired ? 'required' : 'optional')); }
       await patchConfig(set);
       if (changed.length) activity.log(req, 'docaudit_config', { target: 'Documentation Audit', detail: changed.join(', ').slice(0, 900) });
       res.json({ ok: true, changed: changed.length });
@@ -969,15 +1004,19 @@ function mount(app, opts) {
     try {
       const a = await resolve(req, res, 'print'); if (!a) return;
       const b = body(req);
-      const kind = ['audit', 'report', 'blank', 'cap'].indexOf(b.kind) >= 0 ? b.kind : 'audit';
+      const kind = ['audit', 'report', 'blank', 'cap', 'bulk'].indexOf(b.kind) >= 0 ? b.kind : 'audit';
       let target = 'Documentation Audit';
-      if (kind === 'audit') {
+      if (kind === 'bulk') {
+        const ids = (Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 200);
+        for (const id of ids) { const x = await getDoc(AUDITS, id); if (!x || x.removedAt || !inScope(a, x.deptId)) return res.status(403).json({ ok: false, error: 'An audit you chose is not one of yours.' }); }
+        target = ids.length + ' audit(s)';
+      } else if (kind === 'audit') {
         const x = await getDoc(AUDITS, String(b.id || ''));
         if (!x || x.removedAt) return res.status(404).json({ ok: false, error: 'This audit does not exist.' });
         if (!inScope(a, x.deptId)) return notMine(res);
         target = x.deptName + ' · ' + (DA.nurseNames(x) || '—') + ' · ' + x.date;
       } else if (b.dept) { if (!inScope(a, b.dept)) return notMine(res); target = String(b.dept); }
-      activity.log(req, 'docaudit_print', { target, detail: kind + (b.from ? ' · ' + b.from + (b.to ? ' → ' + b.to : '') : '') + (b.pdf ? ' · PDF' : '') });
+      activity.log(req, 'docaudit_print', { target, detail: kind + (kind === 'blank' && +b.copies > 1 ? ' · ' + Math.min(30, +b.copies) + ' copies' : '') + (b.from ? ' · ' + b.from + (b.to ? ' → ' + b.to : '') : '') + (b.pdf ? ' · PDF' : '') });
       res.json({ ok: true });
     } catch (e) { fail(res, e, 'Could not record the print.'); }
   });
@@ -989,7 +1028,18 @@ function mount(app, opts) {
       let depts = await myDepts(a, cfg);
       let scope = access.auditDeptIds(a);
       if (req.query.dept) { if (!inScope(a, req.query.dept)) return notMine(res); scope = [String(req.query.dept)]; depts = depts.filter((d) => d.id === String(req.query.dept)); }
-      const audits = (await findAudits({ depts: scope, months })).filter(DA.countsInKpi);
+      let audits;
+      if (req.query.ids) {
+        // The audits ticked on the Register: those only (each must be one of yours), their months.
+        audits = [];
+        for (const id of String(req.query.ids).split(',').map((x) => x.trim()).filter(Boolean).slice(0, 200)) {
+          const x = await getDoc(AUDITS, id);
+          if (x && !x.removedAt && inScope(a, x.deptId) && DA.countsInKpi(x)) audits.push(x);
+        }
+        if (!audits.length) return res.status(400).json({ ok: false, error: 'None of the chosen audits is completed and yours to export.' });
+        months.splice(0, months.length, ...[...new Set(audits.map((x) => x.month))].sort());
+        depts = depts.filter((d) => audits.some((x) => x.deptId === d.id));
+      } else audits = (await findAudits({ depts: scope, months })).filter(DA.countsInKpi);
       const tools = (await allDocs(TOOLS)).filter((t) => !t.removedAt);
       const sum = buildSummary(audits, tools, months, depts, {});
       const caps = [];
@@ -1002,6 +1052,45 @@ function mount(app, opts) {
       res.set('Cache-Control', 'no-store');
       res.end(buf);
     } catch (e) { fail(res, e, 'Could not build the Excel file.'); }
+  });
+
+  /* BULK on the Register: complete drafts · publish · remove, for up to 200 ticked audits. Each audit
+     goes through the same rule as the single action; what cannot be done is listed with why. */
+  app.post('/api/doc-audit/bulk', guard, async (req, res) => {
+    try {
+      const b = body(req);
+      const action = ['complete', 'publish', 'remove'].indexOf(b.action) >= 0 ? b.action : null;
+      if (!action) return res.status(400).json({ ok: false, error: 'Choose what to do.' });
+      const a = await resolve(req, res, { complete: null, publish: 'edit', remove: 'delete' }[action]); if (!a) return;
+      const ids = [...new Set((Array.isArray(b.ids) ? b.ids : []).map(String))].slice(0, 200);
+      if (!ids.length) return res.status(400).json({ ok: false, error: 'Tick the audits first.' });
+      const cfg = await getConfig();
+      const me = actor(req, a), reason = str(b.reason, 300);
+      let done = 0; const skipped = [];
+      for (const id of ids) {
+        const x = await getDoc(AUDITS, id);
+        if (!x || x.removedAt) { skipped.push({ id, why: 'not found' }); continue; }
+        const label = (DA.nurseNames(x) || '—') + ' · ' + x.date;
+        let no, upd;
+        const t = now();
+        if (action === 'complete') {
+          no = await completeBlock(a, x, cfg);
+          if (!no) upd = { set: { status: 'completed', completedAt: t, completedBy: me }, action: 'completed (bulk)' };
+        } else if (action === 'publish') {
+          no = await publishBlock(a, x, cfg);
+          if (!no) { const p = publishSet(req, a, x, ''); upd = { set: p.set, action: p.action + ' (bulk)' }; }
+        } else {
+          no = removeBlock(a, x);
+          if (!no) upd = { set: { removedAt: t, removedBy: me }, action: 'removed (bulk)' + (reason ? ' · ' + reason : '') };
+        }
+        if (no) { skipped.push({ id, label, why: no.error }); continue; }
+        const doc = Object.assign({}, x, upd.set, { updatedAt: t, updatedBy: me, history: (x.history || []).concat([{ at: t, by: me, action: upd.action, changes: action === 'remove' ? (reason || x.status) : '' }]).slice(-100) });
+        if (!(await putDoc(AUDITS, doc, x.updatedAt))) { skipped.push({ id, label, why: 'changed by someone else meanwhile' }); continue; }
+        logAudit(req, doc, upd.action);
+        done++;
+      }
+      res.json({ ok: true, done, skipped });
+    } catch (e) { fail(res, e, 'Could not finish the bulk action.'); }
   });
 
   // What needs attention, for the sidebar badge.
@@ -1017,8 +1106,10 @@ function mount(app, opts) {
       const list = await findAudits({ depts: ids, from: DA.addMonth(ym, -2) + '-01', drafts: true });
       const me = actor(req, a);
       const canAdd = access.can(a, 'docaudit', 'add'), canEdit = access.can(a, 'docaudit', 'edit');
-      const awaitingAck = canAdd ? list.filter((x) => x.status === 'completed').length : 0;
-      const awaitingSign = canEdit ? list.filter((x) => x.status === 'acknowledged' && (a.unrestricted || !x.auditor || x.auditor.username !== me)).length : 0;
+      const ackReq = cfg.ackRequired === true;
+      const awaitingAck = canAdd && ackReq ? list.filter((x) => x.status === 'completed').length : 0;
+      // Ready to publish (by someone other than its auditor).
+      const awaitingSign = canEdit ? list.filter((x) => (ackReq ? x.status === 'acknowledged' : (x.status === 'completed' || x.status === 'acknowledged')) && (a.unrestricted || !x.auditor || x.auditor.username !== me)).length : 0;
       const drafts = canAdd ? list.filter((x) => x.status === 'draft' && x.auditor && x.auditor.username === me).length : 0;
       const criticalOpen = list.filter((x) => x.status !== 'draft' && x.status !== 'signed' && x.result && (x.result.criticalFails || []).length).length;
       // After the 20th, a department that has not reached its minimum sample for the month.

@@ -968,6 +968,54 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, React.createElement("b", null, p.name), React.createElement("small", null, [p.emp_id && 'ID ' + p.emp_id, p.designation, p.current_department].filter(Boolean).join(' · '))))), document.body));
   }
+  function BlankFormButtons({
+    tool,
+    dept
+  }) {
+    const [copies, setCopies] = useState(1);
+    const [busy, setBusy] = useState(false);
+    const log = {
+      kind: 'blank',
+      dept: dept ? dept.id : undefined,
+      copies
+    };
+    const doc = () => blankDoc(tool, dept ? dept.name : '', copies);
+    return React.createElement("div", {
+      style: {
+        display: 'inline-flex',
+        gap: 6,
+        alignItems: 'center'
+      },
+      title: 'Blank ' + (tool.short || tool.name) + ' form for auditing on paper'
+    }, React.createElement("span", {
+      className: "da-sub"
+    }, "Offline form"), React.createElement("input", {
+      type: "number",
+      min: "1",
+      max: "30",
+      className: "da-in",
+      style: {
+        width: 58,
+        padding: '4px 6px'
+      },
+      value: copies,
+      "aria-label": "Copies",
+      onChange: e => setCopies(Math.max(1, Math.min(30, +e.target.value || 1)))
+    }), React.createElement("span", {
+      className: "da-sub"
+    }, "cop", copies > 1 ? 'ies' : 'y'), React.createElement("button", {
+      className: "da-btn sm",
+      disabled: busy,
+      onClick: () => openPrint(log, doc(), false)
+    }, "Print blank form"), React.createElement("button", {
+      className: "da-btn sm",
+      disabled: busy,
+      onClick: () => {
+        setBusy(true);
+        pdfFrom(log, doc(), false).catch(e => toast(e.message, 'error')).finally(() => setBusy(false));
+      }
+    }, "PDF"));
+  }
   function ResultPanel({
     res,
     criteria,
@@ -1132,7 +1180,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const problems = useMemo(() => form ? DA.validate(form, criteria, {
       today: meta.today,
       tool,
-      auditorStaffId: meta.staffId
+      auditorStaffId: meta.staffId,
+      evidenceRequired: meta.config.evidenceRequired
     }) : [], [form, criteria, tool]);
     const guide = useMemo(() => DA.guideFor(tool, form && form.area), [tool, form && form.area]);
     const bad = (field, cid) => showErr && problems.some(p => p.field === field && (cid == null || p.criterion === cid));
@@ -1293,20 +1342,20 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }
     async function sign() {
       const note = await askText({
-        title: 'Nurse In-charge sign-off',
-        message: 'Sign off this audit. It is locked afterwards; only an administrator can reopen it.',
-        confirmLabel: 'Sign off',
+        title: 'Publish this audit?',
+        message: 'Publishing releases the result to the nurse' + (DA.nursesOf(audit).length > 1 ? 's' : '') + ' (My Profile) and locks the audit; only an administrator can reopen it.' + (DA.pendingAcks(audit).length ? ' Acknowledgement is optional — the nurse can still acknowledge after publishing.' : ''),
+        confirmLabel: 'Publish',
         placeholder: 'Comment (optional)'
       });
       if (note == null) return;
       act('/sign', {
         note
-      }, 'Signed off.');
+      }, 'Published.');
     }
     async function reopen() {
       const reason = await askText({
         title: 'Reopen this audit?',
-        message: 'The sign-off is kept in the history. Say why it is reopened.',
+        message: 'It is taken back from the nurse; the publication is kept in the history. Say why it is reopened.',
         confirmLabel: 'Reopen',
         min: 5
       });
@@ -1536,7 +1585,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-h"
     }, React.createElement("h3", null, "Checklist"), React.createElement("span", {
       className: "da-sub"
-    }, "One answer per criterion. Evidence for a 'No' is optional (what is missing, where, date/time). N/A is not scored; unreviewed items stay blank.")), sections.map(({
+    }, "One answer per criterion. Evidence for a 'No' is ", meta.config.evidenceRequired ? 'required' : 'optional', " (what is missing, where, date/time). N/A is not scored; unreviewed items stay blank.")), sections.map(({
       s,
       items
     }) => React.createElement(React.Fragment, {
@@ -1595,7 +1644,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }, React.createElement("b", null, "Evidence:"), " ", form.evidence[c.id] || '—') : React.createElement("textarea", {
         className: 'da-ta' + (bad('evidence', c.id) ? ' bad' : ''),
         rows: 2,
-        placeholder: v === 'N' ? "Evidence for 'No' — what is missing, where, date / time (optional)" : 'Remark',
+        placeholder: v === 'N' ? "Evidence for 'No' — what is missing, where, date / time (" + (meta.config.evidenceRequired ? 'required' : 'optional') + ")" : 'Remark',
         value: form.evidence[c.id] || '',
         onChange: e => setEv(c.id, e.target.value)
       })));
@@ -1626,7 +1675,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         textTransform: 'uppercase',
         marginBottom: 4
       }
-    }, "Sign-off"), React.createElement("div", {
+    }, "Progress"), React.createElement("div", {
       className: "da-chain"
     }, React.createElement("div", {
       className: "da-step done"
@@ -1640,8 +1689,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         const k = acks[DA.nurseKey(n)];
         return React.createElement("small", {
           key: DA.nurseKey(n)
-        }, ns.length > 1 ? n.name + ': ' : '', k ? (k.method === 'account' ? '✓ own account' : '✓ in person, recorded by ' + (k.byName || k.by)) + ' · ' + when(k.at) + (k.note ? ' · “' + k.note + '”' : '') : 'waiting' + (meta.config.ackRequired && ns.length === 1 ? ' — needed before sign-off' : ''));
-      }), pend.length > 0 && ns.length > 1 && meta.config.ackRequired && React.createElement("small", null, "Every nurse acknowledges before sign-off."), pend.length > 0 && audit.status === 'completed' && meta.canAdd && React.createElement("div", {
+        }, ns.length > 1 ? n.name + ': ' : '', k ? (k.method === 'account' ? '✓ own account' : '✓ in person, recorded by ' + (k.byName || k.by)) + ' · ' + when(k.at) + (k.note ? ' · “' + k.note + '”' : '') : 'waiting' + (meta.config.ackRequired && ns.length === 1 ? ' — needed before publishing' : ''));
+      }), pend.length > 0 && meta.config.ackRequired && React.createElement("small", null, "Every nurse acknowledges before publishing."), pend.length > 0 && !meta.config.ackRequired && React.createElement("small", null, "Optional."), pend.length > 0 && audit.status !== 'draft' && meta.canAdd && React.createElement("div", {
         style: {
           marginTop: 5
         }
@@ -1652,7 +1701,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }, "Record acknowledgement"))));
     })(), React.createElement("div", {
       className: 'da-step ' + (audit.signoff ? 'done' : audit.status === 'acknowledged' ? 'now' : '')
-    }, React.createElement("i", null), React.createElement("div", null, React.createElement("b", null, "Nurse In-charge sign-off"), audit.signoff ? React.createElement("small", null, audit.signoff.name, " \xB7 ", when(audit.signoff.at), audit.signoff.note ? ' · “' + audit.signoff.note + '”' : '') : React.createElement("small", null, own && !meta.isAdmin ? 'Another person signs off your audit' : 'Waiting'), !audit.signoff && meta.canEdit && (audit.status === 'acknowledged' || meta.isAdmin && audit.status === 'completed' || !meta.config.ackRequired && audit.status === 'completed') && (!own || meta.isAdmin) && React.createElement("div", {
+    }, React.createElement("i", null), React.createElement("div", null, React.createElement("b", null, "Published"), " ", React.createElement("span", {
+      className: "da-sub"
+    }, "(released to the nurse)"), audit.signoff ? React.createElement("small", null, "by ", audit.signoff.name, " \xB7 ", when(audit.signoff.at), audit.signoff.note ? ' · “' + audit.signoff.note + '”' : '') : React.createElement("small", null, own && !meta.isAdmin ? 'Another person publishes your audit' : 'Not yet — the nurse does not see it'), !audit.signoff && meta.canEdit && (audit.status === 'acknowledged' || meta.isAdmin && audit.status === 'completed' || !meta.config.ackRequired && audit.status === 'completed') && (!own || meta.isAdmin) && React.createElement("div", {
       style: {
         marginTop: 5
       }
@@ -1660,7 +1711,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-btn sm ok",
       disabled: busy,
       onClick: sign
-    }, "Sign off"))))), (audit.reopened || []).length > 0 && React.createElement("div", {
+    }, "Publish"))))), (audit.reopened || []).length > 0 && React.createElement("div", {
       className: "da-sub",
       style: {
         marginTop: 6
@@ -1751,6 +1802,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         flex: 1
       }
+    }), !audit && meta.canPrint && React.createElement(BlankFormButtons, {
+      tool: tool,
+      dept: depts.find(d => d.id === form.deptId)
     }), !audit && tool.sample && React.createElement("span", {
       className: "da-sub",
       title: tool.sample.note
@@ -1804,8 +1858,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const tot = sum.overall.months[ym];
     const toolName = id => (sum.tools.find(t => t.id === id) || {}).short || id;
     const mineDrafts = pending.filter(x => x.status === 'draft' && x.auditor.username === meta.user);
-    const waitAck = pending.filter(x => x.status === 'completed');
-    const waitSign = pending.filter(x => x.status === 'acknowledged' && (meta.isAdmin || x.auditor.username !== meta.user));
+    const ackReq = meta.config.ackRequired;
+    const waitAck = ackReq ? pending.filter(x => x.status === 'completed') : [];
+    const waitSign = pending.filter(x => (ackReq ? x.status === 'acknowledged' : x.status === 'completed' || x.status === 'acknowledged') && (meta.isAdmin || x.auditor.username !== meta.user));
     const List = ({
       title,
       rows,
@@ -1915,7 +1970,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, tot.criticalRecords), React.createElement("small", null, tot.records ? pctTxt(DA.round1(tot.criticalRecords / tot.records * 100)) + ' of records · target ≤ 5%' : 'target ≤ 5%')), React.createElement("div", {
       className: "da-tile"
-    }, React.createElement("span", null, "Waiting"), React.createElement("b", null, waitAck.length + waitSign.length), React.createElement("small", null, waitAck.length, " acknowledgement \xB7 ", waitSign.length, " sign-off"))), React.createElement("div", {
+    }, React.createElement("span", null, "Ready to publish"), React.createElement("b", null, waitSign.length), React.createElement("small", null, ackReq ? waitAck.length + ' waiting for acknowledgement' : 'not yet seen by the nurse'))), React.createElement("div", {
       className: "da-card"
     }, React.createElement("div", {
       className: "da-h"
@@ -2007,14 +2062,14 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       title: "Your drafts",
       rows: mineDrafts,
       hint: "not results yet"
-    }), React.createElement(List, {
+    }), ackReq && React.createElement(List, {
       title: "Waiting for the nurse\u2019s acknowledgement",
       rows: waitAck,
       hint: "same-day feedback"
     }), meta.canEdit && React.createElement(List, {
-      title: "Waiting for In-charge sign-off",
+      title: "Ready to publish",
       rows: waitSign,
-      hint: "locked once signed"
+      hint: "released to the nurse, then locked \u2014 or tick many in the Register"
     })));
   }
   function Register({
@@ -2052,6 +2107,96 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const needle = f.q.trim().toLowerCase();
     const rows = data ? data.audits.filter(x => !needle || [DA.nursesOf(x).map(n => n.name + ' ' + (n.empId || '')).join(' '), x.uhid, x.auditor && x.auditor.name, x.area].join(' ').toLowerCase().indexOf(needle) >= 0) : [];
     const months = DA.monthsBetween(f.from.slice(0, 7), f.to.slice(0, 7), 36);
+    const [picked, setPicked] = useState([]);
+    const [busy, setBusy] = useState(false);
+    const [reload, setReload] = useState(0);
+    useEffect(() => {
+      setPicked([]);
+    }, [f.dept, f.from, f.to, f.status, f.result, f.tool, f.nurse, reload]);
+    const shownIds = rows.map(x => x.id);
+    const allOn = shownIds.length > 0 && shownIds.every(id => picked.indexOf(id) >= 0);
+    const toggle = id => setPicked(p => p.indexOf(id) >= 0 ? p.filter(x => x !== id) : p.concat([id]));
+    const sel = rows.filter(x => picked.indexOf(x.id) >= 0);
+    const count = st => sel.filter(x => Array.isArray(st) ? st.indexOf(x.status) >= 0 : x.status === st).length;
+    async function bulk(action) {
+      const n = action === 'complete' ? count('draft') : action === 'publish' ? count(['completed', 'acknowledged']) : sel.length;
+      const words = {
+        complete: ['Complete ' + n + ' draft(s)?', 'Fully answered drafts become Completed audits; unfinished ones are skipped and listed.', 'Complete'],
+        publish: ['Publish ' + n + ' audit(s)?', 'They are released to the nurses (My Profile) and locked. Your own audits are skipped — another person publishes them.', 'Publish'],
+        remove: ['Remove ' + sel.length + ' audit(s)?', 'They leave the register and the KPIs; nothing is deleted (kept in history). Published ones only by an administrator.', 'Remove']
+      }[action];
+      if (!n) {
+        toast(action === 'complete' ? 'None of the ticked audits is a draft.' : 'None of the ticked audits is completed and waiting to be published.', 'warn');
+        return;
+      }
+      let reason = '';
+      if (action === 'remove') {
+        reason = await askText({
+          title: words[0],
+          message: words[1],
+          confirmLabel: words[2],
+          danger: true,
+          placeholder: 'Reason (optional)'
+        });
+        if (reason == null) return;
+      } else if (!(await confirmBox({
+        title: words[0],
+        message: words[1],
+        confirmLabel: words[2]
+      }))) return;
+      setBusy(true);
+      try {
+        const ids = action === 'complete' ? sel.filter(x => x.status === 'draft').map(x => x.id) : action === 'publish' ? sel.filter(x => x.status === 'completed' || x.status === 'acknowledged').map(x => x.id) : sel.map(x => x.id);
+        const r = await post('/api/doc-audit/bulk', {
+          action,
+          ids,
+          reason
+        });
+        toast(r.done + ' done' + (r.skipped.length ? ' · ' + r.skipped.length + ' skipped — ' + r.skipped.slice(0, 3).map(s2 => (s2.label ? s2.label + ': ' : '') + s2.why).join(' · ') + (r.skipped.length > 3 ? ' …' : '') : ''), r.skipped.length ? 'warn' : 'success');
+        refreshBadge();
+        setReload(x => x + 1);
+      } catch (e) {
+        toast(e.message, 'error');
+      } finally {
+        setBusy(false);
+      }
+    }
+    const done = sel.filter(x => x.status !== 'draft');
+    const bulkPrint = () => {
+      if (!done.length) return toast('Tick completed or published audits to print.', 'warn');
+      openPrint({
+        kind: 'bulk',
+        ids: done.map(x => x.id)
+      }, bulkDoc(done, meta), false);
+    };
+    const bulkPdf = () => {
+      if (!done.length) return toast('Tick completed or published audits.', 'warn');
+      setBusy(true);
+      pdfFrom({
+        kind: 'bulk',
+        ids: done.map(x => x.id)
+      }, bulkDoc(done, meta), false).catch(e => toast(e.message, 'error')).finally(() => setBusy(false));
+    };
+    const bulkExcel = async () => {
+      if (!done.length) return toast('Tick completed or published audits.', 'warn');
+      try {
+        await download('/api/doc-audit/xlsx?ids=' + done.map(x => x.id).join(','));
+        toast('Excel downloaded.', 'success');
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    };
+    useEffect(() => {
+      let live = true;
+      if (!reload) return;
+      const qs = ['from=' + f.from, 'to=' + f.to, f.dept && 'dept=' + encodeURIComponent(f.dept), f.status && 'status=' + f.status, f.result && 'result=' + f.result, f.tool && 'tool=' + f.tool, f.nurse && 'nurse=' + encodeURIComponent(f.nurse)].filter(Boolean).join('&');
+      api('/api/doc-audit/audits?' + qs).then(j => {
+        if (live) setData(j);
+      }).catch(e => setErr(e.message));
+      return () => {
+        live = false;
+      };
+    }, [reload]);
     async function excel() {
       try {
         await download('/api/doc-audit/xlsx?from=' + months[0] + '&to=' + months[months.length - 1] + (f.dept ? '&dept=' + encodeURIComponent(f.dept) : ''));
@@ -2139,7 +2284,53 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       })
     }, "+ New audit")), err && React.createElement("div", {
       className: "da-banner red"
-    }, err), React.createElement("div", {
+    }, err), picked.length > 0 && React.createElement("div", {
+      className: "da-card da-bar",
+      style: {
+        position: 'sticky',
+        top: 6,
+        zIndex: 3,
+        boxShadow: '0 6px 22px rgba(13,27,46,.12)',
+        animation: 'da-in .2s ease'
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 13
+      }
+    }, picked.length, " selected"), React.createElement("span", {
+      className: "da-sub"
+    }, count('draft'), " draft \xB7 ", count(['completed', 'acknowledged']), " completed \xB7 ", count('signed'), " published"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), meta.canAdd && React.createElement("button", {
+      className: "da-btn",
+      disabled: busy,
+      onClick: () => bulk('complete')
+    }, "Complete"), meta.canEdit && React.createElement("button", {
+      className: "da-btn ok",
+      disabled: busy,
+      onClick: () => bulk('publish')
+    }, "Publish"), meta.canPrint && React.createElement(React.Fragment, null, React.createElement("button", {
+      className: "da-btn",
+      disabled: busy,
+      onClick: bulkPrint
+    }, "Print"), React.createElement("button", {
+      className: "da-btn",
+      disabled: busy,
+      onClick: bulkPdf
+    }, "PDF"), React.createElement("button", {
+      className: "da-btn",
+      disabled: busy,
+      onClick: bulkExcel
+    }, "Excel")), meta.canDelete && React.createElement("button", {
+      className: "da-btn danger",
+      disabled: busy,
+      onClick: () => bulk('remove')
+    }, "Remove"), React.createElement("button", {
+      className: "da-btn sm",
+      onClick: () => setPicked([])
+    }, "Clear")), React.createElement("div", {
       className: "da-card"
     }, !data ? React.createElement("div", {
       className: "da-empty"
@@ -2149,18 +2340,37 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-scroll"
     }, React.createElement("table", {
       className: "da-tbl"
-    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Date"), React.createElement("th", null, "Department / area"), React.createElement("th", null, "Nurse(s) audited"), React.createElement("th", null, "UHID"), React.createElement("th", null, "Auditor"), React.createElement("th", {
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        width: 30
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      "aria-label": "Select all shown",
+      checked: allOn,
+      onChange: () => setPicked(allOn ? [] : shownIds)
+    })), React.createElement("th", null, "Date"), React.createElement("th", null, "Department / area"), React.createElement("th", null, "Nurse(s) audited"), React.createElement("th", null, "UHID"), React.createElement("th", null, "Auditor"), React.createElement("th", {
       className: "n"
     }, "Y / N / NA"), React.createElement("th", {
       className: "n"
     }, "Score"), React.createElement("th", null, "Grade"), React.createElement("th", null, "Result"), React.createElement("th", null, "Status"))), React.createElement("tbody", null, rows.map(x => React.createElement("tr", {
       key: x.id,
       className: "click",
+      style: picked.indexOf(x.id) >= 0 ? {
+        background: '#eef6fd'
+      } : null,
       onClick: () => setRoute({
         view: 'docAuditNew',
         audit: x.id
       })
     }, React.createElement("td", {
+      onClick: e => e.stopPropagation()
+    }, React.createElement("input", {
+      type: "checkbox",
+      "aria-label": "Select",
+      checked: picked.indexOf(x.id) >= 0,
+      onChange: () => toggle(x.id)
+    })), React.createElement("td", {
       style: {
         whiteSpace: 'nowrap'
       }
@@ -3457,7 +3667,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       setDraft({});
       setFlags({
         kpiLink: j.kpiLink,
-        ackRequired: j.ackRequired
+        ackRequired: j.ackRequired,
+        evidenceRequired: j.evidenceRequired
       });
     }).catch(e => toast(e.message, 'error'));
     useEffect(() => {
@@ -3476,7 +3687,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         [k]: v
       })
     }));
-    const dirty = Object.keys(draft).length > 0 || flags.kpiLink !== data.kpiLink || flags.ackRequired !== data.ackRequired;
+    const dirty = Object.keys(draft).length > 0 || flags.kpiLink !== data.kpiLink || flags.ackRequired !== data.ackRequired || flags.evidenceRequired !== data.evidenceRequired;
     const auditorsOf = id => (data.people || []).filter(p => p.auditDepartments.indexOf('*') >= 0 || p.auditDepartments.indexOf(id) >= 0);
     async function save() {
       setBusy(true);
@@ -3484,7 +3695,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         const r = await post('/api/doc-audit/config', {
           depts: draft,
           kpiLink: flags.kpiLink,
-          ackRequired: flags.ackRequired
+          ackRequired: flags.ackRequired,
+          evidenceRequired: flags.evidenceRequired
         }, 'PUT');
         toast(r.changed ? 'Settings saved.' : 'Nothing changed.', 'success');
         load();
@@ -3515,7 +3727,12 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       onClick: () => setFlags(f => Object.assign({}, f, {
         ackRequired: !f.ackRequired
       }))
-    }, React.createElement("span", null, React.createElement("b", null, "Nurse\u2019s acknowledgement required before the In-charge signs off"), " (policy 7.2: same-day feedback, acknowledgement signature)."))), React.createElement("div", {
+    }, React.createElement("span", null, React.createElement("b", null, "Nurse\u2019s acknowledgement required before publishing"), " \u2014 off: optional (the nurse may still acknowledge, before or after publishing).")), React.createElement(Switch, {
+      on: flags.evidenceRequired,
+      onClick: () => setFlags(f => Object.assign({}, f, {
+        evidenceRequired: !f.evidenceRequired
+      }))
+    }, React.createElement("span", null, React.createElement("b", null, "Evidence required for every 'No'"), " \u2014 off: optional (the box is offered, never forced)."))), React.createElement("div", {
       className: "da-card"
     }, React.createElement("div", {
       className: "da-h"
@@ -3603,7 +3820,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     });
     return '<div class="end blk"><span>Printed by ' + esc(me() || '—') + ' on ' + esc(at) + ' from UNICO. Confidential — contains patient identifiers (policy 10).</span><span>Grading bands are an internal Unico scale, not an official JCI rating.</span></div><div class="cr">Automatically generated by the system · Developed by Nasif Ahammed Niloy</div>';
   };
-  function auditDoc(a, tool) {
+  function auditDoc(a, tool, opts) {
+    const o = opts || {};
     const crit = a ? a.criteria : DA.freezeCriteria(tool);
     const ans = a && a.answers || {},
       ev = a && a.evidence || {};
@@ -3618,9 +3836,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       items
     }) => '<tr class="sec"><td colspan="8">Section ' + esc(s.id) + ': ' + esc(s.title) + (s.jci ? ' (JCI: ' + esc(s.jci) + ')' : '') + '</td></tr>' + items.map(c => '<tr><td class="no">' + c.no + '</td><td>' + esc(c.text) + '</td><td class="jci">' + esc((c.jci || []).join(', ')) + '</td><td class="crit">' + (c.critical ? 'Critical' : '') + '</td><td class="c">' + tick(c, 'Y') + '</td><td class="c">' + tick(c, 'N') + '</td><td class="c">' + tick(c, 'NA') + '</td><td class="ev">' + esc(ev[c.id] || '') + '</td></tr>').join('')).join('');
     const H = tool.header || {};
-    const v = x => a ? esc(x || '—') : '&nbsp;';
+    const v = x => a ? esc(x || '—') : x ? esc(x) : '&nbsp;';
     const extra = (H.extra || []).map(f => [f.label, a ? (a.extra || {})[f.id] : '']);
-    const pairs = [['Department', a && a.deptName], ['Audit date / shift', a && DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : '')], ['Patient UHID / MRN', a && a.uhid], [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map(n => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '') + otherText(n)).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed], [H.areaLabel || 'Area', a && a.area]].concat(extra);
+    const pairs = [['Department', a ? a.deptName : o.deptName], ['Audit date / shift', a && DA.fmtDate(a.date) + (a.shift ? ' · ' + a.shift : '')], ['Patient UHID / MRN', a && a.uhid], [DA.nursesOf(a).length > 1 ? 'Nurses audited' : 'Nurse auditee', a && DA.nursesOf(a).map(n => n.name + (n.empId ? ' (ID ' + n.empId + ')' : '') + otherText(n)).join(', ')], ['Auditor', a && a.auditor && a.auditor.name], [H.bedLabel || 'Ward / bed no.', a && a.bed], [H.areaLabel || 'Area', a && a.area]].concat(extra);
     while (pairs.length % 2) pairs.push(['', '']);
     let hd = '';
     for (let i = 0; i < pairs.length; i += 2) hd += '<tr><td class="k">' + esc(pairs[i][0]) + '</td><td>' + v(pairs[i][1]) + '</td><td class="k">' + esc(pairs[i + 1][0]) + '</td><td>' + (pairs[i + 1][0] ? v(pairs[i + 1][1]) : '') + '</td></tr>';
@@ -3632,7 +3850,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const signs = '<div class="signs blk"><div><span>Auditor</span>' + (a ? esc(a.auditor.name) + '<br>' + esc(when(a.completedAt || a.createdAt)) : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Auditee nurse' + (a && DA.nursesOf(a).length > 1 ? 's' : '') + ' (acknowledgement)</span>' + (a && DA.nursesOf(a).length ? DA.nursesOf(a).map(n => {
       const k = DA.acksOf(a)[DA.nurseKey(n)];
       return esc(n.name) + (k ? ' · ' + esc(when(k.at)) + (k.method === 'account' ? ' · own account' : ' · in person') : ' · ____________');
-    }).join('<br>') : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Nurse In-charge</span>' + (a && a.signoff ? esc(a.signoff.name) + '<br>' + esc(when(a.signoff.at)) : 'Signature: ______________<br>Date / time: ____________') + '</div></div>';
+    }).join('<br>') : 'Signature: ______________<br>Date / time: ____________') + '</div>' + '<div><span>Nurse In-charge (published)</span>' + (a && a.signoff ? 'Published by ' + esc(a.signoff.name) + '<br>' + esc(when(a.signoff.at)) : 'Signature: ______________<br>Date / time: ____________') + '</div></div>';
     const body = letterhead('Nursing Quality & Patient Safety', tool.name, [tool.code, tool.version && 'Version ' + tool.version, a && a.toolRevision > 1 ? 'tool revision ' + a.toolRevision : ''].filter(Boolean).join(' · ')) + '<table class="hd">' + hd + '</table>' + '<div class="hint">Mark ✓ in one box per criterion. Write evidence for a \'No\' where useful. Items marked Critical: any \'No\' = audit FAIL. N/A is excluded from scoring.</div>' + '<table class="ck"><thead><tr><th>No.</th><th>Compliance criterion</th><th>JCI</th><th>Critical</th><th>Yes</th><th>No</th><th>N/A</th><th>Evidence / remarks</th></tr></thead><tbody>' + rows + '</tbody></table>' + sum + signs + footer();
     const title = a ? 'Documentation audit — ' + DA.nurseNames(a) + ' — ' + a.date : tool.name + ' (blank form)';
     return {
@@ -3686,64 +3904,100 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       mmH = landscape ? 210 : 297,
       M = 10;
     const pxW = landscape ? 1123 : 794;
-    const host = document.createElement('div');
-    host.style.cssText = 'position:fixed;left:-30000px;top:0;width:' + pxW + 'px;background:#fff;z-index:-1';
-    host.innerHTML = '<style>' + PRINT_CSS + '</style><div class="dap" style="width:' + pxW + 'px;padding:0 4px">' + doc.body + '</div>';
-    document.body.appendChild(host);
-    try {
-      await Promise.all([...host.querySelectorAll('img')].map(im => im.complete ? 0 : new Promise(r => {
-        im.onload = im.onerror = r;
-      })));
-      const root = host.querySelector('.dap');
-      const scale = 2;
-      const canvas = await H(root, {
-        scale,
-        backgroundColor: '#ffffff',
-        useCORS: true,
-        logging: false,
-        windowWidth: pxW
-      });
-      const pxPerMm = pxW / (mmW - 2 * M);
-      const pageH = (mmH - 2 * M - 6) * pxPerMm;
-      const top0 = root.getBoundingClientRect().top;
-      const cuts = [...root.querySelectorAll('tr, .blk')].map(el => el.getBoundingClientRect().bottom - top0).sort((x, y) => x - y);
-      const total = root.scrollHeight;
-      const pages = [];
-      let start = 0;
-      while (start < total - 2 && pages.length < 60) {
-        const limit = start + pageH;
-        const end = total <= limit ? total : cuts.filter(c => c > start + 60 && c <= limit).pop() || limit;
-        pages.push([start, end]);
-        start = end;
-      }
-      const pdf = new J({
-        orientation: landscape ? 'landscape' : 'portrait',
-        unit: 'mm',
-        format: 'a4',
-        compress: true
-      });
-      pages.forEach(([a, b], i) => {
-        const c = document.createElement('canvas');
-        c.width = canvas.width;
-        c.height = Math.max(1, Math.ceil((b - a) * scale));
-        c.getContext('2d').drawImage(canvas, 0, a * scale, canvas.width, (b - a) * scale, 0, 0, canvas.width, (b - a) * scale);
-        if (i) pdf.addPage();
-        pdf.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', M, M, mmW - 2 * M, (b - a) / pxPerMm);
-        pdf.setFontSize(7);
-        pdf.setTextColor(120);
-        pdf.text('Page ' + (i + 1) + ' of ' + pages.length, mmW - M, mmH - 5, {
-          align: 'right'
+    const pxPerMm = pxW / (mmW - 2 * M);
+    const pageH = (mmH - 2 * M - 6) * pxPerMm;
+    const pdf = new J({
+      orientation: landscape ? 'landscape' : 'portrait',
+      unit: 'mm',
+      format: 'a4',
+      compress: true
+    });
+    let pageNo = 0;
+    for (const body of doc.parts || [doc.body]) {
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:-30000px;top:0;width:' + pxW + 'px;background:#fff;z-index:-1';
+      host.innerHTML = '<style>' + PRINT_CSS + '</style><div class="dap" style="width:' + pxW + 'px;padding:0 4px">' + body + '</div>';
+      document.body.appendChild(host);
+      try {
+        await Promise.all([...host.querySelectorAll('img')].map(im => im.complete ? 0 : new Promise(r => {
+          im.onload = im.onerror = r;
+        })));
+        const root = host.querySelector('.dap');
+        const scale = 2;
+        const canvas = await H(root, {
+          scale,
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          logging: false,
+          windowWidth: pxW
         });
-      });
-      pdf.setProperties({
-        title: doc.title,
-        author: me()
-      });
-      pdf.save(doc.file + '.pdf');
-      toast('PDF downloaded.', 'success');
-    } finally {
-      host.remove();
+        const top0 = root.getBoundingClientRect().top;
+        const cuts = [...root.querySelectorAll('tr, .blk')].map(el => el.getBoundingClientRect().bottom - top0).sort((x, y) => x - y);
+        const total = root.scrollHeight;
+        let start = 0,
+          guard = 0;
+        while (start < total - 2 && guard++ < 60) {
+          const limit = start + pageH;
+          const end = total <= limit ? total : cuts.filter(c => c > start + 60 && c <= limit).pop() || limit;
+          const c = document.createElement('canvas');
+          c.width = canvas.width;
+          c.height = Math.max(1, Math.ceil((end - start) * scale));
+          c.getContext('2d').drawImage(canvas, 0, start * scale, canvas.width, (end - start) * scale, 0, 0, canvas.width, (end - start) * scale);
+          if (pageNo) pdf.addPage();
+          pageNo++;
+          pdf.addImage(c.toDataURL('image/jpeg', 0.92), 'JPEG', M, M, mmW - 2 * M, (end - start) / pxPerMm);
+          start = end;
+        }
+      } finally {
+        host.remove();
+      }
     }
+    for (let i = 1; i <= pageNo; i++) {
+      pdf.setPage(i);
+      pdf.setFontSize(7);
+      pdf.setTextColor(120);
+      pdf.text('Page ' + i + ' of ' + pageNo, mmW - M, mmH - 5, {
+        align: 'right'
+      });
+    }
+    pdf.setProperties({
+      title: doc.title,
+      author: me()
+    });
+    pdf.save(doc.file + '.pdf');
+    toast('PDF downloaded.', 'success');
+  }
+  function blankDoc(tool, deptName, copies) {
+    const n = Math.max(1, Math.min(30, +copies || 1));
+    const one = auditDoc(null, tool, {
+      deptName
+    }).body;
+    const parts = Array.from({
+      length: n
+    }, () => one);
+    return {
+      parts,
+      body: parts.join('<div style="page-break-before:always;break-before:page"></div>'),
+      title: (tool.short || tool.name) + ' — blank form' + (deptName ? ' — ' + deptName : ''),
+      file: 'Documentation-Audit-form_' + String(tool.short || tool.id || 'tool').replace(/\W+/g, '-') + (deptName ? '_' + deptName.replace(/\W+/g, '-') : '') + (n > 1 ? '_x' + n : '')
+    };
+  }
+  function bulkDoc(audits, meta) {
+    const parts = audits.map(a => auditDoc(a, toolOf(meta, a.toolId) || {
+      name: a.toolName || 'Documentation audit',
+      code: a.toolCode,
+      sections: [...new Map(a.criteria.map(c => [c.sectionId, {
+        id: c.sectionId,
+        title: c.section || c.sectionId
+      }])).values()],
+      header: {}
+    }).body);
+    return {
+      parts,
+      body: parts.join('<div style="page-break-before:always;break-before:page"></div>'),
+      title: audits.length + ' documentation audits',
+      file: 'Documentation-Audits_' + audits.length + '_' + new Date().toISOString().slice(0, 10)
+    };
   }
   const printAudit = (a, tool) => openPrint(a ? {
     kind: 'audit',
