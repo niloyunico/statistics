@@ -36,7 +36,7 @@ async function build(data) {
   const { months, audits, tools, summary, caps } = data;
   const toolById = {}; (tools || []).forEach((t) => { toolById[t._id || t.id] = t; });
   const wb = new ExcelJS.Workbook();
-  wb.creator = 'UNICO — Documentation Audit';
+  wb.creator = 'UNICO — Nursing Documentation KPI Audit';
   wb.created = new Date();
 
   // 1. Audit Register
@@ -74,17 +74,17 @@ async function build(data) {
   // 2. KPI Dashboard — one row per department × tool × month (+ the period), KPIs as columns.
   const maxK = Math.max(1, ...((tools || []).map((t) => (t.kpis || []).length)));
   const kcols = [];
-  for (let i = 0; i < maxK; i++) kcols.push({ header: 'KPI ' + (i + 1), key: 'k' + i, width: 22 });
+  for (let i = 0; i < maxK; i++) kcols.push({ header: 'Indicator ' + (i + 1), key: 'k' + i, width: 30 });
   const dash = sheet(wb, 'KPI Dashboard', [
     { header: 'Department', key: 'dept', width: 22 }, { header: 'Tool', key: 'tool', width: 18 }, { header: 'Month', key: 'month', width: 11 },
     { header: 'Records audited', key: 'rec', width: 9 }, { header: 'Minimum', key: 'min', width: 8 }, { header: 'Nurses audited', key: 'nurses', width: 9 },
   ].concat(kcols, [{ header: 'Top 3 failing criteria', key: 'top', width: 50 }, { header: 'CAP due (below target 2 months running)', key: 'cap', width: 24 }]));
-  const kpiText = (k) => (k.value == null ? '—' : k.value + '%') + (k.target != null ? ' (target ' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%)' : '');
+  const kpiText = (k) => (k.value == null ? '—' : k.value + '%' + (k.met === false ? ' ▼' : '')) +(k.target != null ? ' (target ' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%)' : '');
   const addDash = (name, toolId, label, s, min, cap) => {
     const t = toolById[toolId] || { kpis: [] };
     const o = { dept: name, tool: (t.short || t.name || toolId), month: label, rec: s.records, min: min == null ? '' : min, nurses: s.nurses,
       top: s.topFailing.map((g) => '#' + g.no + ' ×' + g.count + (g.critical ? ' (critical)' : '')).join(', '), cap: cap || '' };
-    s.kpis.forEach((k, i) => { o['k' + i] = (k.code ? k.code + ' ' : '') + k.name + ': ' + kpiText(k); });
+    s.kpis.forEach((k, i) => { o['k' + i] = k.name + ': ' + kpiText(k); });
     const row = dash.addRow(o);
     s.kpis.forEach((k, i) => mark(row.getCell('k' + i), s.records ? k.met : null));
     return row;

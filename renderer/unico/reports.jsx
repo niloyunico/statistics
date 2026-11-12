@@ -1892,7 +1892,7 @@ const USER_MODS=[
   ['devdays','Device Days','Clinical','Add = enter & send · Edit = review & correct · departments set below'],
   ['kpi','Nursing KPI','Clinical','Add = enter figures · Edit = change figures, KPIs & reports · Print = print, PDF, PowerPoint, Excel'],
   // Nursing documentation audit (UHP-NSG-QA-001…004). Which departments is set per person below the grid.
-  ['docaudit','Documentation Audit','Clinical','Add = fill audits · Edit = correct & sign off · departments set below'],
+  ['docaudit','Nursing Documentation KPI Audit','Clinical','Add = fill audits · Edit = correct & sign off · departments set below'],
   ['datacol','Data Collection','Data',''],
   ['reports','Reports','Data',''],
   ['staff','Staff Management','Administer',''],
@@ -2456,7 +2456,7 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
     const mdActs=(!isAdmin&&!isColl)?asActions(perms.mydept):[];
     if(mdActs.length&&!myDepts.length){ setSec('access'); return setErr('My Department: pick at least one department, or set it back to None.'); }
     if(!isAdmin&&!isColl&&asActions(perms.devdays).length&&!devDepts.length){ setSec('access'); return setErr('Device Days: pick at least one department (or All departments), or set it back to None.'); }
-    if(!isAdmin&&!isColl&&asActions(perms.docaudit).length&&!audDepts.length){ setSec('access'); return setErr('Documentation Audit: pick at least one department (or All departments), or set it back to None.'); }
+    if(!isAdmin&&!isColl&&asActions(perms.docaudit).length&&!audDepts.length){ setSec('access'); return setErr('Nursing Documentation KPI Audit: pick at least one department (or All departments), or set it back to None.'); }
     if(mdActs.length){
       const was=editing?asActions(initial.perms&&initial.perms.mydept):[];
       const wasDepts=(editing&&Array.isArray(initial.myDepartments))?initial.myDepartments:[];
@@ -2946,8 +2946,8 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
               const does=[acts.indexOf('add')>=0&&'audit',acts.indexOf('edit')>=0&&'sign off',acts.indexOf('add')<0&&acts.indexOf('edit')<0&&'view'].filter(Boolean).join(' and ');
               return (
               <div style={{borderTop:'1px solid var(--line-2)',paddingTop:14,marginTop:14}}>
-                <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Documentation Audit <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>{'· which departments they '+does}</span></div>
-                <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Only departments switched on in Documentation Audit {'→'} Settings can be audited. "All departments" also covers departments added later and lets them pick any nurse in the register. Nobody can audit their own documentation.</div>
+                <div style={{fontSize:12.5,fontWeight:700,color:'var(--ink)',marginBottom:3}}>Nursing Documentation KPI Audit <span style={{fontWeight:500,color:'var(--muted)',fontSize:11}}>{'· which departments they '+does}</span></div>
+                <div style={{fontSize:10.5,color:'var(--muted)',marginBottom:9}}>Only departments switched on in Nursing Documentation KPI Audit {'→'} Settings can be audited. "All departments" also covers departments added later and lets them pick any nurse in the register. Nobody can audit their own documentation.</div>
                 <input value={audDeptQ} onChange={e=>setAudDeptQ(e.target.value)} placeholder="Search department…" style={{padding:'6px 9px',border:'1px solid var(--line)',borderRadius:7,fontSize:12,fontFamily:'inherit',marginBottom:8,width:'100%',maxWidth:260}}/>
                 <div style={{display:'flex',flexWrap:'wrap',gap:6,maxHeight:170,overflow:'auto'}}>
                   <button type="button" onClick={()=>toggleAudDept('*')} style={Object.assign(chip(all),{borderStyle:'dashed'})}>All departments</button>
@@ -2955,14 +2955,14 @@ function UserModal({initial,onClose,onSaved,depts,allUsers,inline}){
                     <button key={d.id} type="button" onClick={()=>toggleAudDept(d.id)} style={chip(on)}>{d.name}</button>
                   );})}
                 </div>
-                {!audDepts.length&&<div style={{fontSize:10.5,color:'var(--rose)',marginTop:6}}>Pick at least one department, or set Documentation Audit back to None.</div>}
+                {!audDepts.length&&<div style={{fontSize:10.5,color:'var(--rose)',marginTop:6}}>Pick at least one department, or set Nursing Documentation KPI Audit back to None.</div>}
               </div>
               ); })()}
             {!isAdmin&&!isColl&&<div style={{borderTop:'1px solid var(--line-2)',paddingTop:14,marginTop:14}}>
               <label style={{display:'flex',gap:9,alignItems:'flex-start',cursor:'pointer'}}>
                 <input type="checkbox" checked={audProfile} onChange={e=>setAudProfile(e.target.checked)} style={{marginTop:2}}/>
                 <span><span style={{fontSize:12.5,fontWeight:700,color:'var(--ink)'}}>See documentation audits on staff profiles</span>
-                  <span style={{display:'block',fontSize:10.5,color:'var(--muted)',marginTop:2}}>The "Documentation audits" card on a nurse's staff profile — every department's audits of that nurse. Separate from the Documentation Audit module; administrators always see it.</span></span>
+                  <span style={{display:'block',fontSize:10.5,color:'var(--muted)',marginTop:2}}>The "Documentation audits" card on a nurse's staff profile — every department's audits of that nurse. Separate from the Nursing Documentation KPI Audit module; administrators always see it.</span></span>
               </label>
             </div>}
           </div>

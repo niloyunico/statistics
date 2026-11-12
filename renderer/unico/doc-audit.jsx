@@ -235,8 +235,8 @@
   const NoDepts = ({ meta, setRoute }) => (
     <div className="da-card da-empty">
       {meta && meta.isAdmin
-        ? <span>No department is switched on for Documentation Audit yet. Open <a href="#" onClick={(e) => { e.preventDefault(); setRoute({ view: 'docAuditSettings' }); }}>Documentation Audit → Settings</a> and choose the tool each department audits with.</span>
-        : <span>No department has been set for you yet. Ask the administrator to choose your departments in Access Control → Documentation Audit.</span>}
+        ? <span>No department is switched on for Nursing Documentation KPI Audit yet. Open <a href="#" onClick={(e) => { e.preventDefault(); setRoute({ view: 'docAuditSettings' }); }}>Nursing Documentation KPI Audit → Settings</a> and choose the tool each department audits with.</span>
+        : <span>No department has been set for you yet. Ask the administrator to choose your departments in Access Control → Nursing Documentation KPI Audit.</span>}
     </div>
   );
   const toolOf = (meta, id) => ((meta && meta.tools) || []).find((t) => t.id === id) || null;
@@ -538,7 +538,7 @@
     if (err) return <div className="da-banner red">{err}</div>;
     if (!form || (auditId && !loaded)) return <div className="da-card da-empty">Loading the audit…</div>;
     if (!auditId && !depts.length) return <NoDepts meta={meta} setRoute={setRoute} />;
-    if (!tool) return <div className="da-banner">No audit tool is set for this department. {meta.isAdmin ? 'Choose one in Documentation Audit → Settings.' : 'Ask the administrator.'}</div>;
+    if (!tool) return <div className="da-banner">No audit tool is set for this department. {meta.isAdmin ? 'Choose one in Nursing Documentation KPI Audit → Settings.' : 'Ask the administrator.'}</div>;
 
     const set = (k, v) => setForm((f) => Object.assign({}, f, { [k]: v }));
     const setAns = (cid, v) => setForm((f) => { const answers = Object.assign({}, f.answers); if (answers[cid] === v) delete answers[cid]; else answers[cid] = v; return Object.assign({}, f, { answers }); });
@@ -750,7 +750,7 @@
     return (
       <div className="da-wrap">
         <div className="da-card da-bar">
-          <div><b style={{ fontSize: 15 }}>Documentation Audit · {DA.fmtMonth(ym)}</b><div className="da-sub">Score = Yes ÷ (Yes + No) × 100 · PASS = ≥ 90% and no critical failure · results go to the Nursing Quality Committee by the 10th</div></div>
+          <div><b style={{ fontSize: 15 }}>Nursing Documentation KPI Audit · {DA.fmtMonth(ym)}</b><div className="da-sub">Score = Yes ÷ (Yes + No) × 100 · PASS = ≥ 90% and no critical failure · results go to the Nursing Quality Committee by the 10th</div></div>
           <span style={{ flex: 1 }} />
           {meta.canAdd && <button className="da-btn pri" onClick={() => setRoute({ view: 'docAuditNew' })}>+ New audit</button>}
           <button className="da-btn" onClick={() => setRoute({ view: 'docAuditReports' })}>Reports</button>
@@ -758,26 +758,24 @@
         {meta.config.kpiLink && <div className="da-banner blue" style={{ padding: '8px 12px' }}><div>Every completed audit feeds <b>Nursing KPI 2C — Documentation Accuracy</b> automatically (Σ Yes ÷ Σ Yes + No, all departments).</div></div>}
         <div className="da-tiles">
           <div className="da-tile"><span>Records audited</span><b>{tot.records}</b><small>{tot.nurses} nurse(s)</small></div>
-          <div className="da-tile"><span>KPI-1 Accuracy</span><b style={{ color: tot.accuracy == null ? undefined : tot.accuracy >= 90 ? '#14713f' : '#a3172f' }}>{pctTxt(tot.accuracy)}</b><small>target ≥ 90%</small></div>
-          <div className="da-tile"><span>Audit pass rate</span><b>{tot.records ? pctTxt(DA.round1(tot.pass / tot.records * 100)) : '—'}</b><small>target ≥ 85%</small></div>
+          <div className="da-tile"><span>Documentation accuracy</span><b style={{ color: tot.accuracy == null ? undefined : tot.accuracy >= 90 ? '#14713f' : '#a3172f' }}>{pctTxt(tot.accuracy)}</b><small>target ≥ 90%</small></div>
           <div className="da-tile"><span>Critical failures</span><b style={{ color: tot.criticalRecords ? '#a3172f' : undefined }}>{tot.criticalRecords}</b><small>{tot.records ? pctTxt(DA.round1(tot.criticalRecords / tot.records * 100)) + ' of records · target ≤ 5%' : 'target ≤ 5%'}</small></div>
           <div className="da-tile"><span>Ready to publish</span><b>{waitSign.length}</b><small>{ackReq ? waitAck.length + ' waiting for acknowledgement' : 'not yet seen by the nurse'}</small></div>
         </div>
         <div className="da-card">
           <div className="da-h"><h3>Departments this month</h3><span className="grow" /><span className="da-sub">Policy 7.1: a minimum sample per unit each month, all shifts; each nurse at least once a quarter.</span></div>
           <div className="da-scroll"><table className="da-tbl">
-            <thead><tr><th>Department</th><th>Tool</th><th>Records</th><th className="n">Accuracy</th><th className="n">Pass</th><th className="n">Critical</th><th>Below target</th><th>Top failing criteria</th>{meta.canAdd && <th />}</tr></thead>
+            <thead><tr><th>Department</th><th>Tool</th><th>Records</th><th className="n">Accuracy</th><th className="n">Critical</th><th>Below target</th><th>Top failing criteria</th>{meta.canAdd && <th />}</tr></thead>
             <tbody>{sum.rows.map((r) => {
               const s = r.months[ym];
               const min = r.minRecords || 0;
-              const k1 = s.kpis.find((k) => k.formula === 'accuracy'), k2 = s.kpis.find((k) => k.formula === 'pass');
+              const k1 = s.kpis.find((k) => k.formula === 'accuracy');
               return <tr key={r.deptId + r.toolId}>
                 <td><b>{r.name}</b></td><td className="da-sub">{toolName(r.toolId)}</td>
                 <td style={{ minWidth: 120 }}><b>{s.records}</b>{min ? <span className="da-sub"> / {min}</span> : null}{min > 0 && <div className="da-prog" style={{ marginTop: 4 }}><i style={{ width: Math.min(100, (s.records / min) * 100) + '%', background: s.records >= min ? '#1f9d57' : undefined }} /></div>}</td>
                 <td className="n" style={{ color: k1 && k1.met === false ? '#a3172f' : undefined, fontWeight: 700 }}>{pctTxt(k1 && k1.value)}</td>
-                <td className="n">{pctTxt(k2 && k2.value)}</td>
                 <td className="n" style={{ color: s.criticalRecords ? '#a3172f' : undefined }}>{s.criticalRecords || ''}</td>
-                <td>{s.records ? (s.belowTarget.length ? s.kpis.filter((k) => k.met === false).map((k) => <span key={k.id} className="da-chip off" style={{ marginRight: 3 }}>{k.code || k.name}</span>) : <span className="da-chip met">On target</span>) : <span className="da-muted">—</span>}</td>
+                <td>{s.records ? (s.belowTarget.length ? s.kpis.filter((k) => k.met === false).map((k) => <span key={k.id} className="da-chip off" style={{ marginRight: 3 }}>{k.name}</span>) : <span className="da-chip met">On target</span>) : <span className="da-muted">—</span>}</td>
                 <td style={{ fontSize: 11.8 }}>{s.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ') || <span className="da-muted">—</span>}</td>
                 {meta.canAdd && <td><button className="da-btn sm" onClick={() => { lsSet('da_dept', r.deptId); setRoute({ view: 'docAuditNew', dept: r.deptId }); }}>+ Audit</button></td>}
               </tr>;
@@ -929,7 +927,7 @@
     const label = p.from === p.to ? DA.fmtMonth(p.from) : DA.fmtMonth(p.from) + ' – ' + DA.fmtMonth(p.to);
     async function excel() { try { await download('/api/doc-audit/xlsx?from=' + p.from + '&to=' + p.to + (p.dept ? '&dept=' + encodeURIComponent(p.dept) : '')); toast('Excel downloaded.', 'success'); } catch (e) { toast(e.message, 'error'); } }
     const kCell = (k, records) => !records || k.value == null ? <span className="da-muted">—</span>
-      : <span style={{ fontWeight: 700, color: k.met === false ? '#a3172f' : k.met ? '#14713f' : undefined }}>{k.value}%</span>;
+      : <span style={{ fontWeight: 700, color: k.met === false ? '#a3172f' : k.met ? '#14713f' : undefined }}>{k.value}%{k.met === false ? ' ▼' : ''}</span>;
     return (
       <div className="da-wrap">
         <div className="da-card da-bar">
@@ -952,8 +950,7 @@
         {!data ? <div className="da-card da-empty">Building the report…</div> : <>
           <div className="da-tiles">
             <div className="da-tile"><span>Records audited</span><b>{data.overall.total.records}</b><small>{label}</small></div>
-            <div className="da-tile"><span>KPI-1 Accuracy</span><b style={{ color: data.overall.total.accuracy == null ? undefined : data.overall.total.accuracy >= 90 ? '#14713f' : '#a3172f' }}>{pctTxt(data.overall.total.accuracy)}</b><small>all tools · target ≥ 90%</small></div>
-            <div className="da-tile"><span>Pass rate</span><b>{data.overall.total.records ? pctTxt(DA.round1(data.overall.total.pass / data.overall.total.records * 100)) : '—'}</b><small>target ≥ 85%</small></div>
+            <div className="da-tile"><span>Documentation accuracy</span><b style={{ color: data.overall.total.accuracy == null ? undefined : data.overall.total.accuracy >= 90 ? '#14713f' : '#a3172f' }}>{pctTxt(data.overall.total.accuracy)}</b><small>all tools · target ≥ 90%</small></div>
             <div className="da-tile"><span>Critical failure rate</span><b>{data.overall.total.records ? pctTxt(DA.round1(data.overall.total.criticalRecords / data.overall.total.records * 100)) : '—'}</b><small>{data.overall.total.criticalRecords} record(s) · target ≤ 5%</small></div>
             <div className="da-tile"><span>Nurses audited</span><b>{data.overall.total.nurses}</b><small>each at least once a quarter</small></div>
           </div>
@@ -962,7 +959,7 @@
             <div className="da-h"><h3>Department KPI report</h3><span className="da-sub">Appendix C · {label}</span><span className="grow" />
               {toolsShown.length > 1 && <div className="da-tabs">{toolsShown.map((t) => <button key={t.id} className={'da-btn sm' + (cur.id === t.id ? ' pri' : '')} onClick={() => setTab(t.id)}>{t.short || t.name}</button>)}</div>}</div>
             <div className="da-scroll"><table className="da-tbl">
-              <thead><tr><th style={{ minWidth: 170 }}>Department</th><th className="n">Records</th>{cur.kpis.map((k) => <th key={k.id} className="n" title={DA.KPI_FORMULA_LABEL[k.formula] + (k.criteria ? ' — criteria ' + k.criteria.map((c) => '#' + c.replace('c', '')).join(', ') : '')}>{k.code || ''}<div style={{ textTransform: 'none', fontWeight: 600 }}>{k.name}</div><div style={{ textTransform: 'none', fontWeight: 500 }}>{k.direction === 'lower' ? '≤ ' : '≥ '}{k.target}%</div></th>)}<th>Top 3 failing criteria</th><th>Action plan</th></tr></thead>
+              <thead><tr><th style={{ minWidth: 170 }}>Department</th><th className="n">Records</th>{cur.kpis.map((k) => <th key={k.id} className="n" title={DA.KPI_FORMULA_LABEL[k.formula] + (k.criteria ? ' — criteria ' + k.criteria.map((c) => '#' + c.replace('c', '')).join(', ') : '')}><div style={{ textTransform: 'none', fontWeight: 700 }}>{k.name}</div><div style={{ textTransform: 'none', fontWeight: 500 }}>{k.direction === 'lower' ? '≤ ' : '≥ '}{k.target}%</div></th>)}<th>Top 3 failing criteria</th><th>Action plan</th></tr></thead>
               <tbody>
                 {data.rows.filter((r) => r.toolId === cur.id).map((r) => {
                   const s = r.total; const lastCap = r.caps[r.caps.length - 1];
@@ -980,7 +977,7 @@
             <div className="da-pad da-sub">Policy 9: a department below target for 2 consecutive months submits a corrective action plan with owner and due date, focused on its top 3 failing criteria (PDSA). Hover a KPI for its formula.</div>
           </div>}
           {data.months.length > 1 && data.rows.length > 0 && <div className="da-card">
-            <div className="da-h"><h3>Accuracy by month</h3><span className="da-sub">KPI-1, Σ Yes ÷ Σ (Yes + No)</span></div>
+            <div className="da-h"><h3>Accuracy by month</h3><span className="da-sub">Documentation accuracy = Σ Yes ÷ Σ (Yes + No)</span></div>
             {W.LineChart && <div className="da-pad"><W.LineChart data={data.months.map((m) => ({ mon: DA.fmtMonth(m).slice(0, 3) + ' ' + m.slice(2, 4), val: data.overall.months[m].accuracy == null ? 0 : data.overall.months[m].accuracy }))} x="mon" y="val" height={200} color="#1f4f8a" /></div>}
             <div className="da-scroll"><table className="da-tbl da-heat">
               <thead><tr><th>Department</th>{data.months.map((m) => <th key={m} className="n">{DA.fmtMonth(m)}</th>)}</tr></thead>
@@ -998,11 +995,10 @@
               <div className="seg">{[['', 'None'], ['area', 'By area / zone'], ['shift', 'By shift'], ['nurse', 'By nurse'], ['auditor', 'By auditor']].map(([k, l]) => <button key={k} className={p.by === k ? 'on' : ''} onClick={() => set('by', k)}>{l}</button>)}</div></div>
             {!p.by ? <div className="da-empty" style={{ padding: 14 }}>Choose a breakdown — ED results by zone and by shift (QA-004 §9), or each nurse’s record (policy §1).</div>
               : !data.breakdown || !data.breakdown.length ? <div className="da-empty" style={{ padding: 14 }}>No audit in this period.</div>
-                : <div className="da-scroll"><table className="da-tbl"><thead><tr><th>{({ area: 'Area / zone', shift: 'Shift', nurse: 'Nurse', auditor: 'Auditor' })[p.by]}</th><th className="n">Records</th><th className="n">Accuracy</th><th className="n">Pass rate</th><th className="n">Critical</th><th>Top failing</th></tr></thead>
+                : <div className="da-scroll"><table className="da-tbl"><thead><tr><th>{({ area: 'Area / zone', shift: 'Shift', nurse: 'Nurse', auditor: 'Auditor' })[p.by]}</th><th className="n">Records</th><th className="n">Accuracy</th><th className="n">Critical</th><th>Top failing</th></tr></thead>
                   <tbody>{data.breakdown.map((b) => <tr key={b.key} className={b.staffId ? 'click' : ''} onClick={() => b.staffId && setRoute({ view: 'docAuditRegister', nurse: b.staffId })}>
                     <td><b>{b.label}</b>{b.sub && <div className="da-sub">{b.sub}</div>}</td><td className="n">{b.summary.records}</td>
                     <td className="n" style={{ fontWeight: 700, color: b.summary.accuracy != null && b.summary.accuracy < 90 ? '#a3172f' : undefined }}>{pctTxt(b.summary.accuracy)}</td>
-                    <td className="n">{b.summary.records ? pctTxt(DA.round1(b.summary.pass / b.summary.records * 100)) : '—'}</td>
                     <td className="n" style={{ color: b.summary.criticalRecords ? '#a3172f' : undefined }}>{b.summary.criticalRecords || ''}</td>
                     <td style={{ fontSize: 11.8 }}>{b.summary.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')}</td></tr>)}</tbody></table></div>}
           </div>
@@ -1154,7 +1150,7 @@
               return <div key={i} style={{ display: 'grid', gridTemplateColumns: '80px minmax(140px,1fr) 150px 70px 110px auto', gap: 8, marginBottom: 8, alignItems: 'start' }}>
                 <input className="da-in" value={k.code || ''} onChange={(e) => sk('code', e.target.value)} />
                 <input className="da-in" value={k.name} placeholder="Name" onChange={(e) => sk('name', e.target.value)} />
-                <select className="da-sel" value={k.formula} onChange={(e) => sk('formula', e.target.value)}>{DA.KPI_FORMULAS.map((f) => <option key={f} value={f}>{({ accuracy: 'Accuracy (Σ Yes ÷ Yes+No)', pass: 'Pass rate', full: 'Fully compliant', critical: 'Critical failure rate', subset: 'Chosen criteria' })[f]}</option>)}</select>
+                <select className="da-sel" value={k.formula} onChange={(e) => sk('formula', e.target.value)}>{DA.KPI_FORMULAS.concat(DA.KPI_FORMULAS.indexOf(k.formula) < 0 ? [k.formula] : []).map((f) => <option key={f} value={f}>{({ accuracy: 'Accuracy (Σ Yes ÷ Yes+No)', pass: 'Pass rate', full: 'Fully compliant', critical: 'Critical failure rate', subset: 'Chosen criteria' })[f]}</option>)}</select>
                 <input type="number" className="da-in" value={k.target == null ? '' : k.target} onChange={(e) => sk('target', e.target.value === '' ? null : +e.target.value)} />
                 <select className="da-sel" value={k.direction} onChange={(e) => sk('direction', e.target.value)}><option value="higher">≥ target</option><option value="lower">≤ target</option></select>
                 <button className="da-btn sm danger" disabled={k.formula === 'accuracy' && d.kpis.filter((x) => x.formula === 'accuracy').length === 1} onClick={() => set('kpis', d.kpis.filter((_, j) => j !== i))}>×</button>
@@ -1235,7 +1231,7 @@
                 <td className="n"><input type="number" min="0" className="da-in" style={{ width: 70, textAlign: 'right' }} value={c.minRecords} onChange={(e) => setRow(d, 'minRecords', e.target.value === '' ? 0 : +e.target.value)} /></td>
                 <td style={{ fontSize: 12 }}>{data.peopleAvailable ? (auds.length ? auds.map((p) => p.name + (p.auditDepartments.indexOf('*') >= 0 ? ' (all)' : '')).join(', ') : <span className="da-muted">nobody yet</span>) : <span className="da-muted">—</span>}</td>
               </tr>; })}</tbody></table></div>
-          <div className="da-pad da-sub">Auditors are given in <a href="#" onClick={(e) => { e.preventDefault(); setRoute({ view: 'users' }); }}>Access Control</a>: tick Documentation Audit (Add = fill audits, Edit = sign off as In-charge) and pick their departments. Administrators see every department.</div>
+          <div className="da-pad da-sub">Auditors are given in <a href="#" onClick={(e) => { e.preventDefault(); setRoute({ view: 'users' }); }}>Access Control</a>: tick Nursing Documentation KPI Audit (Add = fill audits, Edit = sign off as In-charge) and pick their departments. Administrators see every department.</div>
         </div>
       </div>);
   }
@@ -1259,7 +1255,7 @@
     + '.dap .res{font-size:11pt;font-weight:800}.dap .act{margin-top:5px;font-size:8pt}'
     + '.dap .signs{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:22px;font-size:8pt}.dap .signs div{border-top:.75pt solid #111;padding-top:4px;min-height:44px}.dap .signs span{display:block;font-size:6.8pt;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#444}'
     + '.dap .end{margin-top:12px;padding-top:5px;border-top:.5pt solid #999;display:flex;justify-content:space-between;font-size:7pt;color:#555}.dap .cr{margin-top:4px;text-align:center;font-size:6.2pt;color:#888}'
-    + '.dap h2{font-size:10pt;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px}.dap td.n,.dap th.n{text-align:right}.dap tr.tot td{font-weight:800;background:#eee}.dap .off{font-weight:800;text-decoration:underline}'
+    + '.dap h2{font-size:10pt;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px}.dap td.n,.dap th.n{text-align:right}.dap tr.tot td{font-weight:800;background:#eee}.dap .off{font-weight:800;color:#c0182f}'
     + '.dap .note{font-size:7.5pt;color:#333;margin-top:6px}'
     + '.dap h2{break-after:avoid;page-break-after:avoid}.dap h3.sec{font-size:11.5pt;margin:18px 0 6px;padding-bottom:3px;border-bottom:1pt solid #111;break-after:avoid;page-break-after:avoid}'
     + '.dap table.kt{font-size:8pt}.dap table.kt td.d{min-width:120px}.dap .legend{font-size:7pt;color:#333;margin:4px 0 2px;line-height:1.45}.dap .none{font-size:7.5pt;color:#555;margin:3px 0 8px}'
@@ -1324,20 +1320,20 @@
   }
   const toolsIn = (data) => data.tools.filter((t) => data.rows.some((r) => r.toolId === t.id && r.total.records > 0));
   const codesOf = (tools) => tools.map((t) => [t.code, t.version ? 'v' + t.version : ''].filter(Boolean).join(' ')).filter(Boolean).join(' · ');
-  const kv = (k, n) => (!n || k.value == null ? '—' : '<span class="' + (k.met === false ? 'off' : '') + '">' + k.value + '%</span>');
+  const kv = (k, n) => (!n || k.value == null ? '—' : k.met === false ? '<span class="off">' + k.value + '% ▼</span>' : k.value + '%');
   // One tool's KPI table: only the departments that audited; the others named in one line; a KPI legend.
   function kpiSection(data, t, n) {
     const rows = data.rows.filter((r) => r.toolId === t.id);
     const audited = rows.filter((r) => r.total.records > 0), idle = rows.filter((r) => !r.total.records);
     const h = data.hospital[t.id];
     return '<h2>' + (n ? n + ' ' : '') + esc(t.name) + (t.code ? ' · ' + esc(t.code) + (t.version ? ' v' + esc(t.version) : '') : '') + '</h2>'
-      + '<table class="kt"><thead><tr><th>Department</th><th class="n">Records</th><th class="n">Nurses</th>' + t.kpis.map((k) => '<th class="n">' + esc(k.code || k.name) + '<br>' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%</th>').join('') + '<th>Top 3 failing criteria</th></tr></thead><tbody>'
+      + '<table class="kt"><thead><tr><th>Department</th><th class="n">Records</th><th class="n">Nurses</th>' + t.kpis.map((k) => '<th class="n">' + esc(k.name) + '<br>' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%</th>').join('') + '<th>Top 3 failing criteria</th></tr></thead><tbody>'
       + audited.map((r) => '<tr><td class="d">' + esc(r.name) + (r.caps.length ? ' <span class="chip">CAP due</span>' : '') + (r.minRecords && r.total.records < r.minRecords * data.months.length ? '<br><small>' + r.total.records + ' of min ' + r.minRecords * data.months.length + '</small>' : '') + '</td><td class="n">' + r.total.records + '</td><td class="n">' + r.total.nurses + '</td>'
         + r.total.kpis.map((k) => '<td class="n">' + kv(k, r.total.records) + '</td>').join('') + '<td>' + esc(r.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count + (g.critical ? ' (C)' : '')).join(', ') || '—') + '</td></tr>').join('')
       + (h ? '<tr class="tot"><td>HOSPITAL TOTAL</td><td class="n">' + h.total.records + '</td><td class="n">' + h.total.nurses + '</td>' + h.total.kpis.map((k) => '<td class="n">' + kv(k, h.total.records) + '</td>').join('') + '<td>' + esc(h.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>' : '')
       + '</tbody></table>'
       + (idle.length ? '<div class="none blk"><b>No audits in this period:</b> ' + esc(idle.map((r) => r.name).join(', ')) + '</div>' : '')
-      + '<div class="legend blk">' + t.kpis.map((k) => '<b>' + esc(k.code || '') + '</b> ' + esc(k.name) + ' = ' + esc(DA.KPI_FORMULA_LABEL[k.formula] || '') + (k.criteria && k.criteria.length ? ' (criteria ' + k.criteria.map((c) => '#' + c.replace('c', '')).join(', ') + ')' : '')).join(' · ') + ' · underlined = below target · (C) = critical criterion.</div>';
+      + '<div class="legend blk">' + t.kpis.map((k) => '<b>' + esc(k.name) + '</b> = ' + esc(DA.KPI_FORMULA_LABEL[k.formula] || '') + (k.criteria && k.criteria.length ? ' (criteria ' + k.criteria.map((c) => '#' + c.replace('c', '')).join(', ') + ')' : '')).join(' · ') + ' · <span class="off">red ▼</span> = below target · (C) = critical criterion.</div>';
   }
   const summaryTable = (data, extra) => {
     const ov = data.overall.total;
@@ -1345,23 +1341,23 @@
     const caps = data.rows.filter((r) => r.caps.length).map((r) => r.name);
     const pub = extra ? extra.audits.filter((x) => x.status === 'signed').length : null;
     return '<table class="kv blk"><tr><td class="k">Reporting period</td><td>' + esc(periodLabel(data.months)) + '</td><td class="k">Departments audited</td><td>' + data.rows.filter((r) => r.total.records).length + ' of ' + data.rows.length + '</td></tr>'
-      + '<tr><td class="k">Records audited</td><td>' + ov.records + ' · ' + ov.nurses + ' nurse(s)</td><td class="k">KPI-1 Accuracy (all tools)</td><td><b>' + (ov.accuracy == null ? '—' : ov.accuracy + '%') + '</b> (target ≥ 90%)</td></tr>'
-      + '<tr><td class="k">Audit pass rate</td><td>' + pct(ov.pass, ov.records) + ' (target ≥ 85%)</td><td class="k">Critical-failure rate</td><td>' + pct(ov.criticalRecords, ov.records) + ' · ' + ov.criticalRecords + ' record(s) (target ≤ 5%)</td></tr>'
-      + (extra ? '<tr><td class="k">Published to nurses</td><td>' + pub + ' of ' + extra.audits.length + '</td><td class="k">Action plans due</td><td>' + (caps.length ? esc(caps.join(', ')) : 'None') + '</td></tr>' : '')
+      + '<tr><td class="k">Records audited</td><td>' + ov.records + ' · ' + ov.nurses + ' nurse(s)</td><td class="k">Documentation accuracy (all tools)</td><td><b>' + (ov.accuracy == null ? '—' : ov.accuracy + '%') + '</b> (target ≥ 90%)</td></tr>'
+      + '<tr><td class="k">Critical failure rate</td><td>' + pct(ov.criticalRecords, ov.records) + ' · ' + ov.criticalRecords + ' record(s) (target ≤ 5%)</td><td class="k">Action plans due</td><td>' + (caps.length ? esc(caps.join(', ')) : 'None') + '</td></tr>'
+      + (extra ? '<tr><td class="k">Published to nurses</td><td>' + pub + ' of ' + extra.audits.length + '</td><td class="k"></td><td></td></tr>' : '')
       + '</table>';
   };
   const signBlock = () => { const sig = sigNames(); return '<div class="signs blk"><div><span>Prepared by</span>' + esc(sig.prepared || '') + '</div><div><span>Reviewed by (Nursing Quality Committee)</span>' + esc(sig.reviewed || '') + '</div><div><span>Approved by (Chief Nursing Officer)</span>' + esc(sig.approved || '') + '</div></div>'; };
-  const reportHead = (data, kind) => { const tools = toolsIn(data); return letterhead('Nursing Quality & Patient Safety', 'Documentation Accuracy ' + kind + ' — ' + periodLabel(data.months), (codesOf(tools) || 'Documentation Audit') + ' · Appendix C' + (data.deptName ? ' · ' + data.deptName : '')); };
+  const reportHead = (data, kind) => { const tools = toolsIn(data); return letterhead('Nursing Quality & Patient Safety', 'Nursing Documentation KPI Audit' + (kind ? ' — ' + kind : '') + ' — ' + periodLabel(data.months), (codesOf(tools) || 'Nursing Documentation KPI Audit') + ' · Appendix C' + (data.deptName ? ' · ' + data.deptName : '')); };
 
   // The department KPI report of a period (Appendix C), one table per tool.
   function reportDoc(data) {
     const tools = toolsIn(data);
-    const body = reportHead(data, 'KPI Report') + summaryTable(data)
+    const body = reportHead(data, '') + summaryTable(data)
       + (tools.length ? tools.map((t) => kpiSection(data, t)).join('') : '<p>No audit in this period.</p>')
       + '<p class="note blk">Results go to the Nursing Quality Committee by the 10th of the following month. A department below target for 2 consecutive months submits a corrective action plan (Appendix B) for its top 3 failing criteria.</p>'
       + signBlock() + footer();
     const label = periodLabel(data.months);
-    return { body, title: 'Documentation Accuracy KPI report — ' + label, file: 'Documentation-Audit-KPI-report_' + label.replace(/\W+/g, '-') };
+    return { body, title: 'Nursing Documentation KPI Audit — ' + label, file: 'Nursing-Documentation-KPI-Audit_' + label.replace(/\W+/g, '-') };
   }
 
   /* The COMPLETE report: summary, KPI tables, trend by month, criterion gaps, action plans due,
@@ -1381,7 +1377,7 @@
         + audited.map((r) => '<tr><td class="d">' + esc(r.name) + '</td>' + data.months.map((m) => { const s2 = r.months[m]; return '<td class="n ' + band(s2.accuracy) + '">' + (s2.accuracy == null ? '·' : s2.accuracy + '%') + (s2.records ? '<small>' + s2.records + ' rec.</small>' : '') + '</td>'; }).join('')
           + '<td class="n ' + band(r.total.accuracy) + '"><b>' + (r.total.accuracy == null ? '—' : r.total.accuracy + '%') + '</b><small>' + r.total.records + ' rec.</small></td></tr>').join('')
         + '<tr class="tot"><td>ALL DEPARTMENTS</td>' + data.months.map((m) => { const s2 = data.overall.months[m]; return '<td class="n">' + (s2.accuracy == null ? '·' : s2.accuracy + '%') + '<small>' + s2.records + ' rec.</small></td>'; }).join('') + '<td class="n">' + (data.overall.total.accuracy == null ? '—' : data.overall.total.accuracy + '%') + '</td></tr></tbody></table>'
-        + '<div class="legend">KPI-1 accuracy = Σ Yes ÷ Σ (Yes + No). Shading: ≥ 95% · ≥ 90% · ≥ 80% · below 80%.</div>';
+        + '<div class="legend">Documentation accuracy = Σ Yes ÷ Σ (Yes + No). Shading: ≥ 95% · ≥ 90% · ≥ 80% · below 80%.</div>';
     }
     // 4. criterion gaps per tool
     const gaps = tools.map((t) => {
@@ -1394,16 +1390,16 @@
     }).join('');
     // 5. CAPs due
     const capRows = data.rows.filter((r) => r.caps.length);
-    const toolKpi = (tid, id) => { const t = data.tools.find((x) => x.id === tid); const k = t && t.kpis.find((x) => x.id === id); return k ? (k.code || '') + ' ' + k.name : id; };
+    const toolKpi = (tid, id) => { const t = data.tools.find((x) => x.id === tid); const k = t && t.kpis.find((x) => x.id === id); return k ? k.name : id; };
     const caps = capRows.length ? '<table class="kt"><thead><tr><th>Department</th><th>Month</th><th>Below target two months running</th><th>Top failing criteria (period)</th></tr></thead><tbody>'
       + capRows.map((r) => r.caps.map((c) => '<tr><td class="d">' + esc(r.name) + '</td><td>' + esc(DA.fmtMonth(c.month)) + '</td><td>' + esc(c.kpis.map((id) => toolKpi(r.toolId, id)).join(', ')) + '</td><td>' + esc(r.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>').join('')).join('') + '</tbody></table>'
       : '<p class="note">No department was below target two months running in this period.</p>';
     // 6. by nurse
     const nurseRows = (extra.nurses || []);
     const otherOf = (staffId) => { const hit = extra.audits.map((x) => DA.nursesOf(x).find((y) => String(y.staffId) === String(staffId) && y.fromOtherDept)).find(Boolean); return hit ? (hit.homeDept || 'other dept') + ' · ' + (hit.assignment || 'Deployed') : ''; };
-    const nurses = nurseRows.length ? '<table class="kt"><thead><tr><th>#</th><th>Nurse</th><th>ID · designation</th><th class="n">Records</th><th class="n">Accuracy</th><th class="n">Pass rate</th><th class="n">Critical</th><th>Top failing</th></tr></thead><tbody>'
+    const nurses = nurseRows.length ? '<table class="kt"><thead><tr><th>#</th><th>Nurse</th><th>ID · designation</th><th class="n">Records</th><th class="n">Accuracy</th><th class="n">Critical</th><th>Top failing</th></tr></thead><tbody>'
       + nurseRows.map((b, i) => { const s2 = b.summary; const o = b.staffId ? otherOf(b.staffId) : '';
-        return '<tr><td class="n">' + (i + 1) + '</td><td><b>' + esc(b.label) + '</b>' + (o ? '<br><small>from ' + esc(o) + '</small>' : '') + '</td><td>' + esc(b.sub || '') + '</td><td class="n">' + s2.records + '</td><td class="n ' + band(s2.accuracy) + '">' + (s2.accuracy == null ? '—' : s2.accuracy + '%') + '</td><td class="n">' + (s2.records ? DA.round1(s2.pass / s2.records * 100) + '%' : '—') + '</td><td class="n">' + (s2.criticalRecords || '') + '</td><td>' + esc(s2.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>'; }).join('')
+        return '<tr><td class="n">' + (i + 1) + '</td><td><b>' + esc(b.label) + '</b>' + (o ? '<br><small>from ' + esc(o) + '</small>' : '') + '</td><td>' + esc(b.sub || '') + '</td><td class="n">' + s2.records + '</td><td class="n ' + band(s2.accuracy) + '">' + (s2.accuracy == null ? '—' : s2.accuracy + '%') + '</td><td class="n">' + (s2.criticalRecords || '') + '</td><td>' + esc(s2.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>'; }).join('')
       + '</tbody></table><div class="legend">A shared record counts under each of its nurses.</div>' : '<p class="note">No nurse audited.</p>';
     // 7. register
     const audits = extra.audits.slice().sort((x, y) => (x.date || '').localeCompare(y.date || '') || String(x.deptName).localeCompare(String(y.deptName)));
@@ -1413,7 +1409,7 @@
           + DA.nursesOf(x).map((y) => esc(y.name) + (y.empId ? ' (' + esc(y.empId) + ')' : '') + (y.fromOtherDept ? ' <span class="chip">other dept</span>' : '')).join('<br>') + '</td><td>' + esc((x.auditor && x.auditor.name) || '') + '</td><td class="n">' + (r.yes != null ? r.yes + '/' + r.no + '/' + r.na : '') + '</td><td class="n"><b>' + (r.pct == null ? '—' : r.pct + '%') + '</b></td><td>' + esc(r.gradeLabel || '') + ((r.criticalFails || []).length ? '<small>' + r.criticalFails.length + ' critical</small>' : '') + '</td><td><b>' + esc(r.result || '') + '</b></td><td>' + esc(DA.STATUS_LABEL[x.status] || x.status) + '</td></tr>'; }).join('')
       + '</tbody></table>' + (extra.more ? '<p class="note">Only the newest 500 audits are listed — choose a shorter period for the full register.</p>' : '') : '<p class="note">No audit in this period.</p>';
 
-    const body = reportHead(data, 'Complete Audit Report')
+    const body = reportHead(data, 'Complete Report')
       + sec('Summary') + summaryTable(data, extra)
       + sec('Department KPI report') + (tools.length ? tools.map((t) => kpiSection(data, t)).join('') : '<p class="note">No audit in this period.</p>')
       + sec('Trend by month') + trend
@@ -1423,7 +1419,7 @@
       + sec('Audit register') + register
       + '<p class="note blk">Grades: ≥ 95% Excellent · 90–94.9% Good · 80–89.9% Needs improvement · < 80% Unsatisfactory. PASS = ≥ 90% and no critical criterion marked \'No\'. N/A is excluded from scoring.</p>'
       + signBlock() + footer();
-    return { body, title: 'Documentation Audit complete report — ' + label, file: 'Documentation-Audit-complete-report_' + label.replace(/\W+/g, '-') };
+    return { body, title: 'Nursing Documentation KPI Audit — complete report — ' + label, file: 'Nursing-Documentation-KPI-Audit-complete-report_' + label.replace(/\W+/g, '-') };
   }
   async function openPrint(log, doc, landscape) {
     const w = window.open('', '_blank');   // inside the click (pop-up blockers); filled once the server has logged it
@@ -1522,15 +1518,15 @@
     const [meta, err, reload] = useMeta();
     const isAdmin = !window.unicoUserPerms || window.unicoUserPerms() === null;
     if (err) return <div className="da-banner red">{err}</div>;
-    if (!meta) return <div className="da-card da-empty">Loading Documentation Audit…</div>;
+    if (!meta) return <div className="da-card da-empty">Loading Nursing Documentation KPI Audit…</div>;
     if (view === 'docAuditNew') {
-      if (!audit && !meta.canAdd) return <div className="da-card da-empty">Filling audits needs the Documentation Audit “Add” permission. Ask the administrator.</div>;
+      if (!audit && !meta.canAdd) return <div className="da-card da-empty">Filling audits needs the Nursing Documentation KPI Audit “Add” permission. Ask the administrator.</div>;
       return <AuditForm key={audit || 'new:' + (dept || '')} meta={meta} auditId={audit} initialDept={dept} setRoute={setRoute} />;
     }
     if (view === 'docAuditRegister') return <Register key={nurse || ''} meta={meta} nurse={nurse} setRoute={setRoute} />;
     if (view === 'docAuditReports') return <Reports meta={meta} setRoute={setRoute} />;
     if (view === 'docAuditTools') return isAdmin ? <Tools meta={meta} reloadMeta={reload} /> : <div className="da-card da-empty">Only an administrator can change the audit tools.</div>;
-    if (view === 'docAuditSettings') return isAdmin ? <Settings meta={meta} reloadMeta={reload} setRoute={setRoute} /> : <div className="da-card da-empty">Only an administrator can change Documentation Audit settings.</div>;
+    if (view === 'docAuditSettings') return isAdmin ? <Settings meta={meta} reloadMeta={reload} setRoute={setRoute} /> : <div className="da-card da-empty">Only an administrator can change Nursing Documentation KPI Audit settings.</div>;
     return <Home meta={meta} setRoute={setRoute} />;
   }
   window.DocAuditView = DocAuditView;

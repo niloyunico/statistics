@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c924946988","reports":"/dist/reports.chunk.js?v=485741b79f","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=03bfd58bd0","docaudit":"/dist/docaudit.chunk.js?v=4efba485ae","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=c924946988","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=ca75ebfb4a","docaudit":"/dist/docaudit.chunk.js?v=24a54bd974","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=542eb7f199","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7359,7 +7359,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     'overlay-edit': { level: 'warn', title: 'Edited in the Quality console', fix: 'The figure used is a Quality-console edit, not the approved submission. Check it is intended.' },
     'dd-incomplete': { level: 'warn', title: 'Device Days not complete', fix: 'Some days of the month are missing or waiting for review in Device Days, so the denominator may be short.' },
     'patient-days-mismatch': { level: 'warn', title: 'Patient-days differ from Device Days', fix: 'The patient-days used differ by more than 5% from the unit’s approved Device Days total patients. Check which is right.' },
-    'docaudit-sample': { level: 'warn', title: 'Fewer records audited than the minimum', fix: 'The department audited fewer patient records than its monthly minimum (Documentation Audit → Settings; policy 7.1: at least 10 per unit). Audit more records before the 5th of next month.' },
+    'docaudit-sample': { level: 'warn', title: 'Fewer records audited than the minimum', fix: 'The department audited fewer patient records than its monthly minimum (Nursing Documentation KPI Audit → Settings; policy 7.1: at least 10 per unit). Audit more records before the 5th of next month.' },
     'stale-den': { level: 'warn', title: 'Old headcount carried forward', fix: 'The staff headcount used was entered more than 3 months ago. Enter this month’s headcount in Quality → Indicator Administration.' },
     outlier: { level: 'warn', title: 'Unusual figure', fix: 'Far from the KPI’s recent months. Check the source figures are right.' },
     'setup-drift': { level: 'warn', title: 'Units expected differ from Department Setup', fix: 'This KPI’s “Units expected” list differs from the units Department Setup says report the indicator. Update one of them.' },
@@ -7542,7 +7542,10 @@ window.QI_CORRECTIONS_BY_DEFID = {
     { id: 'unsat', min: -1, label: 'Unsatisfactory', action: 'Individual improvement plan; focused training; re-audit within 2 weeks.' },
   ];
   const FAIL_ACTION = 'Same-day correction where possible; incident report if harm/near miss; root-cause review.';
-  const KPI_FORMULAS = ['accuracy', 'pass', 'full', 'critical', 'subset'];
+  // The formulas a KPI may use. 'pass' and 'full' were dropped (the user's choice); kpiValue and the
+  // labels still understand them, so nothing old breaks.
+  const KPI_FORMULAS = ['accuracy', 'critical', 'subset'];
+  const KPI_DROPPED = ['pass', 'full'];
   const KPI_FORMULA_LABEL = {
     accuracy: "Total 'Yes' ÷ (Total 'Yes' + Total 'No') × 100 across all audited records",
     pass: 'Records scoring ≥ 90% with zero critical failures ÷ records audited × 100',
@@ -7769,7 +7772,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
   const countsInKpi = (a) => !!a && !a.removedAt && a.status !== 'draft' && !!a.result;
 
   const API = {
-    STATUSES, STATUS_LABEL, ANSWERS, PASS_MARK, GRADES, FAIL_ACTION, KPI_FORMULAS, KPI_FORMULA_LABEL, SHIFTS,
+    STATUSES, STATUS_LABEL, ANSWERS, PASS_MARK, GRADES, FAIL_ACTION, KPI_FORMULAS, KPI_DROPPED, KPI_FORMULA_LABEL, SHIFTS,
     has, round1, isDate, isMonth, hospitalNow, addMonth, monthsBetween, fmtMonth, fmtDate, quarterOf,
     ALDRETE, ALDRETE_DISCHARGE, cleanAldrete, aldreteText,
     MAX_NURSES, nursesOf, nurseKey, acksOf, pendingAcks, nurseNames,
@@ -11395,8 +11398,8 @@ const UNICO_MODULES = [{
   home: 'kpiDashboard'
 }, {
   id: 'docaudit',
-  label: 'Documentation Audit',
-  short: 'Doc audit',
+  label: 'Nursing Documentation KPI Audit',
+  short: 'Doc KPI audit',
   icon: I.doc,
   home: 'docAuditHome'
 }];
@@ -11935,7 +11938,7 @@ const UNICO_WS = [{
     tag: 'NEW'
   }, {
     id: 'docaudit',
-    label: 'Documentation Audit',
+    label: 'Nursing Documentation KPI Audit',
     icon: I.doc,
     home: 'docAuditHome',
     on: v => unicoModuleOf(v) === 'docaudit',
@@ -29040,7 +29043,7 @@ function App() {
       docAuditTools: 'Audit tools',
       docAuditSettings: 'Settings'
     };
-    crumbs = ['UNICO', 'Documentation Audit', DA_TITLE[route.view] || 'Dashboard'];
+    crumbs = ['UNICO', 'Nursing Documentation KPI Audit', DA_TITLE[route.view] || 'Dashboard'];
     body = typeof DocAuditView !== 'undefined' ? React.createElement(DocAuditView, {
       view: route.view,
       audit: route.audit,

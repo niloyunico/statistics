@@ -366,7 +366,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       color: '#1f4f8a',
       dot: '#4a7fd0',
       bg: '#e6eefb',
-      long: 'From the Nursing Documentation Audit (Σ Yes ÷ Σ Yes + No over every completed audit)'
+      long: 'From the Nursing Documentation KPI Audit (Σ Yes ÷ Σ Yes + No over every completed audit)'
     },
     pooled: {
       label: 'Quality',
@@ -4871,7 +4871,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       fall: 'all units, out-patient falls left out',
       pool: 'all units pooled',
       hospital: 'Overall Hospital',
-      docaudit: 'the Documentation Audit module — Σ Yes ÷ Σ Yes + No over every completed audit'
+      docaudit: 'the Nursing Documentation KPI Audit module — Σ Yes ÷ Σ Yes + No over every completed audit'
     }[d.source.rule] + ')' : '', ". ", d.autoFill !== false ? 'Any month can still be typed over in Data Update — with a reason.' : 'Each month is typed in Data Update.') : React.createElement("div", {
       style: {
         fontSize: 12.5

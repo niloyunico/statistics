@@ -40,9 +40,10 @@ const ALDRETE_FIELDS = [
   { id: 'aldreteIn', label: 'Aldrete score — on arrival in recovery', type: 'aldrete' },
   { id: 'aldreteOut', label: 'Aldrete score — at discharge from recovery', type: 'aldrete' },
 ];
+// The user's choice: no Audit Pass Rate and no Fully Compliant Record Rate KPI (each audit still has
+// its own PASS / FAIL). KPI ids stay as the policy numbered them; codes run 1…n.
 const STD_KPIS = [
   kpi('kpi1', 'KPI-1', 'Documentation Accuracy Rate', 'accuracy', 90, 'higher'),
-  kpi('kpi2', 'KPI-2', 'Audit Pass Rate', 'pass', 85, 'higher'),
 ];
 
 const IPD = {
@@ -95,10 +96,9 @@ const IPD = {
     [25, 'H', 'MOI', 0, 'Only hospital-approved abbreviations are used; documentation errors are corrected using the approved procedure without erasing or overwriting original entries; and patient information is kept confidential with access restricted to authorized personnel.'],
   ]),
   kpis: STD_KPIS.concat([
-    kpi('kpi3', 'KPI-3', 'Fully Compliant Record Rate', 'full', 60, 'higher'),
-    kpi('kpi4', 'KPI-4', 'Critical Failure Rate', 'critical', 5, 'lower'),
-    kpi('kpi5', 'KPI-5', 'Consent Documentation Compliance', 'subset', 95, 'higher', range(15, 19)),
-    kpi('kpi6', 'KPI-6', 'Medication Documentation Compliance', 'subset', 95, 'higher', range(9, 11)),
+    kpi('kpi4', 'KPI-2', 'Critical Failure Rate', 'critical', 5, 'lower'),
+    kpi('kpi5', 'KPI-3', 'Consent Documentation Compliance', 'subset', 95, 'higher', range(15, 19)),
+    kpi('kpi6', 'KPI-4', 'Medication Documentation Compliance', 'subset', 95, 'higher', range(9, 11)),
   ]),
   naGuide: [],
 };
@@ -150,8 +150,8 @@ const OT = {
     [20, 'E', 'MOI', 1, 'Every entry is authenticated (name, signature/e-ID, date, time); OT / Cath Lab register is updated; no backdating; correction procedure and approved abbreviations followed.'],
   ]),
   kpis: STD_KPIS.concat([
-    kpi('kpi3', 'KPI-3', 'Critical Failure Rate', 'critical', 5, 'lower'),
-    kpi('kpi4', 'KPI-4', 'Surgical Safety Checklist Compliance', 'subset', 95, 'higher', range(6, 9)),
+    kpi('kpi3', 'KPI-2', 'Critical Failure Rate', 'critical', 5, 'lower'),
+    kpi('kpi4', 'KPI-3', 'Surgical Safety Checklist Compliance', 'subset', 95, 'higher', range(6, 9)),
   ]),
   naGuide: [
     ...OT_GUIDE.map((g) => Object.assign({}, g)),
@@ -237,9 +237,9 @@ const DIAL = {
     [20, 'D', 'MOI', 1, 'Every entry is authenticated (name, signature/e-ID, date, time); dialysis / endoscopy register is updated; no backdating; correction procedure and approved abbreviations followed.'],
   ]),
   kpis: STD_KPIS.concat([
-    kpi('kpi3', 'KPI-3', 'Critical Failure Rate', 'critical', 5, 'lower'),
-    kpi('kpi4', 'KPI-4', 'Dialysis Safety Check Compliance', 'subset', 95, 'higher', ids(4, 6, 8)),
-    kpi('kpi5', 'KPI-5', 'Endoscopy Safety & Scope Traceability Compliance', 'subset', 95, 'higher', ids(12, 16)),
+    kpi('kpi3', 'KPI-2', 'Critical Failure Rate', 'critical', 5, 'lower'),
+    kpi('kpi4', 'KPI-3', 'Dialysis Safety Check Compliance', 'subset', 95, 'higher', ids(4, 6, 8)),
+    kpi('kpi5', 'KPI-4', 'Endoscopy Safety & Scope Traceability Compliance', 'subset', 95, 'higher', ids(12, 16)),
   ]),
   naGuide: [
     { areas: ['Dialysis Unit'], na: range(11, 17), note: 'Sections A, B and D apply. Section C (items 11–17) = N/A.' },
@@ -295,8 +295,8 @@ const ED = {
     [20, 'D', 'MOI', 1, 'Every entry is authenticated (name, signature/e-ID, date, time); ED register is updated; late entries are marked; no backdating; correction procedure and approved abbreviations followed.'],
   ]),
   kpis: STD_KPIS.concat([
-    kpi('kpi3', 'KPI-3', 'Critical Failure Rate', 'critical', 5, 'lower'),
-    kpi('kpi4', 'KPI-4', 'Triage & Deterioration Documentation Compliance', 'subset', 95, 'higher', ids(3, 4, 9)),
+    kpi('kpi3', 'KPI-2', 'Critical Failure Rate', 'critical', 5, 'lower'),
+    kpi('kpi4', 'KPI-3', 'Triage & Deterioration Documentation Compliance', 'subset', 95, 'higher', ids(3, 4, 9)),
   ]),
   naGuide: [
     { areas: ['Resuscitation'], never: ids(1, 3, 5, 12, 20), note: 'All items apply. Item 13 applies to every arrest or major resuscitation; item 10 applies when a time-critical pathway is activated. Identification, triage, allergy, medications and authentication are never N/A, even when entries are completed after the event.' },

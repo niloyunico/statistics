@@ -299,6 +299,25 @@ async function ensureCathPostopMerge(now) {
   await patchConfig({ cathPostopMergeAt: now });
   return true;
 }
+/* No Audit Pass Rate and no Fully Compliant Record Rate KPI (the user's choice). Once, on its own
+   marker: every stored tool drops the KPIs with those formulas; codes of the form "KPI-<n>" run
+   1…n again. KPI ids, criteria and scores unchanged; no revision bump. */
+async function ensureKpiTrim(now) {
+  const cfg = await getConfig();
+  if (cfg.kpiTrimAt) return false;
+  for (const t of await allDocs(TOOLS)) {
+    const old = t.kpis || [];
+    if (!old.some((k) => ['pass', 'full'].indexOf(k.formula) >= 0)) continue;
+    const kpis = old.filter((k) => ['pass', 'full'].indexOf(k.formula) < 0).map((k) => Object.assign({}, k));
+    kpis.forEach((k, i) => { if (/^KPI-\d+$/.test(String(k.code || ''))) k.code = 'KPI-' + (i + 1); });
+    const gone = old.filter((k) => kpis.every((x) => x.id !== k.id)).map((k) => k.name).join(', ');
+    const next = Object.assign({}, t, { kpis, updatedAt: now, updatedBy: 'system',
+      history: (t.history || []).concat([{ at: now, by: 'system', action: 'KPIs removed: ' + gone }]).slice(-100) });
+    if (!(await putDoc(TOOLS, next, t.updatedAt))) return false;   // changed meanwhile: try again next request
+  }
+  await patchConfig({ kpiTrimAt: now });
+  return true;
+}
 async function liveTools() { return (await allDocs(TOOLS)).filter(DA.isLiveTool).sort((a, b) => (a.order || 0) - (b.order || 0)); }
 
 /* ------------------------------------------------------------ departments --- */
@@ -518,7 +537,7 @@ async function monthlyFigures(yms) {
 }
 /* The departments expected to audit each month (enabled), for the KPI's "units expected" —
    from the month the module was set up (`since`): no department owes an audit for a month before
-   Documentation Audit existed. */
+   Nursing Documentation KPI Audit existed. */
 async function enabledDepts() {
   const cfg = await getConfig();
   if (cfg.kpiLink === false) return [];
@@ -597,7 +616,7 @@ function mount(app, opts) {
     if (!a) { res.status(401).json({ ok: false, error: 'Not authenticated.' }); return null; }
     req.access = a;
     if (action && !access.can(a, 'docaudit', action)) {
-      const what = { add: 'fill documentation audits', edit: 'correct or sign off documentation audits', delete: 'remove documentation audits', print: 'print or export documentation audits' }[action] || 'open Documentation Audit';
+      const what = { add: 'fill documentation audits', edit: 'correct or sign off documentation audits', delete: 'remove documentation audits', print: 'print or export documentation audits' }[action] || 'open Nursing Documentation KPI Audit';
       res.status(403).json({ ok: false, error: 'You do not have permission to ' + what + '.' });
       return null;
     }
@@ -607,6 +626,7 @@ function mount(app, opts) {
     await ensureOtAreaMerge(now());
     await ensureOtPostopMerge(now());
     await ensureCathPostopMerge(now());
+    await ensureKpiTrim(now());
     return a;
   };
   const admin = (res, a) => { if (a.unrestricted) return true; res.status(403).json({ ok: false, error: 'Only an administrator can do this.' }); return false; };
@@ -638,7 +658,7 @@ function mount(app, opts) {
       res.json({ ok: true, departments: await myDepts(a, cfg), tools: tools.map(cleanTool), today: today(), month: DA.hospitalNow(now()).month,
         config: { kpiLink: cfg.kpiLink !== false, ackRequired: cfg.ackRequired === true, evidenceRequired: cfg.evidenceRequired === true }, assignments: ASSIGNMENTS, user: actor(req, a), name: nameOf(req, a),
         staffId: me ? me.id : null, allStaff: access.auditDeptIds(a) === null, ...rights(a) });
-    } catch (e) { fail(res, e, 'Could not load Documentation Audit.'); }
+    } catch (e) { fail(res, e, 'Could not load Nursing Documentation KPI Audit.'); }
   });
 
   /* The staff an auditor may pick, thin (id, employee ID, name, designation, role, department):
@@ -735,7 +755,7 @@ function mount(app, opts) {
     const canAdd = access.can(a, 'docaudit', 'add'), canEdit = access.can(a, 'docaudit', 'edit');
     const own = cur && cur.auditor && cur.auditor.username === me;
     const mayWrite = !cur ? canAdd : cur.status === 'draft' ? (canAdd || canEdit) : cur.status === 'completed' ? (canEdit || (own && canAdd)) : canEdit;
-    if (!mayWrite) return res.status(403).json({ ok: false, error: cur ? 'Correcting a completed audit needs the Documentation Audit “Edit” permission.' : 'You do not have permission to fill documentation audits.' });
+    if (!mayWrite) return res.status(403).json({ ok: false, error: cur ? 'Correcting a completed audit needs the Nursing Documentation KPI Audit “Edit” permission.' : 'You do not have permission to fill documentation audits.' });
     const base = b.baseUpdatedAt == null ? null : Number(b.baseUpdatedAt);
     if (cur && base != null && cur.updatedAt !== base) return res.status(409).json({ ok: false, code: 'stale', error: 'Someone else changed this audit. Reload to see their version.', audit: clean(cur) });
 
@@ -747,7 +767,7 @@ function mount(app, opts) {
     else {
       const want = str(b.toolId, 40) || cfgFor(cfg, dept).toolId;
       tool = want ? await getDoc(TOOLS, want) : null;
-      if (!DA.isLiveTool(tool)) return res.status(400).json({ ok: false, error: 'No audit tool is set for this department. Ask the administrator (Documentation Audit → Settings).' });
+      if (!DA.isLiveTool(tool)) return res.status(400).json({ ok: false, error: 'No audit tool is set for this department. Ask the administrator (Nursing Documentation KPI Audit → Settings).' });
     }
     const criteria = cur ? cur.criteria : DA.freezeCriteria(tool);
     const vals = pickAudit(b, tool, criteria);
@@ -1169,7 +1189,7 @@ function mount(app, opts) {
       if (typeof b.ackRequired === 'boolean' && b.ackRequired !== (cfg.ackRequired === true)) { set.ackRequired = b.ackRequired; changed.push('acknowledgement ' + (b.ackRequired ? 'required' : 'optional')); }
       if (typeof b.evidenceRequired === 'boolean' && b.evidenceRequired !== (cfg.evidenceRequired === true)) { set.evidenceRequired = b.evidenceRequired; changed.push("evidence for a 'No' " + (b.evidenceRequired ? 'required' : 'optional')); }
       await patchConfig(set);
-      if (changed.length) activity.log(req, 'docaudit_config', { target: 'Documentation Audit', detail: changed.join(', ').slice(0, 900) });
+      if (changed.length) activity.log(req, 'docaudit_config', { target: 'Nursing Documentation KPI Audit', detail: changed.join(', ').slice(0, 900) });
       res.json({ ok: true, changed: changed.length });
     } catch (e) { fail(res, e, 'Could not save the settings.'); }
   });
@@ -1180,7 +1200,7 @@ function mount(app, opts) {
       const a = await resolve(req, res, 'print'); if (!a) return;
       const b = body(req);
       const kind = ['audit', 'report', 'blank', 'cap', 'bulk'].indexOf(b.kind) >= 0 ? b.kind : 'audit';
-      let target = 'Documentation Audit';
+      let target = 'Nursing Documentation KPI Audit';
       if (kind === 'bulk') {
         const ids = (Array.isArray(b.ids) ? b.ids : []).map(String).slice(0, 200);
         for (const id of ids) { const x = await getDoc(AUDITS, id); if (!x || x.removedAt || !inScope(a, x.deptId)) return res.status(403).json({ ok: false, error: 'An audit you chose is not one of yours.' }); }
@@ -1291,8 +1311,8 @@ function mount(app, opts) {
       const lowSample = day >= 20 && canAdd ? depts.map((d) => ({ id: d.id, name: d.name, have: list.filter((x) => x.deptId === d.id && x.month === ym && x.status !== 'draft').length, need: d.cfg.minRecords }))
         .filter((d) => d.need > 0 && d.have < d.need) : [];
       res.json({ ok: true, total: awaitingAck + awaitingSign + drafts + lowSample.length, awaitingAck, awaitingSign, drafts, criticalOpen, lowSample, month: ym });
-    } catch (e) { fail(res, e, 'Could not check Documentation Audit.'); }
+    } catch (e) { fail(res, e, 'Could not check Nursing Documentation KPI Audit.'); }
   });
 }
 
-module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, ensureCathPostopMerge, cfgFor, _mem: mem };
+module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, ensureCathPostopMerge, ensureKpiTrim, cfgFor, _mem: mem };

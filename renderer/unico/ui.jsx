@@ -73,7 +73,7 @@ const UNICO_MODULES = [
   { id:'kpi',     label:'Nursing KPI',        short:'KPI',        icon:I.trend,   home:'kpiDashboard' },
   // Documentation Audit — the nursing documentation audit per patient record (window.DocAuditView,
   // chunk 'docaudit'); departments set per person: auditDepartments. Never a default.
-  { id:'docaudit',label:'Documentation Audit', short:'Doc audit', icon:I.doc,    home:'docAuditHome' },
+  { id:'docaudit',label:'Nursing Documentation KPI Audit', short:'Doc KPI audit', icon:I.doc,    home:'docAuditHome' },
 ];
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
@@ -457,7 +457,7 @@ const UNICO_WS = [
     { id:'kpi',         label:'Nursing KPI',     icon:I.trend,  home:'kpiDashboard', on:v=>unicoModuleOf(v)==='kpi', badge:'kpi', tag:'NEW' },
     // Badge: audits waiting for the nurse's acknowledgement / the In-charge's sign-off, own drafts,
     // and (after the 20th) departments short of their monthly sample.
-    { id:'docaudit',    label:'Documentation Audit', icon:I.doc, home:'docAuditHome', on:v=>unicoModuleOf(v)==='docaudit', badge:'da', tag:'NEW' },
+    { id:'docaudit',    label:'Nursing Documentation KPI Audit', icon:I.doc, home:'docAuditHome', on:v=>unicoModuleOf(v)==='docaudit', badge:'da', tag:'NEW' },
     // Drug index (21.7k Bangladeshi brands / 1.7k generic monographs) + prescriptions.
     { id:'medicine',    label:'Medicine & Rx',   icon:I.syringe,home:'medHome',     on:v=>unicoModuleOf(v)==='medicine', tag:'NEW' },
   ]},

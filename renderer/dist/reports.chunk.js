@@ -4344,7 +4344,7 @@ function Reports({
   }))))));
 }
 const UCOLORS = ['#0090ca', '#3ab5a7', '#6a52d4', '#e08a1e', '#d23a52', '#1f9d57'];
-const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['devdays', 'Device Days', 'Clinical', 'Add = enter & send · Edit = review & correct · departments set below'], ['kpi', 'Nursing KPI', 'Clinical', 'Add = enter figures · Edit = change figures, KPIs & reports · Print = print, PDF, PowerPoint, Excel'], ['docaudit', 'Documentation Audit', 'Clinical', 'Add = fill audits · Edit = correct & sign off · departments set below'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
+const USER_MODS = [['stats', 'Overview & Departments', 'Clinical', ''], ['quality', 'Quality', 'Clinical', ''], ['supervisor', 'Supervisor Reports', 'Clinical', ''], ['medicine', 'Medicine & Rx', 'Clinical', ''], ['mydept', 'My Department', 'Clinical', 'one department, read-only · departments set below'], ['devdays', 'Device Days', 'Clinical', 'Add = enter & send · Edit = review & correct · departments set below'], ['kpi', 'Nursing KPI', 'Clinical', 'Add = enter figures · Edit = change figures, KPIs & reports · Print = print, PDF, PowerPoint, Excel'], ['docaudit', 'Nursing Documentation KPI Audit', 'Clinical', 'Add = fill audits · Edit = correct & sign off · departments set below'], ['datacol', 'Data Collection', 'Data', ''], ['reports', 'Reports', 'Data', ''], ['staff', 'Staff Management', 'Administer', ''], ['perf', 'Performance', 'Administer', 'inside Staff Management'], ['attrition', 'Attrition & Exits', 'Administer', 'inside Staff Management · discontinuing staff also needs only Staff edit'], ['roster', 'Duty Roster', 'Administer', 'inside Staff Management'], ['users', 'Access Control & Settings', 'Administer', ''], ['datasubmit', 'Data Submission', 'Data', 'reports its own departments — set below'], ['staffapp', 'Staff app (phone)', 'Phone', 'roster, requests, chat — no console']];
 const MOD_GROUPS = ['Clinical', 'Data', 'Administer', 'Phone'];
 const modsGrouped = list => MOD_GROUPS.map(g => [g, list.filter(m => m[2] === g)]).filter(([, ms]) => ms.length);
 const PERM_LEVELS = [['none', 'None'], ['view', 'View'], ['edit', 'Edit'], ['add', 'Add'], ['delete', 'Delete']];
@@ -5152,7 +5152,7 @@ function UserModal({
     }
     if (!isAdmin && !isColl && asActions(perms.docaudit).length && !audDepts.length) {
       setSec('access');
-      return setErr('Documentation Audit: pick at least one department (or All departments), or set it back to None.');
+      return setErr('Nursing Documentation KPI Audit: pick at least one department (or All departments), or set it back to None.');
     }
     if (mdActs.length) {
       const was = editing ? asActions(initial.perms && initial.perms.mydept) : [];
@@ -6698,7 +6698,7 @@ function UserModal({
         color: 'var(--ink)',
         marginBottom: 3
       }
-    }, "Documentation Audit ", React.createElement("span", {
+    }, "Nursing Documentation KPI Audit ", React.createElement("span", {
       style: {
         fontWeight: 500,
         color: 'var(--muted)',
@@ -6710,7 +6710,7 @@ function UserModal({
         color: 'var(--muted)',
         marginBottom: 9
       }
-    }, "Only departments switched on in Documentation Audit ", '→', " Settings can be audited. \"All departments\" also covers departments added later and lets them pick any nurse in the register. Nobody can audit their own documentation."), React.createElement("input", {
+    }, "Only departments switched on in Nursing Documentation KPI Audit ", '→', " Settings can be audited. \"All departments\" also covers departments added later and lets them pick any nurse in the register. Nobody can audit their own documentation."), React.createElement("input", {
       value: audDeptQ,
       onChange: e => setAudDeptQ(e.target.value),
       placeholder: "Search department\u2026",
@@ -6752,7 +6752,7 @@ function UserModal({
         color: 'var(--rose)',
         marginTop: 6
       }
-    }, "Pick at least one department, or set Documentation Audit back to None."));
+    }, "Pick at least one department, or set Nursing Documentation KPI Audit back to None."));
   })(), !isAdmin && !isColl && React.createElement("div", {
     style: {
       borderTop: '1px solid var(--line-2)',
@@ -6786,7 +6786,7 @@ function UserModal({
       color: 'var(--muted)',
       marginTop: 2
     }
-  }, "The \"Documentation audits\" card on a nurse's staff profile \u2014 every department's audits of that nurse. Separate from the Documentation Audit module; administrators always see it."))))), curSec === 'data' && collects && scopeBlock, curSec === 'data' && submits && React.createElement("div", {
+  }, "The \"Documentation audits\" card on a nurse's staff profile \u2014 every department's audits of that nurse. Separate from the Nursing Documentation KPI Audit module; administrators always see it."))))), curSec === 'data' && collects && scopeBlock, curSec === 'data' && submits && React.createElement("div", {
     style: {
       display: 'flex',
       flexDirection: 'column',

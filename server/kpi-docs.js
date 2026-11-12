@@ -39,7 +39,7 @@ function defFacts(d, cfg) {
     ['Numerator', d.formula === 'direct' ? 'Not used — the value itself is entered' : (d.numLabel || '—')],
     ['Denominator', d.formula === 'count' || d.formula === 'direct' ? 'Not used' : (d.denLabel || '—')],
     ['Unit and direction', (d.unit || '—') + ' · ' + (lower ? 'lower is better' : 'higher is better')],
-    ['Data source', linked ? (d.source.rule === 'docaudit' ? 'Documentation Audit module — every completed audit of the month, all departments' : 'Quality data — ' + (d.indicatorName || d.source.indName || d.source.indId)) + (autoOn
+    ['Data source', linked ? (d.source.rule === 'docaudit' ? 'Nursing Documentation KPI Audit module — every completed audit of the month, all departments' : 'Quality data — ' + (d.indicatorName || d.source.indName || d.source.indId)) + (autoOn
       ? '. Filled automatically; a KPI manager may replace a figure only with a written reason.'
       : '. Auto-fill is off: the figure is typed each period; the quality data is shown as a hint.') : 'Entered in the KPI module by a KPI manager.'],
     ['Units expected to report', units],

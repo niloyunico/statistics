@@ -236,7 +236,7 @@ function App(){
   } else if(route.view && route.view.indexOf('docAudit')===0){
     // Documentation Audit (module 'docaudit'; window.DocAuditView, chunk 'docaudit'); the server checks it again.
     const DA_TITLE={docAuditHome:'Dashboard',docAuditNew:route.audit?'Audit':'New audit',docAuditRegister:'Register',docAuditReports:'Reports',docAuditTools:'Audit tools',docAuditSettings:'Settings'};
-    crumbs=['UNICO','Documentation Audit',DA_TITLE[route.view]||'Dashboard'];
+    crumbs=['UNICO','Nursing Documentation KPI Audit',DA_TITLE[route.view]||'Dashboard'];
     body= (typeof DocAuditView!=='undefined') ? <DocAuditView view={route.view} audit={route.audit} dept={route.dept} nurse={route.nurse} month={route.month} setRoute={setRoute}/> : null;
   } else if(route.view==='settings'){
     crumbs=['UNICO','Settings'];

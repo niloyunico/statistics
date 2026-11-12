@@ -297,7 +297,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   // color = chip text, dot = the grid's marker (one clearly different hue per source).
   const SRC = {
     'hh-audit': { label: 'HH audit', color: '#0d5e55', dot: '#2bb3a3', bg: '#dff5f1', long: 'From the hospital hand hygiene audit' },
-    'doc-audit': { label: 'Doc. audit', color: '#1f4f8a', dot: '#4a7fd0', bg: '#e6eefb', long: 'From the Nursing Documentation Audit (Σ Yes ÷ Σ Yes + No over every completed audit)' },
+    'doc-audit': { label: 'Doc. audit', color: '#1f4f8a', dot: '#4a7fd0', bg: '#e6eefb', long: 'From the Nursing Documentation KPI Audit (Σ Yes ÷ Σ Yes + No over every completed audit)' },
     pooled: { label: 'Quality', color: '#0b4f6c', dot: '#0090ca', bg: '#e1f1fa', long: 'From the quality data — all units pooled' },
     hospital: { label: 'Quality', color: '#0b4f6c', dot: '#0090ca', bg: '#e1f1fa', long: 'From the Overall Hospital quality data' },
     edited: { label: 'Edited', color: '#8a5a00', dot: '#e08a1e', bg: '#fff1d6', long: 'The system figure, changed by a KPI manager' },
@@ -1743,7 +1743,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                 <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}><b style={{ fontSize: 13 }}>Where the monthly figures come from</b><span style={{ flex: 1 }} />
                   {linked && may && <Btn onClick={() => set('source', { indId: null })}>Unlink — type them monthly</Btn>}</div>
                 {linked && <label className={'kp-switch light' + (d.autoFill !== false ? ' on' : '')} onClick={() => may && set('autoFill', d.autoFill === false)}><i /><span>{d.autoFill !== false ? 'Auto-fill from the quality data: ON' : 'Auto-fill from the quality data: OFF — typed monthly, the system figure is shown as a hint'}</span></label>}
-                {linked ? <div style={{ fontSize: 12.5 }}>{d.autoFill !== false ? 'Filled automatically from' : 'Linked (for reference) to'} the quality indicator <b>{d.source.indName || d.source.indId}</b>{d.source.rule ? ' (' + ({ hh: 'hand hygiene audit', fall: 'all units, out-patient falls left out', pool: 'all units pooled', hospital: 'Overall Hospital', docaudit: 'the Documentation Audit module — Σ Yes ÷ Σ Yes + No over every completed audit' })[d.source.rule] + ')' : ''}. {d.autoFill !== false ? 'Any month can still be typed over in Data Update — with a reason.' : 'Each month is typed in Data Update.'}</div>
+                {linked ? <div style={{ fontSize: 12.5 }}>{d.autoFill !== false ? 'Filled automatically from' : 'Linked (for reference) to'} the quality indicator <b>{d.source.indName || d.source.indId}</b>{d.source.rule ? ' (' + ({ hh: 'hand hygiene audit', fall: 'all units, out-patient falls left out', pool: 'all units pooled', hospital: 'Overall Hospital', docaudit: 'the Nursing Documentation KPI Audit module — Σ Yes ÷ Σ Yes + No over every completed audit' })[d.source.rule] + ')' : ''}. {d.autoFill !== false ? 'Any month can still be typed over in Data Update — with a reason.' : 'Each month is typed in Data Update.'}</div>
                   : <div style={{ fontSize: 12.5 }}>Typed each month in Data Update. Or link it to a quality indicator the units already report:</div>}
                 {may && <><input className="kp-in" placeholder="Search the quality indicators…" value={q} onChange={(e) => setQ(e.target.value)} />
                   <div style={{ maxHeight: 170, overflow: 'auto', border: '1px solid var(--line)', borderRadius: 8, background: '#fff' }}>

@@ -26,7 +26,10 @@
     { id: 'unsat', min: -1, label: 'Unsatisfactory', action: 'Individual improvement plan; focused training; re-audit within 2 weeks.' },
   ];
   const FAIL_ACTION = 'Same-day correction where possible; incident report if harm/near miss; root-cause review.';
-  const KPI_FORMULAS = ['accuracy', 'pass', 'full', 'critical', 'subset'];
+  // The formulas a KPI may use. 'pass' and 'full' were dropped (the user's choice); kpiValue and the
+  // labels still understand them, so nothing old breaks.
+  const KPI_FORMULAS = ['accuracy', 'critical', 'subset'];
+  const KPI_DROPPED = ['pass', 'full'];
   const KPI_FORMULA_LABEL = {
     accuracy: "Total 'Yes' ÷ (Total 'Yes' + Total 'No') × 100 across all audited records",
     pass: 'Records scoring ≥ 90% with zero critical failures ÷ records audited × 100',
@@ -253,7 +256,7 @@
   const countsInKpi = (a) => !!a && !a.removedAt && a.status !== 'draft' && !!a.result;
 
   const API = {
-    STATUSES, STATUS_LABEL, ANSWERS, PASS_MARK, GRADES, FAIL_ACTION, KPI_FORMULAS, KPI_FORMULA_LABEL, SHIFTS,
+    STATUSES, STATUS_LABEL, ANSWERS, PASS_MARK, GRADES, FAIL_ACTION, KPI_FORMULAS, KPI_DROPPED, KPI_FORMULA_LABEL, SHIFTS,
     has, round1, isDate, isMonth, hospitalNow, addMonth, monthsBetween, fmtMonth, fmtDate, quarterOf,
     ALDRETE, ALDRETE_DISCHARGE, cleanAldrete, aldreteText,
     MAX_NURSES, nursesOf, nurseKey, acksOf, pendingAcks, nurseNames,

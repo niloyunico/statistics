@@ -405,7 +405,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     setRoute
   }) => React.createElement("div", {
     className: "da-card da-empty"
-  }, meta && meta.isAdmin ? React.createElement("span", null, "No department is switched on for Documentation Audit yet. Open ", React.createElement("a", {
+  }, meta && meta.isAdmin ? React.createElement("span", null, "No department is switched on for Nursing Documentation KPI Audit yet. Open ", React.createElement("a", {
     href: "#",
     onClick: e => {
       e.preventDefault();
@@ -413,7 +413,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         view: 'docAuditSettings'
       });
     }
-  }, "Documentation Audit \u2192 Settings"), " and choose the tool each department audits with.") : React.createElement("span", null, "No department has been set for you yet. Ask the administrator to choose your departments in Access Control \u2192 Documentation Audit."));
+  }, "Nursing Documentation KPI Audit \u2192 Settings"), " and choose the tool each department audits with.") : React.createElement("span", null, "No department has been set for you yet. Ask the administrator to choose your departments in Access Control \u2192 Nursing Documentation KPI Audit."));
   const toolOf = (meta, id) => (meta && meta.tools || []).find(t => t.id === id) || null;
   const nurseLine = n => [n.empId && 'ID ' + n.empId, n.designation, n.department, n.linked === false && 'not in the register'].filter(Boolean).join(' · ');
   const OtherDept = ({
@@ -1313,7 +1313,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     });
     if (!tool) return React.createElement("div", {
       className: "da-banner"
-    }, "No audit tool is set for this department. ", meta.isAdmin ? 'Choose one in Documentation Audit → Settings.' : 'Ask the administrator.');
+    }, "No audit tool is set for this department. ", meta.isAdmin ? 'Choose one in Nursing Documentation KPI Audit → Settings.' : 'Ask the administrator.');
     const set = (k, v) => setForm(f => Object.assign({}, f, {
       [k]: v
     }));
@@ -2048,7 +2048,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: {
         fontSize: 15
       }
-    }, "Documentation Audit \xB7 ", DA.fmtMonth(ym)), React.createElement("div", {
+    }, "Nursing Documentation KPI Audit \xB7 ", DA.fmtMonth(ym)), React.createElement("div", {
       className: "da-sub"
     }, "Score = Yes \xF7 (Yes + No) \xD7 100 \xB7 PASS = \u2265 90% and no critical failure \xB7 results go to the Nursing Quality Committee by the 10th")), React.createElement("span", {
       style: {
@@ -2075,13 +2075,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-tile"
     }, React.createElement("span", null, "Records audited"), React.createElement("b", null, tot.records), React.createElement("small", null, tot.nurses, " nurse(s)")), React.createElement("div", {
       className: "da-tile"
-    }, React.createElement("span", null, "KPI-1 Accuracy"), React.createElement("b", {
+    }, React.createElement("span", null, "Documentation accuracy"), React.createElement("b", {
       style: {
         color: tot.accuracy == null ? undefined : tot.accuracy >= 90 ? '#14713f' : '#a3172f'
       }
     }, pctTxt(tot.accuracy)), React.createElement("small", null, "target \u2265 90%")), React.createElement("div", {
-      className: "da-tile"
-    }, React.createElement("span", null, "Audit pass rate"), React.createElement("b", null, tot.records ? pctTxt(DA.round1(tot.pass / tot.records * 100)) : '—'), React.createElement("small", null, "target \u2265 85%")), React.createElement("div", {
       className: "da-tile"
     }, React.createElement("span", null, "Critical failures"), React.createElement("b", {
       style: {
@@ -2105,13 +2103,10 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "n"
     }, "Accuracy"), React.createElement("th", {
       className: "n"
-    }, "Pass"), React.createElement("th", {
-      className: "n"
     }, "Critical"), React.createElement("th", null, "Below target"), React.createElement("th", null, "Top failing criteria"), meta.canAdd && React.createElement("th", null))), React.createElement("tbody", null, sum.rows.map(r => {
       const s = r.months[ym];
       const min = r.minRecords || 0;
-      const k1 = s.kpis.find(k => k.formula === 'accuracy'),
-        k2 = s.kpis.find(k => k.formula === 'pass');
+      const k1 = s.kpis.find(k => k.formula === 'accuracy');
       return React.createElement("tr", {
         key: r.deptId + r.toolId
       }, React.createElement("td", null, React.createElement("b", null, r.name)), React.createElement("td", {
@@ -2139,8 +2134,6 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           fontWeight: 700
         }
       }, pctTxt(k1 && k1.value)), React.createElement("td", {
-        className: "n"
-      }, pctTxt(k2 && k2.value)), React.createElement("td", {
         className: "n",
         style: {
           color: s.criticalRecords ? '#a3172f' : undefined
@@ -2151,7 +2144,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         style: {
           marginRight: 3
         }
-      }, k.code || k.name)) : React.createElement("span", {
+      }, k.name)) : React.createElement("span", {
         className: "da-chip met"
       }, "On target") : React.createElement("span", {
         className: "da-muted"
@@ -2592,7 +2585,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         fontWeight: 700,
         color: k.met === false ? '#a3172f' : k.met ? '#14713f' : undefined
       }
-    }, k.value, "%");
+    }, k.value, "%", k.met === false ? ' ▼' : '');
     return React.createElement("div", {
       className: "da-wrap"
     }, React.createElement("div", {
@@ -2679,13 +2672,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-tile"
     }, React.createElement("span", null, "Records audited"), React.createElement("b", null, data.overall.total.records), React.createElement("small", null, label)), React.createElement("div", {
       className: "da-tile"
-    }, React.createElement("span", null, "KPI-1 Accuracy"), React.createElement("b", {
+    }, React.createElement("span", null, "Documentation accuracy"), React.createElement("b", {
       style: {
         color: data.overall.total.accuracy == null ? undefined : data.overall.total.accuracy >= 90 ? '#14713f' : '#a3172f'
       }
     }, pctTxt(data.overall.total.accuracy)), React.createElement("small", null, "all tools \xB7 target \u2265 90%")), React.createElement("div", {
-      className: "da-tile"
-    }, React.createElement("span", null, "Pass rate"), React.createElement("b", null, data.overall.total.records ? pctTxt(DA.round1(data.overall.total.pass / data.overall.total.records * 100)) : '—'), React.createElement("small", null, "target \u2265 85%")), React.createElement("div", {
       className: "da-tile"
     }, React.createElement("span", null, "Critical failure rate"), React.createElement("b", null, data.overall.total.records ? pctTxt(DA.round1(data.overall.total.criticalRecords / data.overall.total.records * 100)) : '—'), React.createElement("small", null, data.overall.total.criticalRecords, " record(s) \xB7 target \u2264 5%")), React.createElement("div", {
       className: "da-tile"
@@ -2719,10 +2710,10 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       key: k.id,
       className: "n",
       title: DA.KPI_FORMULA_LABEL[k.formula] + (k.criteria ? ' — criteria ' + k.criteria.map(c => '#' + c.replace('c', '')).join(', ') : '')
-    }, k.code || '', React.createElement("div", {
+    }, React.createElement("div", {
       style: {
         textTransform: 'none',
-        fontWeight: 600
+        fontWeight: 700
       }
     }, k.name), React.createElement("div", {
       style: {
@@ -2788,7 +2779,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "da-h"
     }, React.createElement("h3", null, "Accuracy by month"), React.createElement("span", {
       className: "da-sub"
-    }, "KPI-1, \u03A3 Yes \xF7 \u03A3 (Yes + No)")), W.LineChart && React.createElement("div", {
+    }, "Documentation accuracy = \u03A3 Yes \xF7 \u03A3 (Yes + No)")), W.LineChart && React.createElement("div", {
       className: "da-pad"
     }, React.createElement(W.LineChart, {
       data: data.months.map(m => ({
@@ -2903,8 +2894,6 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       className: "n"
     }, "Accuracy"), React.createElement("th", {
       className: "n"
-    }, "Pass rate"), React.createElement("th", {
-      className: "n"
     }, "Critical"), React.createElement("th", null, "Top failing"))), React.createElement("tbody", null, data.breakdown.map(b => React.createElement("tr", {
       key: b.key,
       className: b.staffId ? 'click' : '',
@@ -2923,8 +2912,6 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         color: b.summary.accuracy != null && b.summary.accuracy < 90 ? '#a3172f' : undefined
       }
     }, pctTxt(b.summary.accuracy)), React.createElement("td", {
-      className: "n"
-    }, b.summary.records ? pctTxt(DA.round1(b.summary.pass / b.summary.records * 100)) : '—'), React.createElement("td", {
       className: "n",
       style: {
         color: b.summary.criticalRecords ? '#a3172f' : undefined
@@ -3583,7 +3570,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
         className: "da-sel",
         value: k.formula,
         onChange: e => sk('formula', e.target.value)
-      }, DA.KPI_FORMULAS.map(f => React.createElement("option", {
+      }, DA.KPI_FORMULAS.concat(DA.KPI_FORMULAS.indexOf(k.formula) < 0 ? [k.formula] : []).map(f => React.createElement("option", {
         key: f,
         value: f
       }, {
@@ -3972,9 +3959,9 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
           view: 'users'
         });
       }
-    }, "Access Control"), ": tick Documentation Audit (Add = fill audits, Edit = sign off as In-charge) and pick their departments. Administrators see every department.")));
+    }, "Access Control"), ": tick Nursing Documentation KPI Audit (Add = fill audits, Edit = sign off as In-charge) and pick their departments. Administrators see every department.")));
   }
-  const PRINT_CSS = '' + '.dap{font:9pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;background:#fff}.dap *{box-sizing:border-box}' + '.dap .lh{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;padding-bottom:8px;border-bottom:1.5px solid #111}.dap .lh img{height:38px}' + '.dap .lh .tt{text-align:right}.dap .lh .kind{font-size:7pt;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:#444}.dap .lh h1{margin:2px 0 0;font-size:13.5pt;color:#111}.dap .lh .code{font-size:7.5pt;color:#444;margin-top:2px}' + '.dap table{border-collapse:separate;border-spacing:0;width:100%;font-variant-numeric:tabular-nums}.dap thead{display:table-header-group}.dap tr{page-break-inside:avoid;break-inside:avoid}' + '.dap th,.dap td{border-right:.75pt solid #555;border-bottom:.75pt solid #555;padding:3.5px 5px;vertical-align:top;text-align:left}' + '.dap tr>*:first-child{border-left:.75pt solid #555}.dap thead tr:first-child>*{border-top:.75pt solid #555}.dap table.hd tr:first-child>*{border-top:.75pt solid #555}' + '.dap th{background:#e6e6e6;font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:.3px}' + '.dap table.hd{margin:10px 0 6px;font-size:8.5pt}.dap table.hd td.k{background:#f2f2f2;font-weight:700;width:15%;font-size:7.5pt;text-transform:uppercase;letter-spacing:.2px}' + '.dap .hint{font-size:7.5pt;margin:4px 0 6px;color:#333}' + '.dap table.ck td.c{text-align:center;width:28px;font-size:10pt;font-weight:700}.dap table.ck td.no{width:26px;text-align:center;font-weight:700}' + '.dap table.ck tr.sec td{background:#d9d9d9;font-weight:700;font-size:7.5pt;text-transform:uppercase;letter-spacing:.4px}' + '.dap table.ck td.ev{width:28%;font-size:7.5pt}.dap .crit{font-size:6.5pt;font-weight:800;text-transform:uppercase}.dap .jci{font-size:6.8pt;width:46px}' + '.dap table.sum{margin-top:8px;font-size:8.5pt}.dap table.sum td.k{background:#f2f2f2;font-weight:700;width:22%}.dap table.sum td.v{width:28%;font-weight:700}' + '.dap .res{font-size:11pt;font-weight:800}.dap .act{margin-top:5px;font-size:8pt}' + '.dap .signs{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:22px;font-size:8pt}.dap .signs div{border-top:.75pt solid #111;padding-top:4px;min-height:44px}.dap .signs span{display:block;font-size:6.8pt;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#444}' + '.dap .end{margin-top:12px;padding-top:5px;border-top:.5pt solid #999;display:flex;justify-content:space-between;font-size:7pt;color:#555}.dap .cr{margin-top:4px;text-align:center;font-size:6.2pt;color:#888}' + '.dap h2{font-size:10pt;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px}.dap td.n,.dap th.n{text-align:right}.dap tr.tot td{font-weight:800;background:#eee}.dap .off{font-weight:800;text-decoration:underline}' + '.dap .note{font-size:7.5pt;color:#333;margin-top:6px}' + '.dap h2{break-after:avoid;page-break-after:avoid}.dap h3.sec{font-size:11.5pt;margin:18px 0 6px;padding-bottom:3px;border-bottom:1pt solid #111;break-after:avoid;page-break-after:avoid}' + '.dap table.kt{font-size:8pt}.dap table.kt td.d{min-width:120px}.dap .legend{font-size:7pt;color:#333;margin:4px 0 2px;line-height:1.45}.dap .none{font-size:7.5pt;color:#555;margin:3px 0 8px}' + '.dap table.kv{font-size:8.5pt;margin:6px 0}.dap table.kv td.k{background:#f2f2f2;font-weight:700;width:18%}' + '.dap .gb{height:7px;background:#e6e6e6;width:120px}.dap .gb i{display:block;height:100%;background:#555}.dap .gb i.c{background:#111}' + '.dap td.b95{background:#dff1e5}.dap td.b90{background:#eef7f1}.dap td.b80{background:#fff3d9}.dap td.blow{background:#fde4e8}.dap td small{display:block;font-size:6.5pt;color:#555;font-weight:400}' + '.dap table.rg{font-size:7.5pt}.dap .chip{font-size:6.5pt;font-weight:700;border:.5pt solid #555;padding:0 3px;border-radius:2px;white-space:nowrap}';
+  const PRINT_CSS = '' + '.dap{font:9pt/1.35 "Segoe UI",Arial,sans-serif;color:#111;background:#fff}.dap *{box-sizing:border-box}' + '.dap .lh{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;padding-bottom:8px;border-bottom:1.5px solid #111}.dap .lh img{height:38px}' + '.dap .lh .tt{text-align:right}.dap .lh .kind{font-size:7pt;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:#444}.dap .lh h1{margin:2px 0 0;font-size:13.5pt;color:#111}.dap .lh .code{font-size:7.5pt;color:#444;margin-top:2px}' + '.dap table{border-collapse:separate;border-spacing:0;width:100%;font-variant-numeric:tabular-nums}.dap thead{display:table-header-group}.dap tr{page-break-inside:avoid;break-inside:avoid}' + '.dap th,.dap td{border-right:.75pt solid #555;border-bottom:.75pt solid #555;padding:3.5px 5px;vertical-align:top;text-align:left}' + '.dap tr>*:first-child{border-left:.75pt solid #555}.dap thead tr:first-child>*{border-top:.75pt solid #555}.dap table.hd tr:first-child>*{border-top:.75pt solid #555}' + '.dap th{background:#e6e6e6;font-size:7pt;font-weight:700;text-transform:uppercase;letter-spacing:.3px}' + '.dap table.hd{margin:10px 0 6px;font-size:8.5pt}.dap table.hd td.k{background:#f2f2f2;font-weight:700;width:15%;font-size:7.5pt;text-transform:uppercase;letter-spacing:.2px}' + '.dap .hint{font-size:7.5pt;margin:4px 0 6px;color:#333}' + '.dap table.ck td.c{text-align:center;width:28px;font-size:10pt;font-weight:700}.dap table.ck td.no{width:26px;text-align:center;font-weight:700}' + '.dap table.ck tr.sec td{background:#d9d9d9;font-weight:700;font-size:7.5pt;text-transform:uppercase;letter-spacing:.4px}' + '.dap table.ck td.ev{width:28%;font-size:7.5pt}.dap .crit{font-size:6.5pt;font-weight:800;text-transform:uppercase}.dap .jci{font-size:6.8pt;width:46px}' + '.dap table.sum{margin-top:8px;font-size:8.5pt}.dap table.sum td.k{background:#f2f2f2;font-weight:700;width:22%}.dap table.sum td.v{width:28%;font-weight:700}' + '.dap .res{font-size:11pt;font-weight:800}.dap .act{margin-top:5px;font-size:8pt}' + '.dap .signs{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;margin-top:22px;font-size:8pt}.dap .signs div{border-top:.75pt solid #111;padding-top:4px;min-height:44px}.dap .signs span{display:block;font-size:6.8pt;font-weight:700;letter-spacing:.7px;text-transform:uppercase;color:#444}' + '.dap .end{margin-top:12px;padding-top:5px;border-top:.5pt solid #999;display:flex;justify-content:space-between;font-size:7pt;color:#555}.dap .cr{margin-top:4px;text-align:center;font-size:6.2pt;color:#888}' + '.dap h2{font-size:10pt;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.5px}.dap td.n,.dap th.n{text-align:right}.dap tr.tot td{font-weight:800;background:#eee}.dap .off{font-weight:800;color:#c0182f}' + '.dap .note{font-size:7.5pt;color:#333;margin-top:6px}' + '.dap h2{break-after:avoid;page-break-after:avoid}.dap h3.sec{font-size:11.5pt;margin:18px 0 6px;padding-bottom:3px;border-bottom:1pt solid #111;break-after:avoid;page-break-after:avoid}' + '.dap table.kt{font-size:8pt}.dap table.kt td.d{min-width:120px}.dap .legend{font-size:7pt;color:#333;margin:4px 0 2px;line-height:1.45}.dap .none{font-size:7.5pt;color:#555;margin:3px 0 8px}' + '.dap table.kv{font-size:8.5pt;margin:6px 0}.dap table.kv td.k{background:#f2f2f2;font-weight:700;width:18%}' + '.dap .gb{height:7px;background:#e6e6e6;width:120px}.dap .gb i{display:block;height:100%;background:#555}.dap .gb i.c{background:#111}' + '.dap td.b95{background:#dff1e5}.dap td.b90{background:#eef7f1}.dap td.b80{background:#fff3d9}.dap td.blow{background:#fde4e8}.dap td small{display:block;font-size:6.5pt;color:#555;font-weight:400}' + '.dap table.rg{font-size:7.5pt}.dap .chip{font-size:6.5pt;font-weight:700;border:.5pt solid #555;padding:0 3px;border-radius:2px;white-space:nowrap}';
   const logo = () => '<img src="' + esc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals">';
   const letterhead = (kind, title, code) => '<header class="lh">' + logo() + '<div class="tt"><div class="kind">' + esc(kind) + '</div><h1>' + esc(title) + '</h1>' + (code ? '<div class="code">' + esc(code) + '</div>' : '') + '</div></header>';
   const footer = () => {
@@ -4035,20 +4022,20 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   }
   const toolsIn = data => data.tools.filter(t => data.rows.some(r => r.toolId === t.id && r.total.records > 0));
   const codesOf = tools => tools.map(t => [t.code, t.version ? 'v' + t.version : ''].filter(Boolean).join(' ')).filter(Boolean).join(' · ');
-  const kv = (k, n) => !n || k.value == null ? '—' : '<span class="' + (k.met === false ? 'off' : '') + '">' + k.value + '%</span>';
+  const kv = (k, n) => !n || k.value == null ? '—' : k.met === false ? '<span class="off">' + k.value + '% ▼</span>' : k.value + '%';
   function kpiSection(data, t, n) {
     const rows = data.rows.filter(r => r.toolId === t.id);
     const audited = rows.filter(r => r.total.records > 0),
       idle = rows.filter(r => !r.total.records);
     const h = data.hospital[t.id];
-    return '<h2>' + (n ? n + ' ' : '') + esc(t.name) + (t.code ? ' · ' + esc(t.code) + (t.version ? ' v' + esc(t.version) : '') : '') + '</h2>' + '<table class="kt"><thead><tr><th>Department</th><th class="n">Records</th><th class="n">Nurses</th>' + t.kpis.map(k => '<th class="n">' + esc(k.code || k.name) + '<br>' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%</th>').join('') + '<th>Top 3 failing criteria</th></tr></thead><tbody>' + audited.map(r => '<tr><td class="d">' + esc(r.name) + (r.caps.length ? ' <span class="chip">CAP due</span>' : '') + (r.minRecords && r.total.records < r.minRecords * data.months.length ? '<br><small>' + r.total.records + ' of min ' + r.minRecords * data.months.length + '</small>' : '') + '</td><td class="n">' + r.total.records + '</td><td class="n">' + r.total.nurses + '</td>' + r.total.kpis.map(k => '<td class="n">' + kv(k, r.total.records) + '</td>').join('') + '<td>' + esc(r.total.topFailing.map(g => '#' + g.no + ' ×' + g.count + (g.critical ? ' (C)' : '')).join(', ') || '—') + '</td></tr>').join('') + (h ? '<tr class="tot"><td>HOSPITAL TOTAL</td><td class="n">' + h.total.records + '</td><td class="n">' + h.total.nurses + '</td>' + h.total.kpis.map(k => '<td class="n">' + kv(k, h.total.records) + '</td>').join('') + '<td>' + esc(h.total.topFailing.map(g => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>' : '') + '</tbody></table>' + (idle.length ? '<div class="none blk"><b>No audits in this period:</b> ' + esc(idle.map(r => r.name).join(', ')) + '</div>' : '') + '<div class="legend blk">' + t.kpis.map(k => '<b>' + esc(k.code || '') + '</b> ' + esc(k.name) + ' = ' + esc(DA.KPI_FORMULA_LABEL[k.formula] || '') + (k.criteria && k.criteria.length ? ' (criteria ' + k.criteria.map(c => '#' + c.replace('c', '')).join(', ') + ')' : '')).join(' · ') + ' · underlined = below target · (C) = critical criterion.</div>';
+    return '<h2>' + (n ? n + ' ' : '') + esc(t.name) + (t.code ? ' · ' + esc(t.code) + (t.version ? ' v' + esc(t.version) : '') : '') + '</h2>' + '<table class="kt"><thead><tr><th>Department</th><th class="n">Records</th><th class="n">Nurses</th>' + t.kpis.map(k => '<th class="n">' + esc(k.name) + '<br>' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%</th>').join('') + '<th>Top 3 failing criteria</th></tr></thead><tbody>' + audited.map(r => '<tr><td class="d">' + esc(r.name) + (r.caps.length ? ' <span class="chip">CAP due</span>' : '') + (r.minRecords && r.total.records < r.minRecords * data.months.length ? '<br><small>' + r.total.records + ' of min ' + r.minRecords * data.months.length + '</small>' : '') + '</td><td class="n">' + r.total.records + '</td><td class="n">' + r.total.nurses + '</td>' + r.total.kpis.map(k => '<td class="n">' + kv(k, r.total.records) + '</td>').join('') + '<td>' + esc(r.total.topFailing.map(g => '#' + g.no + ' ×' + g.count + (g.critical ? ' (C)' : '')).join(', ') || '—') + '</td></tr>').join('') + (h ? '<tr class="tot"><td>HOSPITAL TOTAL</td><td class="n">' + h.total.records + '</td><td class="n">' + h.total.nurses + '</td>' + h.total.kpis.map(k => '<td class="n">' + kv(k, h.total.records) + '</td>').join('') + '<td>' + esc(h.total.topFailing.map(g => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>' : '') + '</tbody></table>' + (idle.length ? '<div class="none blk"><b>No audits in this period:</b> ' + esc(idle.map(r => r.name).join(', ')) + '</div>' : '') + '<div class="legend blk">' + t.kpis.map(k => '<b>' + esc(k.name) + '</b> = ' + esc(DA.KPI_FORMULA_LABEL[k.formula] || '') + (k.criteria && k.criteria.length ? ' (criteria ' + k.criteria.map(c => '#' + c.replace('c', '')).join(', ') + ')' : '')).join(' · ') + ' · <span class="off">red ▼</span> = below target · (C) = critical criterion.</div>';
   }
   const summaryTable = (data, extra) => {
     const ov = data.overall.total;
     const pct = (a, b) => b ? DA.round1(a / b * 100) + '%' : '—';
     const caps = data.rows.filter(r => r.caps.length).map(r => r.name);
     const pub = extra ? extra.audits.filter(x => x.status === 'signed').length : null;
-    return '<table class="kv blk"><tr><td class="k">Reporting period</td><td>' + esc(periodLabel(data.months)) + '</td><td class="k">Departments audited</td><td>' + data.rows.filter(r => r.total.records).length + ' of ' + data.rows.length + '</td></tr>' + '<tr><td class="k">Records audited</td><td>' + ov.records + ' · ' + ov.nurses + ' nurse(s)</td><td class="k">KPI-1 Accuracy (all tools)</td><td><b>' + (ov.accuracy == null ? '—' : ov.accuracy + '%') + '</b> (target ≥ 90%)</td></tr>' + '<tr><td class="k">Audit pass rate</td><td>' + pct(ov.pass, ov.records) + ' (target ≥ 85%)</td><td class="k">Critical-failure rate</td><td>' + pct(ov.criticalRecords, ov.records) + ' · ' + ov.criticalRecords + ' record(s) (target ≤ 5%)</td></tr>' + (extra ? '<tr><td class="k">Published to nurses</td><td>' + pub + ' of ' + extra.audits.length + '</td><td class="k">Action plans due</td><td>' + (caps.length ? esc(caps.join(', ')) : 'None') + '</td></tr>' : '') + '</table>';
+    return '<table class="kv blk"><tr><td class="k">Reporting period</td><td>' + esc(periodLabel(data.months)) + '</td><td class="k">Departments audited</td><td>' + data.rows.filter(r => r.total.records).length + ' of ' + data.rows.length + '</td></tr>' + '<tr><td class="k">Records audited</td><td>' + ov.records + ' · ' + ov.nurses + ' nurse(s)</td><td class="k">Documentation accuracy (all tools)</td><td><b>' + (ov.accuracy == null ? '—' : ov.accuracy + '%') + '</b> (target ≥ 90%)</td></tr>' + '<tr><td class="k">Critical failure rate</td><td>' + pct(ov.criticalRecords, ov.records) + ' · ' + ov.criticalRecords + ' record(s) (target ≤ 5%)</td><td class="k">Action plans due</td><td>' + (caps.length ? esc(caps.join(', ')) : 'None') + '</td></tr>' + (extra ? '<tr><td class="k">Published to nurses</td><td>' + pub + ' of ' + extra.audits.length + '</td><td class="k"></td><td></td></tr>' : '') + '</table>';
   };
   const signBlock = () => {
     const sig = sigNames();
@@ -4056,16 +4043,16 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
   };
   const reportHead = (data, kind) => {
     const tools = toolsIn(data);
-    return letterhead('Nursing Quality & Patient Safety', 'Documentation Accuracy ' + kind + ' — ' + periodLabel(data.months), (codesOf(tools) || 'Documentation Audit') + ' · Appendix C' + (data.deptName ? ' · ' + data.deptName : ''));
+    return letterhead('Nursing Quality & Patient Safety', 'Nursing Documentation KPI Audit' + (kind ? ' — ' + kind : '') + ' — ' + periodLabel(data.months), (codesOf(tools) || 'Nursing Documentation KPI Audit') + ' · Appendix C' + (data.deptName ? ' · ' + data.deptName : ''));
   };
   function reportDoc(data) {
     const tools = toolsIn(data);
-    const body = reportHead(data, 'KPI Report') + summaryTable(data) + (tools.length ? tools.map(t => kpiSection(data, t)).join('') : '<p>No audit in this period.</p>') + '<p class="note blk">Results go to the Nursing Quality Committee by the 10th of the following month. A department below target for 2 consecutive months submits a corrective action plan (Appendix B) for its top 3 failing criteria.</p>' + signBlock() + footer();
+    const body = reportHead(data, '') + summaryTable(data) + (tools.length ? tools.map(t => kpiSection(data, t)).join('') : '<p>No audit in this period.</p>') + '<p class="note blk">Results go to the Nursing Quality Committee by the 10th of the following month. A department below target for 2 consecutive months submits a corrective action plan (Appendix B) for its top 3 failing criteria.</p>' + signBlock() + footer();
     const label = periodLabel(data.months);
     return {
       body,
-      title: 'Documentation Accuracy KPI report — ' + label,
-      file: 'Documentation-Audit-KPI-report_' + label.replace(/\W+/g, '-')
+      title: 'Nursing Documentation KPI Audit — ' + label,
+      file: 'Nursing-Documentation-KPI-Audit_' + label.replace(/\W+/g, '-')
     };
   }
   function completeDoc(data, extra) {
@@ -4083,7 +4070,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }).join('') + '<td class="n ' + band(r.total.accuracy) + '"><b>' + (r.total.accuracy == null ? '—' : r.total.accuracy + '%') + '</b><small>' + r.total.records + ' rec.</small></td></tr>').join('') + '<tr class="tot"><td>ALL DEPARTMENTS</td>' + data.months.map(m => {
         const s2 = data.overall.months[m];
         return '<td class="n">' + (s2.accuracy == null ? '·' : s2.accuracy + '%') + '<small>' + s2.records + ' rec.</small></td>';
-      }).join('') + '<td class="n">' + (data.overall.total.accuracy == null ? '—' : data.overall.total.accuracy + '%') + '</td></tr></tbody></table>' + '<div class="legend">KPI-1 accuracy = Σ Yes ÷ Σ (Yes + No). Shading: ≥ 95% · ≥ 90% · ≥ 80% · below 80%.</div>';
+      }).join('') + '<td class="n">' + (data.overall.total.accuracy == null ? '—' : data.overall.total.accuracy + '%') + '</td></tr></tbody></table>' + '<div class="legend">Documentation accuracy = Σ Yes ÷ Σ (Yes + No). Shading: ≥ 95% · ≥ 90% · ≥ 80% · below 80%.</div>';
     }
     const gaps = tools.map(t => {
       const h = data.hospital[t.id];
@@ -4096,7 +4083,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     const toolKpi = (tid, id) => {
       const t = data.tools.find(x => x.id === tid);
       const k = t && t.kpis.find(x => x.id === id);
-      return k ? (k.code || '') + ' ' + k.name : id;
+      return k ? k.name : id;
     };
     const caps = capRows.length ? '<table class="kt"><thead><tr><th>Department</th><th>Month</th><th>Below target two months running</th><th>Top failing criteria (period)</th></tr></thead><tbody>' + capRows.map(r => r.caps.map(c => '<tr><td class="d">' + esc(r.name) + '</td><td>' + esc(DA.fmtMonth(c.month)) + '</td><td>' + esc(c.kpis.map(id => toolKpi(r.toolId, id)).join(', ')) + '</td><td>' + esc(r.total.topFailing.map(g => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>').join('')).join('') + '</tbody></table>' : '<p class="note">No department was below target two months running in this period.</p>';
     const nurseRows = extra.nurses || [];
@@ -4104,21 +4091,21 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       const hit = extra.audits.map(x => DA.nursesOf(x).find(y => String(y.staffId) === String(staffId) && y.fromOtherDept)).find(Boolean);
       return hit ? (hit.homeDept || 'other dept') + ' · ' + (hit.assignment || 'Deployed') : '';
     };
-    const nurses = nurseRows.length ? '<table class="kt"><thead><tr><th>#</th><th>Nurse</th><th>ID · designation</th><th class="n">Records</th><th class="n">Accuracy</th><th class="n">Pass rate</th><th class="n">Critical</th><th>Top failing</th></tr></thead><tbody>' + nurseRows.map((b, i) => {
+    const nurses = nurseRows.length ? '<table class="kt"><thead><tr><th>#</th><th>Nurse</th><th>ID · designation</th><th class="n">Records</th><th class="n">Accuracy</th><th class="n">Critical</th><th>Top failing</th></tr></thead><tbody>' + nurseRows.map((b, i) => {
       const s2 = b.summary;
       const o = b.staffId ? otherOf(b.staffId) : '';
-      return '<tr><td class="n">' + (i + 1) + '</td><td><b>' + esc(b.label) + '</b>' + (o ? '<br><small>from ' + esc(o) + '</small>' : '') + '</td><td>' + esc(b.sub || '') + '</td><td class="n">' + s2.records + '</td><td class="n ' + band(s2.accuracy) + '">' + (s2.accuracy == null ? '—' : s2.accuracy + '%') + '</td><td class="n">' + (s2.records ? DA.round1(s2.pass / s2.records * 100) + '%' : '—') + '</td><td class="n">' + (s2.criticalRecords || '') + '</td><td>' + esc(s2.topFailing.map(g => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>';
+      return '<tr><td class="n">' + (i + 1) + '</td><td><b>' + esc(b.label) + '</b>' + (o ? '<br><small>from ' + esc(o) + '</small>' : '') + '</td><td>' + esc(b.sub || '') + '</td><td class="n">' + s2.records + '</td><td class="n ' + band(s2.accuracy) + '">' + (s2.accuracy == null ? '—' : s2.accuracy + '%') + '</td><td class="n">' + (s2.criticalRecords || '') + '</td><td>' + esc(s2.topFailing.map(g => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>';
     }).join('') + '</tbody></table><div class="legend">A shared record counts under each of its nurses.</div>' : '<p class="note">No nurse audited.</p>';
     const audits = extra.audits.slice().sort((x, y) => (x.date || '').localeCompare(y.date || '') || String(x.deptName).localeCompare(String(y.deptName)));
     const register = audits.length ? '<table class="kt rg"><thead><tr><th>#</th><th>Date</th><th>Department / area</th><th>UHID</th><th>Nurse(s)</th><th>Auditor</th><th class="n">Y/N/NA</th><th class="n">Score</th><th>Grade</th><th>Result</th><th>Status</th></tr></thead><tbody>' + audits.map((x, i) => {
       const r = x.result || {};
       return '<tr><td class="n">' + (i + 1) + '</td><td>' + esc(DA.fmtDate(x.date)) + (x.shift ? '<small>' + esc(x.shift) + '</small>' : '') + '</td><td>' + esc(x.deptName) + (x.area ? '<small>' + esc(x.area) + '</small>' : '') + '</td><td>' + esc(x.uhid || '') + '</td><td>' + DA.nursesOf(x).map(y => esc(y.name) + (y.empId ? ' (' + esc(y.empId) + ')' : '') + (y.fromOtherDept ? ' <span class="chip">other dept</span>' : '')).join('<br>') + '</td><td>' + esc(x.auditor && x.auditor.name || '') + '</td><td class="n">' + (r.yes != null ? r.yes + '/' + r.no + '/' + r.na : '') + '</td><td class="n"><b>' + (r.pct == null ? '—' : r.pct + '%') + '</b></td><td>' + esc(r.gradeLabel || '') + ((r.criticalFails || []).length ? '<small>' + r.criticalFails.length + ' critical</small>' : '') + '</td><td><b>' + esc(r.result || '') + '</b></td><td>' + esc(DA.STATUS_LABEL[x.status] || x.status) + '</td></tr>';
     }).join('') + '</tbody></table>' + (extra.more ? '<p class="note">Only the newest 500 audits are listed — choose a shorter period for the full register.</p>' : '') : '<p class="note">No audit in this period.</p>';
-    const body = reportHead(data, 'Complete Audit Report') + sec('Summary') + summaryTable(data, extra) + sec('Department KPI report') + (tools.length ? tools.map(t => kpiSection(data, t)).join('') : '<p class="note">No audit in this period.</p>') + sec('Trend by month') + trend + sec('Criterion gap analysis — the criteria most often marked \'No\'') + (gaps || '<p class="note">No audit in this period.</p>') + sec('Corrective action plans due') + caps + sec('Results by nurse') + nurses + sec('Audit register') + register + '<p class="note blk">Grades: ≥ 95% Excellent · 90–94.9% Good · 80–89.9% Needs improvement · < 80% Unsatisfactory. PASS = ≥ 90% and no critical criterion marked \'No\'. N/A is excluded from scoring.</p>' + signBlock() + footer();
+    const body = reportHead(data, 'Complete Report') + sec('Summary') + summaryTable(data, extra) + sec('Department KPI report') + (tools.length ? tools.map(t => kpiSection(data, t)).join('') : '<p class="note">No audit in this period.</p>') + sec('Trend by month') + trend + sec('Criterion gap analysis — the criteria most often marked \'No\'') + (gaps || '<p class="note">No audit in this period.</p>') + sec('Corrective action plans due') + caps + sec('Results by nurse') + nurses + sec('Audit register') + register + '<p class="note blk">Grades: ≥ 95% Excellent · 90–94.9% Good · 80–89.9% Needs improvement · < 80% Unsatisfactory. PASS = ≥ 90% and no critical criterion marked \'No\'. N/A is excluded from scoring.</p>' + signBlock() + footer();
     return {
       body,
-      title: 'Documentation Audit complete report — ' + label,
-      file: 'Documentation-Audit-complete-report_' + label.replace(/\W+/g, '-')
+      title: 'Nursing Documentation KPI Audit — complete report — ' + label,
+      file: 'Nursing-Documentation-KPI-Audit-complete-report_' + label.replace(/\W+/g, '-')
     };
   }
   async function openPrint(log, doc, landscape) {
@@ -4315,11 +4302,11 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, err);
     if (!meta) return React.createElement("div", {
       className: "da-card da-empty"
-    }, "Loading Documentation Audit\u2026");
+    }, "Loading Nursing Documentation KPI Audit\u2026");
     if (view === 'docAuditNew') {
       if (!audit && !meta.canAdd) return React.createElement("div", {
         className: "da-card da-empty"
-      }, "Filling audits needs the Documentation Audit \u201CAdd\u201D permission. Ask the administrator.");
+      }, "Filling audits needs the Nursing Documentation KPI Audit \u201CAdd\u201D permission. Ask the administrator.");
       return React.createElement(AuditForm, {
         key: audit || 'new:' + (dept || ''),
         meta: meta,
@@ -4350,7 +4337,7 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       setRoute: setRoute
     }) : React.createElement("div", {
       className: "da-card da-empty"
-    }, "Only an administrator can change Documentation Audit settings.");
+    }, "Only an administrator can change Nursing Documentation KPI Audit settings.");
     return React.createElement(Home, {
       meta: meta,
       setRoute: setRoute

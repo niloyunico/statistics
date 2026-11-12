@@ -847,7 +847,7 @@ function mount(app, opts) {
       { const p = (doc.perms || {}).devdays;
         if (Array.isArray(p) && p.length) activity.log(req, 'devdays_access', { target: username, detail: 'Device Days: ' + p.join('+') + ' · ' + ((doc.deviceDepartments || []).join(', ') || 'no departments') }); }
       { const p = (doc.perms || {}).docaudit;
-        if (Array.isArray(p) && p.length) activity.log(req, 'docaudit_access', { target: username, detail: 'Documentation Audit: ' + p.join('+') + ' · ' + ((doc.auditDepartments || []).join(', ') || 'no departments') }); }
+        if (Array.isArray(p) && p.length) activity.log(req, 'docaudit_access', { target: username, detail: 'Nursing Documentation KPI Audit: ' + p.join('+') + ' · ' + ((doc.auditDepartments || []).join(', ') || 'no departments') }); }
       if (plan) {
         try { await dc().applyResponsibleSync(plan, doc, scope); }
         catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(doc) }); }
@@ -997,7 +997,7 @@ function mount(app, opts) {
       if (devDaysOf(after) !== devDaysOf(u)) activity.log(req, 'devdays_access', { target: username, detail: 'Device Days: ' + devDaysOf(u) + ' → ' + devDaysOf(after) });
       const docAuditOf = (x) => { const p = (x.perms || {}).docaudit; return (Array.isArray(p) ? p.join('+') : (p && p !== 'none' ? p : 'none')) + ' · ' + ((x.auditDepartments || []).join(', ') || 'no departments'); };
       if ((after.auditProfileView === true) !== (u.auditProfileView === true)) activity.log(req, 'docaudit_access', { target: username, detail: 'Documentation audits on staff profiles: ' + (after.auditProfileView === true ? 'given' : 'taken away') });
-      if (docAuditOf(after) !== docAuditOf(u)) activity.log(req, 'docaudit_access', { target: username, detail: 'Documentation Audit: ' + docAuditOf(u) + ' → ' + docAuditOf(after) });
+      if (docAuditOf(after) !== docAuditOf(u)) activity.log(req, 'docaudit_access', { target: username, detail: 'Nursing Documentation KPI Audit: ' + docAuditOf(u) + ' → ' + docAuditOf(after) });
       if (plan && plan.responsibleId) {
         try { await dc().applyResponsibleSync(plan, after, scope); }
         catch (e) { return res.status(500).json({ ok: false, error: mirrorFailed(e), user: safe(after) }); }

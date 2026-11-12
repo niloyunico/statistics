@@ -268,7 +268,8 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.ok(res.body.breakdown.find((b) => b.label === 'Rina Akter').summary.records === 3);
   assert.equal(res.body.rows.some((x) => x.deptId === 'er'), false, 'other departments are not mine');
   const prev = DA.summarize([{ result: DA.score(Object.assign(allYes(IPD), { c1: 'N' }), IPD.criteria), answers: {}, criteria: IPD.criteria }], IPD.kpis);
-  assert.deepEqual(DA.capDue(prev, nov).sort(), ['kpi2', 'kpi3', 'kpi4'], 'the same KPIs below target two months running (KPI-3: 0% then 25% fully compliant)');
+  assert.deepEqual(DA.capDue(prev, nov).sort(), ['kpi4'], 'the same KPIs below target two months running (critical failures)');
+  assert.ok(!nov.kpis.some((k) => k.formula === 'pass' || k.formula === 'full'), 'no Audit Pass Rate or Fully Compliant KPI is calculated');
 
   const figs = await docAudit.monthlyFigures(['2026-10', '2026-11']);
   assert.equal(figs['2026-10'], undefined);
@@ -450,6 +451,29 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.ok(/recovery record/.test(c2.naGuide[0].note) && c2.naGuide[0].never.indexOf('c20') >= 0 && !/item \d/.test(c2.naGuide[0].note));
   assert.equal(c2.revision, crev, 'not a scoring change');
   assert.equal(await docAudit.ensureCathPostopMerge(11500), false, 'once only');
+
+  /* ---- no Audit Pass Rate / Fully Compliant KPIs (the user's choice) ---- */
+  for (const t of catalogue.TOOLS) {
+    assert.ok(!t.kpis.some((k) => k.formula === 'pass' || k.formula === 'full'), t.id + ': no pass / full KPI');
+    assert.deepEqual(t.kpis.map((k) => k.code), t.kpis.map((k, i) => 'KPI-' + (i + 1)), t.id + ': codes run 1…n');
+  }
+  assert.deepEqual(catalogue.TOOLS.find((t) => t.id === 'ipd25').kpis.map((k) => k.name), ['Documentation Accuracy Rate', 'Critical Failure Rate', 'Consent Documentation Compliance', 'Medication Documentation Compliance']);
+  // an install from before: the stored tools still carry them
+  const ip = docAudit._mem.docAuditTools.get('ipd25');
+  ip.kpis = [{ id: 'kpi1', code: 'KPI-1', name: 'Documentation Accuracy Rate', formula: 'accuracy', target: 90, direction: 'higher' }, { id: 'kpi2', code: 'KPI-2', name: 'Audit Pass Rate', formula: 'pass', target: 85, direction: 'higher' },
+    { id: 'kpi3', code: 'KPI-3', name: 'Fully Compliant Record Rate', formula: 'full', target: 60, direction: 'higher' }, { id: 'kpi4', code: 'KPI-4', name: 'Critical Failure Rate', formula: 'critical', target: 5, direction: 'lower' },
+    { id: 'kx', code: 'Own', name: 'Admin KPI', formula: 'subset', target: 95, direction: 'higher', criteria: ['c9'] }];
+  docAudit._mem.docAuditTools.set('ipd25', ip);
+  const iprev = ip.revision;
+  docAudit._mem.cfg = Object.assign({}, docAudit._mem.cfg, { kpiTrimAt: undefined });
+  assert.equal(await docAudit.ensureKpiTrim(12000), true);
+  const ip2 = docAudit._mem.docAuditTools.get('ipd25');
+  assert.deepEqual(ip2.kpis.map((k) => k.id + '=' + k.code), ['kpi1=KPI-1', 'kpi4=KPI-2', 'kx=Own'], 'ids kept, codes renumbered, an own code kept');
+  assert.equal(ip2.revision, iprev, 'not a scoring change');
+  assert.ok(/Audit Pass Rate, Fully Compliant Record Rate/.test(ip2.history[ip2.history.length - 1].action));
+  assert.equal(await docAudit.ensureKpiTrim(12500), false, 'once only');
+  // the tool editor can no longer add one
+  assert.deepEqual(DA.KPI_FORMULAS, ['accuracy', 'critical', 'subset']);
 
   console.log('doc-audit: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });
