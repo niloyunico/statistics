@@ -92,7 +92,7 @@ const UNICO_MODULE_VIEWS = {
   datasubmit:['dsHome','dsMissing','dsStatus','dsQuality','dsPatient','dsHistory','dsHandHygiene'],
   mydept: ['myDept'],
   devdays:['devDaysEntry','devDaysReview','devDaysSummary','devDaysSettings'],
-  kpi:['kpiDashboard','kpiEntry','kpiReports','kpiManage','kpiActions','kpiSettings'],
+  kpi:['kpiDashboard','kpiEntry','kpiCallBell','kpiReports','kpiManage','kpiActions','kpiSettings'],
   docaudit:['docAuditHome','docAuditNew','docAuditRegister','docAuditReports','docAuditTools','docAuditSettings'],
   medicine:['medHome','medInfo','medBrowse','medBrand','medGeneric','medRxNew','medRxList','medRxPrint','medTemplates','medCatalog','medInteractions','medCalc','medAnalytics'],
 };
@@ -602,6 +602,7 @@ function unicoWorkspaceSubAll(view){
   if(mod==='kpi') return [
     { label:'Dashboard',    view:'kpiDashboard' },
     { label:'Data Update',  view:'kpiEntry' },
+    { label:'Call bell',    view:'kpiCallBell' },
     { label:'Reports',      view:'kpiReports' },
     { label:'Manage KPIs',  view:'kpiManage' },
     { label:'Action Plans', view:'kpiActions' },

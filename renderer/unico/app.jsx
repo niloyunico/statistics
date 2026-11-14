@@ -230,9 +230,9 @@ function App(){
     body= (typeof DeviceDaysView!=='undefined') ? <DeviceDaysView view={route.view} dept={route.dept} month={route.month} setRoute={setRoute}/> : null;
   } else if(route.view && route.view.indexOf('kpi')===0){
     // Nursing KPI (module 'kpi'; window.KpiView, chunk 'kpi'); the server checks it again.
-    const KPI_TITLE={kpiDashboard:'Dashboard',kpiEntry:'Data Update',kpiReports:'Reports',kpiManage:'Manage KPIs',kpiActions:'Action Plans',kpiSettings:'Settings'};
+    const KPI_TITLE={kpiDashboard:'Dashboard',kpiEntry:'Data Update',kpiCallBell:'Call bell',kpiReports:'Reports',kpiManage:'Manage KPIs',kpiActions:'Action Plans',kpiSettings:'Settings'};
     crumbs=['UNICO','Nursing KPI',KPI_TITLE[route.view]||'Dashboard'];
-    body= (typeof KpiView!=='undefined') ? <KpiView view={route.view} report={route.report} kpi={route.kpi} setRoute={setRoute}/> : null;
+    body= (typeof KpiView!=='undefined') ? <KpiView view={route.view} report={route.report} kpi={route.kpi} month={route.month} setRoute={setRoute}/> : null;
   } else if(route.view && route.view.indexOf('docAudit')===0){
     // Documentation Audit (module 'docaudit'; window.DocAuditView, chunk 'docaudit'); the server checks it again.
     const DA_TITLE={docAuditHome:'Dashboard',docAuditNew:route.audit?'Audit':'New audit',docAuditRegister:'Register',docAuditReports:'Reports',docAuditTools:'Audit tools',docAuditSettings:'Settings'};

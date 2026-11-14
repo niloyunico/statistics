@@ -1085,6 +1085,9 @@ require('./device-days').mount(app, { requireApi: [session.requireApi] });
 // Nursing KPI: the Nursing Department's KPI programme — catalogue, monthly figures (filled from
 // the quality data where it exists), reports, PowerPoint / Excel export (module 'kpi').
 require('./kpi').mount(app, { requireApi: [session.requireApi] });
+// Call bell: the nurse-call system's PDFs → monthly response time per unit → the quality
+// indicator behind KPI 3B (module 'kpi'; nurse calls only, pull-cord / Code Blue counted apart).
+require('./callbell').mount(app, { requireApi: [session.requireApi] });
 
 // Documentation Audit: the nursing documentation audit (UHP-NSG-QA-001…004) per patient record —
 // four editable tools, auto-scored, nurse acknowledgement + in-charge sign-off, monthly KPIs that

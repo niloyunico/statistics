@@ -2074,9 +2074,166 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     );
   }
 
+  /* ============================================================= call bell === */
+  /* The nurse-call system's "Nurse Call Status Report" PDFs (one per floor wing) → the monthly Call
+     Bell Response Time per unit → the quality indicator → KPI 3B, automatically on every upload.
+     Nurse calls only; pull-cord and Code Blue alarms are counted apart. Rule: callbell-core.js. */
+  function CallBell({ meta, month, setRoute }) {
+    const CB = window.UNICO_CB;
+    const [m, setM] = useState(null);
+    const [ym, setYm] = useState(month || '');
+    const [sum, setSum] = useState(null);
+    const [busy, setBusy] = useState('');
+    const [results, setResults] = useState([]);
+    const [list, setList] = useState(null);          // { kind, calls, total }
+    const [drag, setDrag] = useState(false);
+    const [cfgOpen, setCfgOpen] = useState(false);
+    const [draft, setDraft] = useState(null);
+    const [tick, setTick] = useState(0);
+    const fileRef = useRef(null);
+    const thisYm = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); })();
+    useEffect(() => { api('/api/callbell/meta').then((j) => { setM(j); setYm((y) => y || j.months[0] || thisYm); }).catch((e) => toast(e.message, 'error')); }, [tick]);
+    useEffect(() => { if (!ym) return; setSum(null); setList(null); api('/api/callbell/summary?month=' + ym).then(setSum).catch((e) => toast(e.message, 'error')); }, [ym, tick]);
+    if (!CB) return <div className="kp-card kp-empty">Loading…</div>;
+    if (!m) return <div className="kp-card kp-empty">Loading the call bell data…</div>;
+    const target = m.config.target;
+    const readB64 = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => no(new Error('Could not read ' + f.name)); r.readAsDataURL(f); });
+    async function upload(files) {
+      const pdfs = [...files].filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+      if (!pdfs.length) { toast('Choose the Nurse Call Status Report PDFs.', 'error'); return; }
+      const out = [];
+      for (let i = 0; i < pdfs.length; i++) {
+        const f = pdfs[i];
+        setBusy('Reading ' + (i + 1) + ' of ' + pdfs.length + ': ' + f.name);
+        try {
+          const j = await api('/api/callbell/upload', { method: 'POST', body: JSON.stringify({ name: f.name, data: await readB64(f) }) });
+          out.push({ name: f.name, ok: true, up: j.upload, sent: j.sent });
+        } catch (e) { out.push({ name: f.name, ok: false, error: e.message }); }
+      }
+      setBusy(''); setResults(out);
+      const good = out.filter((x) => x.ok);
+      if (good.length) { const last = good[good.length - 1].up; if (last.months && last.months.length) setYm(last.months[last.months.length - 1]); }
+      toast(good.length + ' of ' + out.length + ' report(s) read' + (good.length ? ' — KPI 3B updated' : ''), good.length === out.length ? 'success' : 'error');
+      setTick((t) => t + 1);
+    }
+    const showList = async (kind, dept) => {
+      try { const j = await api('/api/callbell/calls?month=' + ym + '&kind=' + kind + (dept ? '&dept=' + encodeURIComponent(dept) : '')); setList(Object.assign({ kind }, j)); }
+      catch (e) { toast(e.message, 'error'); }
+    };
+    async function removeUpload(u) {
+      const ok = await confirmBox({ title: 'Remove this upload?', message: u.name + ' (' + u.wing + ', ' + u.from.slice(0, 10) + ' → ' + u.to.slice(0, 10) + '). Its calls stop counting unless another upload carries them too, and the KPI figures are worked out again. It stays in the history.', confirmLabel: 'Remove', danger: true });
+      if (!ok) return;
+      try { await api('/api/callbell/uploads/' + encodeURIComponent(u.id), { method: 'DELETE' }); toast('Removed — figures updated.', 'success'); setTick((t) => t + 1); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    async function saveCfg() {
+      try { await api('/api/callbell/config', { method: 'PUT', body: JSON.stringify(draft) }); toast('Saved — figures sent again.', 'success'); setCfgOpen(false); setTick((t) => t + 1); }
+      catch (e) { toast(e.message, 'error'); }
+    }
+    const fmtMin = (x) => (x == null ? '—' : x.toFixed(2) + ' min');
+    const avgCell = (x) => (x == null ? '—' : x > target ? <b style={{ color: '#c0182f' }}>{fmtMin(x)} ▼</b> : <b>{fmtMin(x)}</b>);
+    const when = (t) => (t ? new Date(t).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
+    // Days expected so far: the whole month, or up to yesterday in the running month.
+    const expectDays = sum ? (ym === thisYm ? Math.max(0, new Date().getDate() - 1) : sum.daysInMonth) : 0;
+    const firstGap = (w) => { for (let d = 1; d <= expectDays; d++) { const k = ym + '-' + String(d).padStart(2, '0'); if (w.dayList.indexOf(k) < 0) return k; } return null; };
+    const months = [...new Set([thisYm].concat(m.months))].sort().reverse();
+    const H = sum && sum.hospital;
+    return (
+      <div className="kp-col" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {(m.canAdd) && (
+          <div className="kp-card" onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); if (!busy) upload(e.dataTransfer.files); }}
+            style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', borderStyle: 'dashed', borderColor: drag ? '#0090ca' : undefined, background: drag ? '#eef8fd' : undefined }}>
+            <div style={{ flex: 1, minWidth: 260 }}>
+              <div style={{ fontWeight: 800, fontSize: 14 }}>Upload Nurse Call Status Reports (PDF)</div>
+              <div className="kp-muted" style={{ marginTop: 3, lineHeight: 1.5 }}>One PDF per floor wing, straight from the nurse-call system. Several at once is fine, and so is uploading a period again — a call already on file is never counted twice. Each upload updates the monthly Call Bell Response Time of its unit and KPI 3B. Nurse calls only; pull-cord and Code Blue alarms are counted apart.</div>
+            </div>
+            <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: 'none' }} onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; if (f.length) upload(f); }} />
+            <Btn pri disabled={!!busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? 'Reading…' : 'Choose PDFs'}</Btn>
+            {busy && <div className="kp-muted" style={{ width: '100%' }}>{busy}</div>}
+            {results.length > 0 && <div style={{ width: '100%', display: 'grid', gap: 4 }}>{results.map((r, i) => (
+              <div key={i} style={{ fontSize: 12.5 }}>{r.ok
+                ? <span>✓ <b>{r.name}</b> — {r.up.wing}, {r.up.from.slice(0, 16)} → {r.up.to.slice(0, 16)}: {r.up.rows} alarms, <b>{r.up.added} new</b>{r.up.already ? ', ' + r.up.already + ' already on file' : ''}{(r.sent || []).some((x) => x.error) ? <span style={{ color: '#c0182f' }}> · not sent to quality: {[...new Set((r.sent || []).filter((x) => x.error).map((x) => x.area + ' (' + x.error + ')'))].join(', ')}</span> : null}</span>
+                : <span style={{ color: '#c0182f' }}>✗ <b>{r.name}</b> — {r.error}</span>}</div>))}</div>}
+          </div>
+        )}
+
+        <div className="kp-card" style={{ padding: 14 }}>
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+            <b style={{ fontSize: 15 }}>Call Bell Response Time</b>
+            <select className="kp-sel" value={ym} onChange={(e) => setYm(e.target.value)}>{months.map((x) => <option key={x} value={x}>{CB.fmtMonth(x)}</option>)}</select>
+            <span className="kp-muted">Target ≤ {target} min · Response = nurse at the bedside (Care) − nurse call</span>
+            <span style={{ flex: 1 }} />
+            <Btn onClick={() => setRoute({ view: 'kpiEntry', kpi: 'kpi-call-bell' })}>KPI 3B in Data Update</Btn>
+            {m.isAdmin && <Btn onClick={() => { setDraft({ target: m.config.target, slowMin: m.config.slowMin, wings: Object.assign({}, m.config.wings) }); setCfgOpen(!cfgOpen); }}>Settings</Btn>}
+          </div>
+          {cfgOpen && draft && (
+            <div className="kp-banner info" style={{ display: 'block' }}>
+              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center' }}>
+                <label className="kp-muted">Target (min) <input className="kp-in" style={{ width: 70 }} value={draft.target} onChange={(e) => setDraft(Object.assign({}, draft, { target: e.target.value }))} /></label>
+                <label className="kp-muted">Slow call over (min) <input className="kp-in" style={{ width: 70 }} value={draft.slowMin} onChange={(e) => setDraft(Object.assign({}, draft, { slowMin: e.target.value }))} /></label>
+              </div>
+              <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))', gap: 8 }}>{m.wings.map((w) => (
+                <label key={w.wing} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5 }}><b style={{ minWidth: 92 }}>{w.wing}</b>
+                  <select className="kp-sel" value={Object.prototype.hasOwnProperty.call(draft.wings, w.wing) ? draft.wings[w.wing] : '__auto'} onChange={(e) => { const wings = Object.assign({}, draft.wings); if (e.target.value === '__auto') delete wings[w.wing]; else wings[w.wing] = e.target.value; setDraft(Object.assign({}, draft, { wings })); }}>
+                    <option value="__auto">Automatic (by floor){!Object.prototype.hasOwnProperty.call(m.config.wings, w.wing) && w.deptName ? ' — ' + w.deptName : ''}</option>
+                    <option value="">Not counted under a unit</option>
+                    {m.depts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                  </select></label>))}</div>
+              <div style={{ marginTop: 10, display: 'flex', gap: 8 }}><Btn pri onClick={saveCfg}>Save and send again</Btn><Btn onClick={() => setCfgOpen(false)}>Cancel</Btn></div>
+            </div>
+          )}
+          {!sum ? <div className="kp-muted">Working out {CB.fmtMonth(ym)}…</div> : !H.calls && !sum.wings.length ? <div className="kp-muted" style={{ padding: '18px 4px' }}>No call bell data for {CB.fmtMonth(ym)} yet{m.canAdd ? ' — upload the reports above.' : '.'}</div> : (<>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 10, marginBottom: 12 }}>
+              {[['Hospital average', avgCell(H.avg), H.avg != null && H.avg > target ? 'above the ' + target + '-min target' : 'target ≤ ' + target + ' min'],
+                ['Nurse calls', fmt0(H.calls), sum.wings.length + ' wing(s)'], ['Median', fmtMin(H.median), 'half the calls answered faster'],
+                ['Within ' + target + ' min', H.withinPct == null ? '—' : H.withinPct + '%', 'of nurse calls'], ['Pull-cord / Code Blue', H.pull.count + ' / ' + H.blue.count, 'counted apart, not in the average']].map(([l, v, s]) => (
+                <div key={l} className="kp-tile" style={{ cursor: 'default' }}><div className="kp-muted" style={{ fontWeight: 700 }}>{l}</div><div style={{ fontSize: 20, fontWeight: 800, margin: '4px 0' }}>{v}</div><div className="kp-muted" style={{ fontSize: 11 }}>{s}</div></div>))}
+            </div>
+            <div style={{ overflowX: 'auto' }}><table className="kp-tbl"><thead><tr><th>Unit</th><th>Wings</th><th>Nurse calls</th><th>Average</th><th>Median</th><th>≤ {target} min</th><th>Longest</th><th>Days with data</th><th>Pull-cord</th><th>Code Blue</th><th>Sent to KPI</th></tr></thead>
+              <tbody>{sum.units.concat([Object.assign({ wings: [] }, H)]).map((u) => (
+                <tr key={u.deptId} style={u.deptId === '__hospital__' ? { fontWeight: 700, background: '#f4f8fb' } : undefined} onClick={() => showList('call', u.deptId === '__hospital__' ? '' : u.deptId)}>
+                  <td>{u.deptName}{!u.area && <div className="kp-muted" style={{ color: '#b5670a' }}>no quality area — counted in Overall only</div>}</td><td className="kp-muted">{(u.wings || []).join(', ') || '—'}</td>
+                  <td>{fmt0(u.calls)}</td><td>{avgCell(u.avg)}</td><td>{fmtMin(u.median)}</td><td>{u.withinPct == null ? '—' : u.withinPct + '%'}</td><td>{fmtMin(u.longest)}</td>
+                  <td>{u.days} of {sum.daysInMonth}</td><td>{u.pull.count}</td><td>{u.blue.count}</td>
+                  <td>{u.sent && u.sent.calls === u.calls && u.sent.sumMin === u.sumMin ? <span className="kp-pill" style={{ background: '#e7f6ed', color: '#14713f' }}>✓ {when(u.sent.at)}</span> : u.calls ? <span className="kp-pill" style={{ background: '#fff1d6', color: '#8a5a00' }}>not sent</span> : '—'}</td></tr>))}</tbody></table></div>
+            <div className="kp-muted" style={{ marginTop: 6 }}>Click a row for its slow calls (over {sum.slowMin} min). Average = Σ response minutes ÷ nurse calls; Overall pools every unit's calls.</div>
+
+            <div style={{ marginTop: 14 }}><b style={{ fontSize: 13 }}>Days covered by the uploaded reports</b> <span className="kp-muted">(one export holds at most 1,000 calls — about 1–4 weeks of a wing)</span></div>
+            <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>{sum.wings.map((w) => { const gap = firstGap(w); return (
+              <div key={w.wing} style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <b style={{ width: 100, fontSize: 12.5 }}>{w.wing}</b>
+                <span style={{ display: 'flex', gap: 2 }}>{Array.from({ length: sum.daysInMonth }, (_, i) => { const k = ym + '-' + String(i + 1).padStart(2, '0'); const on = w.dayList.indexOf(k) >= 0; return <i key={k} title={k + (on ? ' — data' : ' — no data')} style={{ width: 10, height: 16, borderRadius: 2, background: on ? '#1f9d57' : (i < expectDays ? '#f3c6cf' : '#e8edf2') }} />; })}</span>
+                <span className="kp-muted">{w.calls} calls · {fmtMin(w.avg)}{w.deptName ? ' · ' + w.deptName : ' · not under a unit'}</span>
+                {gap && <span style={{ fontSize: 12, color: '#a3172f', fontWeight: 600 }}>Missing from {gap} — export {w.wing} again from that date</span>}
+              </div>); })}</div>
+            <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <Btn onClick={() => showList('call', '')}>Slow calls (over {sum.slowMin} min)</Btn><Btn onClick={() => showList('pull', '')}>Pull-cord alarms</Btn><Btn onClick={() => showList('blue', '')}>Code Blue</Btn>
+            </div>
+            {list && (
+              <div style={{ marginTop: 10, maxHeight: 360, overflow: 'auto' }}>
+                <div className="kp-muted" style={{ marginBottom: 6 }}>{list.kind === 'call' ? 'Nurse calls over ' + list.slowMin + ' min' : list.kind === 'pull' ? 'Pull-cord alarms (not in the average; the report’s times for a cord left pulled are not reliable)' : 'Code Blue alarms'} — {list.total}{list.total > list.calls.length ? ', first ' + list.calls.length + ' shown' : ''}</div>
+                {list.calls.length > 0 && <table className="kp-tbl"><thead><tr><th>Wing</th><th>Room</th><th>Nurse call</th><th>Pull cord</th><th>Care</th>{list.kind === 'call' && <th>Response</th>}</tr></thead>
+                  <tbody>{list.calls.map((c, i) => <tr key={i} style={{ cursor: 'default' }}><td>{c.wing}</td><td>{c.room}</td><td>{c.call || '—'}</td><td>{c.pull || '—'}</td><td>{c.care || '—'}</td>{list.kind === 'call' && <td><b style={{ color: c.min > target ? '#c0182f' : undefined }}>{fmtMin(c.min)}</b></td>}</tr>)}</tbody></table>}
+              </div>
+            )}
+          </>)}
+        </div>
+
+        <div className="kp-card" style={{ padding: 14 }}>
+          <b style={{ fontSize: 13 }}>Uploads</b> <span className="kp-muted">— every report read, newest first</span>
+          {!m.uploads.length ? <div className="kp-muted" style={{ marginTop: 8 }}>Nothing uploaded yet.</div> : (
+            <div style={{ overflowX: 'auto', marginTop: 8 }}><table className="kp-tbl"><thead><tr><th>File</th><th>Wing</th><th>From</th><th>To</th><th>Alarms</th><th>New</th><th>By</th><th>When</th><th /></tr></thead>
+              <tbody>{m.uploads.map((u) => <tr key={u.id} style={{ cursor: 'default', opacity: u.removedAt ? 0.45 : 1 }}><td>{u.name}{u.removedAt ? ' (removed)' : ''}</td><td>{u.wing}</td><td>{u.from.slice(0, 16)}</td><td>{u.to.slice(0, 16)}</td><td>{u.rows}</td><td>{u.added}</td><td>{u.byName || u.by}</td><td>{when(u.at)}</td>
+                <td>{m.canDelete && !u.removedAt && <button className="kp-icon-btn" title="Remove this upload" onClick={() => removeUpload(u)}>×</button>}</td></tr>)}</tbody></table></div>)}
+        </div>
+      </div>
+    );
+  }
+  const fmt0 = (n) => (n == null ? '—' : Number(n).toLocaleString());
+
   /* ================================================================== shell === */
-  const VIEWS = [['kpiDashboard', 'Dashboard'], ['kpiEntry', 'Data Update'], ['kpiReports', 'Reports'], ['kpiManage', 'Manage KPIs'], ['kpiActions', 'Action Plans'], ['kpiSettings', 'Settings']];
-  function KpiView({ view, report, kpi, setRoute }) {
+  const VIEWS = [['kpiDashboard', 'Dashboard'], ['kpiEntry', 'Data Update'], ['kpiCallBell', 'Call bell'], ['kpiReports', 'Reports'], ['kpiManage', 'Manage KPIs'], ['kpiActions', 'Action Plans'], ['kpiSettings', 'Settings']];
+  function KpiView({ view, report, kpi, month, setRoute }) {
     useStyles();
     const [meta, setMeta] = useState(null);
     const [defs, setDefs] = useState(null);
@@ -2101,6 +2258,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     else if (v === 'kpiReports') body = report === 'definitions' || /^calendar-\d{4}$/.test(report || '')
       ? <DocView key={report} meta={meta} kind={report === 'definitions' ? 'definitions' : 'calendar'} year={report === 'definitions' ? null : +report.slice(9)} setRoute={setRoute} />
       : report ? <ReportDoc key={report} meta={meta} id={report} setRoute={setRoute} showCalc={showCalc} /> : <ReportsHome meta={meta} setRoute={setRoute} />;
+    else if (v === 'kpiCallBell') body = <CallBell meta={meta} month={month} setRoute={setRoute} />;
     else if (v === 'kpiManage') body = <ManageKpis meta={meta} defs={defs} reload={loadDefs} />;
     else if (v === 'kpiActions') body = <ActionBoard meta={meta} defs={defs} reload={loadDefs} focusKpi={kpi} />;
     else if (v === 'kpiSettings') body = meta.isAdmin ? <Settings meta={meta} defs={defs} reloadMeta={() => { loadMeta(); loadDefs(); }} /> : <div className="kp-card kp-empty">Only an administrator can change the Nursing KPI settings.</div>;

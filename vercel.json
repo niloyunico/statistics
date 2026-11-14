@@ -22,6 +22,7 @@
           "server/kpi/**",
           "renderer/unico/kpi-core.js",
           "renderer/unico/doc-audit-core.js",
+          "renderer/unico/callbell-core.js",
           "renderer/nurse-app.html",
           "renderer/admin-app.html"
         ]

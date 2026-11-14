@@ -1,3 +1,105 @@
+/* ===== callbell-core.js ===== */
+/* Call Bell Response Time — ONE rule for the server and the screen (window.UNICO_CB; require()d by
+ * server/callbell.js). Reads the text of the nurse-call system's "NURSE CALL STATUS REPORT" PDF
+ * (one per floor wing, e.g. "9th Floor A") and works out the monthly figures behind Nursing KPI 3B.
+ *
+ * A report row: Room | Nurse Call | Pull Chord | Care | Code Blue | Clear Time | Attend TAT | Clear TAT
+ *   - Care = the nurse at the bedside (the call answered). Attend TAT = Care − the first alarm.
+ *   - A row with a Pull Chord time is a bathroom pull-cord alarm, one with a Code Blue time a code;
+ *     anything else is a nurse call (the bed call button).
+ * The KPI counts NURSE CALLS ONLY (the user's choice): pull-cord alarms (some left on for 40–57 min)
+ * and Code Blue are counted and shown apart, never mixed into the average.
+ * Times are the hospital's wall clock, kept as "YYYY-MM-DD HH:MM:SS" text — never converted.
+ */
+(function (root) {
+  const DT = '(20\\d{2}-[01]\\d-[0-3]\\d [0-2]\\d:[0-5]\\d:[0-5]\\d|-{2,})';
+  // pdf text joins the cells ("9062026-11-09 08:55:42----2026-…0:34Min0:0 Min"); the date pattern
+  // (a 20xx year followed by "-") is what separates the room from the first time.
+  const ROW = new RegExp('^\\s*(\\S+?)\\s*' + DT + '\\s*' + DT + '\\s*' + DT + '\\s*' + DT + '\\s*' + DT + '\\s*(\\d+):(\\d{1,2})\\s*Min\\s*(\\d+):(\\d{1,2})\\s*Min\\s*$');
+  const WING = /^\s*(\d{1,2})(?:st|nd|rd|th)\s+Floor\s*([A-Za-z0-9]*)\s*$/i;
+  const SKIP = /^\s*(UNICO|NURSE CALL STATUS REPORT|Room\s*Nurse\s*Call.*|Page\s*\d+\s*\/\s*\d+)\s*$/i;
+  const T = (s) => (/^-+$/.test(s) ? null : s);
+  const secOf = (a, b) => {   // seconds from a to b, both "YYYY-MM-DD HH:MM:SS"
+    const p = (s) => { const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(s); return Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]); };
+    return Math.round((p(b) - p(a)) / 1000);
+  };
+
+  /* The PDF's text → { wing: '9th Floor A', floor: 9, rows: [...], unparsed: [lines] }. */
+  function parseText(text) {
+    let wing = null, floor = null;
+    const rows = [], unparsed = [];
+    String(text || '').split(/\r?\n/).forEach((ln) => {
+      if (!ln.trim()) return;
+      const w = WING.exec(ln);
+      if (w) { const name = ln.trim().replace(/\s+/g, ' '); if (!wing) { wing = name; floor = Number(w[1]); } return; }
+      if (SKIP.test(ln)) return;
+      const m = ROW.exec(ln);
+      if (!m) { unparsed.push(ln.trim()); return; }
+      const [, room, call, pull, care, blue, clear, am, as, cm, cs] = m;
+      const r = { room, call: T(call), pull: T(pull), care: T(care), blue: T(blue), clear: T(clear),
+        attendSec: Number(am) * 60 + Number(as), clearSec: Number(cm) * 60 + Number(cs) };
+      r.kind = r.blue ? 'blue' : r.pull ? 'pull' : 'call';
+      // When the alarm happened: the nurse call, else the pull cord. A pull-cord time can be stale —
+      // a cord left pulled for days (one even dated 2024 by the device clock) is reported with the
+      // next nurse call — so it never decides the date when a nurse call is there. (Nurse-call TAT
+      // = Care − Nurse Call exactly; pull-cord TAT wraps at 60 min and is not used.)
+      r.first = r.call || r.pull || r.care || r.clear;
+      if (!r.first) { unparsed.push(ln.trim()); return; }
+      rows.push(r);
+    });
+    return { wing, floor, rows, unparsed };
+  }
+
+  const keyOf = (wing, r) => String(wing) + '|' + r.first + '|' + r.room;
+  // a parsed row carries `first`; a stored one (server/callbell.js) the same time as `at`
+  const monthOf = (r) => String(r.first || r.at).slice(0, 7);
+  const dayOf = (r) => String(r.first || r.at).slice(0, 10);
+  const daysIn = (ym) => new Date(Date.UTC(+ym.slice(0, 4), +ym.slice(5, 7), 0)).getUTCDate();
+  const round = (x, d) => (x == null || !isFinite(x) ? null : Math.round(x * Math.pow(10, d == null ? 2 : d)) / Math.pow(10, d == null ? 2 : d));
+  const median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y); const h = s.length >> 1; return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2; };
+  const M3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const qualityMonth = (ym) => M3[+ym.slice(5, 7) - 1] + '-' + ym.slice(2, 4);   // '2026-10' → 'Oct-26'
+  const fmtMonth = (ym) => M3[+ym.slice(5, 7) - 1] + ' ' + ym.slice(0, 4);
+
+  /* The figures of a set of calls (one unit or wing, one month). Minutes, nurse calls only in the
+     KPI part; pull-cord and Code Blue apart. `days` = days with at least one alarm. */
+  function summarize(rows, opts) {
+    const o = opts || {};
+    const target = o.target != null ? Number(o.target) : 2;
+    const calls = rows.filter((r) => r.kind === 'call');
+    const mins = calls.map((r) => r.attendSec / 60);
+    const sum = mins.reduce((t, x) => t + x, 0);
+    const pulls = rows.filter((r) => r.kind === 'pull'), blues = rows.filter((r) => r.kind === 'blue');
+    return {
+      calls: calls.length,
+      sumMin: round(sum, 2),
+      avg: calls.length ? round(sum / calls.length, 2) : null,
+      median: round(median(mins), 2),
+      withinPct: calls.length ? round(100 * mins.filter((x) => x <= target).length / calls.length, 1) : null,
+      longest: mins.length ? round(Math.max.apply(null, mins), 2) : null,
+      pull: { count: pulls.length },   // count only: pull-cord durations are not reliable (see parseText)
+      blue: { count: blues.length },
+      days: new Set(rows.map(dayOf)).size,
+    };
+  }
+
+  /* The month remark written with the quality figure (what the number is, and how complete). */
+  function remarkOf(s, ym, opts) {
+    const o = opts || {};
+    const parts = ['Nurse-call system PDFs: ' + s.calls + ' nurse calls, data on ' + s.days + ' of ' + daysIn(ym) + ' days'];
+    if (s.median != null) parts.push('median ' + s.median + ' min');
+    if (s.withinPct != null) parts.push(s.withinPct + '% within ' + (o.target != null ? o.target : 2) + ' min');
+    if (s.pull.count) parts.push('pull-cord alarms ' + s.pull.count + ' (not counted)');
+    if (s.blue.count) parts.push('Code Blue ' + s.blue.count + ' (not counted)');
+    return parts.join('; ') + '.';
+  }
+
+  const API = { parseText, keyOf, monthOf, dayOf, daysIn, round, median, summarize, remarkOf, qualityMonth, fmtMonth, secOf };
+  if (typeof module !== 'undefined' && module.exports) module.exports = API;
+  if (root) root.UNICO_CB = API;
+})(typeof window !== 'undefined' ? window : null);
+
+;
 /* ===== kpi.jsx ===== */
 (function(){
 (function () {
@@ -6087,11 +6189,580 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       onClick: save
     }, busy ? 'Saving…' : 'Save settings')));
   }
-  const VIEWS = [['kpiDashboard', 'Dashboard'], ['kpiEntry', 'Data Update'], ['kpiReports', 'Reports'], ['kpiManage', 'Manage KPIs'], ['kpiActions', 'Action Plans'], ['kpiSettings', 'Settings']];
+  function CallBell({
+    meta,
+    month,
+    setRoute
+  }) {
+    const CB = window.UNICO_CB;
+    const [m, setM] = useState(null);
+    const [ym, setYm] = useState(month || '');
+    const [sum, setSum] = useState(null);
+    const [busy, setBusy] = useState('');
+    const [results, setResults] = useState([]);
+    const [list, setList] = useState(null);
+    const [drag, setDrag] = useState(false);
+    const [cfgOpen, setCfgOpen] = useState(false);
+    const [draft, setDraft] = useState(null);
+    const [tick, setTick] = useState(0);
+    const fileRef = useRef(null);
+    const thisYm = (() => {
+      const d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    })();
+    useEffect(() => {
+      api('/api/callbell/meta').then(j => {
+        setM(j);
+        setYm(y => y || j.months[0] || thisYm);
+      }).catch(e => toast(e.message, 'error'));
+    }, [tick]);
+    useEffect(() => {
+      if (!ym) return;
+      setSum(null);
+      setList(null);
+      api('/api/callbell/summary?month=' + ym).then(setSum).catch(e => toast(e.message, 'error'));
+    }, [ym, tick]);
+    if (!CB) return React.createElement("div", {
+      className: "kp-card kp-empty"
+    }, "Loading\u2026");
+    if (!m) return React.createElement("div", {
+      className: "kp-card kp-empty"
+    }, "Loading the call bell data\u2026");
+    const target = m.config.target;
+    const readB64 = f => new Promise((ok, no) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result));
+      r.onerror = () => no(new Error('Could not read ' + f.name));
+      r.readAsDataURL(f);
+    });
+    async function upload(files) {
+      const pdfs = [...files].filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+      if (!pdfs.length) {
+        toast('Choose the Nurse Call Status Report PDFs.', 'error');
+        return;
+      }
+      const out = [];
+      for (let i = 0; i < pdfs.length; i++) {
+        const f = pdfs[i];
+        setBusy('Reading ' + (i + 1) + ' of ' + pdfs.length + ': ' + f.name);
+        try {
+          const j = await api('/api/callbell/upload', {
+            method: 'POST',
+            body: JSON.stringify({
+              name: f.name,
+              data: await readB64(f)
+            })
+          });
+          out.push({
+            name: f.name,
+            ok: true,
+            up: j.upload,
+            sent: j.sent
+          });
+        } catch (e) {
+          out.push({
+            name: f.name,
+            ok: false,
+            error: e.message
+          });
+        }
+      }
+      setBusy('');
+      setResults(out);
+      const good = out.filter(x => x.ok);
+      if (good.length) {
+        const last = good[good.length - 1].up;
+        if (last.months && last.months.length) setYm(last.months[last.months.length - 1]);
+      }
+      toast(good.length + ' of ' + out.length + ' report(s) read' + (good.length ? ' — KPI 3B updated' : ''), good.length === out.length ? 'success' : 'error');
+      setTick(t => t + 1);
+    }
+    const showList = async (kind, dept) => {
+      try {
+        const j = await api('/api/callbell/calls?month=' + ym + '&kind=' + kind + (dept ? '&dept=' + encodeURIComponent(dept) : ''));
+        setList(Object.assign({
+          kind
+        }, j));
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    };
+    async function removeUpload(u) {
+      const ok = await confirmBox({
+        title: 'Remove this upload?',
+        message: u.name + ' (' + u.wing + ', ' + u.from.slice(0, 10) + ' → ' + u.to.slice(0, 10) + '). Its calls stop counting unless another upload carries them too, and the KPI figures are worked out again. It stays in the history.',
+        confirmLabel: 'Remove',
+        danger: true
+      });
+      if (!ok) return;
+      try {
+        await api('/api/callbell/uploads/' + encodeURIComponent(u.id), {
+          method: 'DELETE'
+        });
+        toast('Removed — figures updated.', 'success');
+        setTick(t => t + 1);
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
+    async function saveCfg() {
+      try {
+        await api('/api/callbell/config', {
+          method: 'PUT',
+          body: JSON.stringify(draft)
+        });
+        toast('Saved — figures sent again.', 'success');
+        setCfgOpen(false);
+        setTick(t => t + 1);
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
+    const fmtMin = x => x == null ? '—' : x.toFixed(2) + ' min';
+    const avgCell = x => x == null ? '—' : x > target ? React.createElement("b", {
+      style: {
+        color: '#c0182f'
+      }
+    }, fmtMin(x), " \u25BC") : React.createElement("b", null, fmtMin(x));
+    const when = t => t ? new Date(t).toLocaleString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit'
+    }) : '';
+    const expectDays = sum ? ym === thisYm ? Math.max(0, new Date().getDate() - 1) : sum.daysInMonth : 0;
+    const firstGap = w => {
+      for (let d = 1; d <= expectDays; d++) {
+        const k = ym + '-' + String(d).padStart(2, '0');
+        if (w.dayList.indexOf(k) < 0) return k;
+      }
+      return null;
+    };
+    const months = [...new Set([thisYm].concat(m.months))].sort().reverse();
+    const H = sum && sum.hospital;
+    return React.createElement("div", {
+      className: "kp-col",
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 14
+      }
+    }, m.canAdd && React.createElement("div", {
+      className: "kp-card",
+      onDragOver: e => {
+        e.preventDefault();
+        setDrag(true);
+      },
+      onDragLeave: () => setDrag(false),
+      onDrop: e => {
+        e.preventDefault();
+        setDrag(false);
+        if (!busy) upload(e.dataTransfer.files);
+      },
+      style: {
+        padding: 16,
+        display: 'flex',
+        gap: 14,
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        borderStyle: 'dashed',
+        borderColor: drag ? '#0090ca' : undefined,
+        background: drag ? '#eef8fd' : undefined
+      }
+    }, React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 260
+      }
+    }, React.createElement("div", {
+      style: {
+        fontWeight: 800,
+        fontSize: 14
+      }
+    }, "Upload Nurse Call Status Reports (PDF)"), React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        marginTop: 3,
+        lineHeight: 1.5
+      }
+    }, "One PDF per floor wing, straight from the nurse-call system. Several at once is fine, and so is uploading a period again \u2014 a call already on file is never counted twice. Each upload updates the monthly Call Bell Response Time of its unit and KPI 3B. Nurse calls only; pull-cord and Code Blue alarms are counted apart.")), React.createElement("input", {
+      ref: fileRef,
+      type: "file",
+      accept: "application/pdf,.pdf",
+      multiple: true,
+      style: {
+        display: 'none'
+      },
+      onChange: e => {
+        const f = [...(e.target.files || [])];
+        e.target.value = '';
+        if (f.length) upload(f);
+      }
+    }), React.createElement(Btn, {
+      pri: true,
+      disabled: !!busy,
+      onClick: () => fileRef.current && fileRef.current.click()
+    }, busy ? 'Reading…' : 'Choose PDFs'), busy && React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        width: '100%'
+      }
+    }, busy), results.length > 0 && React.createElement("div", {
+      style: {
+        width: '100%',
+        display: 'grid',
+        gap: 4
+      }
+    }, results.map((r, i) => React.createElement("div", {
+      key: i,
+      style: {
+        fontSize: 12.5
+      }
+    }, r.ok ? React.createElement("span", null, "\u2713 ", React.createElement("b", null, r.name), " \u2014 ", r.up.wing, ", ", r.up.from.slice(0, 16), " \u2192 ", r.up.to.slice(0, 16), ": ", r.up.rows, " alarms, ", React.createElement("b", null, r.up.added, " new"), r.up.already ? ', ' + r.up.already + ' already on file' : '', (r.sent || []).some(x => x.error) ? React.createElement("span", {
+      style: {
+        color: '#c0182f'
+      }
+    }, " \xB7 not sent to quality: ", [...new Set((r.sent || []).filter(x => x.error).map(x => x.area + ' (' + x.error + ')'))].join(', ')) : null) : React.createElement("span", {
+      style: {
+        color: '#c0182f'
+      }
+    }, "\u2717 ", React.createElement("b", null, r.name), " \u2014 ", r.error))))), React.createElement("div", {
+      className: "kp-card",
+      style: {
+        padding: 14
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        marginBottom: 12
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 15
+      }
+    }, "Call Bell Response Time"), React.createElement("select", {
+      className: "kp-sel",
+      value: ym,
+      onChange: e => setYm(e.target.value)
+    }, months.map(x => React.createElement("option", {
+      key: x,
+      value: x
+    }, CB.fmtMonth(x)))), React.createElement("span", {
+      className: "kp-muted"
+    }, "Target \u2264 ", target, " min \xB7 Response = nurse at the bedside (Care) \u2212 nurse call"), React.createElement("span", {
+      style: {
+        flex: 1
+      }
+    }), React.createElement(Btn, {
+      onClick: () => setRoute({
+        view: 'kpiEntry',
+        kpi: 'kpi-call-bell'
+      })
+    }, "KPI 3B in Data Update"), m.isAdmin && React.createElement(Btn, {
+      onClick: () => {
+        setDraft({
+          target: m.config.target,
+          slowMin: m.config.slowMin,
+          wings: Object.assign({}, m.config.wings)
+        });
+        setCfgOpen(!cfgOpen);
+      }
+    }, "Settings")), cfgOpen && draft && React.createElement("div", {
+      className: "kp-banner info",
+      style: {
+        display: 'block'
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 14,
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }
+    }, React.createElement("label", {
+      className: "kp-muted"
+    }, "Target (min) ", React.createElement("input", {
+      className: "kp-in",
+      style: {
+        width: 70
+      },
+      value: draft.target,
+      onChange: e => setDraft(Object.assign({}, draft, {
+        target: e.target.value
+      }))
+    })), React.createElement("label", {
+      className: "kp-muted"
+    }, "Slow call over (min) ", React.createElement("input", {
+      className: "kp-in",
+      style: {
+        width: 70
+      },
+      value: draft.slowMin,
+      onChange: e => setDraft(Object.assign({}, draft, {
+        slowMin: e.target.value
+      }))
+    }))), React.createElement("div", {
+      style: {
+        marginTop: 10,
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fill,minmax(260px,1fr))',
+        gap: 8
+      }
+    }, m.wings.map(w => React.createElement("label", {
+      key: w.wing,
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        fontSize: 12.5
+      }
+    }, React.createElement("b", {
+      style: {
+        minWidth: 92
+      }
+    }, w.wing), React.createElement("select", {
+      className: "kp-sel",
+      value: Object.prototype.hasOwnProperty.call(draft.wings, w.wing) ? draft.wings[w.wing] : '__auto',
+      onChange: e => {
+        const wings = Object.assign({}, draft.wings);
+        if (e.target.value === '__auto') delete wings[w.wing];else wings[w.wing] = e.target.value;
+        setDraft(Object.assign({}, draft, {
+          wings
+        }));
+      }
+    }, React.createElement("option", {
+      value: "__auto"
+    }, "Automatic (by floor)", !Object.prototype.hasOwnProperty.call(m.config.wings, w.wing) && w.deptName ? ' — ' + w.deptName : ''), React.createElement("option", {
+      value: ""
+    }, "Not counted under a unit"), m.depts.map(d => React.createElement("option", {
+      key: d.id,
+      value: d.id
+    }, d.name)))))), React.createElement("div", {
+      style: {
+        marginTop: 10,
+        display: 'flex',
+        gap: 8
+      }
+    }, React.createElement(Btn, {
+      pri: true,
+      onClick: saveCfg
+    }, "Save and send again"), React.createElement(Btn, {
+      onClick: () => setCfgOpen(false)
+    }, "Cancel"))), !sum ? React.createElement("div", {
+      className: "kp-muted"
+    }, "Working out ", CB.fmtMonth(ym), "\u2026") : !H.calls && !sum.wings.length ? React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        padding: '18px 4px'
+      }
+    }, "No call bell data for ", CB.fmtMonth(ym), " yet", m.canAdd ? ' — upload the reports above.' : '.') : React.createElement(React.Fragment, null, React.createElement("div", {
+      style: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+        gap: 10,
+        marginBottom: 12
+      }
+    }, [['Hospital average', avgCell(H.avg), H.avg != null && H.avg > target ? 'above the ' + target + '-min target' : 'target ≤ ' + target + ' min'], ['Nurse calls', fmt0(H.calls), sum.wings.length + ' wing(s)'], ['Median', fmtMin(H.median), 'half the calls answered faster'], ['Within ' + target + ' min', H.withinPct == null ? '—' : H.withinPct + '%', 'of nurse calls'], ['Pull-cord / Code Blue', H.pull.count + ' / ' + H.blue.count, 'counted apart, not in the average']].map(([l, v, s]) => React.createElement("div", {
+      key: l,
+      className: "kp-tile",
+      style: {
+        cursor: 'default'
+      }
+    }, React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        fontWeight: 700
+      }
+    }, l), React.createElement("div", {
+      style: {
+        fontSize: 20,
+        fontWeight: 800,
+        margin: '4px 0'
+      }
+    }, v), React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        fontSize: 11
+      }
+    }, s)))), React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, React.createElement("table", {
+      className: "kp-tbl"
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Unit"), React.createElement("th", null, "Wings"), React.createElement("th", null, "Nurse calls"), React.createElement("th", null, "Average"), React.createElement("th", null, "Median"), React.createElement("th", null, "\u2264 ", target, " min"), React.createElement("th", null, "Longest"), React.createElement("th", null, "Days with data"), React.createElement("th", null, "Pull-cord"), React.createElement("th", null, "Code Blue"), React.createElement("th", null, "Sent to KPI"))), React.createElement("tbody", null, sum.units.concat([Object.assign({
+      wings: []
+    }, H)]).map(u => React.createElement("tr", {
+      key: u.deptId,
+      style: u.deptId === '__hospital__' ? {
+        fontWeight: 700,
+        background: '#f4f8fb'
+      } : undefined,
+      onClick: () => showList('call', u.deptId === '__hospital__' ? '' : u.deptId)
+    }, React.createElement("td", null, u.deptName, !u.area && React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        color: '#b5670a'
+      }
+    }, "no quality area \u2014 counted in Overall only")), React.createElement("td", {
+      className: "kp-muted"
+    }, (u.wings || []).join(', ') || '—'), React.createElement("td", null, fmt0(u.calls)), React.createElement("td", null, avgCell(u.avg)), React.createElement("td", null, fmtMin(u.median)), React.createElement("td", null, u.withinPct == null ? '—' : u.withinPct + '%'), React.createElement("td", null, fmtMin(u.longest)), React.createElement("td", null, u.days, " of ", sum.daysInMonth), React.createElement("td", null, u.pull.count), React.createElement("td", null, u.blue.count), React.createElement("td", null, u.sent && u.sent.calls === u.calls && u.sent.sumMin === u.sumMin ? React.createElement("span", {
+      className: "kp-pill",
+      style: {
+        background: '#e7f6ed',
+        color: '#14713f'
+      }
+    }, "\u2713 ", when(u.sent.at)) : u.calls ? React.createElement("span", {
+      className: "kp-pill",
+      style: {
+        background: '#fff1d6',
+        color: '#8a5a00'
+      }
+    }, "not sent") : '—')))))), React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        marginTop: 6
+      }
+    }, "Click a row for its slow calls (over ", sum.slowMin, " min). Average = \u03A3 response minutes \xF7 nurse calls; Overall pools every unit's calls."), React.createElement("div", {
+      style: {
+        marginTop: 14
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 13
+      }
+    }, "Days covered by the uploaded reports"), " ", React.createElement("span", {
+      className: "kp-muted"
+    }, "(one export holds at most 1,000 calls \u2014 about 1\u20134 weeks of a wing)")), React.createElement("div", {
+      style: {
+        display: 'grid',
+        gap: 6,
+        marginTop: 8
+      }
+    }, sum.wings.map(w => {
+      const gap = firstGap(w);
+      return React.createElement("div", {
+        key: w.wing,
+        style: {
+          display: 'flex',
+          gap: 10,
+          alignItems: 'center',
+          flexWrap: 'wrap'
+        }
+      }, React.createElement("b", {
+        style: {
+          width: 100,
+          fontSize: 12.5
+        }
+      }, w.wing), React.createElement("span", {
+        style: {
+          display: 'flex',
+          gap: 2
+        }
+      }, Array.from({
+        length: sum.daysInMonth
+      }, (_, i) => {
+        const k = ym + '-' + String(i + 1).padStart(2, '0');
+        const on = w.dayList.indexOf(k) >= 0;
+        return React.createElement("i", {
+          key: k,
+          title: k + (on ? ' — data' : ' — no data'),
+          style: {
+            width: 10,
+            height: 16,
+            borderRadius: 2,
+            background: on ? '#1f9d57' : i < expectDays ? '#f3c6cf' : '#e8edf2'
+          }
+        });
+      })), React.createElement("span", {
+        className: "kp-muted"
+      }, w.calls, " calls \xB7 ", fmtMin(w.avg), w.deptName ? ' · ' + w.deptName : ' · not under a unit'), gap && React.createElement("span", {
+        style: {
+          fontSize: 12,
+          color: '#a3172f',
+          fontWeight: 600
+        }
+      }, "Missing from ", gap, " \u2014 export ", w.wing, " again from that date"));
+    })), React.createElement("div", {
+      style: {
+        marginTop: 12,
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap'
+      }
+    }, React.createElement(Btn, {
+      onClick: () => showList('call', '')
+    }, "Slow calls (over ", sum.slowMin, " min)"), React.createElement(Btn, {
+      onClick: () => showList('pull', '')
+    }, "Pull-cord alarms"), React.createElement(Btn, {
+      onClick: () => showList('blue', '')
+    }, "Code Blue")), list && React.createElement("div", {
+      style: {
+        marginTop: 10,
+        maxHeight: 360,
+        overflow: 'auto'
+      }
+    }, React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        marginBottom: 6
+      }
+    }, list.kind === 'call' ? 'Nurse calls over ' + list.slowMin + ' min' : list.kind === 'pull' ? 'Pull-cord alarms (not in the average; the report’s times for a cord left pulled are not reliable)' : 'Code Blue alarms', " \u2014 ", list.total, list.total > list.calls.length ? ', first ' + list.calls.length + ' shown' : ''), list.calls.length > 0 && React.createElement("table", {
+      className: "kp-tbl"
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Wing"), React.createElement("th", null, "Room"), React.createElement("th", null, "Nurse call"), React.createElement("th", null, "Pull cord"), React.createElement("th", null, "Care"), list.kind === 'call' && React.createElement("th", null, "Response"))), React.createElement("tbody", null, list.calls.map((c, i) => React.createElement("tr", {
+      key: i,
+      style: {
+        cursor: 'default'
+      }
+    }, React.createElement("td", null, c.wing), React.createElement("td", null, c.room), React.createElement("td", null, c.call || '—'), React.createElement("td", null, c.pull || '—'), React.createElement("td", null, c.care || '—'), list.kind === 'call' && React.createElement("td", null, React.createElement("b", {
+      style: {
+        color: c.min > target ? '#c0182f' : undefined
+      }
+    }, fmtMin(c.min)))))))))), React.createElement("div", {
+      className: "kp-card",
+      style: {
+        padding: 14
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 13
+      }
+    }, "Uploads"), " ", React.createElement("span", {
+      className: "kp-muted"
+    }, "\u2014 every report read, newest first"), !m.uploads.length ? React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        marginTop: 8
+      }
+    }, "Nothing uploaded yet.") : React.createElement("div", {
+      style: {
+        overflowX: 'auto',
+        marginTop: 8
+      }
+    }, React.createElement("table", {
+      className: "kp-tbl"
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "File"), React.createElement("th", null, "Wing"), React.createElement("th", null, "From"), React.createElement("th", null, "To"), React.createElement("th", null, "Alarms"), React.createElement("th", null, "New"), React.createElement("th", null, "By"), React.createElement("th", null, "When"), React.createElement("th", null))), React.createElement("tbody", null, m.uploads.map(u => React.createElement("tr", {
+      key: u.id,
+      style: {
+        cursor: 'default',
+        opacity: u.removedAt ? 0.45 : 1
+      }
+    }, React.createElement("td", null, u.name, u.removedAt ? ' (removed)' : ''), React.createElement("td", null, u.wing), React.createElement("td", null, u.from.slice(0, 16)), React.createElement("td", null, u.to.slice(0, 16)), React.createElement("td", null, u.rows), React.createElement("td", null, u.added), React.createElement("td", null, u.byName || u.by), React.createElement("td", null, when(u.at)), React.createElement("td", null, m.canDelete && !u.removedAt && React.createElement("button", {
+      className: "kp-icon-btn",
+      title: "Remove this upload",
+      onClick: () => removeUpload(u)
+    }, "\xD7")))))))));
+  }
+  const fmt0 = n => n == null ? '—' : Number(n).toLocaleString();
+  const VIEWS = [['kpiDashboard', 'Dashboard'], ['kpiEntry', 'Data Update'], ['kpiCallBell', 'Call bell'], ['kpiReports', 'Reports'], ['kpiManage', 'Manage KPIs'], ['kpiActions', 'Action Plans'], ['kpiSettings', 'Settings']];
   function KpiView({
     view,
     report,
     kpi,
+    month,
     setRoute
   }) {
     useStyles();
@@ -6159,6 +6830,10 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       showCalc: showCalc
     }) : React.createElement(ReportsHome, {
       meta: meta,
+      setRoute: setRoute
+    });else if (v === 'kpiCallBell') body = React.createElement(CallBell, {
+      meta: meta,
+      month: month,
       setRoute: setRoute
     });else if (v === 'kpiManage') body = React.createElement(ManageKpis, {
       meta: meta,

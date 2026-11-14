@@ -102,6 +102,7 @@ const MANIFEST = [
   { file: 'search.jsx', jsx: true },
   { file: 'data-collection.jsx', jsx: true, chunk: 'datacollection' },
   { file: 'device-days.jsx', jsx: true, chunk: 'devdays' },      // window.DeviceDaysView — Record of Device Insertion Days (module 'devdays')
+  { file: 'callbell-core.js', jsx: false, chunk: 'kpi' },     // window.UNICO_CB — call bell PDFs → monthly response time (also require()d by the server)
   { file: 'kpi.jsx', jsx: true, chunk: 'kpi' },                  // window.KpiView — the Nursing Department's KPI programme (module 'kpi')
   { file: 'doc-audit.jsx', jsx: true, chunk: 'docaudit' },       // window.DocAuditView — Nursing Documentation Audit (module 'docaudit')
   { file: 'supervisor.jsx', jsx: true, chunk: 'supervisor' },
