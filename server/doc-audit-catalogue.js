@@ -317,6 +317,8 @@ function guessTool(dept) {
   if (/\b(opd|homecare)\b|out[\s-]*patient|home\s*care|family medicine|infection|administrative/.test(s)) return null;
   if (id === 'er' || /emergency/.test(nm)) return { toolId: 'ed20', minRecords: 30 };
   if (/cath/.test(s)) return { toolId: 'cath20', minRecords: 10 };
+  // Intensive care before the theatre rule: "CTVS ICU" is an ICU (IPD tool), though "CTVS" alone means the OT.
+  if (/\b(icu|ccu|hdu|nicu|micu|sicu|cticu)\b|intensive|critical care/.test(s)) return { toolId: 'ipd25', minRecords: 10 };
   if (/\b(ot|ctot|ctvs)\b|operation|theatre/.test(s)) return { toolId: 'ot20', minRecords: 10 };
   if (/endoscop/.test(s)) return { toolId: 'dial20', minRecords: 10 };
   if (/dialysis/.test(s)) return { toolId: 'dial20', minRecords: 15 };

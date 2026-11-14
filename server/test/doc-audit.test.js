@@ -66,6 +66,8 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   assert.deepEqual(catalogue.TOOLS.find((t) => t.id === 'ot20').criteria.filter((c) => c.active && c.critical).map((c) => c.id), ['c1', 'c3', 'c4', 'c5', 'c7', 'c8', 'c13', 'c15', 'c20'], 'OT: the same 9 critical (ids kept, renumbered)');
   assert.ok(catalogue.TOOLS.find((t) => t.id === 'ot20').header.areas.indexOf('Post-operative / Recovery (PACU)') < 0, 'the post-operative record is part of "OT"');
   assert.equal(catalogue.guessTool({ id: 'cathlab', name: 'Cath Lab' }).toolId, 'cath20');
+  assert.equal(catalogue.guessTool({ id: 'cticu', name: 'CTVS ICU' }).toolId, 'ipd25', 'CTVS ICU is an ICU — IPD tool, not OT (no duplicate dashboard row)');
+  assert.equal(catalogue.guessTool({ id: 'ctvs', name: 'CTVS OT' }).toolId, 'ot20', 'CTVS OT stays OT');
   assert.equal(DA.aldreteText({ a: 2, r: 2, c: 1, co: 1, o: 2 }), '8/10 (A2 R2 C1 Co1 O2)');
   assert.deepEqual(DA.cleanAldrete({ a: 9, r: '2' }), { r: 2, total: 2, complete: false }, 'each sign 0–2; total worked out');
   assert.deepEqual(crit('dial20'), [1, 2, 3, 4, 6, 8, 12, 15, 16, 18, 20], 'QA-003: 11 critical');
