@@ -91,6 +91,8 @@ const MANIFEST = [
   { file: 'manage.jsx', jsx: true },
   { file: 'staff.jsx', jsx: true },
   { file: 'staff-profile.jsx', jsx: true, chunk: 'staffprofile' },
+  { file: 'staff-import-core.js', jsx: false, chunk: 'staffprofile' },   // window.UNICO_SI — pasted form text → match → what to fill (also require()d by the tests)
+  { file: 'staff-paste.jsx', jsx: true, chunk: 'staffprofile' },        // Staff Management → Paste & Update (window.StaffPasteView), administrators only
   { file: 'staff-h360.jsx', jsx: true, chunk: 'staffprofile' },   // Staff Management → H360 Check + the profile's H360 card (window.StaffH360View / StaffH360Card)
   { file: 'input.jsx', jsx: true },
   { file: 'reports.jsx', jsx: true, chunk: 'reports' },

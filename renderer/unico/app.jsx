@@ -146,7 +146,7 @@ function App(){
     if(s.indexOf('docAudit')===0) return 'docaudit';
     if(s.indexOf('dc')===0||s.indexOf('ds')===0) return 'datacollection';
     if(s==='reports'||s==='settings'||s==='users') return 'reports';      // Settings + Access Control live in the reports chunk
-    if(s==='staffProfile'||s==='staffForm'||s==='perfStaff'||s==='staffH360') return 'staffprofile';
+    if(s==='staffProfile'||s==='staffForm'||s==='perfStaff'||s==='staffH360'||s==='staffPaste') return 'staffprofile';
     if(s.indexOf('perf')===0) return 'performance';
     if(s.indexOf('roster')===0) return 'roster';
     if(s.indexOf('sup')===0) return 'supervisor';
@@ -399,6 +399,10 @@ function App(){
     // Our register compared with H360's employee list (staff-h360.jsx, staffprofile chunk).
     crumbs=['UNICO','Staff Management','H360 Check'];
     body=(typeof window!=='undefined'&&window.StaffH360View)?<window.StaffH360View store={staff} setRoute={setRoute}/>:null;
+  } else if(route.view==='staffPaste'){
+    // Paste registration-form text → matched register update (staff-paste.jsx, staffprofile chunk). Admin only.
+    crumbs=['UNICO','Staff Management','Paste & Update'];
+    body=(typeof window!=='undefined'&&window.StaffPasteView)?<window.StaffPasteView store={staff} setRoute={setRoute}/>:null;
   } else if(route.view==='staffProfile'){
     const emp=staff.get(route.emp);
     crumbs=['UNICO','Staff Management',emp?emp.name:'Profile'];

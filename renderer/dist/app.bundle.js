@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=06cc02e6a9","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0b300a4cb9","docaudit":"/dist/docaudit.chunk.js?v=c326eb8769","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=83b34fe55d","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=524380e967","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0b300a4cb9","docaudit":"/dist/docaudit.chunk.js?v=c326eb8769","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=83b34fe55d","manpower":"/dist/manpower.chunk.js?v=087142b1bc","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -11442,7 +11442,7 @@ const UNICO_MODULES = [{
 const UNICO_MODULE_VIEWS = {
   stats: ['dashboard', 'departments', 'compare', 'gallery', 'manage', 'settings'],
   datacol: ['dcReview', 'dcPatient', 'dcQuality', 'input', 'dcSettings', 'dcShare', 'dcFields', 'dcAnalytics'],
-  staff: ['staffHome', 'staffAll', 'staffNewEntries', 'staffRecentUpdates', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests', 'staffH360'],
+  staff: ['staffHome', 'staffAll', 'staffNewEntries', 'staffRecentUpdates', 'traineeHome', 'trainees', 'nurseHome', 'nurses', 'nurseCompliance', 'pcaHome', 'pca', 'pcaCompliance', 'staffPrevious', 'staffProfile', 'staffForm', 'staffRequests', 'staffH360', 'staffPaste'],
   quality: ['quality', 'qualityScore', 'qualityTrend', 'qualityIncidents', 'qualityDataEntry', 'qualityManage', 'qualityCatalog', 'qualityAssign', 'qualityCapa', 'qualityDept', 'qualityEdit', 'qualityEntry', 'qualityHub', 'qualityDeptManage'],
   supervisor: ['supHome', 'supBoard', 'supNew', 'supHistory', 'supReport', 'supH360Scan', 'supH360', 'supSheet'],
   reports: ['reports', 'reportsQuality', 'qualityReport', 'qualityReportQ'],
@@ -12279,7 +12279,12 @@ function unicoWorkspaceSubAll(view) {
     label: 'H360 Check',
     view: 'staffH360',
     mod: 'staff'
-  }, {
+  }, ...(unicoUserPerms() === null ? [{
+    label: 'Paste & Update',
+    view: 'staffPaste',
+    mod: 'staff',
+    adminOnly: true
+  }] : []), {
     label: 'Performance',
     view: 'perfHome',
     mod: 'perf',
@@ -29260,7 +29265,7 @@ function App() {
     if (s.indexOf('docAudit') === 0) return 'docaudit';
     if (s.indexOf('dc') === 0 || s.indexOf('ds') === 0) return 'datacollection';
     if (s === 'reports' || s === 'settings' || s === 'users') return 'reports';
-    if (s === 'staffProfile' || s === 'staffForm' || s === 'perfStaff' || s === 'staffH360') return 'staffprofile';
+    if (s === 'staffProfile' || s === 'staffForm' || s === 'perfStaff' || s === 'staffH360' || s === 'staffPaste') return 'staffprofile';
     if (s.indexOf('perf') === 0) return 'performance';
     if (s.indexOf('roster') === 0) return 'roster';
     if (s.indexOf('sup') === 0) return 'supervisor';
@@ -29793,6 +29798,12 @@ function App() {
   } else if (route.view === 'staffH360') {
     crumbs = ['UNICO', 'Staff Management', 'H360 Check'];
     body = typeof window !== 'undefined' && window.StaffH360View ? React.createElement(window.StaffH360View, {
+      store: staff,
+      setRoute: setRoute
+    }) : null;
+  } else if (route.view === 'staffPaste') {
+    crumbs = ['UNICO', 'Staff Management', 'Paste & Update'];
+    body = typeof window !== 'undefined' && window.StaffPasteView ? React.createElement(window.StaffPasteView, {
       store: staff,
       setRoute: setRoute
     }) : null;

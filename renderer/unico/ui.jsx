@@ -78,7 +78,7 @@ const UNICO_MODULES = [
 const UNICO_MODULE_VIEWS = {
   stats:  ['dashboard','departments','compare','gallery','manage','settings'],
   datacol:['dcReview','dcPatient','dcQuality','input','dcSettings','dcShare','dcFields','dcAnalytics'],
-  staff:  ['staffHome','staffAll','staffNewEntries','staffRecentUpdates','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests','staffH360'],
+  staff:  ['staffHome','staffAll','staffNewEntries','staffRecentUpdates','traineeHome','trainees','nurseHome','nurses','nurseCompliance','pcaHome','pca','pcaCompliance','staffPrevious','staffProfile','staffForm','staffRequests','staffH360','staffPaste'],
   quality:['quality','qualityScore','qualityTrend','qualityIncidents','qualityDataEntry','qualityManage','qualityCatalog','qualityAssign','qualityCapa','qualityDept','qualityEdit','qualityEntry','qualityHub','qualityDeptManage'],
   supervisor:['supHome','supBoard','supNew','supHistory','supReport','supH360Scan','supH360','supSheet'],
   reports:['reports','reportsQuality','qualityReport','qualityReportQ'],
@@ -658,6 +658,8 @@ function unicoWorkspaceSubAll(view){
     { label:'Previous Staff', view:'staffPrevious',   mod:'staff' },
     { label:'Nurse / PCA requests', view:'staffRequests', mod:'staff' },
     { label:'H360 Check',     view:'staffH360',       mod:'staff' },
+    // Paste registration-form text → matched, checked register update (staff-paste.jsx). Administrators only.
+    ...(unicoUserPerms()===null ? [{ label:'Paste & Update', view:'staffPaste', mod:'staff', adminOnly:true }] : []),
     { label:'Performance',    view:'perfHome',        mod:'perf', divider:true,
       match:UNICO_MODULE_VIEWS.perf },
     { label:'Attrition & Exits', view:'perfAttrition', mod:'attrition', match:UNICO_MODULE_VIEWS.attrition },
