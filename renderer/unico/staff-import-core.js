@@ -469,44 +469,85 @@ function planUpdate(p, rec) {
       if (!add.length) return;
       const have = rec && Array.isArray(rec.prior_experience_entries) ? rec.prior_experience_entries.filter((e) => e && (e.org || e.dept || entryYears(e) > 0)) : [];
       const form = expStr(add);
-      if (!rec) return rows.push({ key: k, label, kind: 'new', stored: '', form, value: add });
+      const ex = { key: k, label, list: false, exp: true, form, value: add, formValue: add };
+      if (!rec) return rows.push(Object.assign(ex, { kind: 'new', stored: '' }));
       if (!have.length) {
-        if (/fresher/i.test(String(rec.previous_experience || ''))) return rows.push({ key: k, label, kind: 'diff', stored: rec.previous_experience, form, value: add });
-        return rows.push({ key: k, label, kind: 'fill', stored: '', form, value: add });
+        if (/fresher/i.test(String(rec.previous_experience || ''))) return rows.push(Object.assign(ex, { kind: 'diff', stored: rec.previous_experience }));
+        return rows.push(Object.assign(ex, { kind: 'fill', stored: '' }));
       }
-      if (key(expStr(have)) === key(form)) return rows.push({ key: k, label, kind: 'same', stored: expStr(have), form, value: add });
-      return rows.push({ key: k, label, kind: 'diff', stored: expStr(have), form, value: add });
+      if (key(expStr(have)) === key(form)) return rows.push(Object.assign(ex, { kind: 'same', stored: expStr(have) }));
+      return rows.push(Object.assign(ex, { kind: 'diff', stored: expStr(have) }));
     }
     const v = f[k];
     if (!v) return;
-    if (!rec) return rows.push({ key: k, label, kind: 'new', stored: '', form: v, value: v });
+    const list = kind === 'list';
+    if (!rec) return rows.push({ key: k, label, list, kind: 'new', stored: '', form: v, value: v, formValue: v });
     const s = storedOf(rec, k);
-    if (kind === 'list') {
+    if (list) {
       const u = unionList(s, String(v).split(/\s*,\s*/).filter(Boolean));
-      if (!clean(s)) return rows.push({ key: k, label, kind: 'fill', stored: '', form: v, value: u.value });
-      if (!u.added.length) return rows.push({ key: k, label, kind: 'same', stored: s, form: v, value: s });
-      return rows.push({ key: k, label, kind: 'fill', stored: s, form: v, value: u.value, added: u.added });
+      if (!clean(s)) return rows.push({ key: k, label, list, kind: 'fill', stored: '', form: v, value: u.value, formValue: v });
+      if (!u.added.length) return rows.push({ key: k, label, list, kind: 'same', stored: s, form: v, value: s, formValue: v });
+      return rows.push({ key: k, label, list, kind: 'fill', stored: s, form: v, value: u.value, formValue: v, added: u.added });
     }
-    if (s == null || !clean(s)) return rows.push({ key: k, label, kind: 'fill', stored: '', form: v, value: v });
-    if (k === 'hepatitis_b_vaccination' ? hepSame(s, v) : same(kind, s, v)) return rows.push({ key: k, label, kind: 'same', stored: s, form: v, value: s });
-    rows.push({ key: k, label, kind: 'diff', stored: s, form: v, value: v });
+    if (s == null || !clean(s)) return rows.push({ key: k, label, list, kind: 'fill', stored: '', form: v, value: v, formValue: v });
+    if (k === 'hepatitis_b_vaccination' ? hepSame(s, v) : same(kind, s, v)) return rows.push({ key: k, label, list, kind: 'same', stored: s, form: v, value: s, formValue: v });
+    rows.push({ key: k, label, list, kind: 'diff', stored: s, form: v, value: v, formValue: v });
   });
   return { rows };
 }
 
-/* The fields to write for the rows the administrator ticked (fill rows start ticked, diff rows not).
-   `ticked` = Set/array of row keys. meta = { at:ISO, by, via }. Returns { patch, filled[], replaced{}, skipped[] }. */
-function buildPatch(p, rec, plan, ticked, meta) {
-  const on = new Set(Array.isArray(ticked) ? ticked : ticked ? Array.from(ticked) : []);
+/* PER-FIELD CHOICES: { key: 'form' | 'merge' | 'keep' }.
+     form  — write the form's value (a list: the form's list only)
+     merge — a list: what the register holds + what the form adds
+     keep  — leave the register as it is
+   Defaults: a blank on the register is filled, a list is added to, a different value is kept. */
+function defaultChoices(plan) {
+  const c = {};
+  (plan.rows || []).forEach((r) => {
+    if (r.kind === 'same') return;
+    c[r.key] = r.kind === 'diff' ? 'keep' : (r.list && clean(r.stored)) ? 'merge' : 'form';
+  });
+  return c;
+}
+// The pop-up's quick buttons: only what is blank on the register / every form value / nothing.
+function quickChoices(plan, mode) {
+  const c = {};
+  (plan.rows || []).forEach((r) => {
+    if (r.kind === 'same') return;
+    const blank = !clean(typeof r.stored === 'string' ? r.stored : JSON.stringify(r.stored || ''));
+    if (mode === 'keep') c[r.key] = 'keep';
+    else if (mode === 'form') c[r.key] = 'form';
+    else c[r.key] = (r.kind === 'new' || blank) ? 'form' : 'keep';                   // 'blanks'
+  });
+  return c;
+}
+// An older caller's list of ticked keys → choices (ticked = fill it, a list with something stored = add to it).
+function toChoices(plan, given) {
+  if (given && !Array.isArray(given) && !(given instanceof Set) && typeof given === 'object') return Object.assign({}, given);
+  const on = new Set(given ? Array.from(given) : []);
+  const c = {};
+  (plan.rows || []).forEach((r) => { if (r.kind !== 'same') c[r.key] = on.has(r.key) ? ((r.list && clean(r.stored)) ? 'merge' : 'form') : 'keep'; });
+  return c;
+}
+const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
+/* The fields to write for the administrator's choices (see above; an array of ticked keys also works).
+   meta = { at:ISO, by, via }. Returns { patch, filled[], replaced{}, skipped[], changed, before{}, written{} } —
+   before/written are what an Undo needs (buildUndo). */
+function buildPatch(p, rec, plan, choices, meta) {
+  const ch = toChoices(plan, choices);
   const f = p.fields || {};
   const m = meta || {};
   const patch = {}; const filled = []; const replaced = {}; const skipped = [];
   (plan.rows || []).forEach((r) => {
     if (r.kind === 'same') return;
-    if (!on.has(r.key)) { if (r.kind === 'diff') skipped.push(r.key); return; }
-    if (r.key === 'form_no') { patch.custom = Object.assign({}, (rec && rec.custom) || {}, { cf_hr_form_reference: r.value }); }
-    else patch[r.key] = r.value;
-    if (r.kind === 'diff') replaced[r.key] = { old: r.stored, new: r.key === 'prior_experience_entries' ? r.form : r.value };
+    const how = ch[r.key] || 'keep';
+    if (how === 'keep') { if (r.kind === 'diff' || (r.list && r.added)) skipped.push(r.key); return; }
+    const value = r.list ? (how === 'merge' ? r.value : r.formValue) : r.value;
+    if (r.key === 'form_no') { patch.custom = Object.assign({}, (patch.custom || (rec && rec.custom)) || {}, { cf_hr_form_reference: value }); }
+    else patch[r.key] = value;
+    const hadValue = !!clean(typeof r.stored === 'string' ? r.stored : JSON.stringify(r.stored || ''));
+    if (r.kind === 'diff' || (r.list && hadValue && how === 'form')) replaced[r.key] = { old: r.stored, new: r.exp ? r.form : value };
     else filled.push(r.key);
   });
   // Experience rows (or a new joining date) → the derived totals, the way the staff form saves them.
@@ -535,7 +576,46 @@ function buildPatch(p, rec, plan, ticked, meta) {
     const hist = rec && Array.isArray(rec.import_source_history) ? rec.import_source_history.slice(-19) : [];
     patch.import_source_history = hist.concat([src]);
   }
-  return { patch, filled, replaced, skipped, changed };
+  const before = {}, written = {};
+  Object.keys(patch).forEach((k) => { before[k] = rec ? clone(rec[k]) : undefined; written[k] = clone(patch[k]); });
+  return { patch, filled, replaced, skipped, changed, before, written };
+}
+
+/* UNDO one apply: put back the old value of every field it wrote — but only where the record still holds
+   what the apply wrote. A field somebody changed since is left alone and named in `skipped`.
+   A field that did not exist before comes back as null (empty). */
+function buildUndo(recNow, applied) {
+  const patch = {}; const skipped = [];
+  const a = applied || {};
+  Object.keys(a.written || {}).forEach((k) => {
+    if (JSON.stringify(recNow ? recNow[k] : undefined) !== JSON.stringify(a.written[k])) { skipped.push(k); return; }
+    const b = a.before ? a.before[k] : undefined;
+    patch[k] = b === undefined ? null : clone(b);
+  });
+  return { patch, skipped };
+}
+
+/* Anyone on the register, by part of the name (or a name spelt differently), employee ID or phone
+   digits — for "this form is someone else". Former staff included and said so. */
+function searchRoster(q, roster, limit) {
+  const s = String(q || '').trim();
+  if (s.length < 2) return [];
+  const d = s.replace(/\D/g, '');
+  const low = s.toLowerCase();
+  const out = [];
+  (roster || []).forEach((r) => {
+    if (!r || r.id == null) return;
+    let score = 0; const why = [];
+    if (d.length >= 3 && digits(r.emp_id) && digits(r.emp_id).indexOf(d) >= 0) { score = Math.max(score, d === digits(r.emp_id) ? 100 : 70); why.push('employee ID'); }
+    if (d.length >= 4 && recPhones(r).concat([digits(r.phone)]).some((x) => x && x.indexOf(d.slice(-10)) >= 0)) { score = Math.max(score, 90); why.push('phone'); }
+    if (/[a-z]/i.test(s)) {
+      const nm = String(r.name || '').toLowerCase();
+      if (nm.indexOf(low) >= 0) { score = Math.max(score, 80); why.push('name'); }
+      else { const ns = nameScore(s, r.name || ''); if (ns >= SIMILAR) { score = Math.max(score, Math.round(ns * 75)); why.push('name ~' + Math.round(ns * 100) + '%'); } }
+    }
+    if (score) out.push({ id: r.id, name: r.name || '', emp_id: r.emp_id || '', phone: r.phone || '', designation: r.designation || '', current_department: r.current_department || '', former: !!(r.former || r.is_active === false), score, why });
+  });
+  return out.sort((x, y) => y.score - x.score).slice(0, limit || 8);
 }
 
 // A brand-new register row from the form (the caller adds id / is_active / created_at, as store.create does).
@@ -594,7 +674,7 @@ const AI_PROMPT = [
   '(same fields for the next form)',
 ].join('\n');
 
-const API = { parseText, parsePerson, splitPeople, matchPerson, planUpdate, buildPatch, newRecord, parseDate, parsePhone, parseHepB, parseRole, parseExperience, fmtYM, entryYears, FIELDS, FIELD_LABEL, LABELS, AI_PROMPT };
+const API = { parseText, parsePerson, splitPeople, matchPerson, planUpdate, defaultChoices, quickChoices, buildPatch, buildUndo, searchRoster, newRecord, parseDate, parsePhone, parseHepB, parseRole, parseExperience, fmtYM, entryYears, FIELDS, FIELD_LABEL, LABELS, AI_PROMPT };
 if (typeof module !== 'undefined' && module.exports) module.exports = API;
 else root.UNICO_SI = API;
 })(typeof window !== 'undefined' ? window : globalThis);

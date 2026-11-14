@@ -9523,44 +9523,85 @@ function planUpdate(p, rec) {
       if (!add.length) return;
       const have = rec && Array.isArray(rec.prior_experience_entries) ? rec.prior_experience_entries.filter((e) => e && (e.org || e.dept || entryYears(e) > 0)) : [];
       const form = expStr(add);
-      if (!rec) return rows.push({ key: k, label, kind: 'new', stored: '', form, value: add });
+      const ex = { key: k, label, list: false, exp: true, form, value: add, formValue: add };
+      if (!rec) return rows.push(Object.assign(ex, { kind: 'new', stored: '' }));
       if (!have.length) {
-        if (/fresher/i.test(String(rec.previous_experience || ''))) return rows.push({ key: k, label, kind: 'diff', stored: rec.previous_experience, form, value: add });
-        return rows.push({ key: k, label, kind: 'fill', stored: '', form, value: add });
+        if (/fresher/i.test(String(rec.previous_experience || ''))) return rows.push(Object.assign(ex, { kind: 'diff', stored: rec.previous_experience }));
+        return rows.push(Object.assign(ex, { kind: 'fill', stored: '' }));
       }
-      if (key(expStr(have)) === key(form)) return rows.push({ key: k, label, kind: 'same', stored: expStr(have), form, value: add });
-      return rows.push({ key: k, label, kind: 'diff', stored: expStr(have), form, value: add });
+      if (key(expStr(have)) === key(form)) return rows.push(Object.assign(ex, { kind: 'same', stored: expStr(have) }));
+      return rows.push(Object.assign(ex, { kind: 'diff', stored: expStr(have) }));
     }
     const v = f[k];
     if (!v) return;
-    if (!rec) return rows.push({ key: k, label, kind: 'new', stored: '', form: v, value: v });
+    const list = kind === 'list';
+    if (!rec) return rows.push({ key: k, label, list, kind: 'new', stored: '', form: v, value: v, formValue: v });
     const s = storedOf(rec, k);
-    if (kind === 'list') {
+    if (list) {
       const u = unionList(s, String(v).split(/\s*,\s*/).filter(Boolean));
-      if (!clean(s)) return rows.push({ key: k, label, kind: 'fill', stored: '', form: v, value: u.value });
-      if (!u.added.length) return rows.push({ key: k, label, kind: 'same', stored: s, form: v, value: s });
-      return rows.push({ key: k, label, kind: 'fill', stored: s, form: v, value: u.value, added: u.added });
+      if (!clean(s)) return rows.push({ key: k, label, list, kind: 'fill', stored: '', form: v, value: u.value, formValue: v });
+      if (!u.added.length) return rows.push({ key: k, label, list, kind: 'same', stored: s, form: v, value: s, formValue: v });
+      return rows.push({ key: k, label, list, kind: 'fill', stored: s, form: v, value: u.value, formValue: v, added: u.added });
     }
-    if (s == null || !clean(s)) return rows.push({ key: k, label, kind: 'fill', stored: '', form: v, value: v });
-    if (k === 'hepatitis_b_vaccination' ? hepSame(s, v) : same(kind, s, v)) return rows.push({ key: k, label, kind: 'same', stored: s, form: v, value: s });
-    rows.push({ key: k, label, kind: 'diff', stored: s, form: v, value: v });
+    if (s == null || !clean(s)) return rows.push({ key: k, label, list, kind: 'fill', stored: '', form: v, value: v, formValue: v });
+    if (k === 'hepatitis_b_vaccination' ? hepSame(s, v) : same(kind, s, v)) return rows.push({ key: k, label, list, kind: 'same', stored: s, form: v, value: s, formValue: v });
+    rows.push({ key: k, label, list, kind: 'diff', stored: s, form: v, value: v, formValue: v });
   });
   return { rows };
 }
 
-/* The fields to write for the rows the administrator ticked (fill rows start ticked, diff rows not).
-   `ticked` = Set/array of row keys. meta = { at:ISO, by, via }. Returns { patch, filled[], replaced{}, skipped[] }. */
-function buildPatch(p, rec, plan, ticked, meta) {
-  const on = new Set(Array.isArray(ticked) ? ticked : ticked ? Array.from(ticked) : []);
+/* PER-FIELD CHOICES: { key: 'form' | 'merge' | 'keep' }.
+     form  — write the form's value (a list: the form's list only)
+     merge — a list: what the register holds + what the form adds
+     keep  — leave the register as it is
+   Defaults: a blank on the register is filled, a list is added to, a different value is kept. */
+function defaultChoices(plan) {
+  const c = {};
+  (plan.rows || []).forEach((r) => {
+    if (r.kind === 'same') return;
+    c[r.key] = r.kind === 'diff' ? 'keep' : (r.list && clean(r.stored)) ? 'merge' : 'form';
+  });
+  return c;
+}
+// The pop-up's quick buttons: only what is blank on the register / every form value / nothing.
+function quickChoices(plan, mode) {
+  const c = {};
+  (plan.rows || []).forEach((r) => {
+    if (r.kind === 'same') return;
+    const blank = !clean(typeof r.stored === 'string' ? r.stored : JSON.stringify(r.stored || ''));
+    if (mode === 'keep') c[r.key] = 'keep';
+    else if (mode === 'form') c[r.key] = 'form';
+    else c[r.key] = (r.kind === 'new' || blank) ? 'form' : 'keep';                   // 'blanks'
+  });
+  return c;
+}
+// An older caller's list of ticked keys → choices (ticked = fill it, a list with something stored = add to it).
+function toChoices(plan, given) {
+  if (given && !Array.isArray(given) && !(given instanceof Set) && typeof given === 'object') return Object.assign({}, given);
+  const on = new Set(given ? Array.from(given) : []);
+  const c = {};
+  (plan.rows || []).forEach((r) => { if (r.kind !== 'same') c[r.key] = on.has(r.key) ? ((r.list && clean(r.stored)) ? 'merge' : 'form') : 'keep'; });
+  return c;
+}
+const clone = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+
+/* The fields to write for the administrator's choices (see above; an array of ticked keys also works).
+   meta = { at:ISO, by, via }. Returns { patch, filled[], replaced{}, skipped[], changed, before{}, written{} } —
+   before/written are what an Undo needs (buildUndo). */
+function buildPatch(p, rec, plan, choices, meta) {
+  const ch = toChoices(plan, choices);
   const f = p.fields || {};
   const m = meta || {};
   const patch = {}; const filled = []; const replaced = {}; const skipped = [];
   (plan.rows || []).forEach((r) => {
     if (r.kind === 'same') return;
-    if (!on.has(r.key)) { if (r.kind === 'diff') skipped.push(r.key); return; }
-    if (r.key === 'form_no') { patch.custom = Object.assign({}, (rec && rec.custom) || {}, { cf_hr_form_reference: r.value }); }
-    else patch[r.key] = r.value;
-    if (r.kind === 'diff') replaced[r.key] = { old: r.stored, new: r.key === 'prior_experience_entries' ? r.form : r.value };
+    const how = ch[r.key] || 'keep';
+    if (how === 'keep') { if (r.kind === 'diff' || (r.list && r.added)) skipped.push(r.key); return; }
+    const value = r.list ? (how === 'merge' ? r.value : r.formValue) : r.value;
+    if (r.key === 'form_no') { patch.custom = Object.assign({}, (patch.custom || (rec && rec.custom)) || {}, { cf_hr_form_reference: value }); }
+    else patch[r.key] = value;
+    const hadValue = !!clean(typeof r.stored === 'string' ? r.stored : JSON.stringify(r.stored || ''));
+    if (r.kind === 'diff' || (r.list && hadValue && how === 'form')) replaced[r.key] = { old: r.stored, new: r.exp ? r.form : value };
     else filled.push(r.key);
   });
   // Experience rows (or a new joining date) → the derived totals, the way the staff form saves them.
@@ -9589,7 +9630,46 @@ function buildPatch(p, rec, plan, ticked, meta) {
     const hist = rec && Array.isArray(rec.import_source_history) ? rec.import_source_history.slice(-19) : [];
     patch.import_source_history = hist.concat([src]);
   }
-  return { patch, filled, replaced, skipped, changed };
+  const before = {}, written = {};
+  Object.keys(patch).forEach((k) => { before[k] = rec ? clone(rec[k]) : undefined; written[k] = clone(patch[k]); });
+  return { patch, filled, replaced, skipped, changed, before, written };
+}
+
+/* UNDO one apply: put back the old value of every field it wrote — but only where the record still holds
+   what the apply wrote. A field somebody changed since is left alone and named in `skipped`.
+   A field that did not exist before comes back as null (empty). */
+function buildUndo(recNow, applied) {
+  const patch = {}; const skipped = [];
+  const a = applied || {};
+  Object.keys(a.written || {}).forEach((k) => {
+    if (JSON.stringify(recNow ? recNow[k] : undefined) !== JSON.stringify(a.written[k])) { skipped.push(k); return; }
+    const b = a.before ? a.before[k] : undefined;
+    patch[k] = b === undefined ? null : clone(b);
+  });
+  return { patch, skipped };
+}
+
+/* Anyone on the register, by part of the name (or a name spelt differently), employee ID or phone
+   digits — for "this form is someone else". Former staff included and said so. */
+function searchRoster(q, roster, limit) {
+  const s = String(q || '').trim();
+  if (s.length < 2) return [];
+  const d = s.replace(/\D/g, '');
+  const low = s.toLowerCase();
+  const out = [];
+  (roster || []).forEach((r) => {
+    if (!r || r.id == null) return;
+    let score = 0; const why = [];
+    if (d.length >= 3 && digits(r.emp_id) && digits(r.emp_id).indexOf(d) >= 0) { score = Math.max(score, d === digits(r.emp_id) ? 100 : 70); why.push('employee ID'); }
+    if (d.length >= 4 && recPhones(r).concat([digits(r.phone)]).some((x) => x && x.indexOf(d.slice(-10)) >= 0)) { score = Math.max(score, 90); why.push('phone'); }
+    if (/[a-z]/i.test(s)) {
+      const nm = String(r.name || '').toLowerCase();
+      if (nm.indexOf(low) >= 0) { score = Math.max(score, 80); why.push('name'); }
+      else { const ns = nameScore(s, r.name || ''); if (ns >= SIMILAR) { score = Math.max(score, Math.round(ns * 75)); why.push('name ~' + Math.round(ns * 100) + '%'); } }
+    }
+    if (score) out.push({ id: r.id, name: r.name || '', emp_id: r.emp_id || '', phone: r.phone || '', designation: r.designation || '', current_department: r.current_department || '', former: !!(r.former || r.is_active === false), score, why });
+  });
+  return out.sort((x, y) => y.score - x.score).slice(0, limit || 8);
 }
 
 // A brand-new register row from the form (the caller adds id / is_active / created_at, as store.create does).
@@ -9648,7 +9728,7 @@ const AI_PROMPT = [
   '(same fields for the next form)',
 ].join('\n');
 
-const API = { parseText, parsePerson, splitPeople, matchPerson, planUpdate, buildPatch, newRecord, parseDate, parsePhone, parseHepB, parseRole, parseExperience, fmtYM, entryYears, FIELDS, FIELD_LABEL, LABELS, AI_PROMPT };
+const API = { parseText, parsePerson, splitPeople, matchPerson, planUpdate, defaultChoices, quickChoices, buildPatch, buildUndo, searchRoster, newRecord, parseDate, parsePhone, parseHepB, parseRole, parseExperience, fmtYM, entryYears, FIELDS, FIELD_LABEL, LABELS, AI_PROMPT };
 if (typeof module !== 'undefined' && module.exports) module.exports = API;
 else root.UNICO_SI = API;
 })(typeof window !== 'undefined' ? window : globalThis);
@@ -9673,59 +9753,562 @@ const spToast = (m, t) => {
 };
 const spDate = iso => /^\d{4}-\d{2}-\d{2}$/.test(String(iso || '')) ? String(iso).split('-').reverse().join('/') : String(iso || '');
 const SP_DATE_KEYS = ['dob', 'doj', 'licence_expiry'];
-const spShow = (k, v) => v == null || v === '' ? '—' : SP_DATE_KEYS.indexOf(k) >= 0 ? spDate(v) : String(v);
+const spShow = (k, v) => v == null || v === '' ? '—' : SP_DATE_KEYS.indexOf(k) >= 0 ? spDate(v) : typeof v === 'string' ? v : JSON.stringify(v);
+const spPortal = n => window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
+const spMeta = () => {
+  const me = window.__UNICO_USER__ || {};
+  return {
+    at: new Date().toISOString(),
+    by: me.name || me.username || 'Administrator'
+  };
+};
+const SP_SERIOUS = /signature|Same (form number|phone|employee ID)|not an 11-digit|expired|More than one BNMC|not readable|not understood/i;
 const SP_CSS = `
 .sp-step{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:800;color:var(--ink);margin-bottom:8px}
 .sp-step i{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--blue);color:#fff;font-style:normal;font-size:11.5px}
 .sp-prompt{white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;line-height:1.5;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:10px 12px;max-height:240px;overflow:auto;margin:0}
-.sp-text{width:100%;box-sizing:border-box;min-height:190px;font:inherit;font-size:12.5px;line-height:1.5;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--panel);color:var(--ink);resize:vertical}
-.sp-card{border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-bottom:12px;overflow:hidden}
-.sp-card-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:11px 14px;border-bottom:1px solid var(--line-2);background:var(--panel-2)}
-.sp-card-b{padding:11px 14px}
+.sp-text{width:100%;box-sizing:border-box;min-height:170px;font:inherit;font-size:12.5px;line-height:1.5;border:1px solid var(--line);border-radius:9px;padding:10px 12px;background:var(--panel);color:var(--ink);resize:vertical}
+.sp-tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:12px}
+.sp-tile{border:1px solid var(--line);border-left:4px solid var(--c);border-radius:11px;padding:10px 13px;background:var(--panel);text-align:left;cursor:pointer;font:inherit}
+.sp-tile b{display:block;font-size:24px;line-height:1.1;font-family:var(--mono);color:var(--c)}
+.sp-tile span{font-size:11.5px;color:var(--muted);font-weight:700}
+.sp-tile.on{box-shadow:0 0 0 2px var(--c) inset;background:var(--panel-2)}
+.sp-card{border:1px solid var(--line);border-left:4px solid var(--c, var(--line));border-radius:12px;background:var(--panel);margin-bottom:12px;overflow:hidden;scroll-margin-top:90px}
+.sp-card-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:var(--panel-2)}
+.sp-card-b{padding:11px 14px;border-top:1px solid var(--line-2)}
 .sp-t{width:100%;border-collapse:collapse;font-size:12.5px}
-.sp-t th{text-align:left;padding:7px 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:700;border-bottom:1px solid var(--line)}
+.sp-t th{text-align:left;padding:7px 8px;font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:700;border-bottom:1px solid var(--line);white-space:nowrap}
 .sp-t td{padding:6px 8px;border-bottom:1px solid var(--line-2);vertical-align:top;color:var(--ink-2)}
-.sp-t tr.diff td{background:rgba(224,138,30,.06)}
+.sp-t tr.diff td{background:rgba(224,138,30,.07)}
+.sp-t tr.fill td{background:rgba(31,157,87,.045)}
 .sp-t tr.off td{opacity:.55}
+.sp-t tr.same td{color:var(--muted)}
+.sp-t tr.click{cursor:pointer}.sp-t tr.click:hover td{background:var(--panel-2)}
 .sp-in{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font:inherit;font-size:12.5px;background:var(--panel);color:var(--ink)}
-.sp-tag{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:999px;white-space:nowrap}
-.sp-tag.fill{background:#eaf7ef;color:#13703d}.sp-tag.diff{background:#fff5e6;color:#9a5a06}.sp-tag.new{background:#e8f3fb;color:#0b5f8a}
-.sp-warn{background:#fff5e6;border:1px solid #f6dcb0;color:#7a4705;border-radius:9px;padding:8px 11px;font-size:12px;margin-bottom:10px}
+.sp-badge{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:800;letter-spacing:.3px;padding:4px 11px;border-radius:999px;color:#fff;background:var(--c);white-space:nowrap}
+.sp-chip{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:999px;white-space:nowrap}
+.sp-chip.fill{background:#eaf7ef;color:#13703d}.sp-chip.diff{background:#fff5e6;color:#9a5a06}.sp-chip.new{background:#e8f3fb;color:#0b5f8a}.sp-chip.same{background:var(--panel-2);color:var(--muted)}.sp-chip.check{background:#fff5e6;color:#9a5a06;border:1px solid #f6dcb0}
+.sp-warn{background:#fff5e6;border:1px solid #f6dcb0;color:#7a4705;border-radius:9px;padding:8px 11px 8px 26px;font-size:12px;margin:0 0 10px}
 .sp-warn li{margin:2px 0}
-.sp-ok{background:#eaf7ef;border:1px solid #c4e6d1;color:#13703d;border-radius:9px;padding:10px 12px;font-size:12.5px;margin-bottom:12px}
+.sp-ok{background:#eaf7ef;border:1px solid #c4e6d1;color:#13703d;border-radius:9px;padding:10px 12px;font-size:12.5px}
 .sp-err{background:#fdf0f2;border:1px solid #f2c4cd;color:#8f1d30;border-radius:9px;padding:10px 12px;font-size:12.5px;margin-bottom:12px}
+.sp-dup{background:#fdf0f2;border:1px solid #f2c4cd;color:#8f1d30;border-radius:10px;padding:10px 13px;font-size:12.5px;margin-bottom:12px}
 .sp-muted{color:var(--muted);font-size:12px}
+.sp-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;white-space:nowrap}
+.sp-seg button{border:0;background:var(--panel);color:var(--ink-2);font:inherit;font-size:11px;font-weight:700;padding:4px 9px;cursor:pointer;border-right:1px solid var(--line)}
+.sp-seg button:last-child{border-right:0}
+.sp-seg button.on{background:var(--blue);color:#fff}
+.sp-seg button.on.keep{background:#5b6676}
+.sp-ov{position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:9000;display:grid;place-items:center;padding:16px}
+.sp-dlg{background:var(--panel, #fff);border-radius:14px;box-shadow:0 30px 80px rgba(0,0,0,.35);width:min(1180px,100%);max-height:92vh;display:flex;flex-direction:column;overflow:hidden}
+.sp-dlg-h{padding:13px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sp-dlg-b{padding:13px 18px;overflow:auto;flex:1}
+.sp-dlg-f{padding:11px 18px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel-2)}
+.sp-cand{display:inline-flex;flex-direction:column;align-items:flex-start;gap:2px;border:1px solid var(--line);border-radius:9px;padding:6px 10px;background:var(--panel);cursor:pointer;font:inherit;text-align:left;max-width:300px}
+.sp-cand.on{box-shadow:0 0 0 2px var(--blue) inset}
+.sp-cand small{color:var(--muted);font-size:10.5px}
 `;
 function spPlan(p, st, staff) {
-  const fields = Object.assign({}, p.fields, st.edits || {});
+  const SI = window.UNICO_SI;
+  const s = st || {};
+  const fields = Object.assign({}, p.fields, s.edits || {});
   SP_DATE_KEYS.forEach(k => {
-    if (st.edits && st.edits[k]) {
-      const d = window.UNICO_SI.parseDate(st.edits[k]);
+    if (s.edits && s.edits[k]) {
+      const d = SI.parseDate(s.edits[k]);
       if (d) fields[k] = d.iso;
     }
   });
   const pe = Object.assign({}, p, {
     fields
   });
-  const rec = st.choice !== 'new' && st.choice !== 'skip' ? (staff || []).find(r => String(r.id) === String(st.choice)) || null : null;
-  const plan = window.UNICO_SI.planUpdate(pe, rec);
-  if (st.choice === 'new' && !plan.rows.some(r => r.key === 'current_department')) {
+  const isNew = s.choice === 'new';
+  const rec = !isNew && s.choice !== 'skip' && s.choice != null ? (staff || []).find(r => String(r.id) === String(s.choice)) || null : null;
+  const plan = SI.planUpdate(pe, rec);
+  if (isNew && !plan.rows.some(r => r.key === 'current_department')) {
     plan.rows.splice(3, 0, {
       key: 'current_department',
       label: 'Department',
       kind: 'new',
       stored: '',
       form: '',
-      value: ''
+      value: '',
+      formValue: ''
     });
   }
-  const ticked = plan.rows.filter(r => r.kind !== 'same' && (r.kind === 'diff' ? (st.on || []).indexOf(r.key) >= 0 : (st.off || []).indexOf(r.key) < 0)).map(r => r.key);
+  const choices = Object.assign(SI.defaultChoices(plan), s.choices || {});
+  const live = plan.rows.filter(r => r.kind !== 'same');
+  const counts = {
+    fill: live.filter(r => r.kind !== 'diff' && choices[r.key] !== 'keep').length,
+    replace: live.filter(r => r.kind === 'diff' && choices[r.key] !== 'keep').length,
+    keep: live.filter(r => choices[r.key] === 'keep').length,
+    differ: live.filter(r => r.kind === 'diff').length,
+    same: plan.rows.length - live.length
+  };
   return {
     pe,
     rec,
     plan,
-    ticked
+    choices,
+    counts,
+    isNew
   };
+}
+function spStatus(p, st, match, rec) {
+  const s = st || {};
+  const cands = match && match.candidates || [];
+  const check = !s.done && (match && match.decision === 'choose' || p.warnings.some(w => SP_SERIOUS.test(w)) || s.choice === 'new' && cands.length > 0);
+  if (s.done) return {
+    code: 'saved',
+    label: s.done.what === 'created' ? 'SAVED · NEW RECORD' : 'SAVED · UPDATED',
+    c: '#5b6676',
+    check: false,
+    reason: s.done.name + (s.done.what === 'created' ? ' was added to the register.' : ' was updated (' + s.done.count + ' field' + (s.done.count === 1 ? '' : 's') + ').')
+  };
+  if (s.choice === 'new') return {
+    code: 'new',
+    label: 'NEW STAFF',
+    c: '#0b78b3',
+    check,
+    reason: cands.length ? 'Looks like ' + cands.slice(0, 2).map(c => c.name + (c.emp_id ? ' (' + c.emp_id + ')' : '')).join(', ') + ' — compare before creating.' : 'Not on the register: no one has this phone or NID, or this name with the same joining / birth date.'
+  };
+  if (s.choice != null && s.choice !== 'skip') {
+    const c = cands.find(x => String(x.id) === String(s.choice));
+    return {
+      code: 'existing',
+      label: 'EXISTING · ' + (rec ? rec.name + (rec.emp_id ? ' (' + rec.emp_id + ')' : '') : '#' + s.choice),
+      c: '#13803f',
+      check,
+      reason: c ? 'Matched by ' + c.why.join(', ') + '.' : 'Picked by you.'
+    };
+  }
+  if (cands.length) return {
+    code: 'check',
+    label: 'CHECK — ' + cands.length + ' possible match' + (cands.length === 1 ? '' : 'es'),
+    c: '#c27a06',
+    check: true,
+    reason: 'Not sure who this is. Open Update… to compare, or Create… if it is a new person.'
+  };
+  return {
+    code: 'skip',
+    label: 'SKIPPED',
+    c: '#8b98ab',
+    check,
+    reason: 'Nothing will be written for this form.'
+  };
+}
+async function spSaveAll(store, items) {
+  const SI = window.UNICO_SI;
+  const meta = spMeta();
+  const done = [];
+  for (const x of items) {
+    if (x.isNew) {
+      const rec = SI.newRecord(x.pe, x.plan, x.choices, meta);
+      if (!rec.current_department) rec.current_department = 'Unassigned';
+      const id = store.create(rec);
+      done.push({
+        n: x.p.n,
+        id,
+        name: rec.name,
+        what: 'created',
+        count: Object.keys(rec).length,
+        written: JSON.parse(JSON.stringify(rec)),
+        at: meta.at
+      });
+    } else {
+      const b = SI.buildPatch(x.pe, x.rec, x.plan, x.choices, meta);
+      if (!b.changed) continue;
+      store.update(x.rec.id, b.patch);
+      done.push({
+        n: x.p.n,
+        id: x.rec.id,
+        name: x.rec.name,
+        what: 'updated',
+        count: b.filled.length + Object.keys(b.replaced).length,
+        replaced: Object.keys(b.replaced).length,
+        before: b.before,
+        written: b.written,
+        at: meta.at
+      });
+    }
+  }
+  if (!done.length) return done;
+  if (!window.unicoFlushNow) throw new Error('Saving is unavailable in this tab — reload the page.');
+  const res = await window.unicoFlushNow();
+  if (!res || res.ok !== true) throw new Error(res && res.error || 'The database did not confirm the save.');
+  return done;
+}
+function SpChoice({
+  r,
+  how,
+  onPick,
+  editing,
+  onEdit,
+  isNew
+}) {
+  const opts = isNew ? [['form', 'Use'], ['keep', 'Leave out']] : r.list ? [['keep', 'Keep'], ['merge', 'Merge'], ['form', 'Use form']] : [['keep', 'Keep'], ['form', 'Use form']];
+  return React.createElement("span", {
+    style: {
+      display: 'inline-flex',
+      gap: 6,
+      alignItems: 'center'
+    }
+  }, React.createElement("span", {
+    className: "sp-seg"
+  }, opts.map(([v, l]) => React.createElement("button", {
+    key: v,
+    type: "button",
+    className: (how === v ? 'on ' : '') + (v === 'keep' ? 'keep' : ''),
+    onClick: () => onPick(v)
+  }, l))), !r.exp && !r.list && React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: onEdit
+  }, editing ? 'Done' : 'Edit'));
+}
+function SpCompareDialog({
+  p,
+  st,
+  set,
+  staff,
+  match,
+  mode,
+  onClose,
+  onSave,
+  setRoute
+}) {
+  const SI = window.UNICO_SI;
+  const [q, setQ] = useState('');
+  const [showSame, setShowSame] = useState(false);
+  const [editing, setEditing] = useState({});
+  const [anyway, setAnyway] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const isCreate = mode === 'create';
+  const eff = isCreate && st.choice !== 'new' ? Object.assign({}, st, {
+    choice: 'new',
+    choices: {}
+  }) : st;
+  const view = spPlan(p, eff, staff);
+  const {
+    rec,
+    plan,
+    choices,
+    counts
+  } = view;
+  const cands = match && match.candidates || [];
+  const found = useMemo(() => SI.searchRoster(q, staff), [q, staff]);
+  const pickTarget = id => {
+    set({
+      choice: id,
+      choices: {},
+      edits: st.edits || {}
+    });
+    setErr('');
+  };
+  const asNew = isCreate && st.choice !== 'new' ? {
+    choice: 'new'
+  } : {};
+  const setChoice = (key, v) => set(Object.assign({}, asNew, {
+    choices: Object.assign({}, eff.choices || {}, {
+      [key]: v
+    })
+  }));
+  const quick = m => set(Object.assign({}, asNew, {
+    choices: SI.quickChoices(plan, m)
+  }));
+  const edit = (k, v) => set(Object.assign({}, asNew, {
+    edits: Object.assign({}, st.edits || {}, {
+      [k]: v
+    }),
+    choices: Object.assign({}, eff.choices || {}, {
+      [k]: 'form'
+    })
+  }));
+  const rows = plan.rows.filter(r => showSame || r.kind !== 'same');
+  const blocked = isCreate ? cands.length > 0 && !anyway || !String(view.pe.fields.name || '').trim() : !rec;
+  const save = async () => {
+    setBusy(true);
+    setErr('');
+    try {
+      if (isCreate) set({
+        choice: 'new'
+      });
+      const out = await onSave(Object.assign({
+        p
+      }, view, {
+        isNew: isCreate
+      }));
+      if (out) onClose();
+    } catch (e) {
+      setErr(e && e.message || 'Not saved.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return spPortal(React.createElement("div", {
+    className: "sp-ov",
+    onMouseDown: e => {
+      if (e.target === e.currentTarget && !busy) onClose();
+    }
+  }, React.createElement("div", {
+    className: "sp-dlg",
+    role: "dialog",
+    "aria-modal": "true"
+  }, React.createElement("div", {
+    className: "sp-dlg-h"
+  }, React.createElement("span", {
+    className: "sp-badge",
+    style: {
+      '--c': isCreate ? '#0b78b3' : '#13803f'
+    }
+  }, isCreate ? 'CREATE NEW' : 'UPDATE EXISTING'), React.createElement("b", {
+    style: {
+      fontSize: 14.5,
+      color: 'var(--ink)'
+    }
+  }, "Form #", p.n, " \xB7 ", view.pe.fields.name || 'No name'), React.createElement("span", {
+    className: "sp-muted"
+  }, [p.fields.role, p.fields.designation, p.fields.form_no].filter(Boolean).join(' · ')), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: onClose,
+    disabled: busy
+  }, "Close")), React.createElement("div", {
+    className: "sp-dlg-b"
+  }, !isCreate && React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, React.createElement("div", {
+    className: "sp-muted",
+    style: {
+      fontWeight: 700,
+      marginBottom: 6
+    }
+  }, "Update which staff record?"), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginBottom: 8
+    }
+  }, cands.map(c => React.createElement("button", {
+    key: c.id,
+    type: "button",
+    className: 'sp-cand' + (String(st.choice) === String(c.id) ? ' on' : ''),
+    onClick: () => pickTarget(c.id)
+  }, React.createElement("b", null, c.strong ? '✓ ' : '? ', c.name, c.emp_id ? ' · ' + c.emp_id : '', c.former ? ' · archived' : ''), React.createElement("small", null, c.why.join(' · ')))), !cands.length && React.createElement("span", {
+    className: "sp-muted"
+  }, "No suggested match \u2014 search the register below.")), React.createElement("input", {
+    className: "sp-in",
+    style: {
+      maxWidth: 420
+    },
+    value: q,
+    onChange: e => setQ(e.target.value),
+    placeholder: "Search anyone: name, employee ID or phone\u2026"
+  }), q.trim().length >= 2 && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      marginTop: 8
+    }
+  }, found.map(c => React.createElement("button", {
+    key: c.id,
+    type: "button",
+    className: 'sp-cand' + (String(st.choice) === String(c.id) ? ' on' : ''),
+    onClick: () => {
+      pickTarget(c.id);
+      setQ('');
+    }
+  }, React.createElement("b", null, c.name, c.emp_id ? ' · ' + c.emp_id : '', c.former ? ' · archived' : ''), React.createElement("small", null, [c.designation, c.current_department, c.phone].filter(Boolean).join(' · '), " \u2014 ", c.why.join(', ')))), !found.length && React.createElement("span", {
+    className: "sp-muted"
+  }, "Nobody found.")), rec && React.createElement("div", {
+    style: {
+      marginTop: 10,
+      fontSize: 12.5
+    }
+  }, "Comparing with ", React.createElement("b", null, rec.name), rec.emp_id ? ' · ID ' + rec.emp_id : '', rec.current_department ? ' · ' + rec.current_department : '', rec.former ? ' · in Previous Staff' : '', " ", React.createElement("button", {
+    className: "btn sm",
+    style: {
+      marginLeft: 6
+    },
+    onClick: () => {
+      onClose();
+      setRoute({
+        view: 'staffProfile',
+        emp: rec.id
+      });
+    }
+  }, "Open profile"))), isCreate && cands.length > 0 && React.createElement("div", {
+    className: "sp-dup"
+  }, React.createElement("b", null, "Wait \u2014 this may already be on the register."), React.createElement("div", {
+    style: {
+      display: 'grid',
+      gap: 6,
+      margin: '8px 0'
+    }
+  }, cands.map(c => React.createElement("div", {
+    key: c.id,
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center',
+      flexWrap: 'wrap'
+    }
+  }, React.createElement("span", null, React.createElement("b", null, c.name), c.emp_id ? ' · ' + c.emp_id : '', c.former ? ' · archived' : '', " \u2014 ", c.why.join(', ')), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => {
+      pickTarget(c.id);
+      onClose();
+      setTimeout(() => window.dispatchEvent(new CustomEvent('sp:open', {
+        detail: {
+          n: p.n,
+          mode: 'update'
+        }
+      })), 0);
+    }
+  }, "Compare with them")))), React.createElement("label", {
+    style: {
+      display: 'inline-flex',
+      gap: 7,
+      alignItems: 'center',
+      fontWeight: 700,
+      cursor: 'pointer'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: anyway,
+    onChange: e => setAnyway(e.target.checked)
+  }), "It is a different person \u2014 create anyway")), p.warnings.length > 0 && React.createElement("ul", {
+    className: "sp-warn"
+  }, p.warnings.map((w, i) => React.createElement("li", {
+    key: i
+  }, w))), (isCreate || rec) && React.createElement(React.Fragment, null, React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      marginBottom: 8
+    }
+  }, React.createElement("span", {
+    className: "sp-muted",
+    style: {
+      fontWeight: 700
+    }
+  }, "Quick:"), isCreate ? React.createElement(React.Fragment, null, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => quick('form')
+  }, "Use every field"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => quick('keep')
+  }, "Clear all")) : React.createElement(React.Fragment, null, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => quick('blanks')
+  }, "Fill blanks only"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => quick('form')
+  }, "Use all form values"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => quick('keep')
+  }, "Keep all"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => set({
+      choices: {}
+    })
+  }, "Reset")), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), !isCreate && counts.same > 0 && React.createElement("label", {
+    className: "sp-muted",
+    style: {
+      display: 'inline-flex',
+      gap: 6,
+      alignItems: 'center',
+      cursor: 'pointer'
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: showSame,
+    onChange: e => setShowSame(e.target.checked)
+  }), "Show ", counts.same, " matching field", counts.same === 1 ? '' : 's')), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("table", {
+    className: "sp-t"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "Field"), !isCreate && React.createElement("th", null, "On the register now"), React.createElement("th", null, isCreate ? 'Value' : 'From the form'), React.createElement("th", null, "Choice"), React.createElement("th", null))), React.createElement("tbody", null, rows.map(r => {
+    const how = choices[r.key] || 'keep';
+    const ed = !!editing[r.key] || isCreate && !r.exp && !r.list;
+    const shown = eff.edits && eff.edits[r.key] != null ? eff.edits[r.key] : String(r.formValue == null ? r.form : r.formValue);
+    return React.createElement("tr", {
+      key: r.key,
+      className: r.kind === 'same' ? 'same' : r.kind === 'diff' ? 'diff' : 'fill'
+    }, React.createElement("td", {
+      style: {
+        fontWeight: 700,
+        whiteSpace: 'nowrap'
+      }
+    }, r.label), !isCreate && React.createElement("td", {
+      style: {
+        maxWidth: 320
+      }
+    }, spShow(r.key, r.stored)), React.createElement("td", {
+      style: {
+        maxWidth: 380
+      }
+    }, ed && !r.exp && !r.list ? React.createElement("input", {
+      className: "sp-in",
+      value: shown,
+      placeholder: r.key === 'current_department' ? 'e.g. MICU — or leave blank' : SP_DATE_KEYS.indexOf(r.key) >= 0 ? 'DD/MM/YYYY' : '',
+      onChange: e => edit(r.key, e.target.value)
+    }) : React.createElement("span", null, r.exp ? r.form : spShow(r.key, r.formValue == null ? r.form : r.formValue), r.list && r.added && r.stored ? React.createElement("span", {
+      className: "sp-muted"
+    }, " (+ ", r.added.join(', '), ")") : null)), React.createElement("td", null, r.kind === 'same' ? React.createElement("span", {
+      className: "sp-chip same"
+    }, "Same") : React.createElement(SpChoice, {
+      r: r,
+      how: how,
+      isNew: isCreate,
+      editing: !!editing[r.key],
+      onPick: v => setChoice(r.key, v),
+      onEdit: () => setEditing(Object.assign({}, editing, {
+        [r.key]: !editing[r.key]
+      }))
+    })), React.createElement("td", null, r.kind === 'same' ? null : React.createElement("span", {
+      className: 'sp-chip ' + (r.kind === 'diff' ? 'diff' : r.kind === 'new' ? 'new' : 'fill')
+    }, r.kind === 'diff' ? 'Mismatch' : r.kind === 'new' ? 'New' : r.added && r.stored ? 'Adds' : 'Blank on register')));
+  }), !rows.length && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 5,
+    className: "sp-muted"
+  }, "The register already holds everything on this form.")))))), err && React.createElement("div", {
+    className: "sp-err",
+    style: {
+      marginTop: 12
+    }
+  }, err)), React.createElement("div", {
+    className: "sp-dlg-f"
+  }, React.createElement("span", {
+    className: "sp-muted"
+  }, isCreate ? plan.rows.length - counts.keep + ' fields go on the new record' : rec ? 'Will fill ' + counts.fill + ' · replace ' + counts.replace + ' · keep ' + counts.keep : 'Pick the staff record to compare with.'), React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: onClose,
+    disabled: busy
+  }, "Cancel"), React.createElement("button", {
+    className: "btn pri",
+    disabled: busy || blocked || !isCreate && counts.fill + counts.replace === 0,
+    onClick: save
+  }, busy ? 'Saving…' : isCreate ? 'Create record' : 'Save update')))));
 }
 function SpPerson({
   p,
@@ -9733,103 +10316,116 @@ function SpPerson({
   set,
   staff,
   match,
+  status,
+  open,
+  onToggle,
+  onOpen,
+  onUndo,
   setRoute
 }) {
-  const SI = window.UNICO_SI;
+  const view = spPlan(p, st, staff);
   const {
     rec,
     plan,
-    ticked
-  } = spPlan(p, st, staff);
+    choices,
+    counts,
+    isNew
+  } = view;
   const rows = plan.rows.filter(r => r.kind !== 'same');
-  const sameN = plan.rows.length - rows.length;
-  const tick = (r, v) => {
-    if (r.kind === 'diff') set({
-      on: v ? (st.on || []).concat([r.key]) : (st.on || []).filter(k => k !== r.key)
-    });else set({
-      off: v ? (st.off || []).filter(k => k !== r.key) : (st.off || []).concat([r.key])
-    });
-  };
+  const tick = (r, on) => set({
+    choices: Object.assign({}, st.choices || {}, {
+      [r.key]: on ? r.list && r.stored ? 'merge' : 'form' : 'keep'
+    })
+  });
   const edit = (k, v) => set({
     edits: Object.assign({}, st.edits || {}, {
       [k]: v
     })
   });
-  const editable = r => r.key !== 'prior_experience_entries' && ['special_training', 'extracurricular', 'languages'].indexOf(r.key) < 0;
-  const f = p.fields;
-  const choiceLabel = st.choice === 'skip' ? 'Skipped — nothing is written for this form' : st.choice === 'new' ? 'A NEW staff record will be created' : rec ? 'Updates ' + rec.name + (rec.emp_id ? ' (ID ' + rec.emp_id + ')' : '') + (rec.current_department ? ' · ' + rec.current_department : '') : 'Pick who this is';
-  const cand = (match.candidates || []).find(c => String(c.id) === String(st.choice));
+  const editable = r => !r.exp && !r.list;
   return React.createElement("div", {
-    className: "sp-card"
+    className: "sp-card",
+    id: 'sp-card-' + p.n,
+    style: {
+      '--c': status.c
+    }
   }, React.createElement("div", {
     className: "sp-card-h"
-  }, React.createElement("b", {
+  }, React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: onToggle,
+    title: open ? 'Collapse' : 'Expand',
+    style: {
+      minWidth: 30
+    }
+  }, open ? '▾' : '▸'), React.createElement("b", {
     style: {
       fontSize: 13.5,
       color: 'var(--ink)'
     }
-  }, "#", p.n, " \xB7 ", st.edits && st.edits.name || f.name || 'No name'), React.createElement("span", {
+  }, "#", p.n, " \xB7 ", st.edits && st.edits.name || p.fields.name || 'No name'), React.createElement("span", {
+    className: "sp-badge",
+    style: {
+      '--c': status.c
+    }
+  }, status.label), status.check && React.createElement("span", {
+    className: "sp-chip check"
+  }, "Needs your check"), React.createElement("span", {
     className: "sp-muted"
-  }, [f.role, f.designation, f.form_no].filter(Boolean).join(' · ')), React.createElement("span", {
+  }, [p.fields.designation || p.fields.role, p.fields.form_no].filter(Boolean).join(' · ')), React.createElement("span", {
     style: {
       flex: 1
     }
-  }), React.createElement("select", {
+  }), st.done ? React.createElement(React.Fragment, null, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: st.done.id
+    })
+  }, "Open profile"), React.createElement("button", {
+    className: "btn sm",
+    onClick: onUndo
+  }, "Undo")) : React.createElement(React.Fragment, null, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => onOpen('update')
+  }, "Update existing\u2026"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => onOpen('create')
+  }, "Create new\u2026"), React.createElement("select", {
     className: "sp-in",
     style: {
       width: 'auto',
-      maxWidth: 380
+      maxWidth: 260
     },
     value: String(st.choice),
     onChange: e => set({
       choice: e.target.value,
-      on: [],
-      off: []
-    })
+      choices: {}
+    }),
+    title: "What the batch Apply does with this form"
   }, (match.candidates || []).map(c => React.createElement("option", {
     key: c.id,
     value: String(c.id)
-  }, (c.strong ? '✓ ' : '? ') + c.name + (c.emp_id ? ' · ' + c.emp_id : '') + ' — ' + c.why.slice(0, 2).join(', '))), React.createElement("option", {
+  }, (c.strong ? '✓ ' : '? ') + c.name + (c.emp_id ? ' · ' + c.emp_id : ''))), rec && !(match.candidates || []).some(c => String(c.id) === String(rec.id)) && React.createElement("option", {
+    value: String(rec.id)
+  }, rec.name), React.createElement("option", {
     value: "new"
-  }, "+ Create a new staff record"), React.createElement("option", {
+  }, "+ New staff record"), React.createElement("option", {
     value: "skip"
-  }, "Skip this form"), st.choice !== 'new' && st.choice !== 'skip' && !(match.candidates || []).some(c => String(c.id) === String(st.choice)) && React.createElement("option", {
-    value: String(st.choice)
-  }, rec ? rec.name : 'Record #' + st.choice))), React.createElement("div", {
+  }, "Skip this form")))), React.createElement("div", {
+    style: {
+      padding: '6px 14px 8px',
+      fontSize: 12,
+      color: 'var(--ink-2)',
+      borderTop: '1px solid var(--line-2)'
+    }
+  }, status.reason, !st.done && !isNew && rec && React.createElement("span", {
+    className: "sp-muted"
+  }, " \xB7 ", counts.fill, " to fill \xB7 ", counts.differ, " differ", counts.replace ? ' (' + counts.replace + ' to replace)' : '', " \xB7 ", counts.same, " same")), open && !st.done && React.createElement("div", {
     className: "sp-card-b"
-  }, React.createElement("div", {
-    style: {
-      fontSize: 12.5,
-      fontWeight: 700,
-      color: st.choice === 'new' ? '#0b5f8a' : st.choice === 'skip' ? 'var(--muted)' : '#13703d',
-      marginBottom: 6
-    }
-  }, choiceLabel, rec && React.createElement("button", {
-    className: "btn sm",
-    style: {
-      marginLeft: 8
-    },
-    onClick: () => setRoute({
-      view: 'staffProfile',
-      emp: rec.id
-    })
-  }, "Open profile")), cand && React.createElement("div", {
-    className: "sp-muted",
-    style: {
-      marginBottom: 8
-    }
-  }, "Why: ", cand.why.join('; '), "."), match.decision === 'choose' && st.choice === 'skip' && React.createElement("div", {
+  }, p.warnings.length > 0 && React.createElement("ul", {
     className: "sp-warn"
-  }, "Not sure who this is: ", (match.candidates || []).length ? 'possible matches are in the list above — pick one, or create a new record.' : 'no one on the register matches.'), match.decision === 'new' && st.choice === 'new' && React.createElement("div", {
-    className: "sp-muted",
-    style: {
-      marginBottom: 8
-    }
-  }, "No one on the register has this phone, NID, or this name with the same joining / birth date."), p.warnings.length > 0 && React.createElement("ul", {
-    className: "sp-warn",
-    style: {
-      paddingLeft: 26
-    }
   }, p.warnings.map((w, i) => React.createElement("li", {
     key: i
   }, w))), st.choice !== 'skip' && React.createElement("div", {
@@ -9842,16 +10438,15 @@ function SpPerson({
     style: {
       width: 28
     }
-  }), React.createElement("th", null, "Field"), st.choice !== 'new' && React.createElement("th", null, "On the register now"), React.createElement("th", null, st.choice === 'new' ? 'Value' : 'From the form'), React.createElement("th", {
+  }), React.createElement("th", null, "Field"), !isNew && React.createElement("th", null, "On the register now"), React.createElement("th", null, isNew ? 'Value' : 'From the form'), React.createElement("th", {
     style: {
-      width: 80
+      width: 110
     }
   }))), React.createElement("tbody", null, rows.map(r => {
-    const on = ticked.indexOf(r.key) >= 0;
-    const isExp = r.key === 'prior_experience_entries';
+    const on = (choices[r.key] || 'keep') !== 'keep';
     return React.createElement("tr", {
       key: r.key,
-      className: (r.kind === 'diff' ? 'diff ' : '') + (on ? '' : 'off')
+      className: (r.kind === 'diff' ? 'diff ' : 'fill ') + (on ? '' : 'off')
     }, React.createElement("td", null, React.createElement("input", {
       type: "checkbox",
       checked: on,
@@ -9861,23 +10456,18 @@ function SpPerson({
         fontWeight: 600,
         whiteSpace: 'nowrap'
       }
-    }, r.label), st.choice !== 'new' && React.createElement("td", null, isExp ? r.stored || '—' : spShow(r.key, r.stored)), React.createElement("td", null, isExp ? React.createElement("span", null, r.form) : editable(r) ? React.createElement("input", {
+    }, r.label), !isNew && React.createElement("td", null, spShow(r.key, r.stored)), React.createElement("td", null, editable(r) ? React.createElement("input", {
       className: "sp-in",
-      value: st.edits && st.edits[r.key] != null ? st.edits[r.key] : r.kind === 'new' || r.kind === 'diff' || !r.stored ? String(r.form || '') : String(r.value || ''),
-      placeholder: r.key === 'current_department' ? 'e.g. MICU — or leave blank' : SP_DATE_KEYS.indexOf(r.key) >= 0 ? 'YYYY-MM-DD' : '',
+      value: st.edits && st.edits[r.key] != null ? st.edits[r.key] : String(r.formValue == null ? r.form : r.formValue),
+      placeholder: r.key === 'current_department' ? 'e.g. MICU — or leave blank' : '',
       onChange: e => edit(r.key, e.target.value)
-    }) : React.createElement("span", null, r.added && r.stored ? React.createElement(React.Fragment, null, "adds ", React.createElement("b", null, r.added.join(', '))) : r.value)), React.createElement("td", null, React.createElement("span", {
-      className: 'sp-tag ' + (r.kind === 'diff' ? 'diff' : r.kind === 'new' ? 'new' : 'fill')
-    }, r.kind === 'diff' ? 'Different' : r.kind === 'new' ? 'New' : r.added && r.stored ? 'Adds' : 'Fills blank')));
+    }) : React.createElement("span", null, r.exp ? r.form : r.list && r.added && r.stored && choices[r.key] === 'merge' ? React.createElement(React.Fragment, null, "adds ", React.createElement("b", null, r.added.join(', '))) : spShow(r.key, choices[r.key] === 'merge' ? r.value : r.formValue))), React.createElement("td", null, React.createElement("span", {
+      className: 'sp-chip ' + (r.kind === 'diff' ? 'diff' : r.kind === 'new' ? 'new' : 'fill')
+    }, r.kind === 'diff' ? 'Mismatch' : r.kind === 'new' ? 'New' : r.added && r.stored ? 'Adds' : 'Blank on register')));
   }), !rows.length && React.createElement("tr", null, React.createElement("td", {
     colSpan: 5,
     className: "sp-muted"
-  }, "Nothing to change \u2014 the register already holds everything on this form.")))), sameN > 0 && React.createElement("div", {
-    className: "sp-muted",
-    style: {
-      marginTop: 6
-    }
-  }, sameN, " field", sameN === 1 ? '' : 's', " already the same on the register."))));
+  }, "Nothing to change \u2014 the register already holds everything on this form.")))))));
 }
 function StaffPasteView({
   store,
@@ -9888,20 +10478,32 @@ function StaffPasteView({
   const [people, setPeople] = useState(null);
   const [state, setState] = useState({});
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(null);
   const [err, setErr] = useState('');
   const [showPrompt, setShowPrompt] = useState(false);
+  const [filter, setFilter] = useState('all');
+  const [openCards, setOpenCards] = useState({});
+  const [dlg, setDlg] = useState(null);
   const staff = store && store.staff || [];
-  const matches = useMemo(() => (people || []).map(p => SI.matchPerson(Object.assign({}, p, {
+  const matches = useMemo(() => (people || []).map(p => SI ? SI.matchPerson(Object.assign({}, p, {
     fields: Object.assign({}, p.fields, (state[p.n] || {}).edits || {})
-  }), staff)), [people, staff, state]);
-  if (!spIsAdmin()) {
-    return React.createElement("div", {
-      className: "card"
-    }, React.createElement("div", {
-      className: "card-b"
-    }, "Paste & Update is for administrators."));
-  }
+  }), staff) : {
+    candidates: []
+  }), [people, staff, state]);
+  React.useEffect(() => {
+    const h = e => {
+      if (e.detail) setDlg({
+        n: e.detail.n,
+        mode: e.detail.mode
+      });
+    };
+    window.addEventListener('sp:open', h);
+    return () => window.removeEventListener('sp:open', h);
+  }, []);
+  if (!spIsAdmin()) return React.createElement("div", {
+    className: "card"
+  }, React.createElement("div", {
+    className: "card-b"
+  }, "Paste & Update is for administrators."));
   if (!SI) return React.createElement("div", {
     className: "card"
   }, React.createElement("div", {
@@ -9909,7 +10511,6 @@ function StaffPasteView({
   }, "Loading\u2026"));
   const read = () => {
     setErr('');
-    setDone(null);
     const vocab = window.STAFF ? {
       extracurricular: window.STAFF.EXTRACURRICULARS,
       special_training: (window.STAFF.TRAININGS || []).concat(window.STAFF.PCA_TRAININGS || []),
@@ -9920,93 +10521,165 @@ function StaffPasteView({
     });
     if (!ps.length) {
       setPeople([]);
-      setErr('No form found in the text. Each form should start with "### STAFF 1" (the AI prompt below) or "1. Name …".');
+      setErr('No form found in the text. Each form should start with "### STAFF 1" (the AI prompt) or "1. Name …".');
       return;
     }
     const st = {};
+    const op = {};
     ps.forEach(p => {
       const m = SI.matchPerson(p, staff);
       st[p.n] = {
         choice: m.decision === 'match' ? m.best.id : m.decision === 'new' ? 'new' : 'skip',
-        on: [],
-        off: [],
-        edits: {}
+        choices: {},
+        edits: {},
+        done: null
       };
+      op[p.n] = true;
     });
     setPeople(ps);
     setState(st);
+    setOpenCards(op);
+    setFilter('all');
   };
   const setOne = (n, patch) => setState(s => Object.assign({}, s, {
     [n]: Object.assign({}, s[n], patch)
   }));
-  const plans = (people || []).map(p => ({
-    p,
-    st: state[p.n] || {},
-    ...spPlan(p, state[p.n] || {
-      choice: 'skip'
-    }, staff)
-  }));
-  const toApply = plans.filter(x => x.st.choice && x.st.choice !== 'skip' && (x.st.choice === 'new' || x.ticked.length));
-  const counts = {
-    upd: toApply.filter(x => x.st.choice !== 'new').length,
-    add: toApply.filter(x => x.st.choice === 'new').length
+  const items = (people || []).map((p, i) => {
+    const st = state[p.n] || {};
+    const view = spPlan(p, st, staff);
+    return Object.assign({
+      p,
+      st,
+      match: matches[i] || {
+        candidates: []
+      }
+    }, view, {
+      status: spStatus(p, st, matches[i], view.rec)
+    });
+  });
+  const tiles = [['all', 'All forms', '#3c4858', items.length], ['new', 'New staff', '#0b78b3', items.filter(x => x.status.code === 'new').length], ['existing', 'Existing staff', '#13803f', items.filter(x => x.status.code === 'existing').length], ['check', 'Needs your check', '#c27a06', items.filter(x => x.status.check || x.status.code === 'check').length], ['saved', 'Saved', '#5b6676', items.filter(x => x.status.code === 'saved').length]];
+  const shown = items.filter(x => filter === 'all' || (filter === 'check' ? x.status.check || x.status.code === 'check' : x.status.code === filter));
+  const pending = items.filter(x => !x.st.done && x.st.choice != null && x.st.choice !== 'skip' && (x.isNew || x.rec && x.counts.fill + x.counts.replace > 0));
+  const nNew = pending.filter(x => x.isNew).length;
+  const lookAlike = pending.filter(x => x.isNew && (x.match.candidates || []).length);
+  const markDone = list => setState(s => {
+    const o = Object.assign({}, s);
+    list.forEach(d => {
+      o[d.n] = Object.assign({}, o[d.n], {
+        done: d
+      });
+    });
+    return o;
+  });
+  const saveOne = async x => {
+    const done = await spSaveAll(store, [x]);
+    if (!done.length) {
+      spToast('Nothing to change for this person.', 'info');
+      return true;
+    }
+    markDone(done);
+    setOpenCards(o => Object.assign({}, o, {
+      [x.p.n]: false
+    }));
+    spToast(done[0].name + (done[0].what === 'created' ? ' added to the register.' : ' updated.'));
+    return true;
   };
-  const apply = async () => {
-    if (!toApply.length) return;
-    const noName = toApply.find(x => x.st.choice === 'new' && !String(x.pe.fields.name || '').trim());
+  const applyAll = async () => {
+    if (!pending.length) return;
+    const noName = pending.find(x => x.isNew && !String(x.pe.fields.name || '').trim());
     if (noName) {
       setErr('Form #' + noName.p.n + ' has no name — type it before creating the record.');
       return;
     }
-    if (!window.confirm('Apply ' + toApply.length + ' form' + (toApply.length === 1 ? '' : 's') + '?\n\n' + (counts.upd ? counts.upd + ' staff record' + (counts.upd === 1 ? '' : 's') + ' updated (ticked fields only)\n' : '') + (counts.add ? counts.add + ' new staff record' + (counts.add === 1 ? '' : 's') + ' created\n' : '') + '\nThe form and every replaced value are kept on each record.')) return;
+    if (!window.confirm('Save ' + pending.length + ' form' + (pending.length === 1 ? '' : 's') + '?\n\n' + (pending.length - nNew) + ' staff record(s) updated (the chosen fields only)\n' + nNew + ' new staff record(s) created\n' + (lookAlike.length ? '\n⚠ ' + lookAlike.length + ' new record(s) look like existing staff: ' + lookAlike.map(x => '#' + x.p.n).join(', ') + ' — open Create… on them first if unsure.\n' : '') + '\nThe form and every replaced value are kept on each record; Undo is available on each card.')) return;
     setBusy(true);
     setErr('');
-    const me = window.__UNICO_USER__ || {};
-    const meta = {
-      at: new Date().toISOString(),
-      by: me.name || me.username || 'Administrator'
-    };
-    const out = [];
     try {
-      for (const x of toApply) {
-        if (x.st.choice === 'new') {
-          const rec = SI.newRecord(x.pe, x.plan, x.ticked, meta);
-          if (!rec.current_department) rec.current_department = 'Unassigned';
-          const id = store.create(rec);
-          out.push({
-            n: x.p.n,
-            id,
-            name: rec.name,
-            what: 'created',
-            count: x.ticked.length
-          });
-        } else {
-          const b = SI.buildPatch(x.pe, x.rec, x.plan, x.ticked, meta);
-          if (!b.changed) continue;
-          store.update(x.rec.id, b.patch);
-          out.push({
-            n: x.p.n,
-            id: x.rec.id,
-            name: x.rec.name,
-            what: 'updated',
-            count: b.filled.length + Object.keys(b.replaced).length,
-            replaced: Object.keys(b.replaced).length
-          });
-        }
-      }
-      if (!window.unicoFlushNow) throw new Error('Saving is unavailable in this tab — reload the page.');
-      const res = await window.unicoFlushNow();
-      if (!res || res.ok !== true) throw new Error(res && res.error || 'The database did not confirm the save.');
-      setDone(out);
-      setPeople(null);
-      setState({});
-      setText('');
-      spToast(out.length + ' staff record' + (out.length === 1 ? '' : 's') + ' saved.');
+      const done = await spSaveAll(store, pending);
+      markDone(done);
+      setOpenCards(o => {
+        const n = Object.assign({}, o);
+        done.forEach(d => {
+          n[d.n] = false;
+        });
+        return n;
+      });
+      spToast(done.length + ' staff record' + (done.length === 1 ? '' : 's') + ' saved.');
     } catch (e) {
       setErr('Not saved: ' + (e && e.message || 'the save failed') + ' The changes are still waiting in this tab — keep it open, reload the staff list, and check the records before trying again.');
     } finally {
       setBusy(false);
     }
+  };
+  const undo = async x => {
+    const d = x.st.done;
+    if (!d) return;
+    const now = store.get ? store.get(d.id) : staff.find(r => r.id === d.id);
+    try {
+      if (d.what === 'created') {
+        const same = now && Object.keys(d.written).every(k => JSON.stringify(now[k]) === JSON.stringify(d.written[k]));
+        if (!now) {
+          setOne(x.p.n, {
+            done: null
+          });
+          return;
+        }
+        if (!same) {
+          window.alert(d.name + ' has been edited since it was created here, so it is not removed. Archive it from the profile if it should go.');
+          return;
+        }
+        if (!window.confirm('Undo: remove the record just created for ' + d.name + '? Nothing else on the register is touched.')) return;
+        store.destroy(d.id);
+      } else {
+        const u = SI.buildUndo(now, d);
+        if (!Object.keys(u.patch).length) {
+          window.alert('Nothing to put back — every field was changed again since.');
+          return;
+        }
+        if (!window.confirm('Undo the update of ' + d.name + '? ' + Object.keys(u.patch).filter(k => k.indexOf('import_') !== 0).length + ' field(s) go back to what they were' + (u.skipped.length ? '; ' + u.skipped.join(', ') + ' changed since and stay as they are' : '') + '.')) return;
+        store.update(d.id, u.patch);
+      }
+      const res = window.unicoFlushNow ? await window.unicoFlushNow() : {
+        ok: false
+      };
+      if (!res || res.ok !== true) throw new Error(res && res.error || 'The database did not confirm the undo.');
+      setOne(x.p.n, {
+        done: null
+      });
+      setOpenCards(o => Object.assign({}, o, {
+        [x.p.n]: true
+      }));
+      spToast('Undone: ' + d.name + '.');
+    } catch (e) {
+      setErr('Undo failed: ' + (e && e.message || 'not saved') + ' Reload the staff list and check ' + d.name + '.');
+    }
+  };
+  const goCard = n => {
+    setOpenCards(o => Object.assign({}, o, {
+      [n]: true
+    }));
+    setTimeout(() => {
+      const el = document.getElementById('sp-card-' + n);
+      if (el) el.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start'
+      });
+    }, 30);
+  };
+  const exportCsv = () => {
+    const esc = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const head = ['Form #', 'Name on form', 'Form number', 'Status', 'Matched to', 'Employee ID', 'Why', 'To fill', 'Mismatch', 'To replace', 'Warnings'];
+    const lines = [head.map(esc).join(',')].concat(items.map(x => [x.p.n, x.p.fields.name, x.p.fields.form_no, x.status.label, x.rec ? x.rec.name : '', x.rec ? x.rec.emp_id : '', x.status.reason, x.counts.fill, x.counts.differ, x.counts.replace, x.p.warnings.join(' | ')].map(esc).join(',')));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], {
+      type: 'text/csv;charset=utf-8'
+    });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'Staff-forms-summary-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
   };
   const copyPrompt = () => {
     const ok = () => spToast('Prompt copied — paste it into ChatGPT or Gemini with the form photos.');
@@ -10019,6 +10692,7 @@ function StaffPasteView({
       setShowPrompt(true);
     }
   };
+  const dx = dlg ? items.find(x => x.p.n === dlg.n) : null;
   return React.createElement("div", {
     style: {
       display: 'grid',
@@ -10038,29 +10712,13 @@ function StaffPasteView({
     c: "var(--blue)"
   }), React.createElement("div", null, React.createElement("h3", null, "Paste & Update"), React.createElement("div", {
     className: "sub"
-  }, "Paste registration-form text; each person is matched to the staff register. Blank fields are filled, anything different is only listed until you tick it, and nothing is saved until Apply."))), React.createElement("div", {
+  }, "Paste registration-form text; each person is matched to the staff register. See at a glance who is new and who already exists, compare side by side, and save one person or all of them. Nothing is saved until you press Save / Create."))), React.createElement("div", {
     className: "card-b",
     style: {
       display: 'grid',
       gap: 18
     }
-  }, done && React.createElement("div", {
-    className: "sp-ok"
-  }, React.createElement("b", null, "Saved."), " ", done.length, " record", done.length === 1 ? '' : 's', ":", React.createElement("div", {
-    style: {
-      display: 'flex',
-      flexWrap: 'wrap',
-      gap: 6,
-      marginTop: 7
-    }
-  }, done.map(d => React.createElement("button", {
-    key: d.n,
-    className: "btn sm",
-    onClick: () => setRoute({
-      view: 'staffProfile',
-      emp: d.id
-    })
-  }, d.what === 'created' ? 'New: ' : 'Updated: ', d.name, d.what === 'updated' ? ' · ' + d.count + ' field' + (d.count === 1 ? '' : 's') : '')))), React.createElement("div", null, React.createElement("div", {
+  }, React.createElement("div", null, React.createElement("div", {
     className: "sp-step"
   }, React.createElement("i", null, "1"), "Get the text from an AI (optional)"), React.createElement("ol", {
     className: "sp-muted",
@@ -10108,6 +10766,7 @@ function StaffPasteView({
   }, "Read and match"), (text || people) && React.createElement("button", {
     className: "btn sm",
     onClick: () => {
+      if (items.some(x => x.st.done) && !window.confirm('Clear the list? Saved records stay saved, but their Undo buttons go.')) return;
       setText('');
       setPeople(null);
       setState({});
@@ -10119,27 +10778,161 @@ function StaffPasteView({
     className: "sp-err"
   }, err), people && people.length > 0 && React.createElement("div", null, React.createElement("div", {
     className: "sp-step"
-  }, React.createElement("i", null, "3"), "Check each person"), React.createElement("div", {
+  }, React.createElement("i", null, "3"), "Who is new, who already exists"), React.createElement("div", {
+    className: "sp-tiles"
+  }, tiles.map(([id, label, c, n]) => React.createElement("button", {
+    key: id,
+    type: "button",
+    className: 'sp-tile' + (filter === id ? ' on' : ''),
+    style: {
+      '--c': c
+    },
+    onClick: () => setFilter(id)
+  }, React.createElement("b", null, n), React.createElement("span", null, label)))), React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      border: '1px solid var(--line-2)',
+      borderRadius: 10,
+      marginBottom: 10
+    }
+  }, React.createElement("table", {
+    className: "sp-t"
+  }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "#"), React.createElement("th", null, "Name on the form"), React.createElement("th", null, "Status"), React.createElement("th", null, "Matched to / why"), React.createElement("th", null, "Changes"), React.createElement("th", null, "Warnings"), React.createElement("th", null, "Action"))), React.createElement("tbody", null, shown.map(x => React.createElement("tr", {
+    key: x.p.n,
+    className: "click",
+    onClick: () => goCard(x.p.n)
+  }, React.createElement("td", {
+    style: {
+      fontFamily: 'var(--mono)'
+    }
+  }, x.p.n), React.createElement("td", {
+    style: {
+      fontWeight: 700,
+      color: 'var(--ink)'
+    }
+  }, x.st.edits && x.st.edits.name || x.p.fields.name, React.createElement("div", {
+    className: "sp-muted"
+  }, [x.p.fields.designation || x.p.fields.role, x.p.fields.phone].filter(Boolean).join(' · '))), React.createElement("td", null, React.createElement("span", {
+    className: "sp-badge",
+    style: {
+      '--c': x.status.c,
+      fontSize: 10.5
+    }
+  }, x.status.code === 'existing' ? 'EXISTING' : x.status.label), x.status.check && React.createElement("div", null, React.createElement("span", {
+    className: "sp-chip check",
+    style: {
+      marginTop: 4
+    }
+  }, "Needs check"))), React.createElement("td", {
+    style: {
+      maxWidth: 330
+    }
+  }, x.rec ? React.createElement("b", null, x.rec.name, x.rec.emp_id ? ' · ' + x.rec.emp_id : '') : null, React.createElement("div", {
+    className: "sp-muted"
+  }, x.status.reason)), React.createElement("td", {
+    style: {
+      whiteSpace: 'nowrap'
+    }
+  }, x.st.done ? x.st.done.count + ' saved' : x.isNew ? x.plan.rows.length - x.counts.keep + ' fields' : x.rec ? React.createElement("span", null, x.counts.fill, " fill", React.createElement("br", null), x.counts.differ, " mismatch") : '—'), React.createElement("td", {
+    style: {
+      color: x.p.warnings.length ? '#9a5a06' : 'var(--muted)',
+      fontWeight: 700
+    }
+  }, x.p.warnings.length || '—'), React.createElement("td", {
+    style: {
+      whiteSpace: 'nowrap'
+    },
+    onClick: e => e.stopPropagation()
+  }, x.st.done ? React.createElement(React.Fragment, null, React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: x.st.done.id
+    })
+  }, "Profile"), " ", React.createElement("button", {
+    className: "btn sm",
+    onClick: () => undo(x)
+  }, "Undo")) : React.createElement(React.Fragment, null, x.status.code === 'new' ? React.createElement("button", {
+    className: "btn pri sm",
+    onClick: () => setDlg({
+      n: x.p.n,
+      mode: 'create'
+    })
+  }, "Create\u2026") : React.createElement("button", {
+    className: "btn pri sm",
+    onClick: () => setDlg({
+      n: x.p.n,
+      mode: 'update'
+    })
+  }, "Update\u2026"), ' ', x.status.code === 'new' ? React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setDlg({
+      n: x.p.n,
+      mode: 'update'
+    })
+  }, "Find existing\u2026") : React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setDlg({
+      n: x.p.n,
+      mode: 'create'
+    })
+  }, "Create new\u2026"))))), !shown.length && React.createElement("tr", null, React.createElement("td", {
+    colSpan: 7,
+    className: "sp-muted"
+  }, "Nothing in this group."))))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      marginBottom: 10
+    }
+  }, React.createElement("button", {
+    className: "btn sm",
+    onClick: exportCsv
+  }, "Download summary (Excel / CSV)"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => {
+      const o = {};
+      items.forEach(x => {
+        o[x.p.n] = true;
+      });
+      setOpenCards(o);
+    }
+  }, "Expand all"), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setOpenCards({})
+  }, "Collapse all")), React.createElement("div", {
+    className: "sp-step"
+  }, React.createElement("i", null, "4"), "Check each person"), React.createElement("div", {
     className: "sp-muted",
     style: {
       marginBottom: 10
     }
-  }, "Ticked rows are written. \"Fills blank\" rows start ticked; \"Different\" rows start unticked \u2014 tick one only when the form is right and the register is wrong. You can correct any value before applying."), people.map((p, i) => React.createElement(SpPerson, {
-    key: p.n,
-    p: p,
-    st: state[p.n] || {},
-    set: patch => setOne(p.n, patch),
+  }, "Ticked rows are written. Blanks on the register start ticked; a mismatch starts unticked. ", React.createElement("b", null, "Update existing\u2026"), " / ", React.createElement("b", null, "Create new\u2026"), " open the side-by-side compare with more choices, and save that one person at once."), shown.map(x => React.createElement(SpPerson, {
+    key: x.p.n,
+    p: x.p,
+    st: x.st,
+    set: patch => setOne(x.p.n, patch),
     staff: staff,
-    match: matches[i] || {
-      candidates: []
-    },
+    match: x.match,
+    status: x.status,
+    open: !!openCards[x.p.n],
+    onToggle: () => setOpenCards(o => Object.assign({}, o, {
+      [x.p.n]: !o[x.p.n]
+    })),
+    onOpen: mode => setDlg({
+      n: x.p.n,
+      mode
+    }),
+    onUndo: () => undo(x),
     setRoute: setRoute
   })), React.createElement("div", {
     className: "sp-step",
     style: {
       marginTop: 6
     }
-  }, React.createElement("i", null, "4"), "Apply"), React.createElement("div", {
+  }, React.createElement("i", null, "5"), "Save the rest together"), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 10,
@@ -10148,11 +10941,21 @@ function StaffPasteView({
     }
   }, React.createElement("button", {
     className: "btn pri",
-    disabled: busy || !toApply.length,
-    onClick: apply
-  }, busy ? 'Saving…' : 'Apply ' + toApply.length + ' form' + (toApply.length === 1 ? '' : 's')), React.createElement("span", {
+    disabled: busy || !pending.length,
+    onClick: applyAll
+  }, busy ? 'Saving…' : 'Save ' + pending.length + ' form' + (pending.length === 1 ? '' : 's')), React.createElement("span", {
     className: "sp-muted"
-  }, counts.upd, " update", counts.upd === 1 ? '' : 's', " \xB7 ", counts.add, " new \xB7 ", plans.length - toApply.length, " skipped or nothing to change"))))));
+  }, pending.length - nNew, " update", pending.length - nNew === 1 ? '' : 's', " \xB7 ", nNew, " new \xB7 ", items.filter(x => x.st.done).length, " already saved \xB7 ", items.length - pending.length - items.filter(x => x.st.done).length, " skipped or nothing to change"))))), dx && React.createElement(SpCompareDialog, {
+    p: dx.p,
+    st: dx.st,
+    set: patch => setOne(dx.p.n, patch),
+    staff: staff,
+    match: dx.match,
+    mode: dlg.mode,
+    onClose: () => setDlg(null),
+    onSave: saveOne,
+    setRoute: setRoute
+  }));
 }
 Object.assign(window, {
   StaffPasteView

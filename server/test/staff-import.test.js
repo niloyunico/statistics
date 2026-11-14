@@ -148,6 +148,52 @@ assert.equal(rec.name, 'Rupa Xyzbin'); assert.equal(rec.role, 'Nurse'); assert.e
 assert.ok(rec.total_experience_years > 0 && rec.import_source && rec.import_source.form_no === 'UF-AAAA00000001-001');
 ok('new record');
 
+/* ---- per-field choices (the pop-up) ---- */
+const dc = SI.defaultChoices(plan);
+assert.equal(dc.blood_group, 'form'); assert.equal(dc.qualification, 'keep'); assert.equal(dc.special_training, 'merge', 'a list with something stored is added to');
+let q = SI.quickChoices(plan, 'blanks');
+assert.equal(q.blood_group, 'form'); assert.equal(q.qualification, 'keep'); assert.equal(q.special_training, 'keep', '"Fill blanks only" leaves a list that already holds something');
+q = SI.quickChoices(plan, 'form');
+assert.ok(Object.values(q).every((v) => v === 'form'), '"Use all form values"');
+q = SI.quickChoices(plan, 'keep');
+assert.equal(SI.buildPatch(ps[2], ROSTER[0], plan, q, {}).changed, false, '"Keep all" writes nothing');
+bp = SI.buildPatch(ps[2], ROSTER[0], plan, { special_training: 'form', qualification: 'form' }, {});
+assert.equal(bp.patch.special_training, 'First Aid, ICU / Critical Care', '"Use form" on a list replaces it with the form list');
+assert.ok(bp.replaced.special_training && bp.replaced.qualification, 'both are recorded as replaced');
+bp = SI.buildPatch(ps[2], ROSTER[0], plan, { special_training: 'merge' }, {});
+assert.equal(bp.patch.special_training, 'First Aid, CPR, ICU / Critical Care');
+// An edited value (the screen puts it into the form fields) is what gets written.
+const edited = { ...ps[2], fields: { ...ps[2].fields, blood_group: 'AB+' } };
+const ep = SI.planUpdate(edited, ROSTER[0]);
+assert.equal(SI.buildPatch(edited, ROSTER[0], ep, { blood_group: 'form' }, {}).patch.blood_group, 'AB+');
+ok('choices');
+
+/* ---- undo ---- */
+const recA = JSON.parse(JSON.stringify(ROSTER[0]));
+const ap = SI.buildPatch(ps[2], recA, plan, { blood_group: 'form', hepatitis_b_vaccination: 'form', form_no: 'form' }, { at: '2026-11-14T08:00:00.000Z' });
+assert.deepEqual(Object.keys(ap.written).sort(), ['blood_group', 'custom', 'hepatitis_b_vaccination', 'import_source', 'import_source_history'].sort());
+const after = Object.assign({}, recA, JSON.parse(JSON.stringify(ap.patch)));
+let un = SI.buildUndo(after, ap);
+assert.deepEqual(un.skipped, []);
+assert.equal(un.patch.blood_group, '', 'a blank comes back blank');
+assert.equal(un.patch.hepatitis_b_vaccination, 'Not Completed', 'a replaced value comes back');
+assert.equal(un.patch.import_source, null, 'the form record goes too'); assert.equal(un.patch.custom, null);
+after.blood_group = 'O-';                                     // somebody corrected it since
+un = SI.buildUndo(after, ap);
+assert.deepEqual(un.skipped, ['blood_group'], 'a field changed since is not overwritten');
+assert.ok(!('blood_group' in un.patch));
+ok('undo');
+
+/* ---- search anyone ---- */
+let sr = SI.searchRoster('lipi', ROSTER);
+assert.equal(sr[0].id, 1, 'part of a name');
+sr = SI.searchRoster('11400', ROSTER);
+assert.deepEqual(sr.map((r) => r.id).sort(), [2, 3], 'an employee ID (two people share it)');
+sr = SI.searchRoster('3333333', ROSTER);
+assert.equal(sr[0].id, 5); assert.equal(sr[0].former, true, 'former staff found and said so');
+assert.deepEqual(SI.searchRoster('a', ROSTER), [], 'one letter searches nothing');
+ok('search');
+
 /* ---- dates ---- */
 assert.equal(SI.parseDate('October 30, 2020').iso, '2020-10-30');
 assert.equal(SI.parseDate('15-10-26').iso, '2026-10-15');
