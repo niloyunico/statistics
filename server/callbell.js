@@ -143,6 +143,15 @@ async function sendMonth(ym, by) {
   Object.keys(cfg.sent || {}).filter((k) => k.endsWith('|' + ym)).map((k) => k.slice(0, -(ym.length + 1)))
     .filter((id) => !todo.some((u) => u.deptId === id))
     .forEach((id) => { const d = list.find((x) => x.id === id); todo.push({ deptId: id, area: d ? d.qualityKey : null, calls: 0 }); });
+  // The indicator must be visible where its figures go (the user's choice: uploads restore a
+  // Quality-console removal). Logged so the change is never silent.
+  const areasOut = [...new Set(todo.filter((u) => u.area && u.calls).map((u) => u.area))];
+  try { const back = await unhideIndicator(areasOut); if (back.length) {
+    out.push({ restored: back });
+    const entry = { action: 'callbell_indicator_restored', username: 'system', name: by || 'system', target: IND_NAME, detail: 'restored in Quality on ' + back.join(', ') + ' (it had been removed there)' };
+    if (activity.record) activity.record(entry).catch(() => {}); else activity.log(null, entry.action, entry);
+  } }
+  catch (e) { out.push({ error: 'could not restore the indicator in Quality: ' + ((e && e.message) || e) }); }
   for (const u of todo) {
     const key = u.deptId + '|' + ym;
     if (!u.area) { out.push({ deptId: u.deptId, skipped: 'no quality area' }); continue; }
@@ -173,6 +182,34 @@ async function sendMonth(ym, by) {
   }
   await patchConfig({ sent });
   return out;
+}
+/* Un-hide the Call Bell indicator where the Quality console removed it (overlay unico_quality_v2
+   depts[area].indRemoved) — the same thing the console's own restoreIndicator does. A removed
+   indicator is hidden everywhere, KPI 3B included, so figures sent to it would never show.
+   Conditional on the overlay being unchanged since it was read (an open tab's save is never
+   overwritten); written through the database handle, which refreshes the cached copy. → [areas] */
+async function unhideIndicator(areas) {
+  if (DEPS.unhide) return DEPS.unhide(areas);
+  const d = await db();
+  if (!d || !areas.length) return [];
+  const c = d.collection('appdata');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const doc = await c.findOne({ _id: 'shared' }, { projection: { 'data.unico_quality_v2': 1 } });
+    const raw = doc && doc.data && doc.data.unico_quality_v2;
+    if (raw == null) return [];
+    let q;
+    try { q = typeof raw === 'string' ? JSON.parse(raw) : JSON.parse(JSON.stringify(raw)); } catch (e) { return []; }
+    const changed = [];
+    areas.forEach((k) => {
+      const o = q && q.depts && q.depts[k];
+      if (o && Array.isArray(o.indRemoved) && o.indRemoved.some((x) => String(x) === IND_ID)) { o.indRemoved = o.indRemoved.filter((x) => String(x) !== IND_ID); changed.push(k); }
+    });
+    if (!changed.length) return [];
+    const next = typeof raw === 'string' ? JSON.stringify(q) : q;
+    const r = await c.updateOne({ _id: 'shared', 'data.unico_quality_v2': raw }, { $set: { 'data.unico_quality_v2': next, updatedAt: Date.now() } });
+    if (r.matchedCount) return changed;
+  }
+  return [];
 }
 async function hasIndicator(area) {
   try { const q = await getQuality(); const a = (q || []).find((x) => x && x.key === area); return !!(a && (a.indicators || []).some((i) => i.id === IND_ID)); } catch (e) { return true; }
@@ -232,17 +269,25 @@ function mount(app, opts) {
       if (!p.wing || !p.rows.length) return res.status(400).json({ ok: false, error: name + ' is not a Nurse Call Status Report (no floor / no calls found).' });
       // A changed report layout must not be half-read in silence.
       if (p.unparsed.length > Math.max(3, p.rows.length * 0.02)) return res.status(400).json({ ok: false, error: name + ': ' + p.unparsed.length + ' lines could not be read — has the report layout changed?', sample: p.unparsed.slice(0, 5) });
+      // Duplicates are taken out BEFORE anything is counted: the same alarm twice in this file
+      // (wing|time|room) is kept once, and an alarm already on file from an earlier upload is not
+      // added again (storeRows). Both are reported.
+      const seenKeys = new Set();
+      const uniq = p.rows.filter((r) => { const k = CB.keyOf(p.wing, r); if (seenKeys.has(k)) return false; seenKeys.add(k); return true; });
+      const dupInFile = p.rows.length - uniq.length;
+      p.rows = uniq;
       const t = now();
       const id = 'cbu_' + crypto.randomBytes(6).toString('hex');
       const added = await storeRows(id, p.wing, p.rows, t);
       const at = p.rows.map((r) => r.first).sort();
       const months = [...new Set(p.rows.map(CB.monthOf))].filter(isMonth).sort();
-      const up = { _id: id, name, wing: p.wing, from: at[0], to: at[at.length - 1], rows: p.rows.length, added, already: p.rows.length - added,
+      const up = { _id: id, name, wing: p.wing, from: at[0], to: at[at.length - 1], rows: p.rows.length, added, already: p.rows.length - added, dupInFile,
         calls: p.rows.filter((r) => r.kind === 'call').length, unparsed: p.unparsed.length, months, by: actor(req, a), byName: nameOf(req, a), at: t, removedAt: null };
       const c = await coll(UPLOADS);
       if (c) await c.insertOne(up); else mem[UPLOADS].set(id, clone(up));
-      // `send: false` (the KPI 3B entry box): stored only — the figure goes to quality when the
-      // person checks it and presses Save (POST /api/callbell/send).
+      // `send: false` (both screens since 2026-11-14 — the user updates the KPI per selected month
+      // by hand): stored only; the figure goes to quality on "Update KPI 3B" / the 3B box's Save
+      // (POST /api/callbell/send). Without the flag (scripts, tests) it still sends.
       const sent = [];
       if (b.send !== false) for (const ym of months) sent.push.apply(sent, (await sendMonth(ym, nameOf(req, a))).map((x) => Object.assign({ month: ym }, x)));
       activity.log(req, 'callbell_upload', { target: p.wing, detail: name + ' · ' + p.rows.length + ' alarms (' + added + ' new) · ' + up.from + ' → ' + up.to });
@@ -341,4 +386,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthFigures, sendMonth, deptOfWing, getConfig, _mem: mem };
+module.exports = { mount, monthFigures, sendMonth, deptOfWing, getConfig, unhideIndicator, _mem: mem };

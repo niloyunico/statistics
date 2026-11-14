@@ -47,6 +47,7 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
 
   /* ---- server: upload → store (no double counting) → quality ---- */
   const applied = [];
+  const hidden = new Set(['Level 9']), restoredLog = [];
   const quality = { 'Level 9': true, 'Overall Hospital': true, 'Level 11': false };
   const routes = {};
   const reg = (m) => (path, g, h) => { routes[m + ' ' + path] = h; };
@@ -56,6 +57,8 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
     apply: async (spec) => { applied.push(spec); quality[spec.area] = true; },
     hasIndicator: async (area) => !!quality[area],
     parsePdf: async (buf) => buf.slice(5).toString(),
+    // the Quality console had removed the indicator on Level 9: sending restores it
+    unhide: async (areas) => { const back = areas.filter((a) => hidden.has(a)); back.forEach((a) => hidden.delete(a)); restoredLog.push(...back); return back; },
   } });
   const admin = { unrestricted: true, username: 'admin', name: 'Admin', perms: null };
   const viewer = { unrestricted: false, username: 'v', perms: { kpi: ['view'] } };
@@ -81,6 +84,8 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
   assert.equal(oct9.length, 1); assert.equal(oct9[0].num, 3.07); assert.equal(oct9[0].den, 2); assert.equal(oct9[0].entryMode, 'rate'); assert.equal(oct9[0].mult, 1);
   assert.equal(oct9[0].indicatorId, 'ind-call-bell-response'); assert.equal(oct9[0].formula, undefined, 'an existing indicator keeps its own definition');
   assert.ok(applied.some((x) => x.area === 'Overall Hospital' && x.month === 'Oct-26' && x.den === 2));
+  assert.deepEqual(restoredLog, ['Level 9'], 'a Quality-console removal is undone where the figures go');
+  assert.ok(res.body.sent.some((x) => x.restored && x.restored.indexOf('Level 9') >= 0), 'and reported');
 
   // the same export again: nothing new, nothing re-sent
   const n = applied.length;
@@ -127,20 +132,25 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
   assert.equal((await call('PUT /api/callbell/config', viewer, { body: { target: 3 } })).status, 403);
   assert.ok(logged.some((l) => l.action === 'callbell_upload'));
 
+  // the same alarm twice inside one file is counted once, and reported
+  const DUP = page('10th Floor B', ['10202026-12-05 09:00:00----2026-12-05 09:00:20----2026-12-05 09:00:200:20Min0:0 Min', '10202026-12-05 09:00:00----2026-12-05 09:00:20----2026-12-05 09:00:200:20Min0:0 Min']);
+  res = await call('POST /api/callbell/upload', admin, { body: { name: 'dup.pdf', data: pdf(DUP), send: false } });
+  assert.equal(res.body.upload.dupInFile, 1); assert.equal(res.body.upload.added, 1); assert.equal(res.body.upload.rows, 1);
+
   // the KPI 3B entry box: upload without sending, then Save sends the touched months
   const before = applied.length;
   const T10 = page('10th Floor A', ['10012026-12-03 10:00:00----2026-12-03 10:00:30----2026-12-03 10:00:300:30Min0:0 Min', '10022026-12-04 11:00:00----2026-12-04 11:01:30----2026-12-04 11:01:301:30Min0:0 Min']);
   res = await call('POST /api/callbell/upload', admin, { body: { name: 'L10-dec.pdf', data: pdf(T10), send: false } });
   assert.equal(res.status, 200); assert.deepEqual(res.body.sent, []); assert.equal(applied.length, before, 'send:false writes nothing to quality');
   res = await call('GET /api/callbell/summary', viewer, { query: { month: '2026-12' } });
-  assert.equal(res.body.hospital.calls, 2); assert.equal(res.body.hospital.sumMin, 2); assert.equal(res.body.hospital.sent, null, 'not sent yet');
+  assert.equal(res.body.hospital.calls, 3); assert.equal(res.body.hospital.sumMin, 2.33); assert.equal(res.body.hospital.sent, null, 'not sent yet');
   assert.equal((await call('POST /api/callbell/send', viewer, { body: { months: ['2026-12'] } })).status, 403, 'sending needs Add or Edit');
   assert.equal((await call('POST /api/callbell/send', admin, { body: { months: ['bogus'] } })).status, 400);
   res = await call('POST /api/callbell/send', admin, { body: { months: ['2026-12'] } });
   assert.equal(res.status, 200);
-  assert.equal(last('Overall Hospital', 'Dec-26').den, 2); assert.equal(last('Level 10', 'Dec-26').num, 2);
+  assert.equal(last('Overall Hospital', 'Dec-26').den, 3); assert.equal(last('Level 10', 'Dec-26').num, 2.33);
   res = await call('GET /api/callbell/summary', viewer, { query: { month: '2026-12' } });
-  assert.ok(res.body.hospital.sent && res.body.hospital.sent.calls === 2);
+  assert.ok(res.body.hospital.sent && res.body.hospital.sent.calls === 3);
   // pressing send again: nothing changed, nothing written — unless forced (the page's "Update KPI 3B")
   const n2 = applied.length;
   await call('POST /api/callbell/send', admin, { body: { months: ['2026-12'] } });

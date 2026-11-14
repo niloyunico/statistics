@@ -2055,7 +2055,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     if (onProgress) onProgress('');
     return out;
   }
-  const cbResultLine = r => r.ok ? React.createElement("span", null, "\u2713 ", React.createElement("b", null, r.name), " \u2014 ", r.up.wing, ", ", r.up.from.slice(0, 16), " \u2192 ", r.up.to.slice(0, 16), ": ", r.up.rows, " alarms, ", React.createElement("b", null, r.up.added, " new"), r.up.already ? ', ' + r.up.already + ' already on file' : '', (r.sent || []).some(x => x.error) ? React.createElement("span", {
+  const cbResultLine = r => r.ok ? React.createElement("span", null, "\u2713 ", React.createElement("b", null, r.name), " \u2014 ", r.up.wing, ", ", r.up.from.slice(0, 16), " \u2192 ", r.up.to.slice(0, 16), ": ", r.up.rows, " alarms, ", React.createElement("b", null, r.up.added, " new"), r.up.already ? ', ' + r.up.already + ' duplicate(s) already on file — skipped' : '', r.up.dupInFile ? ', ' + r.up.dupInFile + ' repeated in the file — skipped' : '', (r.sent || []).some(x => x.error) ? React.createElement("span", {
     style: {
       color: '#c0182f'
     }
@@ -2144,7 +2144,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         fontSize: 11.5,
         lineHeight: 1.45
       }
-    }, "Choose or drag several \u201CNurse Call Status Report\u201D PDFs at once \u2014 one per floor wing. The minutes and calls below fill themselves (nurse calls only); check them and press Save. A call already on file is never counted twice.")), React.createElement("input", {
+    }, "Choose or drag several \u201CNurse Call Status Report\u201D PDFs at once \u2014 one per floor wing. The minutes and calls below fill themselves (nurse calls only); check them and press Save. Duplicates are checked first: a call already uploaded, or repeated inside a file, is skipped.")), React.createElement("input", {
       ref: ref,
       type: "file",
       accept: "application/pdf,.pdf",
@@ -2246,7 +2246,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           const j = await api('/api/callbell/send', {
             method: 'POST',
             body: JSON.stringify({
-              months: cbFill.months.length ? cbFill.months : [ym]
+              months: [ym]
             })
           });
           const bad = (j.sent || []).filter(x => x.error);
@@ -2479,7 +2479,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         padding: '6px 10px'
       }
-    }, "Save sends this figure from the nurse-call PDFs to the quality data \u2014 KPI 3B then shows it as the system figure", cbFill.months.length > 1 ? ', together with the other months in these PDFs that have nurse calls' : '', ". Change a number to type your own instead."), cell.source === 'partial' && React.createElement("div", {
+    }, "Save sends this figure from the nurse-call PDFs to the quality data \u2014 KPI 3B then shows it as the system figure for ", when2, " only (other months in these PDFs are sent when you choose them). Change a number to type your own instead."), cell.source === 'partial' && React.createElement("div", {
       className: "kp-banner"
     }, "Events were reported for this month but the denominator is missing in the quality data (for CLABSI / CAUTI / VAP: the device days). Type the full figures here, or complete the quality data."), f === 'direct' ? numIn(val, setVal, 'Value (' + (def.unit || '') + ')', def.formulaText, first) : React.createElement("div", {
       className: "kp-row"
@@ -6459,14 +6459,14 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         toast('Choose the Nurse Call Status Report PDFs.', 'error');
         return;
       }
-      const out = await cbUploadPdfs(files, true, setBusy);
+      const out = await cbUploadPdfs(files, false, setBusy);
       setResults(out);
       const good = out.filter(x => x.ok);
       if (good.length) {
         const last = good[good.length - 1].up;
         if (last.months && last.months.length) setYm(last.months[last.months.length - 1]);
       }
-      toast(good.length + ' of ' + out.length + ' report(s) read' + (good.length ? ' — KPI 3B updated' : ''), good.length === out.length ? 'success' : 'error');
+      toast(good.length + ' of ' + out.length + ' report(s) read' + (good.length ? ' — choose the month and press “Update KPI 3B” to send it' : ''), good.length === out.length ? 'success' : 'error');
       setTick(t => t + 1);
     }
     const showList = async (kind, dept) => {
@@ -6577,7 +6577,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         marginTop: 3,
         lineHeight: 1.5
       }
-    }, "One PDF per floor wing, straight from the nurse-call system. Several at once is fine, and so is uploading a period again \u2014 a call already on file is never counted twice. Each upload updates the monthly Call Bell Response Time of its unit and KPI 3B. Nurse calls only; pull-cord and Code Blue alarms are counted apart.")), React.createElement("input", {
+    }, "One PDF per floor wing, straight from the nurse-call system. Several at once is fine. Duplicates are checked before anything is counted: a call already uploaded, or repeated inside a file, is skipped and reported. Uploading only stores the calls \u2014 choose the month below and press \u201CUpdate KPI 3B\u201D when it is ready. Nurse calls only; pull-cord and Code Blue alarms are counted apart.")), React.createElement("input", {
       ref: fileRef,
       type: "file",
       accept: "application/pdf,.pdf",
@@ -6841,26 +6841,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         marginTop: 8
       }
-    }, React.createElement("span", null, "\u2691"), React.createElement("div", null, CB.fmtMonth(ym), " has figures not sent to the KPI yet (uploaded from the KPI 3B box and not saved). ", React.createElement("button", {
-      disabled: !!busy,
-      onClick: async () => {
-        setBusy('Sending…');
-        try {
-          const j = await api('/api/callbell/send', {
-            method: 'POST',
-            body: JSON.stringify({
-              months: [ym]
-            })
-          });
-          const bad = (j.sent || []).filter(x => x.error);
-          toast(bad.length ? 'Not sent: ' + [...new Set(bad.map(x => x.area + ' (' + x.error + ')'))].join(', ') : 'Sent — KPI 3B updated.', bad.length ? 'error' : 'success');
-        } catch (e) {
-          toast(e.message, 'error');
-        }
-        setBusy('');
-        setTick(t => t + 1);
-      }
-    }, "Send to KPI"))), React.createElement("div", {
+    }, React.createElement("span", null, "\u2691"), React.createElement("div", null, CB.fmtMonth(ym), " is not in KPI 3B yet, or has changed since it was sent \u2014 press \u201CUpdate KPI 3B \u2014 ", CB.fmtMonth(ym), "\u201D when the month is complete. ")), React.createElement("div", {
       className: "kp-muted",
       style: {
         marginTop: 6

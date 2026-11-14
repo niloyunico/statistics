@@ -830,7 +830,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     return out;
   }
   const cbResultLine = (r) => (r.ok
-    ? <span>✓ <b>{r.name}</b> — {r.up.wing}, {r.up.from.slice(0, 16)} → {r.up.to.slice(0, 16)}: {r.up.rows} alarms, <b>{r.up.added} new</b>{r.up.already ? ', ' + r.up.already + ' already on file' : ''}{(r.sent || []).some((x) => x.error) ? <span style={{ color: '#c0182f' }}> · not sent to quality: {[...new Set((r.sent || []).filter((x) => x.error).map((x) => x.area + ' (' + x.error + ')'))].join(', ')}</span> : null}</span>
+    ? <span>✓ <b>{r.name}</b> — {r.up.wing}, {r.up.from.slice(0, 16)} → {r.up.to.slice(0, 16)}: {r.up.rows} alarms, <b>{r.up.added} new</b>{r.up.already ? ', ' + r.up.already + ' duplicate(s) already on file — skipped' : ''}{r.up.dupInFile ? ', ' + r.up.dupInFile + ' repeated in the file — skipped' : ''}{(r.sent || []).some((x) => x.error) ? <span style={{ color: '#c0182f' }}> · not sent to quality: {[...new Set((r.sent || []).filter((x) => x.error).map((x) => x.area + ' (' + x.error + ')'))].join(', ')}</span> : null}</span>
     : <span style={{ color: '#c0182f' }}>✗ <b>{r.name}</b> — {r.error}</span>);
 
   /* KPI 3B's entry box: fill the month from the nurse-call PDFs (many at once). The figures fill the
@@ -867,7 +867,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 200 }}>
             <b style={{ fontSize: 13 }}>Fill from the nurse-call PDFs</b>
-            <div className="kp-muted" style={{ fontSize: 11.5, lineHeight: 1.45 }}>Choose or drag several “Nurse Call Status Report” PDFs at once — one per floor wing. The minutes and calls below fill themselves (nurse calls only); check them and press Save. A call already on file is never counted twice.</div>
+            <div className="kp-muted" style={{ fontSize: 11.5, lineHeight: 1.45 }}>Choose or drag several “Nurse Call Status Report” PDFs at once — one per floor wing. The minutes and calls below fill themselves (nurse calls only); check them and press Save. Duplicates are checked first: a call already uploaded, or repeated inside a file, is skipped.</div>
           </div>
           <input ref={ref} type="file" accept="application/pdf,.pdf" multiple style={{ display: 'none' }} onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; go(f); }} />
           <Btn pri={!res.length} disabled={!!busy} onClick={() => ref.current && ref.current.click()}>{busy ? 'Reading…' : res.length ? 'Add more PDFs' : 'Choose PDFs'}</Btn>
@@ -915,7 +915,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       if (cbFill && String(num) === cbFill.num && String(den) === cbFill.den) {
         setBusy(true); setErr('');
         try {
-          const j = await api('/api/callbell/send', { method: 'POST', body: JSON.stringify({ months: cbFill.months.length ? cbFill.months : [ym] }) });
+          const j = await api('/api/callbell/send', { method: 'POST', body: JSON.stringify({ months: [ym] }) });   // this month only — the others are sent when chosen
           const bad = (j.sent || []).filter((x) => x.error);
           if (bad.length) throw new Error('Not sent: ' + [...new Set(bad.map((x) => x.area + ' (' + x.error + ')'))].join(', '));
           // A figure typed earlier for this month would hide the PDF figure: back to the system figure (kept in the history).
@@ -1006,7 +1006,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               setNum(n); setDen(d); setCbFill({ num: n, den: d, months });
               setNote(window.UNICO_CB.remarkOf(h, ym, { target: s.target })); setNeedNote(false); setErr('');
             }} />}
-            {cbFill && String(num) === cbFill.num && String(den) === cbFill.den && <div className="kp-banner info" style={{ padding: '6px 10px' }}>Save sends this figure from the nurse-call PDFs to the quality data — KPI 3B then shows it as the system figure{cbFill.months.length > 1 ? ', together with the other months in these PDFs that have nurse calls' : ''}. Change a number to type your own instead.</div>}
+            {cbFill && String(num) === cbFill.num && String(den) === cbFill.den && <div className="kp-banner info" style={{ padding: '6px 10px' }}>Save sends this figure from the nurse-call PDFs to the quality data — KPI 3B then shows it as the system figure for {when2} only (other months in these PDFs are sent when you choose them). Change a number to type your own instead.</div>}
             {cell.source === 'partial' && <div className="kp-banner">Events were reported for this month but the denominator is missing in the quality data (for CLABSI / CAUTI / VAP: the device days). Type the full figures here, or complete the quality data.</div>}
             {f === 'direct'
               ? numIn(val, setVal, 'Value (' + (def.unit || '') + ')', def.formulaText, first)
@@ -2193,11 +2193,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const target = m.config.target;
     async function upload(files) {
       if (![...files].some((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf')) { toast('Choose the Nurse Call Status Report PDFs.', 'error'); return; }
-      const out = await cbUploadPdfs(files, true, setBusy);
+      const out = await cbUploadPdfs(files, false, setBusy);
       setResults(out);
       const good = out.filter((x) => x.ok);
       if (good.length) { const last = good[good.length - 1].up; if (last.months && last.months.length) setYm(last.months[last.months.length - 1]); }
-      toast(good.length + ' of ' + out.length + ' report(s) read' + (good.length ? ' — KPI 3B updated' : ''), good.length === out.length ? 'success' : 'error');
+      toast(good.length + ' of ' + out.length + ' report(s) read' + (good.length ? ' — choose the month and press “Update KPI 3B” to send it' : ''), good.length === out.length ? 'success' : 'error');
       setTick((t) => t + 1);
     }
     const showList = async (kind, dept) => {
@@ -2229,7 +2229,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             style={{ padding: 16, display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap', borderStyle: 'dashed', borderColor: drag ? '#0090ca' : undefined, background: drag ? '#eef8fd' : undefined }}>
             <div style={{ flex: 1, minWidth: 260 }}>
               <div style={{ fontWeight: 800, fontSize: 14 }}>Upload Nurse Call Status Reports (PDF)</div>
-              <div className="kp-muted" style={{ marginTop: 3, lineHeight: 1.5 }}>One PDF per floor wing, straight from the nurse-call system. Several at once is fine, and so is uploading a period again — a call already on file is never counted twice. Each upload updates the monthly Call Bell Response Time of its unit and KPI 3B. Nurse calls only; pull-cord and Code Blue alarms are counted apart.</div>
+              <div className="kp-muted" style={{ marginTop: 3, lineHeight: 1.5 }}>One PDF per floor wing, straight from the nurse-call system. Several at once is fine. Duplicates are checked before anything is counted: a call already uploaded, or repeated inside a file, is skipped and reported. Uploading only stores the calls — choose the month below and press “Update KPI 3B” when it is ready. Nurse calls only; pull-cord and Code Blue alarms are counted apart.</div>
             </div>
             <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: 'none' }} onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; if (f.length) upload(f); }} />
             <Btn pri disabled={!!busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? 'Reading…' : 'Choose PDFs'}</Btn>
@@ -2290,12 +2290,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                   <td>{u.days} of {sum.daysInMonth}</td><td>{u.pull.count}</td><td>{u.blue.count}</td>
                   <td>{u.sent && u.sent.calls === u.calls && u.sent.sumMin === u.sumMin ? <span className="kp-pill" style={{ background: '#e7f6ed', color: '#14713f' }}>✓ {when(u.sent.at)}</span> : u.calls ? <span className="kp-pill" style={{ background: '#fff1d6', color: '#8a5a00' }}>not sent</span> : '—'}</td></tr>))}</tbody></table></div>
             {m.canAdd && sum.units.concat([H]).some((u) => u.area && u.calls && !(u.sent && u.sent.calls === u.calls && u.sent.sumMin === u.sumMin)) && (
-              <div className="kp-banner" style={{ marginTop: 8 }}><span>⚑</span><div>{CB.fmtMonth(ym)} has figures not sent to the KPI yet (uploaded from the KPI 3B box and not saved). <button disabled={!!busy} onClick={async () => {
-                setBusy('Sending…');
-                try { const j = await api('/api/callbell/send', { method: 'POST', body: JSON.stringify({ months: [ym] }) }); const bad = (j.sent || []).filter((x) => x.error); toast(bad.length ? 'Not sent: ' + [...new Set(bad.map((x) => x.area + ' (' + x.error + ')'))].join(', ') : 'Sent — KPI 3B updated.', bad.length ? 'error' : 'success'); }
-                catch (e) { toast(e.message, 'error'); }
-                setBusy(''); setTick((t) => t + 1);
-              }}>Send to KPI</button></div></div>)}
+              <div className="kp-banner" style={{ marginTop: 8 }}><span>⚑</span><div>{CB.fmtMonth(ym)} is not in KPI 3B yet, or has changed since it was sent — press “Update KPI 3B — {CB.fmtMonth(ym)}” when the month is complete. </div></div>)}
             <div className="kp-muted" style={{ marginTop: 6 }}>Click a row for its slow calls (over {sum.slowMin} min). Average = Σ response minutes ÷ nurse calls; Overall pools every unit's calls.</div>
 
             <div style={{ marginTop: 14 }}><b style={{ fontSize: 13 }}>Days covered by the uploaded reports</b> <span className="kp-muted">(one export holds at most 1,000 calls — about 1–4 weeks of a wing)</span></div>
