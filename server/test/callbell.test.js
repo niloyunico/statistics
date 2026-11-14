@@ -127,5 +127,20 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
   assert.equal((await call('PUT /api/callbell/config', viewer, { body: { target: 3 } })).status, 403);
   assert.ok(logged.some((l) => l.action === 'callbell_upload'));
 
+  // the KPI 3B entry box: upload without sending, then Save sends the touched months
+  const before = applied.length;
+  const T10 = page('10th Floor A', ['10012026-12-03 10:00:00----2026-12-03 10:00:30----2026-12-03 10:00:300:30Min0:0 Min', '10022026-12-04 11:00:00----2026-12-04 11:01:30----2026-12-04 11:01:301:30Min0:0 Min']);
+  res = await call('POST /api/callbell/upload', admin, { body: { name: 'L10-dec.pdf', data: pdf(T10), send: false } });
+  assert.equal(res.status, 200); assert.deepEqual(res.body.sent, []); assert.equal(applied.length, before, 'send:false writes nothing to quality');
+  res = await call('GET /api/callbell/summary', viewer, { query: { month: '2026-12' } });
+  assert.equal(res.body.hospital.calls, 2); assert.equal(res.body.hospital.sumMin, 2); assert.equal(res.body.hospital.sent, null, 'not sent yet');
+  assert.equal((await call('POST /api/callbell/send', viewer, { body: { months: ['2026-12'] } })).status, 403, 'sending needs Add or Edit');
+  assert.equal((await call('POST /api/callbell/send', admin, { body: { months: ['bogus'] } })).status, 400);
+  res = await call('POST /api/callbell/send', admin, { body: { months: ['2026-12'] } });
+  assert.equal(res.status, 200);
+  assert.equal(last('Overall Hospital', 'Dec-26').den, 2); assert.equal(last('Level 10', 'Dec-26').num, 2);
+  res = await call('GET /api/callbell/summary', viewer, { query: { month: '2026-12' } });
+  assert.ok(res.body.hospital.sent && res.body.hospital.sent.calls === 2);
+
   console.log('callbell: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });

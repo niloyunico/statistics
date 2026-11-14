@@ -241,12 +241,30 @@ function mount(app, opts) {
         calls: p.rows.filter((r) => r.kind === 'call').length, unparsed: p.unparsed.length, months, by: actor(req, a), byName: nameOf(req, a), at: t, removedAt: null };
       const c = await coll(UPLOADS);
       if (c) await c.insertOne(up); else mem[UPLOADS].set(id, clone(up));
+      // `send: false` (the KPI 3B entry box): stored only — the figure goes to quality when the
+      // person checks it and presses Save (POST /api/callbell/send).
       const sent = [];
-      for (const ym of months) sent.push.apply(sent, (await sendMonth(ym, nameOf(req, a))).map((x) => Object.assign({ month: ym }, x)));
+      if (b.send !== false) for (const ym of months) sent.push.apply(sent, (await sendMonth(ym, nameOf(req, a))).map((x) => Object.assign({ month: ym }, x)));
       activity.log(req, 'callbell_upload', { target: p.wing, detail: name + ' · ' + p.rows.length + ' alarms (' + added + ' new) · ' + up.from + ' → ' + up.to });
       const { _id, ...rest } = up;
       res.json({ ok: true, upload: Object.assign({ id: _id }, rest), sent });
     } catch (e) { fail(res, e, 'Could not read the report.'); }
+  });
+
+  /* Send the months' figures to the quality indicator now (the KPI 3B box's Save, the Call bell
+     page's "Send to KPI"). Writes only where the figure changed. */
+  app.post('/api/callbell/send', guard, async (req, res) => {
+    try {
+      const a = await resolve(req, res, null); if (!a) return;
+      if (!access.can(a, 'kpi', 'add') && !access.can(a, 'kpi', 'edit')) return res.status(403).json({ ok: false, error: 'Sending figures to the KPI needs the Nursing KPI “Add” or “Edit” permission.' });
+      const b = (req.body && typeof req.body === 'object') ? req.body : {};
+      const months = [...new Set((Array.isArray(b.months) ? b.months : [b.month]).map(String))].filter(isMonth).slice(0, 24);
+      if (!months.length) return res.status(400).json({ ok: false, error: 'Which month?' });
+      const out = [];
+      for (const ym of months) out.push.apply(out, (await sendMonth(ym, nameOf(req, a))).map((x) => Object.assign({ month: ym }, x)));
+      activity.log(req, 'callbell_send', { target: 'Call Bell Response Time', detail: months.join(', ') + ' · ' + out.filter((x) => !x.error && !x.skipped).length + ' figure(s) written' });
+      res.json({ ok: true, sent: out });
+    } catch (e) { fail(res, e, 'Could not send the figures.'); }
   });
 
   app.get('/api/callbell/summary', guard, async (req, res) => {

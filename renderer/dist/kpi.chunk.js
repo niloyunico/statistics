@@ -2017,6 +2017,180 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       onClick: onClose
     }, "Cancel"))));
   }
+  async function cbUploadPdfs(files, send, onProgress) {
+    const pdfs = [...files].filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+    const readB64 = f => new Promise((ok, no) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result));
+      r.onerror = () => no(new Error('Could not read ' + f.name));
+      r.readAsDataURL(f);
+    });
+    const out = [];
+    for (let i = 0; i < pdfs.length; i++) {
+      const f = pdfs[i];
+      if (onProgress) onProgress('Reading ' + (i + 1) + ' of ' + pdfs.length + ': ' + f.name);
+      try {
+        const j = await api('/api/callbell/upload', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: f.name,
+            data: await readB64(f),
+            send: send !== false
+          })
+        });
+        out.push({
+          name: f.name,
+          ok: true,
+          up: j.upload,
+          sent: j.sent || []
+        });
+      } catch (e) {
+        out.push({
+          name: f.name,
+          ok: false,
+          error: e.message
+        });
+      }
+    }
+    if (onProgress) onProgress('');
+    return out;
+  }
+  const cbResultLine = r => r.ok ? React.createElement("span", null, "\u2713 ", React.createElement("b", null, r.name), " \u2014 ", r.up.wing, ", ", r.up.from.slice(0, 16), " \u2192 ", r.up.to.slice(0, 16), ": ", r.up.rows, " alarms, ", React.createElement("b", null, r.up.added, " new"), r.up.already ? ', ' + r.up.already + ' already on file' : '', (r.sent || []).some(x => x.error) ? React.createElement("span", {
+    style: {
+      color: '#c0182f'
+    }
+  }, " \xB7 not sent to quality: ", [...new Set((r.sent || []).filter(x => x.error).map(x => x.area + ' (' + x.error + ')'))].join(', ')) : null) : React.createElement("span", {
+    style: {
+      color: '#c0182f'
+    }
+  }, "\u2717 ", React.createElement("b", null, r.name), " \u2014 ", r.error);
+  function CallBellFill({
+    ym,
+    onFill
+  }) {
+    const CB = window.UNICO_CB;
+    const [busy, setBusy] = useState('');
+    const [res, setRes] = useState([]);
+    const [sum, setSum] = useState(null);
+    const [drag, setDrag] = useState(false);
+    const ref = useRef(null);
+    if (!CB) return null;
+    async function go(files) {
+      const list = [...(files || [])];
+      if (!list.length) return;
+      const out = await cbUploadPdfs(list, false, setBusy);
+      const all = res.concat(out);
+      setRes(all);
+      const months = [...new Set(all.filter(r => r.ok).reduce((a, r) => a.concat(r.up.months || []), []))];
+      try {
+        const s = await api('/api/callbell/summary?month=' + ym);
+        setSum(s);
+        onFill(s, months);
+        if (!s.hospital.calls) toast('These PDFs have no nurse calls in ' + CB.fmtMonth(ym) + '.', 'error');
+      } catch (e) {
+        toast(e.message, 'error');
+      }
+    }
+    const thisYm = (() => {
+      const d = new Date();
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    })();
+    const expect = sum ? ym === thisYm ? Math.max(0, new Date().getDate() - 1) : sum.daysInMonth : 0;
+    const gapOf = w => {
+      for (let d = 1; d <= expect; d++) {
+        const k = ym + '-' + String(d).padStart(2, '0');
+        if (w.dayList.indexOf(k) < 0) return k;
+      }
+      return null;
+    };
+    return React.createElement("div", {
+      onDragOver: e => {
+        e.preventDefault();
+        setDrag(true);
+      },
+      onDragLeave: () => setDrag(false),
+      onDrop: e => {
+        e.preventDefault();
+        setDrag(false);
+        if (!busy) go(e.dataTransfer.files);
+      },
+      style: {
+        border: '1.5px dashed ' + (drag ? '#0090ca' : '#b9cad8'),
+        background: drag ? '#eef8fd' : '#f8fbfd',
+        borderRadius: 12,
+        padding: '10px 12px',
+        display: 'grid',
+        gap: 6
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 10,
+        alignItems: 'center',
+        flexWrap: 'wrap'
+      }
+    }, React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 200
+      }
+    }, React.createElement("b", {
+      style: {
+        fontSize: 13
+      }
+    }, "Fill from the nurse-call PDFs"), React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        fontSize: 11.5,
+        lineHeight: 1.45
+      }
+    }, "Choose or drag several \u201CNurse Call Status Report\u201D PDFs at once \u2014 one per floor wing. The minutes and calls below fill themselves (nurse calls only); check them and press Save. A call already on file is never counted twice.")), React.createElement("input", {
+      ref: ref,
+      type: "file",
+      accept: "application/pdf,.pdf",
+      multiple: true,
+      style: {
+        display: 'none'
+      },
+      onChange: e => {
+        const f = [...(e.target.files || [])];
+        e.target.value = '';
+        go(f);
+      }
+    }), React.createElement(Btn, {
+      pri: !res.length,
+      disabled: !!busy,
+      onClick: () => ref.current && ref.current.click()
+    }, busy ? 'Reading…' : res.length ? 'Add more PDFs' : 'Choose PDFs')), busy && React.createElement("div", {
+      className: "kp-muted"
+    }, busy), res.map((r, i) => React.createElement("div", {
+      key: i,
+      style: {
+        fontSize: 12
+      }
+    }, cbResultLine(r))), sum && sum.wings.length > 0 && React.createElement("div", {
+      style: {
+        fontSize: 12,
+        display: 'grid',
+        gap: 2
+      }
+    }, sum.wings.map(w => {
+      const g = gapOf(w);
+      return React.createElement("div", {
+        key: w.wing
+      }, React.createElement("b", null, w.wing), ": ", w.calls, " nurse calls \xB7 data on ", w.days, " of ", sum.daysInMonth, " days", g && React.createElement("span", {
+        style: {
+          color: '#a3172f',
+          fontWeight: 600
+        }
+      }, " \u2014 missing from ", g, ", export again from that date"));
+    })), sum && React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        fontSize: 11
+      }
+    }, "Details, slow calls and every upload: Nursing KPI \u2192 Call bell."));
+  }
   function EntryDialog({
     meta,
     def,
@@ -2040,6 +2214,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const [err, setErr] = useState('');
     const [needNote, setNeedNote] = useState(false);
     const [openCalc, setOpenCalc] = useState(!!showCalc);
+    const isCB = !!(def.source && def.source.indId === 'ind-call-bell-response' && window.UNICO_CB);
+    const [cbFill, setCbFill] = useState(null);
     const first = useRef(null),
       noteRef = useRef(null);
     useEffect(() => {
@@ -2063,6 +2239,30 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       if (f === 'direct') setVal(K.has(x.value) ? String(x.value) : '');
     };
     async function save(next, confirmed) {
+      if (cbFill && String(num) === cbFill.num && String(den) === cbFill.den) {
+        setBusy(true);
+        setErr('');
+        try {
+          const j = await api('/api/callbell/send', {
+            method: 'POST',
+            body: JSON.stringify({
+              months: cbFill.months.length ? cbFill.months : [ym]
+            })
+          });
+          const bad = (j.sent || []).filter(x => x.error);
+          if (bad.length) throw new Error('Not sent: ' + [...new Set(bad.map(x => x.area + ' (' + x.error + ')'))].join(', '));
+          if (saved) await api('/api/kpi/values/' + encodeURIComponent(def.id) + '/' + ym, {
+            method: 'DELETE'
+          });
+          toast(def.name + ' · ' + when2 + ': ' + K.fmt(def, live) + ' — from the nurse-call PDFs' + ((j.sent || []).some(x => x.month !== ym && !x.error && !x.skipped) ? ' (also ' + [...new Set(j.sent.filter(x => x.month !== ym && !x.error && !x.skipped).map(x => window.UNICO_CB.fmtMonth(x.month)))].join(', ') + ')' : ''), 'success');
+          onSaved(null);
+          onClose();
+        } catch (x) {
+          setBusy(false);
+          setErr(x.message);
+        }
+        return;
+      }
       const e = K.validateEntry(def, entry);
       if (e) {
         setErr(e);
@@ -2254,7 +2454,32 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       kpiId: def.id,
       ym: ym,
       compact: true
-    }))), cell.source === 'partial' && React.createElement("div", {
+    }))), isCB && may && React.createElement(CallBellFill, {
+      ym: ym,
+      onFill: (s, months) => {
+        const h = s.hospital;
+        if (!h.calls) return;
+        const n = String(h.sumMin),
+          d = String(h.calls);
+        setNum(n);
+        setDen(d);
+        setCbFill({
+          num: n,
+          den: d,
+          months
+        });
+        setNote(window.UNICO_CB.remarkOf(h, ym, {
+          target: s.target
+        }));
+        setNeedNote(false);
+        setErr('');
+      }
+    }), cbFill && String(num) === cbFill.num && String(den) === cbFill.den && React.createElement("div", {
+      className: "kp-banner info",
+      style: {
+        padding: '6px 10px'
+      }
+    }, "Save sends this figure from the nurse-call PDFs to the quality data \u2014 KPI 3B then shows it as the system figure", cbFill.months.length > 1 ? ', together with the other months in these PDFs that have nurse calls' : '', ". Change a number to type your own instead."), cell.source === 'partial' && React.createElement("div", {
       className: "kp-banner"
     }, "Events were reported for this month but the denominator is missing in the quality data (for CLABSI / CAUTI / VAP: the device days). Type the full figures here, or complete the quality data."), f === 'direct' ? numIn(val, setVal, 'Value (' + (def.unit || '') + ')', def.formulaText, first) : React.createElement("div", {
       className: "kp-row"
@@ -6229,45 +6454,12 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       className: "kp-card kp-empty"
     }, "Loading the call bell data\u2026");
     const target = m.config.target;
-    const readB64 = f => new Promise((ok, no) => {
-      const r = new FileReader();
-      r.onload = () => ok(String(r.result));
-      r.onerror = () => no(new Error('Could not read ' + f.name));
-      r.readAsDataURL(f);
-    });
     async function upload(files) {
-      const pdfs = [...files].filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
-      if (!pdfs.length) {
+      if (![...files].some(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf')) {
         toast('Choose the Nurse Call Status Report PDFs.', 'error');
         return;
       }
-      const out = [];
-      for (let i = 0; i < pdfs.length; i++) {
-        const f = pdfs[i];
-        setBusy('Reading ' + (i + 1) + ' of ' + pdfs.length + ': ' + f.name);
-        try {
-          const j = await api('/api/callbell/upload', {
-            method: 'POST',
-            body: JSON.stringify({
-              name: f.name,
-              data: await readB64(f)
-            })
-          });
-          out.push({
-            name: f.name,
-            ok: true,
-            up: j.upload,
-            sent: j.sent
-          });
-        } catch (e) {
-          out.push({
-            name: f.name,
-            ok: false,
-            error: e.message
-          });
-        }
-      }
-      setBusy('');
+      const out = await cbUploadPdfs(files, true, setBusy);
       setResults(out);
       const good = out.filter(x => x.ok);
       if (good.length) {
@@ -6418,15 +6610,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontSize: 12.5
       }
-    }, r.ok ? React.createElement("span", null, "\u2713 ", React.createElement("b", null, r.name), " \u2014 ", r.up.wing, ", ", r.up.from.slice(0, 16), " \u2192 ", r.up.to.slice(0, 16), ": ", r.up.rows, " alarms, ", React.createElement("b", null, r.up.added, " new"), r.up.already ? ', ' + r.up.already + ' already on file' : '', (r.sent || []).some(x => x.error) ? React.createElement("span", {
-      style: {
-        color: '#c0182f'
-      }
-    }, " \xB7 not sent to quality: ", [...new Set((r.sent || []).filter(x => x.error).map(x => x.area + ' (' + x.error + ')'))].join(', ')) : null) : React.createElement("span", {
-      style: {
-        color: '#c0182f'
-      }
-    }, "\u2717 ", React.createElement("b", null, r.name), " \u2014 ", r.error))))), React.createElement("div", {
+    }, cbResultLine(r))))), React.createElement("div", {
       className: "kp-card",
       style: {
         padding: 14
@@ -6621,7 +6805,31 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         background: '#fff1d6',
         color: '#8a5a00'
       }
-    }, "not sent") : '—')))))), React.createElement("div", {
+    }, "not sent") : '—')))))), m.canAdd && sum.units.concat([H]).some(u => u.area && u.calls && !(u.sent && u.sent.calls === u.calls && u.sent.sumMin === u.sumMin)) && React.createElement("div", {
+      className: "kp-banner",
+      style: {
+        marginTop: 8
+      }
+    }, React.createElement("span", null, "\u2691"), React.createElement("div", null, CB.fmtMonth(ym), " has figures not sent to the KPI yet (uploaded from the KPI 3B box and not saved). ", React.createElement("button", {
+      disabled: !!busy,
+      onClick: async () => {
+        setBusy('Sending…');
+        try {
+          const j = await api('/api/callbell/send', {
+            method: 'POST',
+            body: JSON.stringify({
+              months: [ym]
+            })
+          });
+          const bad = (j.sent || []).filter(x => x.error);
+          toast(bad.length ? 'Not sent: ' + [...new Set(bad.map(x => x.area + ' (' + x.error + ')'))].join(', ') : 'Sent — KPI 3B updated.', bad.length ? 'error' : 'success');
+        } catch (e) {
+          toast(e.message, 'error');
+        }
+        setBusy('');
+        setTick(t => t + 1);
+      }
+    }, "Send to KPI"))), React.createElement("div", {
       className: "kp-muted",
       style: {
         marginTop: 6

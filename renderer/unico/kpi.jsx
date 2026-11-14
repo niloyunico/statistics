@@ -812,6 +812,75 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     );
   }
 
+  /* Several nurse-call PDFs, one request each (a request body has a size limit); one bad file never
+     stops the others. `send` false = stored only (the KPI 3B box sends on Save). → [{ name, ok, up | error }] */
+  async function cbUploadPdfs(files, send, onProgress) {
+    const pdfs = [...files].filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+    const readB64 = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => no(new Error('Could not read ' + f.name)); r.readAsDataURL(f); });
+    const out = [];
+    for (let i = 0; i < pdfs.length; i++) {
+      const f = pdfs[i];
+      if (onProgress) onProgress('Reading ' + (i + 1) + ' of ' + pdfs.length + ': ' + f.name);
+      try {
+        const j = await api('/api/callbell/upload', { method: 'POST', body: JSON.stringify({ name: f.name, data: await readB64(f), send: send !== false }) });
+        out.push({ name: f.name, ok: true, up: j.upload, sent: j.sent || [] });
+      } catch (e) { out.push({ name: f.name, ok: false, error: e.message }); }
+    }
+    if (onProgress) onProgress('');
+    return out;
+  }
+  const cbResultLine = (r) => (r.ok
+    ? <span>✓ <b>{r.name}</b> — {r.up.wing}, {r.up.from.slice(0, 16)} → {r.up.to.slice(0, 16)}: {r.up.rows} alarms, <b>{r.up.added} new</b>{r.up.already ? ', ' + r.up.already + ' already on file' : ''}{(r.sent || []).some((x) => x.error) ? <span style={{ color: '#c0182f' }}> · not sent to quality: {[...new Set((r.sent || []).filter((x) => x.error).map((x) => x.area + ' (' + x.error + ')'))].join(', ')}</span> : null}</span>
+    : <span style={{ color: '#c0182f' }}>✗ <b>{r.name}</b> — {r.error}</span>);
+
+  /* KPI 3B's entry box: fill the month from the nurse-call PDFs (many at once). The figures fill the
+     two fields; Save then RELEASES them to the quality indicator (one source — KPI 3B shows them as
+     the system figure, no typed copy and no override). Changed by hand, Save is the normal save. */
+  function CallBellFill({ ym, onFill }) {
+    const CB = window.UNICO_CB;
+    const [busy, setBusy] = useState('');
+    const [res, setRes] = useState([]);
+    const [sum, setSum] = useState(null);
+    const [drag, setDrag] = useState(false);
+    const ref = useRef(null);
+    if (!CB) return null;
+    async function go(files) {
+      const list = [...(files || [])];
+      if (!list.length) return;
+      const out = await cbUploadPdfs(list, false, setBusy);
+      const all = res.concat(out);
+      setRes(all);
+      const months = [...new Set(all.filter((r) => r.ok).reduce((a, r) => a.concat(r.up.months || []), []))];
+      try {
+        const s = await api('/api/callbell/summary?month=' + ym);
+        setSum(s);
+        onFill(s, months);
+        if (!s.hospital.calls) toast('These PDFs have no nurse calls in ' + CB.fmtMonth(ym) + '.', 'error');
+      } catch (e) { toast(e.message, 'error'); }
+    }
+    const thisYm = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); })();
+    const expect = sum ? (ym === thisYm ? Math.max(0, new Date().getDate() - 1) : sum.daysInMonth) : 0;
+    const gapOf = (w) => { for (let d = 1; d <= expect; d++) { const k = ym + '-' + String(d).padStart(2, '0'); if (w.dayList.indexOf(k) < 0) return k; } return null; };
+    return (
+      <div onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); if (!busy) go(e.dataTransfer.files); }}
+        style={{ border: '1.5px dashed ' + (drag ? '#0090ca' : '#b9cad8'), background: drag ? '#eef8fd' : '#f8fbfd', borderRadius: 12, padding: '10px 12px', display: 'grid', gap: 6 }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 200 }}>
+            <b style={{ fontSize: 13 }}>Fill from the nurse-call PDFs</b>
+            <div className="kp-muted" style={{ fontSize: 11.5, lineHeight: 1.45 }}>Choose or drag several “Nurse Call Status Report” PDFs at once — one per floor wing. The minutes and calls below fill themselves (nurse calls only); check them and press Save. A call already on file is never counted twice.</div>
+          </div>
+          <input ref={ref} type="file" accept="application/pdf,.pdf" multiple style={{ display: 'none' }} onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; go(f); }} />
+          <Btn pri={!res.length} disabled={!!busy} onClick={() => ref.current && ref.current.click()}>{busy ? 'Reading…' : res.length ? 'Add more PDFs' : 'Choose PDFs'}</Btn>
+        </div>
+        {busy && <div className="kp-muted">{busy}</div>}
+        {res.map((r, i) => <div key={i} style={{ fontSize: 12 }}>{cbResultLine(r)}</div>)}
+        {sum && sum.wings.length > 0 && <div style={{ fontSize: 12, display: 'grid', gap: 2 }}>{sum.wings.map((w) => { const g = gapOf(w); return (
+          <div key={w.wing}><b>{w.wing}</b>: {w.calls} nurse calls · data on {w.days} of {sum.daysInMonth} days{g && <span style={{ color: '#a3172f', fontWeight: 600 }}> — missing from {g}, export again from that date</span>}</div>); })}</div>}
+        {sum && <div className="kp-muted" style={{ fontSize: 11 }}>Details, slow calls and every upload: Nursing KPI → Call bell.</div>}
+      </div>
+    );
+  }
+
   function EntryDialog({ meta, def, ym, cell, onClose, onSaved, showCalc, checks, onStartHere }) {
     const f = def.formula;
     const saved = cell.source === 'manual' || cell.source === 'edited';
@@ -825,6 +894,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const [err, setErr] = useState('');
     const [needNote, setNeedNote] = useState(false);
     const [openCalc, setOpenCalc] = useState(!!showCalc);
+    // KPI 3B: the figures last filled from the nurse-call PDFs ({ num, den, months }) — Save sends them.
+    const isCB = !!(def.source && def.source.indId === 'ind-call-bell-response' && window.UNICO_CB);
+    const [cbFill, setCbFill] = useState(null);
     const first = useRef(null), noteRef = useRef(null);
     useEffect(() => { if (first.current) first.current.focus(); }, []);
     const entry = { num, den, value: val };
@@ -839,6 +911,20 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const overriding = !!(cell.auto && K.has(cell.auto.value));
     const fillFrom = (x) => { setNum(K.has(x.num) ? String(x.num) : ''); setDen(K.has(x.den) ? String(x.den) : ''); if (f === 'direct') setVal(K.has(x.value) ? String(x.value) : ''); };
     async function save(next, confirmed) {
+      // Still the figures the PDFs gave: release them to the quality indicator instead of typing a copy.
+      if (cbFill && String(num) === cbFill.num && String(den) === cbFill.den) {
+        setBusy(true); setErr('');
+        try {
+          const j = await api('/api/callbell/send', { method: 'POST', body: JSON.stringify({ months: cbFill.months.length ? cbFill.months : [ym] }) });
+          const bad = (j.sent || []).filter((x) => x.error);
+          if (bad.length) throw new Error('Not sent: ' + [...new Set(bad.map((x) => x.area + ' (' + x.error + ')'))].join(', '));
+          // A figure typed earlier for this month would hide the PDF figure: back to the system figure (kept in the history).
+          if (saved) await api('/api/kpi/values/' + encodeURIComponent(def.id) + '/' + ym, { method: 'DELETE' });
+          toast(def.name + ' · ' + when2 + ': ' + K.fmt(def, live) + ' — from the nurse-call PDFs' + ((j.sent || []).some((x) => x.month !== ym && !x.error && !x.skipped) ? ' (also ' + [...new Set(j.sent.filter((x) => x.month !== ym && !x.error && !x.skipped).map((x) => window.UNICO_CB.fmtMonth(x.month)))].join(', ') + ')' : ''), 'success');
+          onSaved(null); onClose();
+        } catch (x) { setBusy(false); setErr(x.message); }
+        return;
+      }
       const e = K.validateEntry(def, entry);
       if (e) { setErr(e); return; }
       if (overriding && !note.trim()) { setNeedNote(true); setErr('Say why the system figure (' + K.fmt(def, cell.auto.value) + ') is being changed — the reason is printed on the report.'); if (noteRef.current) noteRef.current.focus(); return; }
@@ -913,6 +999,14 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                 {openCalc && <div className="kp-pad"><EvidencePanel def={def} kpiId={def.id} ym={ym} compact /></div>}
               </div>
             )}
+            {isCB && may && <CallBellFill ym={ym} onFill={(s, months) => {
+              const h = s.hospital;
+              if (!h.calls) return;
+              const n = String(h.sumMin), d = String(h.calls);
+              setNum(n); setDen(d); setCbFill({ num: n, den: d, months });
+              setNote(window.UNICO_CB.remarkOf(h, ym, { target: s.target })); setNeedNote(false); setErr('');
+            }} />}
+            {cbFill && String(num) === cbFill.num && String(den) === cbFill.den && <div className="kp-banner info" style={{ padding: '6px 10px' }}>Save sends this figure from the nurse-call PDFs to the quality data — KPI 3B then shows it as the system figure{cbFill.months.length > 1 ? ', together with the other months in these PDFs that have nurse calls' : ''}. Change a number to type your own instead.</div>}
             {cell.source === 'partial' && <div className="kp-banner">Events were reported for this month but the denominator is missing in the quality data (for CLABSI / CAUTI / VAP: the device days). Type the full figures here, or complete the quality data.</div>}
             {f === 'direct'
               ? numIn(val, setVal, 'Value (' + (def.unit || '') + ')', def.formulaText, first)
@@ -2097,20 +2191,10 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     if (!CB) return <div className="kp-card kp-empty">Loading…</div>;
     if (!m) return <div className="kp-card kp-empty">Loading the call bell data…</div>;
     const target = m.config.target;
-    const readB64 = (f) => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result)); r.onerror = () => no(new Error('Could not read ' + f.name)); r.readAsDataURL(f); });
     async function upload(files) {
-      const pdfs = [...files].filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
-      if (!pdfs.length) { toast('Choose the Nurse Call Status Report PDFs.', 'error'); return; }
-      const out = [];
-      for (let i = 0; i < pdfs.length; i++) {
-        const f = pdfs[i];
-        setBusy('Reading ' + (i + 1) + ' of ' + pdfs.length + ': ' + f.name);
-        try {
-          const j = await api('/api/callbell/upload', { method: 'POST', body: JSON.stringify({ name: f.name, data: await readB64(f) }) });
-          out.push({ name: f.name, ok: true, up: j.upload, sent: j.sent });
-        } catch (e) { out.push({ name: f.name, ok: false, error: e.message }); }
-      }
-      setBusy(''); setResults(out);
+      if (![...files].some((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf')) { toast('Choose the Nurse Call Status Report PDFs.', 'error'); return; }
+      const out = await cbUploadPdfs(files, true, setBusy);
+      setResults(out);
       const good = out.filter((x) => x.ok);
       if (good.length) { const last = good[good.length - 1].up; if (last.months && last.months.length) setYm(last.months[last.months.length - 1]); }
       toast(good.length + ' of ' + out.length + ' report(s) read' + (good.length ? ' — KPI 3B updated' : ''), good.length === out.length ? 'success' : 'error');
@@ -2150,10 +2234,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             <input ref={fileRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: 'none' }} onChange={(e) => { const f = [...(e.target.files || [])]; e.target.value = ''; if (f.length) upload(f); }} />
             <Btn pri disabled={!!busy} onClick={() => fileRef.current && fileRef.current.click()}>{busy ? 'Reading…' : 'Choose PDFs'}</Btn>
             {busy && <div className="kp-muted" style={{ width: '100%' }}>{busy}</div>}
-            {results.length > 0 && <div style={{ width: '100%', display: 'grid', gap: 4 }}>{results.map((r, i) => (
-              <div key={i} style={{ fontSize: 12.5 }}>{r.ok
-                ? <span>✓ <b>{r.name}</b> — {r.up.wing}, {r.up.from.slice(0, 16)} → {r.up.to.slice(0, 16)}: {r.up.rows} alarms, <b>{r.up.added} new</b>{r.up.already ? ', ' + r.up.already + ' already on file' : ''}{(r.sent || []).some((x) => x.error) ? <span style={{ color: '#c0182f' }}> · not sent to quality: {[...new Set((r.sent || []).filter((x) => x.error).map((x) => x.area + ' (' + x.error + ')'))].join(', ')}</span> : null}</span>
-                : <span style={{ color: '#c0182f' }}>✗ <b>{r.name}</b> — {r.error}</span>}</div>))}</div>}
+            {results.length > 0 && <div style={{ width: '100%', display: 'grid', gap: 4 }}>{results.map((r, i) => <div key={i} style={{ fontSize: 12.5 }}>{cbResultLine(r)}</div>)}</div>}
           </div>
         )}
 
@@ -2196,6 +2277,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                   <td>{fmt0(u.calls)}</td><td>{avgCell(u.avg)}</td><td>{fmtMin(u.median)}</td><td>{u.withinPct == null ? '—' : u.withinPct + '%'}</td><td>{fmtMin(u.longest)}</td>
                   <td>{u.days} of {sum.daysInMonth}</td><td>{u.pull.count}</td><td>{u.blue.count}</td>
                   <td>{u.sent && u.sent.calls === u.calls && u.sent.sumMin === u.sumMin ? <span className="kp-pill" style={{ background: '#e7f6ed', color: '#14713f' }}>✓ {when(u.sent.at)}</span> : u.calls ? <span className="kp-pill" style={{ background: '#fff1d6', color: '#8a5a00' }}>not sent</span> : '—'}</td></tr>))}</tbody></table></div>
+            {m.canAdd && sum.units.concat([H]).some((u) => u.area && u.calls && !(u.sent && u.sent.calls === u.calls && u.sent.sumMin === u.sumMin)) && (
+              <div className="kp-banner" style={{ marginTop: 8 }}><span>⚑</span><div>{CB.fmtMonth(ym)} has figures not sent to the KPI yet (uploaded from the KPI 3B box and not saved). <button disabled={!!busy} onClick={async () => {
+                setBusy('Sending…');
+                try { const j = await api('/api/callbell/send', { method: 'POST', body: JSON.stringify({ months: [ym] }) }); const bad = (j.sent || []).filter((x) => x.error); toast(bad.length ? 'Not sent: ' + [...new Set(bad.map((x) => x.area + ' (' + x.error + ')'))].join(', ') : 'Sent — KPI 3B updated.', bad.length ? 'error' : 'success'); }
+                catch (e) { toast(e.message, 'error'); }
+                setBusy(''); setTick((t) => t + 1);
+              }}>Send to KPI</button></div></div>)}
             <div className="kp-muted" style={{ marginTop: 6 }}>Click a row for its slow calls (over {sum.slowMin} min). Average = Σ response minutes ÷ nurse calls; Overall pools every unit's calls.</div>
 
             <div style={{ marginTop: 14 }}><b style={{ fontSize: 13 }}>Days covered by the uploaded reports</b> <span className="kp-muted">(one export holds at most 1,000 calls — about 1–4 weeks of a wing)</span></div>
