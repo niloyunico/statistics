@@ -6640,7 +6640,38 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         flex: 1
       }
-    }), React.createElement(Btn, {
+    }), m.canAdd && sum && sum.hospital.calls > 0 ? React.createElement(Btn, {
+      pri: true,
+      disabled: !!busy,
+      title: "Send this month's figures from the uploaded calls to the quality data again and open KPI 3B in Data Update",
+      onClick: async () => {
+        setBusy('Updating KPI 3B…');
+        try {
+          const j = await api('/api/callbell/send', {
+            method: 'POST',
+            body: JSON.stringify({
+              months: [ym],
+              force: true
+            })
+          });
+          const bad = (j.sent || []).filter(x => x.error);
+          setBusy('');
+          if (bad.length) {
+            toast('Not updated: ' + [...new Set(bad.map(x => x.area + ' (' + x.error + ')'))].join(', '), 'error');
+            setTick(t => t + 1);
+            return;
+          }
+          toast('KPI 3B · ' + CB.fmtMonth(ym) + ': ' + sum.hospital.avg + ' min (' + fmt0(sum.hospital.calls) + ' nurse calls) — updated', 'success');
+          setRoute({
+            view: 'kpiEntry',
+            kpi: 'kpi-call-bell'
+          });
+        } catch (e) {
+          setBusy('');
+          toast(e.message, 'error');
+        }
+      }
+    }, busy === 'Updating KPI 3B…' ? 'Updating…' : 'Update KPI 3B — ' + CB.fmtMonth(ym)) : React.createElement(Btn, {
       onClick: () => setRoute({
         view: 'kpiEntry',
         kpi: 'kpi-call-bell'

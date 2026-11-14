@@ -260,9 +260,16 @@ function mount(app, opts) {
       const b = (req.body && typeof req.body === 'object') ? req.body : {};
       const months = [...new Set((Array.isArray(b.months) ? b.months : [b.month]).map(String))].filter(isMonth).slice(0, 24);
       if (!months.length) return res.status(400).json({ ok: false, error: 'Which month?' });
+      // force (the page's "Update KPI 3B" button): write every unit again, even if unchanged since the
+      // last send — e.g. after someone changed the quality figure by hand.
+      if (b.force === true) {
+        const cfg = await getConfig();
+        const keep = {}; Object.keys(cfg.sent || {}).forEach((k) => { if (!months.some((m) => k.endsWith('|' + m))) keep[k] = cfg.sent[k]; });
+        await patchConfig({ sent: keep });
+      }
       const out = [];
       for (const ym of months) out.push.apply(out, (await sendMonth(ym, nameOf(req, a))).map((x) => Object.assign({ month: ym }, x)));
-      activity.log(req, 'callbell_send', { target: 'Call Bell Response Time', detail: months.join(', ') + ' · ' + out.filter((x) => !x.error && !x.skipped).length + ' figure(s) written' });
+      activity.log(req, 'callbell_send', { target: 'Call Bell Response Time', detail: (b.force === true ? 're-sent ' : '') + months.join(', ') + ' · ' + out.filter((x) => !x.error && !x.skipped).length + ' figure(s) written' });
       res.json({ ok: true, sent: out });
     } catch (e) { fail(res, e, 'Could not send the figures.'); }
   });

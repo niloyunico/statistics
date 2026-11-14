@@ -2244,7 +2244,19 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
             <select className="kp-sel" value={ym} onChange={(e) => setYm(e.target.value)}>{months.map((x) => <option key={x} value={x}>{CB.fmtMonth(x)}</option>)}</select>
             <span className="kp-muted">Target ≤ {target} min · Response = nurse at the bedside (Care) − nurse call</span>
             <span style={{ flex: 1 }} />
-            <Btn onClick={() => setRoute({ view: 'kpiEntry', kpi: 'kpi-call-bell' })}>KPI 3B in Data Update</Btn>
+            {m.canAdd && sum && sum.hospital.calls > 0
+              ? <Btn pri disabled={!!busy} title="Send this month's figures from the uploaded calls to the quality data again and open KPI 3B in Data Update" onClick={async () => {
+                  setBusy('Updating KPI 3B…');
+                  try {
+                    const j = await api('/api/callbell/send', { method: 'POST', body: JSON.stringify({ months: [ym], force: true }) });
+                    const bad = (j.sent || []).filter((x) => x.error);
+                    setBusy('');
+                    if (bad.length) { toast('Not updated: ' + [...new Set(bad.map((x) => x.area + ' (' + x.error + ')'))].join(', '), 'error'); setTick((t) => t + 1); return; }
+                    toast('KPI 3B · ' + CB.fmtMonth(ym) + ': ' + sum.hospital.avg + ' min (' + fmt0(sum.hospital.calls) + ' nurse calls) — updated', 'success');
+                    setRoute({ view: 'kpiEntry', kpi: 'kpi-call-bell' });
+                  } catch (e) { setBusy(''); toast(e.message, 'error'); }
+                }}>{busy === 'Updating KPI 3B…' ? 'Updating…' : 'Update KPI 3B — ' + CB.fmtMonth(ym)}</Btn>
+              : <Btn onClick={() => setRoute({ view: 'kpiEntry', kpi: 'kpi-call-bell' })}>KPI 3B in Data Update</Btn>}
             {m.isAdmin && <Btn onClick={() => { setDraft({ target: m.config.target, slowMin: m.config.slowMin, wings: Object.assign({}, m.config.wings) }); setCfgOpen(!cfgOpen); }}>Settings</Btn>}
           </div>
           {cfgOpen && draft && (

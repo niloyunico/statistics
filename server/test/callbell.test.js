@@ -141,6 +141,14 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
   assert.equal(last('Overall Hospital', 'Dec-26').den, 2); assert.equal(last('Level 10', 'Dec-26').num, 2);
   res = await call('GET /api/callbell/summary', viewer, { query: { month: '2026-12' } });
   assert.ok(res.body.hospital.sent && res.body.hospital.sent.calls === 2);
+  // pressing send again: nothing changed, nothing written — unless forced (the page's "Update KPI 3B")
+  const n2 = applied.length;
+  await call('POST /api/callbell/send', admin, { body: { months: ['2026-12'] } });
+  assert.equal(applied.length, n2, 'unchanged: not written again');
+  res = await call('POST /api/callbell/send', admin, { body: { months: ['2026-12'], force: true } });
+  assert.equal(res.status, 200);
+  assert.deepEqual(applied.slice(n2).map((x) => x.area + ':' + x.month).sort(), ['Level 10:Dec-26', 'Overall Hospital:Dec-26'], 'forced: every unit + Overall written again');
+  assert.ok(logged.some((l) => l.action === 'callbell_send' && /^re-sent/.test(l.o.detail)));
 
   console.log('callbell: all assertions passed');
 })().catch((e) => { console.error(e); process.exit(1); });
