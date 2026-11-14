@@ -23382,6 +23382,344 @@ function StaffDesigChart({
     }
   }, S.expLabel(e))))))));
 }
+function StaffMonthlyCard({
+  all,
+  group,
+  department,
+  setRoute,
+  tone = '#0090ca'
+}) {
+  const S = window.STAFF;
+  const pad = n => String(n).padStart(2, '0');
+  const now = new Date();
+  const thisYm = now.getFullYear() + '-' + pad(now.getMonth() + 1);
+  const todayIso = thisYm + '-' + pad(now.getDate());
+  const M3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const ymLabel = ym => M3[Number(ym.slice(5, 7)) - 1] + ' ' + ym.slice(0, 4);
+  const addM = (ym, n) => {
+    const y = Number(ym.slice(0, 4)),
+      m = Number(ym.slice(5, 7)) - 1 + n;
+    const d = new Date(y, m, 1);
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1);
+  };
+  const lastDay = ym => {
+    const y = Number(ym.slice(0, 4)),
+      m = Number(ym.slice(5, 7));
+    return ym + '-' + pad(new Date(y, m, 0).getDate());
+  };
+  const isoOf = v => {
+    if (v == null || v === '') return '';
+    if (typeof v === 'number') {
+      const d = new Date(v);
+      return isNaN(d) ? '' : d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v));
+    if (m) return m[0];
+    const t = Date.parse(v);
+    return isNaN(t) ? '' : isoOf(t);
+  };
+  const [ym, setYm] = React.useState(thisYm);
+  const [open, setOpen] = React.useState('');
+  const [exits, setExits] = React.useState(null);
+  React.useEffect(() => {
+    let live = true;
+    const may = !window.unicoCan || window.unicoCan('attrition', 'view');
+    if (!may) {
+      setExits({});
+      return;
+    }
+    fetch('/api/attrition', {
+      credentials: 'same-origin',
+      cache: 'no-store'
+    }).then(r => r.ok ? r.json() : null).then(j => {
+      if (!live) return;
+      const m = {};
+      (j && j.exits || []).forEach(x => {
+        if (x && x.staffId && x.lastDay) m[String(x.staffId)] = x;
+      });
+      setExits(m);
+    }).catch(() => {
+      if (live) setExits({});
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  const people = React.useMemo(() => (all || []).filter(e => e && S.matchesStaffGroup(e, group) && (!department || staffDeptList(e).includes(department))).map(e => {
+    const gone = !!e.former || e.is_active === false;
+    const ex = exits && exits[String(e.id)];
+    return {
+      e,
+      doj: isoOf(e.doj),
+      left: gone ? isoOf(ex && ex.lastDay) || isoOf(e.archived_at) || todayIso : '',
+      why: gone ? ex && ex.separation || e.archived_reason || '' : ''
+    };
+  }), [all, group, department, exits]);
+  const statsOf = m => {
+    const end = m === thisYm ? todayIso : lastDay(m),
+      start = m + '-01';
+    const joined = people.filter(p => p.doj && p.doj >= start && p.doj <= end);
+    const left = people.filter(p => p.left && p.left >= start && p.left <= end);
+    const inPost = people.filter(p => (!p.doj || p.doj <= end) && (!p.left || p.left > end));
+    return {
+      joined,
+      left,
+      inPost,
+      noDoj: inPost.filter(p => !p.doj).length
+    };
+  };
+  const st = statsOf(ym);
+  const prev = statsOf(addM(ym, -1));
+  const months = [];
+  for (let i = 11; i >= 0; i--) months.push(addM(ym, -i));
+  const series = months.map(m => {
+    const s = statsOf(m);
+    return {
+      m,
+      j: s.joined.length,
+      l: s.left.length,
+      h: s.inPost.length
+    };
+  });
+  const first = people.reduce((a, p) => p.doj && p.doj < a ? p.doj : a, thisYm + '-01').slice(0, 7);
+  const opts = [];
+  for (let m = thisYm, i = 0; m >= first && i < 60; m = addM(m, -1), i++) opts.push(m);
+  const diff = st.inPost.length - prev.inPost.length;
+  const noun = group === 'Trainee' ? 'trainee nurses' : group === 'PCA' ? 'PCAs' : group === 'Nurse' ? 'nurses' : 'staff';
+  const W = 1000,
+    H = 190,
+    padL = 8,
+    padB = 24,
+    colW = (W - padL * 2) / 12;
+  const maxH = Math.max(1, ...series.map(s => s.h)),
+    maxJ = Math.max(1, ...series.map(s => Math.max(s.j, s.l)));
+  const yH = v => 30 + (H - padB - 90) * (1 - v / maxH);
+  const barH = v => Math.max(3, Math.round(52 * (v / maxJ)));
+  const tile = (label, val, sub, color, key) => React.createElement("button", {
+    type: "button",
+    className: "ndb-soft",
+    onClick: key ? () => setOpen(open === key ? '' : key) : undefined,
+    style: {
+      cursor: key ? 'pointer' : 'default',
+      textAlign: 'left',
+      border: open && open === key ? '2px solid ' + color : undefined
+    }
+  }, React.createElement("div", {
+    className: "ndb-soft-body"
+  }, React.createElement("div", {
+    className: "ndb-soft-l"
+  }, label), React.createElement("div", {
+    className: "num ndb-soft-v",
+    style: {
+      color
+    }
+  }, val), React.createElement("div", {
+    className: "ndb-soft-s"
+  }, sub)));
+  const list = open === 'joined' ? st.joined.slice().sort((a, b) => a.doj < b.doj ? -1 : 1) : open === 'left' ? st.left.slice().sort((a, b) => a.left < b.left ? -1 : 1) : [];
+  return React.createElement("div", {
+    className: "card",
+    style: {
+      borderLeft: '4px solid ' + tone
+    }
+  }, React.createElement("div", {
+    className: "card-h",
+    style: {
+      flexWrap: 'wrap',
+      gap: 8
+    }
+  }, React.createElement("h3", null, "Monthly staff count"), React.createElement("span", {
+    className: "sub"
+  }, "joined \xB7 left \xB7 on the staff in the month", department ? ' — ' + staffDeptLabel(department) : ''), React.createElement("span", {
+    className: "spacer"
+  }), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setYm(addM(ym, -1)),
+    disabled: ym <= first,
+    "aria-label": "Previous month"
+  }, "\u2039"), React.createElement("select", {
+    value: ym,
+    onChange: e => setYm(e.target.value),
+    "aria-label": "Month",
+    style: {
+      padding: '5px 8px',
+      borderRadius: 8,
+      border: '1px solid var(--line)',
+      fontWeight: 700
+    }
+  }, opts.map(m => React.createElement("option", {
+    key: m,
+    value: m
+  }, ymLabel(m), m === thisYm ? ' (this month)' : ''))), React.createElement("button", {
+    className: "btn sm",
+    onClick: () => setYm(addM(ym, 1)),
+    disabled: ym >= thisYm,
+    "aria-label": "Next month"
+  }, "\u203A")), React.createElement("div", {
+    className: "card-b",
+    style: {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 12
+    }
+  }, React.createElement("div", {
+    className: "ndb-softs",
+    style: {
+      gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))'
+    }
+  }, tile('On the staff', fmt(st.inPost.length), (ym === thisYm ? 'today' : 'on ' + lastDay(ym).slice(8) + ' ' + ymLabel(ym)) + (prev.inPost.length || diff ? ' · ' + (diff > 0 ? '+' : '') + diff + ' vs ' + ymLabel(addM(ym, -1)) : ''), tone), tile('Joined', fmt(st.joined.length), st.joined.length ? 'click to see who' : 'no joining date in ' + ymLabel(ym), '#1f9d57', 'joined'), tile('Left', fmt(st.left.length), st.left.length ? 'click to see who' : 'nobody left in ' + ymLabel(ym), '#d23a52', 'left'), tile('Net change', (st.joined.length - st.left.length > 0 ? '+' : '') + (st.joined.length - st.left.length), 'joined minus left', '#6a52d4')), open && React.createElement("div", {
+    style: {
+      border: '1px solid var(--line-2)',
+      borderRadius: 10,
+      padding: '6px 10px',
+      maxHeight: 280,
+      overflow: 'auto'
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 700,
+      color: 'var(--muted)',
+      padding: '4px 0'
+    }
+  }, open === 'joined' ? 'Joined' : 'Left', " in ", ymLabel(ym), " \xB7 ", list.length), list.length === 0 && React.createElement("div", {
+    className: "ndb-empty"
+  }, "Nobody."), list.map(p => React.createElement("div", {
+    key: p.e.id,
+    className: "ndb-row",
+    onClick: () => setRoute({
+      view: 'staffProfile',
+      emp: p.e.id
+    })
+  }, React.createElement(Avatar, {
+    photo: staffShownPhoto(p.e),
+    name: p.e.name,
+    size: 30
+  }), React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, React.createElement("div", {
+    className: "ndb-row-name"
+  }, p.e.name), React.createElement("div", {
+    className: "ndb-row-sub"
+  }, [p.e.designation, p.e.current_department, open === 'left' && p.why].filter(Boolean).join(' · ') || '—')), React.createElement("div", {
+    className: "num ndb-row-date"
+  }, open === 'joined' ? p.doj : p.left)))), React.createElement("div", {
+    style: {
+      overflowX: 'auto'
+    }
+  }, React.createElement("svg", {
+    viewBox: '0 0 ' + W + ' ' + H,
+    style: {
+      width: '100%',
+      minWidth: 520,
+      height: 'auto',
+      display: 'block'
+    },
+    role: "img",
+    "aria-label": "Staff on the staff, joined and left over the last 12 months"
+  }, series.map((s, i) => {
+    const x = padL + i * colW;
+    const on = s.m === ym;
+    return React.createElement("g", {
+      key: s.m,
+      onClick: () => setYm(s.m),
+      style: {
+        cursor: 'pointer'
+      }
+    }, React.createElement("rect", {
+      x: x + 2,
+      y: 4,
+      width: colW - 4,
+      height: H - padB - 2,
+      rx: 6,
+      fill: on ? 'rgba(0,144,202,.08)' : 'transparent'
+    }), s.j > 0 && React.createElement(React.Fragment, null, React.createElement("rect", {
+      x: x + colW / 2 - 13,
+      y: H - padB - barH(s.j),
+      width: 12,
+      height: barH(s.j),
+      rx: 2,
+      fill: "#1f9d57"
+    }, React.createElement("title", null, ymLabel(s.m), ": ", s.j, " joined")), React.createElement("text", {
+      x: x + colW / 2 - 7,
+      y: H - padB - barH(s.j) - 4,
+      textAnchor: "middle",
+      fontSize: "11",
+      fontWeight: "700",
+      fill: "#1f9d57"
+    }, s.j)), s.l > 0 && React.createElement(React.Fragment, null, React.createElement("rect", {
+      x: x + colW / 2 + 1,
+      y: H - padB - barH(s.l),
+      width: 12,
+      height: barH(s.l),
+      rx: 2,
+      fill: "#d23a52"
+    }, React.createElement("title", null, ymLabel(s.m), ": ", s.l, " left")), React.createElement("text", {
+      x: x + colW / 2 + 7,
+      y: H - padB - barH(s.l) - 4,
+      textAnchor: "middle",
+      fontSize: "11",
+      fontWeight: "700",
+      fill: "#d23a52"
+    }, s.l)), React.createElement("text", {
+      x: x + colW / 2,
+      y: H - 6,
+      textAnchor: "middle",
+      fontSize: "12",
+      fontWeight: on ? 800 : 500,
+      fill: on ? '#0d1b2e' : '#7b8794'
+    }, M3[Number(s.m.slice(5, 7)) - 1], s.m.slice(5, 7) === '01' || i === 0 ? ' ' + s.m.slice(2, 4) : ''), React.createElement("text", {
+      x: x + colW / 2,
+      y: yH(s.h) - 9,
+      textAnchor: "middle",
+      fontSize: "12",
+      fontWeight: "700",
+      fill: tone
+    }, s.h));
+  }), React.createElement("polyline", {
+    fill: "none",
+    stroke: tone,
+    strokeWidth: "2.2",
+    strokeLinejoin: "round",
+    points: series.map((s, i) => padL + i * colW + colW / 2 + ',' + yH(s.h)).join(' ')
+  }), series.map((s, i) => React.createElement("circle", {
+    key: s.m,
+    cx: padL + i * colW + colW / 2,
+    cy: yH(s.h),
+    r: s.m === ym ? 4.5 : 3,
+    fill: "#fff",
+    stroke: tone,
+    strokeWidth: "2"
+  }))), React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 14,
+      fontSize: 11.5,
+      color: 'var(--muted)',
+      flexWrap: 'wrap',
+      marginTop: 4
+    }
+  }, React.createElement("span", null, React.createElement("b", {
+    style: {
+      color: tone
+    }
+  }, "\u2501"), " on the staff"), React.createElement("span", null, React.createElement("b", {
+    style: {
+      color: '#1f9d57'
+    }
+  }, "\u25A0"), " joined"), React.createElement("span", null, React.createElement("b", {
+    style: {
+      color: '#d23a52'
+    }
+  }, "\u25A0"), " left"), React.createElement("span", null, "Counted from the date of joining and the last working day (Attrition register, else the day moved to Previous Staff)."), st.noDoj > 0 && React.createElement("span", {
+    style: {
+      color: '#b5670a'
+    }
+  }, st.noDoj, " ", noun, " with no date of joining are counted as on the staff.")))));
+}
 function WorkforceDashboard({
   store,
   setRoute,
@@ -23751,7 +24089,13 @@ function WorkforceDashboard({
     className: "ndb-soft-s"
   }, comp.missing_vaccination.length, " vaccination \xB7 ", comp.missing_training.length, " training \xB7 ", comp.missing_phone.length, " phone")), React.createElement(Bars, {
     color: "#d23a52"
-  }))), React.createElement("div", {
+  }))), React.createElement(StaffMonthlyCard, {
+    all: store.staff,
+    group: group,
+    department: department,
+    setRoute: setRoute,
+    tone: tone
+  }), React.createElement("div", {
     className: "ndb-cols ndb-cols-wide"
   }, React.createElement(StaffDeptChart, {
     list: list,
