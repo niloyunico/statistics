@@ -93,8 +93,15 @@ function rights(actor, doc, cfgDept, cfgCns) {
   const sentByMe = !!(doc && doc.sentBy && doc.sentBy === me);
   // The reviewer the sheet is waiting on (or an administrator).
   const reviewer = (st === 'pending_manager' && (admin || isMgr)) || (st === 'pending_cns' && (admin || isCns));
+  // A sheet still being prepared (draft / returned) is the preparers' work in progress: only the
+  // people who prepare THIS unit's roster (its Setup In-charge, anyone with Duty Roster Edit for
+  // the unit — two preparers both see it) and administrators. The Manager, the CNS and view-only
+  // accounts see it once it is sent to them.
+  const viewDraft = admin || editor;
+  const seeAny = admin || a.inScope === true || isCns || mgrOfUnit || inchOfUnit;
   return {
-    view: admin || a.inScope === true || isCns || mgrOfUnit || inchOfUnit,
+    view: editable ? viewDraft : seeAny,
+    viewDraft,
     edit: admin ? st !== 'approved' : (editor && editable),
     send: (admin || editor) && editable,
     forward: st === 'pending_manager' && (admin || isMgr),

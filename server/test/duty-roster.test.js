@@ -493,6 +493,75 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.ok(found.ok && Array.isArray(found.staff) && found.staff.length <= 20);
     found.staff.forEach((p) => assert.deepEqual(Object.keys(p).sort(), ['current_department', 'designation', 'emp_id', 'id', 'name', 'photo', 'role', 'unit'], 'only the fields needed to pick someone'));
 
+    /* ---- a draft is its preparers' own: only they (and administrators) see it ---- */
+    assert.equal((await call('PUT', '/api/rosters/config', { depts: { nicu: { incharge: { username: 'shirin' }, manager: { username: 'farida' } } } })).status, 200);
+    let dr = await put({ dept: 'NICU', year: 2028, month: 0, grid: { S1: { 1: 'M4', 2: 'N2' } }, order: ['S1'], baseRevision: 0 }, 'shirin');
+    assert.equal(dr.status, 200, JSON.stringify(dr.body));
+    const drId = dr.body.roster.id;
+    let seen = (await call('GET', '/api/rosters/NICU/2028/0', null, 'farida')).body;
+    assert.equal(seen.roster, null, 'the manager does not see a draft');
+    assert.ok(seen.hiddenDraft && seen.hiddenDraft.status === 'draft', 'only that it is being prepared');
+    assert.equal(JSON.stringify(seen).indexOf('M4'), -1, 'and no cell of it');
+    seen = (await call('GET', '/api/rosters/NICU/2028/0', null, 'nasrin')).body;
+    assert.equal(seen.roster, null, 'nor does the CNS');
+    assert.ok(seen.hiddenDraft);
+    assert.ok(!(await call('GET', '/api/rosters', null, 'nasrin')).body.rosters.some((r) => r.id === drId), 'the list leaves the draft out for a reviewer');
+    assert.equal((await call('GET', '/api/rosters/' + encodeURIComponent(drId) + '/versions', null, 'nasrin')).status, 403, 'nor its saved versions');
+    assert.equal((await call('GET', '/api/rosters/NICU/2028/0', null, 'shirin')).body.roster.grid.S1['1'], 'M4', 'the Setup in-charge sees her draft');
+    assert.equal((await call('GET', '/api/rosters/NICU/2028/0', null, 'legacy')).body.roster.grid.S1['2'], 'N2', 'a second preparer of the unit sees it too');
+    assert.equal((await call('GET', '/api/rosters/NICU/2028/0')).body.roster.grid.S1['1'], 'M4', 'an administrator sees every draft');
+    assert.ok((await call('GET', '/api/rosters', null, 'legacy')).body.rosters.some((r) => r.id === drId), 'and the preparers list it');
+
+    /* ---- who entered each cell ---- */
+    dr = (await call('GET', '/api/rosters/NICU/2028/0')).body.roster;
+    assert.equal(dr.cellBy.S1['1'].by, 'shirin'); assert.equal(dr.cellBy.S1['1'].name, 'Shirin Akter');
+    assert.equal(dr.cellBy.S1['2'].from, '', 'entered on a blank cell');
+    assert.equal(dr.edits.length, 1); assert.equal(dr.edits[0].count, 2);
+    // An administrator changes one cell and adds one: those two are hers, the untouched one stays Shirin's.
+    dr = await put({ dept: 'NICU', year: 2028, month: 0, grid: { S1: { 1: 'M4', 2: 'E4', 3: 'OFF' } }, order: ['S1'], baseRevision: 1 });
+    assert.equal(dr.status, 200, JSON.stringify(dr.body));
+    dr = (await call('GET', '/api/rosters/NICU/2028/0', null, 'shirin')).body.roster;
+    assert.equal(dr.cellBy.S1['1'].by, 'shirin', 'an unchanged cell keeps who entered it');
+    assert.equal(dr.cellBy.S1['2'].by, 'admin'); assert.equal(dr.cellBy.S1['2'].from, 'N2'); assert.equal(dr.cellBy.S1['2'].to, 'E4');
+    assert.equal(dr.cellBy.S1['3'].by, 'admin', "an administrator's entries are tracked too");
+    assert.deepEqual(dr.edits.map((e) => [e.by, e.count]), [['shirin', 2], ['admin', 2]]);
+    // A save that changes no cell records nothing and leaves the cells exactly as they were.
+    const gridBefore = JSON.stringify(dr.grid);
+    dr = await put({ dept: 'NICU', year: 2028, month: 0, grid: { S1: { 1: 'M4', 2: 'E4', 3: 'OFF' } }, order: ['S1'], baseRevision: 2 }, 'shirin');
+    assert.equal(dr.status, 200);
+    assert.equal(JSON.stringify(dr.body.roster.grid), gridBefore, 'the grid is untouched');
+    assert.equal(dr.body.roster.edits.length, 2, 'no entry for a save without changes');
+    // A cleared cell is recorded as cleared by its saver.
+    dr = await put({ dept: 'NICU', year: 2028, month: 0, grid: { S1: { 1: 'M4', 2: 'E4' } }, order: ['S1'], baseRevision: 3 }, 'shirin');
+    assert.deepEqual([dr.body.roster.cellBy.S1['3'].from, dr.body.roster.cellBy.S1['3'].to, dr.body.roster.cellBy.S1['3'].by], ['OFF', '', 'shirin']);
+    // A client cannot write the record itself.
+    dr = await put({ dept: 'NICU', year: 2028, month: 0, grid: { S1: { 1: 'M4', 2: 'E4' } }, order: ['S1'], cellBy: { S1: { 1: { by: 'nasrin', name: 'Forged' } } }, baseRevision: 4 }, 'shirin');
+    assert.equal(dr.body.roster.cellBy.S1['1'].by, 'shirin', 'cellBy comes from the server, never the request');
+    // Sent for review: now the manager sees it, cells and all.
+    assert.equal((await T(drId, 'send_manager', '', 'shirin')).status, 200);
+    assert.equal((await call('GET', '/api/rosters/NICU/2028/0', null, 'farida')).body.roster.grid.S1['2'], 'E4', 'once sent, the manager sees it');
+
+    /* ---- taking added staff off "from this month on" reaches the later sheets too ---- */
+    const gst = (name) => ({ from: 'Trainee Nurses', mode: 'move', name });
+    await put({ dept: 'NICU', year: 2029, month: 1, grid: { S1: { 1: 'M4' } }, order: ['S1', 'S77', 'S78'], guests: { S77: gst('Seventy Seven'), S78: gst('Seventy Eight') }, baseRevision: 0 });
+    await put({ dept: 'NICU', year: 2029, month: 2, grid: { S1: { 1: 'M4' }, S77: { 4: 'N2' } }, order: ['S1', 'S77', 'S78'], guests: { S77: gst('Seventy Seven'), S78: gst('Seventy Eight') }, baseRevision: 0 });
+    const febRev = (await call('GET', '/api/rosters/NICU/2029/1')).body.roster.revision;
+    assert.equal((await call('POST', '/api/rosters/guests/remove', { dept: 'NICU', year: 2029, month: 1, keys: ['S77'] }, 'shirin')).status, 403, 'administrators only');
+    assert.equal((await call('POST', '/api/rosters/guests/remove', { dept: 'NICU', year: 2029, month: 1, keys: ['junk'] })).status, 400);
+    const gr = (await call('POST', '/api/rosters/guests/remove', { dept: 'NICU', year: 2029, month: 1, keys: ['S77', 'S78'] })).body;
+    assert.equal(gr.ok, true, JSON.stringify(gr));
+    assert.deepEqual(gr.removed.map((x) => x.key + '@' + x.m).sort(), ['S77@1', 'S78@1', 'S78@2'], 'off this month and every later sheet where they have no shift');
+    assert.deepEqual(gr.kept.map((x) => x.key + '@' + x.m), ['S77@2'], 'a later sheet where they have shifts is left alone and named');
+    const feb = (await call('GET', '/api/rosters/NICU/2029/1')).body.roster;
+    const mar = (await call('GET', '/api/rosters/NICU/2029/2')).body.roster;
+    assert.deepEqual([Object.keys(feb.guests), Object.keys(mar.guests)], [[], ['S77']]);
+    assert.equal(feb.revision, febRev, 'the revision is kept, so an open page goes on saving');
+    assert.equal(feb.history[feb.history.length - 1].action, 'guest_removed', 'and the history says so');
+    assert.equal(mar.grid.S77['4'], 'N2', 'cells are never touched');
+    assert.equal((await put({ dept: 'NICU', year: 2029, month: 1, grid: { S1: { 1: 'M4', 2: 'E4' } }, order: ['S1'], baseRevision: febRev }, 'shirin')).status, 200, "the in-charge's open page saves without a conflict");
+    assert.deepEqual(Object.keys((await call('GET', '/api/rosters/NICU/2029/1')).body.roster.guests), [], '...and does not bring them back');
+    assert.ok(logged.some((l) => l.action === 'roster_guest_removed'), 'the removal is logged');
+
     // The print log.
     assert.equal((await call('POST', '/api/rosters/print', { kind: 'staff', target: 'Rahima', detail: 'May-Nov 2026' }, 'rahima')).body.ok, true);
     assert.ok(logged.some((l) => l.action === 'roster_print' && l.opts.target === 'Rahima'));

@@ -647,6 +647,17 @@ const ROS_AL_DOT = {
   boxShadow: '0 0 0 1.5px #fff',
   pointerEvents: 'none'
 };
+const ROS_WHO_TAG = {
+  position: 'absolute',
+  left: 1,
+  bottom: 1,
+  width: 7,
+  height: 7,
+  borderRadius: 2,
+  boxShadow: '0 0 0 1.5px #fff',
+  pointerEvents: 'none'
+};
+const ROS_WHO_COLORS = ['#0090ca', '#d4572a', '#1f9d57', '#8e44ad', '#c0392b', '#b5670a', '#2c3e50', '#16a085', '#d63384', '#5b6b00'];
 const rosPortal = n => window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
 const ROS_STATUS = {
   draft: {
@@ -2982,6 +2993,8 @@ function RosterGrid({
   const [marks, setMarks] = useState({});
   const [movedOut, setMovedOut] = useState([]);
   const [addOpen, setAddOpen] = useState(false);
+  const [hiddenDraft, setHiddenDraft] = useState(null);
+  const [showWho, setShowWho] = useState(false);
   const staff = useMemo(() => {
     const mem = members ? new Set(members.map(String)) : null;
     const moved = new Set(movedOut);
@@ -3047,10 +3060,12 @@ function RosterGrid({
     rosApi.get(monthUrl).then(r => {
       if (!r || !r.ok) {
         setLoadError(r && r.error || 'The server did not return the roster.');
+        setHiddenDraft(null);
         setLoading(false);
         setDirty(false);
         return;
       }
+      setHiddenDraft(r.hiddenDraft || null);
       const d = r.roster;
       setGrid(rosMigrateGrid(d && d.grid, staff));
       setOrder(d && d.order || []);
@@ -3091,7 +3106,7 @@ function RosterGrid({
   }, []);
   const stNorm = rosStatusNorm(status);
   const locked = ROS_EDITABLE.indexOf(stNorm) < 0;
-  const canEdit = !loadError && !conflict && (sheetCan ? !!sheetCan.edit : !locked && rosCan('edit'));
+  const canEdit = !loadError && !conflict && !hiddenDraft && (sheetCan ? !!sheetCan.edit : !locked && rosCan('edit'));
   const blockedAt = useRef(0);
   const editBlocked = () => {
     const now = Date.now();
@@ -3246,6 +3261,23 @@ function RosterGrid({
         delete n[empId];
         return n;
       });
+      const who = g.name || 'This person';
+      rosApi.post('/api/rosters/guests/remove', {
+        dept,
+        year,
+        month,
+        keys: [empId]
+      }).then(r => {
+        if (!r || !r.ok) {
+          rosToast(r && r.error || 'Could not take them off the later months.', 'error');
+          return;
+        }
+        const other = x => !(x.year === year && x.m === month);
+        const later = (r.removed || []).filter(other).map(x => x.month);
+        const kept = (r.kept || []).filter(other).map(x => x.month);
+        const failed = r.failed || [];
+        rosToast(who + ' taken off ' + dept + ' from ' + monthLabel + ' on' + (later.length ? ' (also taken off ' + later.join(', ') + ')' : '') + '.' + (kept.length ? ' Still rostered with shifts on ' + kept.join(', ') + ' — open that month to take them off there.' : '') + (failed.length ? ' ' + failed.join(', ') + ' was being saved at the same moment — open it and remove them again.' : ''), kept.length || failed.length ? 'info' : undefined);
+      }).catch(() => rosToast('Could not reach the server for the later months — this month still takes them off when it saves.', 'error'));
       return;
     }
     const pat = ROS_PATTERNS.find(p => p[0] === v);
@@ -3477,6 +3509,48 @@ function RosterGrid({
     } else if (r && r.code === 'conflict') refreshMeta();
   };
   const ev = useMemo(() => rosEval(grid, rows, days, year, month, cfg, en, custom), [grid, rows, days, year, month, cfg, en, custom]);
+  const cellBy = meta && meta.cellBy || {};
+  const whoOf = (empId, d, c) => {
+    if (!c) return null;
+    const e = (cellBy[empId] || {})[d];
+    return e && e.to === c ? e : null;
+  };
+  const whoInfo = useMemo(() => {
+    const by = {};
+    let before = 0;
+    rows.forEach(x => {
+      const g = grid[x.empId] || {};
+      Object.keys(g).forEach(d => {
+        if (!g[d]) return;
+        const e = whoOf(x.empId, d, g[d]);
+        if (!e) {
+          before++;
+          return;
+        }
+        const k = e.by || e.name || '?';
+        (by[k] || (by[k] = {
+          key: k,
+          name: e.name || e.by || 'Unknown',
+          n: 0
+        })).n++;
+      });
+    });
+    const people = Object.values(by).sort((a, b) => b.n - a.n);
+    const color = {};
+    people.forEach((p, i) => {
+      color[p.key] = ROS_WHO_COLORS[i % ROS_WHO_COLORS.length];
+    });
+    return {
+      people,
+      before,
+      color
+    };
+  }, [rows, grid, meta && meta.cellBy]);
+  const whoTxt = (empId, d, c) => {
+    if (!c) return '';
+    const e = whoOf(empId, d, c);
+    return e ? '\nEntered by ' + (e.name || e.by) + ' · ' + rosWhen(e.at) + (e.from ? ' (was ' + e.from + ')' : ' (was blank)') : '\nEntered before tracking began (or not saved yet)';
+  };
   const totalViol = ev.totalViol;
   const monthLabel = R.MONTHS[month] + ' ' + year;
   const monShort = R.MONTHS[month].slice(0, 3);
@@ -3663,6 +3737,83 @@ function RosterGrid({
   }, label)));
   if (loadError) return retryBox('The roster for ' + R.MONTHS[month] + ' ' + year + ' did not load.', loadError + ' Nothing is shown, so nothing can be saved over the stored roster.', 'Try again', () => setReloadKey(k => k + 1));
   if (conflict) return retryBox('Someone else saved this roster while you were editing.', conflict + ' Your last changes were not saved. Reload to see the current roster, then make them again.', 'Reload the month', () => setReloadKey(k => k + 1));
+  if (hiddenDraft) {
+    const hd = hiddenDraft;
+    return React.createElement("div", {
+      style: {
+        maxWidth: 760,
+        margin: '40px auto',
+        padding: '0 16px'
+      }
+    }, React.createElement("div", {
+      style: {
+        background: 'rgba(255,255,255,.88)',
+        border: '1px solid rgba(255,255,255,.95)',
+        borderLeft: '4px solid #8b98ab',
+        borderRadius: 14,
+        boxShadow: '0 10px 28px rgba(31,59,90,.1)',
+        padding: '18px 20px',
+        display: 'flex',
+        gap: 14,
+        alignItems: 'flex-start'
+      }
+    }, React.createElement("span", {
+      style: {
+        display: 'inline-grid',
+        placeItems: 'center',
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        background: 'rgba(125,145,180,.14)',
+        color: '#3c4858',
+        flexShrink: 0
+      }
+    }, React.createElement(Ic, {
+      d: I.lock || 'M5 11h14v10H5zM8 11V7a4 4 0 018 0v4',
+      s: 18
+    })), React.createElement("div", {
+      style: {
+        flex: 1,
+        minWidth: 0
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 14.5,
+        fontWeight: 800,
+        color: '#16202e'
+      }
+    }, dept, " \xB7 ", monthLabel, " is being prepared"), React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#3c4858',
+        marginTop: 6,
+        lineHeight: 1.55
+      }
+    }, (rosStatusNorm(hd.status) === 'returned' ? 'It was returned for correction and is with ' : 'The draft is with ') + (hd.preparedBy || "the unit's in-charge"), hd.updatedAt ? ' (last saved ' + rosWhen(hd.updatedAt) + ')' : '', ". A draft is shown only to the people who prepare this unit's roster and to administrators \u2014 you will see it here once it is sent for review."), depts.length > 1 && React.createElement("div", {
+      style: {
+        marginTop: 12
+      }
+    }, React.createElement("select", {
+      value: dept,
+      onChange: e => setRoute({
+        view: 'rosterGrid',
+        dept: e.target.value,
+        year,
+        month
+      }),
+      style: {
+        padding: '7px 10px',
+        borderRadius: 9,
+        border: '1px solid rgba(125,145,180,.35)',
+        background: 'rgba(255,255,255,.8)',
+        fontFamily: 'inherit',
+        fontSize: 12
+      }
+    }, depts.map(d => React.createElement("option", {
+      key: d,
+      value: d
+    }, d)))))));
+  }
   const showGrid = view === 'month' || view === 'swap';
   const showFooter = view === 'month' || view === 'rules';
   const toolBtnStyle = {
@@ -4137,7 +4288,30 @@ function RosterGrid({
     style: {
       flex: 1
     }
-  }), canEdit && rosIsAdmin() && React.createElement("button", {
+  }), React.createElement("button", {
+    type: "button",
+    onClick: () => setShowWho(v => !v),
+    title: "Tag every cell with the person who entered it (saved changes since tracking began)",
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid ' + (showWho ? 'rgba(0,144,202,.4)' : 'rgba(125,145,180,.3)'),
+      background: showWho ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.65)',
+      color: showWho ? '#0072a3' : '#3c4858',
+      padding: '5px 11px',
+      borderRadius: 9,
+      fontSize: 10.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement(Ic, {
+    d: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z",
+    s: 12,
+    sw: 2
+  }), showWho ? 'Hide who entered' : 'Show who entered'), canEdit && rosIsAdmin() && React.createElement("button", {
     type: "button",
     onClick: () => setAddOpen(true),
     style: {
@@ -4422,7 +4596,89 @@ function RosterGrid({
       fontSize: 10.5,
       color: '#9aa6b4'
     }
-  }, "Hover a code for its hours \xB7 picking one makes it the active brush \u2014 then click or drag across cells, or click a day heading to paint the whole column.")), legendOpen && React.createElement(RosLegendPanel, null), React.createElement("div", {
+  }, "Hover a code for its hours \xB7 picking one makes it the active brush \u2014 then click or drag across cells, or click a day heading to paint the whole column.")), legendOpen && React.createElement(RosLegendPanel, null), showWho && (() => {
+    const recent = (Array.isArray(meta.edits) ? meta.edits : []).slice(-6).reverse();
+    const chip = {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      fontSize: 10.5,
+      fontWeight: 700,
+      padding: '3px 10px',
+      borderRadius: 10,
+      background: 'rgba(255,255,255,.85)',
+      border: '1px solid rgba(125,145,180,.25)',
+      color: '#3c4858',
+      whiteSpace: 'nowrap'
+    };
+    return React.createElement("div", {
+      style: {
+        padding: '9px 16px',
+        borderBottom: '1px solid rgba(125,145,180,.18)',
+        background: 'rgba(247,251,255,.7)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 7
+      }
+    }, React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 7,
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 9.5,
+        fontWeight: 800,
+        letterSpacing: .8,
+        textTransform: 'uppercase',
+        color: '#7d8ea8'
+      }
+    }, "Entered by"), whoInfo.people.map(p => React.createElement("span", {
+      key: p.key,
+      style: chip
+    }, React.createElement("i", {
+      style: {
+        width: 9,
+        height: 9,
+        borderRadius: 2,
+        background: whoInfo.color[p.key],
+        display: 'inline-block'
+      }
+    }), p.name, " \xB7 ", p.n, " cell", p.n === 1 ? '' : 's')), whoInfo.before > 0 && React.createElement("span", {
+      style: {
+        ...chip,
+        color: '#7d8ea8'
+      }
+    }, React.createElement("i", {
+      style: {
+        width: 9,
+        height: 9,
+        borderRadius: 2,
+        border: '1px dashed #9aa6b4',
+        display: 'inline-block',
+        boxSizing: 'border-box'
+      }
+    }), "Before tracking began \xB7 ", whoInfo.before, " cell", whoInfo.before === 1 ? '' : 's'), !whoInfo.people.length && React.createElement("span", {
+      style: {
+        fontSize: 11,
+        color: '#6c7a8c'
+      }
+    }, "No cell on this sheet has been entered since tracking began \u2014 every change saved from now on shows who made it.")), recent.length > 0 && React.createElement("div", {
+      style: {
+        fontSize: 10.5,
+        color: '#6c7a8c',
+        lineHeight: 1.6
+      }
+    }, React.createElement("b", {
+      style: {
+        color: '#3c4858'
+      }
+    }, "Recent entries: "), recent.map((e, i) => React.createElement("span", {
+      key: i
+    }, i ? '  ·  ' : '', rosWhen(e.at), " \u2014 ", e.name || e.by, " (", e.count, " cell", e.count === 1 ? '' : 's', ")"))));
+  })(), React.createElement("div", {
     style: {
       overflowX: 'auto'
     }
@@ -4713,11 +4969,19 @@ function RosterGrid({
         onMouseDown: cellDown(x.empId, d),
         onMouseEnter: cellOver(x.empId, d),
         onMouseUp: cellUp(x.empId, x.name, d),
-        title: c ? c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt + (mk ? '\nReview note: ' + mk.note : '') : mk ? 'Review note: ' + mk.note : 'Click to assign a shift',
+        title: c ? c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt + (mk ? '\nReview note: ' + mk.note : '') + (showWho ? whoTxt(x.empId, d, c) : '') : mk ? 'Review note: ' + mk.note : 'Click to assign a shift',
         style: paintStyle(x.empId, d, c)
       }, c || '·', mk && React.createElement("i", {
         style: ROS_MARK_CORNER
-      }), oc && React.createElement("i", {
+      }), showWho && (() => {
+        const e = whoOf(x.empId, d, c);
+        return e ? React.createElement("i", {
+          style: {
+            ...ROS_WHO_TAG,
+            background: whoInfo.color[e.by || e.name || '?']
+          }
+        }) : null;
+      })(), oc && React.createElement("i", {
         style: ROS_OC_BADGE
       }, "OC"), c === 'AL' && !(al && al.for) && React.createElement("i", {
         style: ROS_AL_DOT

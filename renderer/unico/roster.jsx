@@ -386,6 +386,9 @@ const rosIsAdmin = () => { try { const u = window.__UNICO_USER__; return !u || u
 const ROS_OC_BADGE = { position: 'absolute', top: -5, right: -6, fontStyle: 'normal', fontSize: 7, fontWeight: 800, lineHeight: '11px', padding: '0 3px', borderRadius: 5, background: '#0d3a5c', color: '#fff', letterSpacing: .3, boxShadow: '0 1px 3px rgba(0,0,0,.25)', pointerEvents: 'none' };
 const ROS_MARK_CORNER = { position: 'absolute', top: 0, left: 0, width: 0, height: 0, borderTop: '9px solid #d23a52', borderRight: '9px solid transparent', borderTopLeftRadius: 5, pointerEvents: 'none' };
 const ROS_AL_DOT = { position: 'absolute', top: 2, right: 2, width: 6, height: 6, borderRadius: '50%', background: '#e08a1e', boxShadow: '0 0 0 1.5px #fff', pointerEvents: 'none' };
+// "Show who entered": a small square in the cell's lower-left corner, one colour per person.
+const ROS_WHO_TAG = { position: 'absolute', left: 1, bottom: 1, width: 7, height: 7, borderRadius: 2, boxShadow: '0 0 0 1.5px #fff', pointerEvents: 'none' };
+const ROS_WHO_COLORS = ['#0090ca', '#d4572a', '#1f9d57', '#8e44ad', '#c0392b', '#b5670a', '#2c3e50', '#16a085', '#d63384', '#5b6b00'];
 const rosPortal = (n) => (window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
 
 /* ---- THE REVIEW CHAIN ----
@@ -1380,6 +1383,11 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const [marks, setMarks] = useState({});
   const [movedOut, setMovedOut] = useState([]);
   const [addOpen, setAddOpen] = useState(false);
+  // A draft this account does not prepare: the server sends only who is preparing it (no cells),
+  // so nothing here can start a second sheet over it.
+  const [hiddenDraft, setHiddenDraft] = useState(null);
+  // "Show who entered": each cell tagged with the person who last entered it (server: cellBy).
+  const [showWho, setShowWho] = useState(false);
   const staff = useMemo(() => {
     const mem = members ? new Set(members.map(String)) : null;
     const moved = new Set(movedOut);
@@ -1439,9 +1447,11 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     rosApi.get(monthUrl).then((r) => {
       if (!r || !r.ok) {
         setLoadError((r && r.error) || 'The server did not return the roster.');
+        setHiddenDraft(null);
         setLoading(false); setDirty(false);
         return;
       }
+      setHiddenDraft(r.hiddenDraft || null);
       const d = r.roster;                       // null = never drafted, a real empty month
       setGrid(rosMigrateGrid(d && d.grid, staff));
       setOrder((d && d.order) || []);
@@ -1478,7 +1488,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
      only for an older server that does not send it. */
   const stNorm = rosStatusNorm(status);
   const locked = ROS_EDITABLE.indexOf(stNorm) < 0;
-  const canEdit = !loadError && !conflict && (sheetCan ? !!sheetCan.edit : (!locked && rosCan('edit')));
+  const canEdit = !loadError && !conflict && !hiddenDraft && (sheetCan ? !!sheetCan.edit : (!locked && rosCan('edit')));
   // Said once, not once per click: painting across a locked row used to stack a toast per cell.
   const blockedAt = useRef(0);
   const editBlocked = () => {
@@ -1582,6 +1592,21 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       if (carried[empId]) setGuestsOff((l) => (l.indexOf(empId) >= 0 ? l : l.concat([empId])));
       setOrder((o) => o.filter((k) => k !== empId));
       setCells((gr) => { const n = { ...gr }; delete n[empId]; return n; });
+      /* This month's sheet saves itself (above). The unit's LATER months that already have a sheet
+         listing them are taken off on the server now — before, a removal reached only the month on
+         screen, so a later draft (and its in-charge) kept showing them. A later month where they
+         already have shifts is left alone and named here. */
+      const who = g.name || 'This person';
+      rosApi.post('/api/rosters/guests/remove', { dept, year, month, keys: [empId] }).then((r) => {
+        if (!r || !r.ok) { rosToast((r && r.error) || 'Could not take them off the later months.', 'error'); return; }
+        const other = (x) => !(x.year === year && x.m === month);
+        const later = (r.removed || []).filter(other).map((x) => x.month);
+        const kept = (r.kept || []).filter(other).map((x) => x.month);
+        const failed = r.failed || [];
+        rosToast(who + ' taken off ' + dept + ' from ' + monthLabel + ' on' + (later.length ? ' (also taken off ' + later.join(', ') + ')' : '') + '.'
+          + (kept.length ? ' Still rostered with shifts on ' + kept.join(', ') + ' — open that month to take them off there.' : '')
+          + (failed.length ? ' ' + failed.join(', ') + ' was being saved at the same moment — open it and remove them again.' : ''), (kept.length || failed.length) ? 'info' : undefined);
+      }).catch(() => rosToast('Could not reach the server for the later months — this month still takes them off when it saves.', 'error'));
       return;
     }
     const pat = ROS_PATTERNS.find((p) => p[0] === v);
@@ -1747,6 +1772,32 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
 
   /* ---- derived ---- */
   const ev = useMemo(() => rosEval(grid, rows, days, year, month, cfg, en, custom), [grid, rows, days, year, month, cfg, en, custom]);
+  /* Who entered each cell — the server records it on every save (cellBy: who, when, from → to).
+     A cell counts for that person only while it still holds what they entered; a cell with a
+     code and no record was entered before tracking began (or is not saved yet). */
+  const cellBy = (meta && meta.cellBy) || {};
+  const whoOf = (empId, d, c) => { if (!c) return null; const e = (cellBy[empId] || {})[d]; return e && e.to === c ? e : null; };
+  const whoInfo = useMemo(() => {
+    const by = {}; let before = 0;
+    rows.forEach((x) => {
+      const g = grid[x.empId] || {};
+      Object.keys(g).forEach((d) => {
+        if (!g[d]) return;
+        const e = whoOf(x.empId, d, g[d]);
+        if (!e) { before++; return; }
+        const k = e.by || e.name || '?';
+        (by[k] || (by[k] = { key: k, name: e.name || e.by || 'Unknown', n: 0 })).n++;
+      });
+    });
+    const people = Object.values(by).sort((a, b) => b.n - a.n);
+    const color = {}; people.forEach((p, i) => { color[p.key] = ROS_WHO_COLORS[i % ROS_WHO_COLORS.length]; });
+    return { people, before, color };
+  }, [rows, grid, meta && meta.cellBy]);   // eslint-disable-line
+  const whoTxt = (empId, d, c) => {
+    if (!c) return '';
+    const e = whoOf(empId, d, c);
+    return e ? '\nEntered by ' + (e.name || e.by) + ' · ' + rosWhen(e.at) + (e.from ? ' (was ' + e.from + ')' : ' (was blank)') : '\nEntered before tracking began (or not saved yet)';
+  };
   const totalViol = ev.totalViol;
   const monthLabel = R.MONTHS[month] + ' ' + year;
   const monShort = R.MONTHS[month].slice(0, 3);
@@ -1841,6 +1892,34 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     loadError + ' Nothing is shown, so nothing can be saved over the stored roster.', 'Try again', () => setReloadKey((k) => k + 1));
   if (conflict) return retryBox('Someone else saved this roster while you were editing.',
     conflict + ' Your last changes were not saved. Reload to see the current roster, then make them again.', 'Reload the month', () => setReloadKey((k) => k + 1));
+  // Being prepared by the unit's own roster preparers: not shown to anyone else until it is sent.
+  if (hiddenDraft) {
+    const hd = hiddenDraft;
+    return (
+      <div style={{ maxWidth: 760, margin: '40px auto', padding: '0 16px' }}>
+        <div style={{ background: 'rgba(255,255,255,.88)', border: '1px solid rgba(255,255,255,.95)', borderLeft: '4px solid #8b98ab', borderRadius: 14, boxShadow: '0 10px 28px rgba(31,59,90,.1)', padding: '18px 20px', display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+          <span style={{ display: 'inline-grid', placeItems: 'center', width: 40, height: 40, borderRadius: 12, background: 'rgba(125,145,180,.14)', color: '#3c4858', flexShrink: 0 }}>
+            <Ic d={I.lock || 'M5 11h14v10H5zM8 11V7a4 4 0 018 0v4'} s={18} />
+          </span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14.5, fontWeight: 800, color: '#16202e' }}>{dept} · {monthLabel} is being prepared</div>
+            <div style={{ fontSize: 12.5, color: '#3c4858', marginTop: 6, lineHeight: 1.55 }}>
+              {(rosStatusNorm(hd.status) === 'returned' ? 'It was returned for correction and is with ' : 'The draft is with ') + (hd.preparedBy || "the unit's in-charge")}
+              {hd.updatedAt ? ' (last saved ' + rosWhen(hd.updatedAt) + ')' : ''}. A draft is shown only to the people who prepare this unit's roster and to administrators — you will see it here once it is sent for review.
+            </div>
+            {depts.length > 1 && (
+              <div style={{ marginTop: 12 }}>
+                <select value={dept} onChange={(e) => setRoute({ view: 'rosterGrid', dept: e.target.value, year, month })}
+                  style={{ padding: '7px 10px', borderRadius: 9, border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12 }}>
+                  {depts.map((d) => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const showGrid = view === 'month' || view === 'swap';
   const showFooter = view === 'month' || view === 'rules';
@@ -1975,6 +2054,10 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
             <h3 style={ROS_H3}>Monthly grid</h3>
             <span style={{ fontSize: 11, color: '#9aa6b4' }}>click a cell to pick · drag a shift onto another to swap · paint with a brush</span>
             <span style={{ flex: 1 }} />
+            <button type="button" onClick={() => setShowWho((v) => !v)} title="Tag every cell with the person who entered it (saved changes since tracking began)"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid ' + (showWho ? 'rgba(0,144,202,.4)' : 'rgba(125,145,180,.3)'), background: showWho ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.65)', color: showWho ? '#0072a3' : '#3c4858', padding: '5px 11px', borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+              <Ic d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z" s={12} sw={2} />{showWho ? 'Hide who entered' : 'Show who entered'}
+            </button>
             {canEdit && rosIsAdmin() && (
               <button type="button" onClick={() => setAddOpen(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(0,144,202,.35)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '5px 11px', borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                 <Ic d="M12 5v14M5 12h14" s={12} sw={2.4} />Add staff from another unit
@@ -2055,6 +2138,29 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
 
           {legendOpen && <RosLegendPanel />}
 
+          {showWho && (() => {
+            const recent = (Array.isArray(meta.edits) ? meta.edits : []).slice(-6).reverse();
+            const chip = { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 10.5, fontWeight: 700, padding: '3px 10px', borderRadius: 10, background: 'rgba(255,255,255,.85)', border: '1px solid rgba(125,145,180,.25)', color: '#3c4858', whiteSpace: 'nowrap' };
+            return (
+              <div style={{ padding: '9px 16px', borderBottom: '1px solid rgba(125,145,180,.18)', background: 'rgba(247,251,255,.7)', display: 'flex', flexDirection: 'column', gap: 7 }}>
+                <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: .8, textTransform: 'uppercase', color: '#7d8ea8' }}>Entered by</span>
+                  {whoInfo.people.map((p) => (
+                    <span key={p.key} style={chip}><i style={{ width: 9, height: 9, borderRadius: 2, background: whoInfo.color[p.key], display: 'inline-block' }} />{p.name} · {p.n} cell{p.n === 1 ? '' : 's'}</span>
+                  ))}
+                  {whoInfo.before > 0 && <span style={{ ...chip, color: '#7d8ea8' }}><i style={{ width: 9, height: 9, borderRadius: 2, border: '1px dashed #9aa6b4', display: 'inline-block', boxSizing: 'border-box' }} />Before tracking began · {whoInfo.before} cell{whoInfo.before === 1 ? '' : 's'}</span>}
+                  {!whoInfo.people.length && <span style={{ fontSize: 11, color: '#6c7a8c' }}>No cell on this sheet has been entered since tracking began — every change saved from now on shows who made it.</span>}
+                </div>
+                {recent.length > 0 && (
+                  <div style={{ fontSize: 10.5, color: '#6c7a8c', lineHeight: 1.6 }}>
+                    <b style={{ color: '#3c4858' }}>Recent entries: </b>
+                    {recent.map((e, i) => <span key={i}>{i ? '  ·  ' : ''}{rosWhen(e.at)} — {e.name || e.by} ({e.count} cell{e.count === 1 ? '' : 's'})</span>)}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           <div style={{ overflowX: 'auto' }}>
             {rows.length === 0 ? (
               <div style={{ padding: 34, textAlign: 'center', color: '#6c7a8c' }}>No active staff are assigned to {dept}.</div>
@@ -2132,9 +2238,10 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                           return (
                             <td key={d} style={{ padding: 2, textAlign: 'center', borderBottom: '1px solid rgba(125,145,180,.14)', background: rosIsFri(year, month, d) ? 'rgba(224,138,30,.09)' : 'transparent' }}>
                               <span onMouseDown={cellDown(x.empId, d)} onMouseEnter={cellOver(x.empId, d)} onMouseUp={cellUp(x.empId, x.name, d)}
-                                title={c ? (c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt + (mk ? '\nReview note: ' + mk.note : '')) : (mk ? 'Review note: ' + mk.note : 'Click to assign a shift')}
+                                title={c ? (c + ' — ' + (sh ? sh.label : '') + (sh && sh.hours ? ' · ' + sh.hours + ' h' : '') + (oc ? ' · + on call' : '') + alTxt + (mk ? '\nReview note: ' + mk.note : '') + (showWho ? whoTxt(x.empId, d, c) : '')) : (mk ? 'Review note: ' + mk.note : 'Click to assign a shift')}
                                 style={paintStyle(x.empId, d, c)}>{c || '·'}
                                 {mk && <i style={ROS_MARK_CORNER} />}
+                                {showWho && (() => { const e = whoOf(x.empId, d, c); return e ? <i style={{ ...ROS_WHO_TAG, background: whoInfo.color[e.by || e.name || '?'] }} /> : null; })()}
                                 {oc && <i style={ROS_OC_BADGE}>OC</i>}
                                 {c === 'AL' && !(al && al.for) && <i style={ROS_AL_DOT} />}</span>
                             </td>

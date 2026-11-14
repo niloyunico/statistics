@@ -133,6 +133,30 @@ function carriedGuests(sheets, dept, year, month) {
   }
   return acc;
 }
+/* WHO ENTERED EACH CELL. Worked out here from the stored grid and the one being saved — never taken
+   from the browser. A cell added, changed or cleared in this save gets {by, name, at, from, to};
+   every other cell keeps what it had (cells untouched since tracking began have nothing: "entered
+   before tracking"). `edits` = one line per save that changed cells (newest last, capped).
+   The grid itself is never touched here. */
+const EDITS_CAP = 300;
+function trackCells(prevGrid, nextGrid, prevCellBy, prevEdits, actor, at) {
+  const a = obj(prevGrid), b = obj(nextGrid);
+  const cellBy = JSON.parse(JSON.stringify(obj(prevCellBy)));
+  const changed = [];
+  new Set(Object.keys(a).concat(Object.keys(b))).forEach((emp) => {
+    const x = obj(a[emp]), y = obj(b[emp]);
+    new Set(Object.keys(x).concat(Object.keys(y))).forEach((d) => {
+      const was = s(x[d], 8), now = s(y[d], 8);
+      if (was === now) return;
+      (cellBy[emp] || (cellBy[emp] = {}))[d] = { by: s(actor.username, 60), name: s(actor.name, 120), at, from: was, to: now };
+      changed.push(emp + ':' + d);
+    });
+  });
+  const edits = (Array.isArray(prevEdits) ? prevEdits : []).slice(-EDITS_CAP);
+  if (changed.length) edits.push({ at, by: s(actor.username, 60), name: s(actor.name, 120), count: changed.length, cells: changed.slice(0, 80) });
+  return { cellBy, edits: edits.slice(-EDITS_CAP), changed };
+}
+
 /* What a cell can carry beside its code: an on-call mark on top of a shift, and the date an
    Alternative Leave stands in for (+ an optional reason). Each is kept only where the cell
    still holds a matching code, so changing a cell never leaves a stale mark behind. */
@@ -486,6 +510,15 @@ async function rightsFor(req, doc) {
   const actor = await actorOf(req, doc);
   return { can: W.rights(actor, doc, cfg.depts[key] || {}, cfg.cns), actor };
 }
+// A sheet still being prepared (draft / returned) that this request may not see: only the unit's
+// preparers and administrators see a draft (rights().view). Never changes the sheet — it is only
+// left out of what this request receives.
+async function draftHiddenFor(req, doc) {
+  if (!doc || W.EDITABLE.indexOf(W.effStatus(doc)) < 0) return false;
+  try { return !(await rightsFor(req, doc)).can.view; } catch (e) { return true; }
+}
+const hiddenDraftOf = (doc) => ({ status: W.effStatus(doc), preparedBy: doc.preparedBy || doc.updatedBy || doc.createdBy || '', updatedAt: doc.updatedAt || null, dept: doc.dept, deptName: doc.deptName || doc.dept, year: doc.year, month: doc.month });
+
 /* One guarded write outside a save: only lands while the sheet is still in the status (and,
    when given, at the revision) it was read in — the same guard the hand-overs use. */
 async function guardedSet(id, doc, set, entry, atRevision) {
@@ -518,6 +551,7 @@ async function decorate(req, doc, stub) {
   if (!doc) return { roster: null, signers, can, members };
   const out = Object.assign({}, doc, { can, signers, deptId: key }, members ? { members } : {});
   if (Array.isArray(out.history)) out.history = out.history.slice(-50);
+  if (Array.isArray(out.edits)) out.edits = out.edits.slice(-60);
   return out;
 }
 
@@ -589,7 +623,7 @@ function mount(app, opts) {
       const allowed = await deptMatcher(req);
       const cfg = await getConfig(); const index = await deptIndex();
       const out = [];
-      for (const d of await listAll()) { if (d && (allowed(d.dept) || await reviewVisible(req, cfg, index, d.dept))) out.push(d); }
+      for (const d of await listAll()) { if (d && (allowed(d.dept) || await reviewVisible(req, cfg, index, d.dept)) && !(await draftHiddenFor(req, d))) out.push(d); }
       res.json({ ok: true, rosters: publishedOnly(req, out) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load rosters.' }); }
   });
@@ -892,6 +926,7 @@ function mount(app, opts) {
         if (k < from || k > to) continue;
         if (!(allowed(d.dept) || await reviewVisible(req, cfg, index, d.dept))) continue;
         if (!publishedOnly(req, [d]).length) continue;
+        if (await draftHiddenFor(req, d)) continue;
         out.push({ id: d.id, dept: d.dept, deptName: d.deptName || d.dept, year: d.year, month: d.month, status: d.status, revision: d.revision || 0, cells: (d.grid && d.grid[key]) || {} });
       }
       out.sort((a, b) => monthKey(a.year, a.month) - monthKey(b.year, b.month));
@@ -1010,6 +1045,7 @@ function mount(app, opts) {
     if (!doc) return false;
     const allowed = await deptMatcher(req);
     if (!(allowed(doc.dept) || await reviewVisible(req, await getConfig(), await deptIndex(), doc.dept))) return false;
+    if (await draftHiddenFor(req, doc)) return false;
     return publishedOnly(req, [doc]).length > 0;
   };
   app.get('/api/rosters/:id/versions', readGuard, async (req, res) => {
@@ -1088,11 +1124,52 @@ function mount(app, opts) {
       const who_ = (obj(doc.names)[emp]) || emp;
       const lbl = new Date(doc.year, doc.month, day).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
       const entry = { at: now, by: actor.username, byName: actor.name, action: 'edit', from: W.effStatus(doc), to: W.effStatus(doc), note: who_ + ' · ' + lbl + ': ' + (before || '—') + ' → ' + (code || '—'), revision: current + 1 };
-      const set = { grid, staffIds: Object.keys(grid), oncall: extras.oncall, altLeave: extras.altLeave, revision: current + 1, updatedAt: now, updatedBy: who(req) };
+      const tr = trackCells(doc.grid, grid, doc.cellBy, doc.edits, actor, now);
+      const set = { grid, staffIds: Object.keys(grid), oncall: extras.oncall, altLeave: extras.altLeave, revision: current + 1, updatedAt: now, updatedBy: who(req), cellBy: tr.cellBy, edits: tr.edits };
       if (!(await guardedSet(id, doc, set, entry, true))) return res.status(409).json({ ok: false, conflict: true, error: 'This roster changed meanwhile. Reload it and try again.' });
       try { require('./activity-log').log(req, 'roster_review_edit', { target: doc.deptName || doc.dept, detail: (doc.month + 1) + '/' + doc.year + ' · ' + entry.note }); } catch (e) { /* never breaks the request */ }
       res.json({ ok: true, roster: await decorate(req, await getOne(id)) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not change that shift.' }); }
+  });
+
+  /* Take people added from another unit off a unit's roster "from this month on" (administrator).
+     Body { dept, year, month, keys:[S<id>…] }. Removes them from the guest list of this month's sheet
+     and of every LATER sheet of the unit where they have no shift — a later sheet where they DO have
+     shifts is left alone and named in the reply. Each change is guarded by that sheet's revision and
+     status, keeps the revision (an open page goes on saving) and writes a history line; cells are
+     never touched. (The current month's "carried in" removal is kept by the page's own save.) */
+  app.post('/api/rosters/guests/remove', readGuard, async (req, res) => {
+    try {
+      if (!(req.access && req.access.unrestricted)) return res.status(403).json({ ok: false, error: 'Only an administrator can take added staff off a roster.' });
+      const b = obj(req.body);
+      const dept = s(b.dept, 40), year = parseInt(b.year, 10), month = parseInt(b.month, 10);
+      const keys = (Array.isArray(b.keys) ? b.keys : []).map((k) => s(k, 40)).filter((k) => /^S\d+$/.test(k)).slice(0, 20);
+      if (!dept || !(year > 2000) || !(month >= 0 && month <= 11) || !keys.length) return res.status(400).json({ ok: false, error: 'Which roster and which people?' });
+      const at = monthNo(year, month);
+      const unit = dept.trim().toLowerCase();
+      const sheets = (await listAll()).filter((d) => d && String(d.dept || '').trim().toLowerCase() === unit && monthNo(d.year, d.month) >= at && W.effStatus(d) !== 'approved')
+        .sort((x, y) => monthNo(x.year, x.month) - monthNo(y.year, y.month));
+      const removed = [], kept = [], failed = [];
+      const actor = await actorOf(req, sheets[0] || { dept });
+      const label = (d) => new Date(d.year, d.month, 1).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+      for (const d of sheets) {
+        const full = await getOne(d.id);
+        if (!full) continue;
+        const take = keys.filter((k) => obj(full.guests)[k]);
+        if (!take.length) continue;
+        const withShifts = take.filter((k) => Object.keys(obj(obj(full.grid)[k])).length);
+        withShifts.forEach((k) => kept.push({ key: k, name: obj(full.guests)[k].name || k, month: label(full), year: full.year, m: full.month }));
+        const go = take.filter((k) => withShifts.indexOf(k) < 0);
+        if (!go.length) continue;
+        const guests = Object.assign({}, obj(full.guests)); go.forEach((k) => { delete guests[k]; });
+        const now = Date.now();
+        const entry = { at: now, by: actor.username, byName: actor.name, action: 'guest_removed', from: W.effStatus(full), to: W.effStatus(full), note: go.map((k) => obj(full.guests)[k].name || k).join(', ') + ' taken off (no shifts on this sheet)', revision: full.revision || 0 };
+        if (await guardedSet(full.id, full, { guests }, entry, true)) go.forEach((k) => removed.push({ key: k, name: obj(full.guests)[k].name || k, month: label(full), year: full.year, m: full.month }));
+        else failed.push(label(full));
+      }
+      try { require('./activity-log').log(req, 'roster_guest_removed', { target: dept, detail: removed.map((x) => x.name + ' · ' + x.month).join('; ') + (kept.length ? ' · kept (has shifts): ' + kept.map((x) => x.name + ' · ' + x.month).join('; ') : '') }); } catch (e) { /* never breaks the request */ }
+      res.json({ ok: true, removed, kept, failed });
+    } catch (e) { res.status(500).json({ ok: false, error: 'Could not take them off the roster.' }); }
   });
 
   // The one decision route. Body: { action: send_manager | send_cns | forward | approve | return | reopen, note? }.
@@ -1165,6 +1242,11 @@ function mount(app, opts) {
       if (!(allowed(dept) || await reviewVisible(req, await getConfig(), await deptIndex(), dept))) return res.status(403).json({ ok: false, error: 'This roster belongs to a unit outside your departments.' });
       const id = rosterId(dept, parseInt(req.params.year, 10), parseInt(req.params.month, 10));
       const doc = publishedOnly(req, [await getOne(id)].filter(Boolean))[0] || null;   // null when never drafted (or not published, to a collector)
+      // A draft this account does not prepare: not shown (no cells), only that it is being prepared.
+      if (doc && await draftHiddenFor(req, doc)) {
+        const dh = await decorate(req, doc);
+        return res.json({ ok: true, roster: null, hiddenDraft: hiddenDraftOf(doc), signers: dh.signers, can: dh.can, members: dh.members, movedOut: [], guestsCarried: {} });
+      }
       const d = await decorate(req, doc, { dept, status: 'draft', revision: 0 });
       const yr = parseInt(req.params.year, 10), mo = parseInt(req.params.month, 10);
       const sheets = await listAll();
@@ -1221,6 +1303,12 @@ function mount(app, opts) {
       doc.revision = current + 1;
       doc.updatedAt = Date.now();
       doc.updatedBy = who(req);
+      // Who entered each changed cell (the saver — an administrator's entries too).
+      {
+        const act = await actorOf(req, existing || doc);
+        const tr = trackCells(existing ? existing.grid : {}, doc.grid, existing && existing.cellBy, existing && existing.edits, act, doc.updatedAt);
+        doc.cellBy = tr.cellBy; doc.edits = tr.edits;
+      }
       // Editing a returned sheet: the correction has started, it is a draft again.
       let push = null;
       if (eff === 'returned') { const rs = W.resumeOnEdit(existing, await actorOf(req, existing), doc.updatedAt); Object.assign(doc, rs.set); push = rs.entry; }

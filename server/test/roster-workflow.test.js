@@ -65,7 +65,14 @@ ok('the set manager never approves', !can(manager, 'pending_cns').approve);
 ok('the set manager cannot return a sheet already with the CNS', !can(manager, 'pending_cns').return);
 ok('a manager assigned the unit (not yet in the setup) also forwards', can(scopedManager, 'pending_manager').forward);
 ok('a manager of another unit cannot forward', !can(foreignManager, 'pending_manager').forward && !can(foreignManager, 'pending_manager').return);
-ok('the set manager sees the sheet beyond unit scope', can(manager, 'draft').view && !can(foreignManager, 'draft').view);
+ok('the set manager sees the sheet beyond unit scope once it is sent', can(manager, 'pending_manager').view && can(manager, 'approved').view && !can(foreignManager, 'pending_manager').view);
+// Drafts are the preparers' work in progress (user, 2026-11-14): the unit's In-charge / editors and administrators only.
+ok('a draft: the in-charge (editor) sees it', can(incharge, 'draft').view && can(incharge, 'returned').view && can(incharge, 'draft').viewDraft);
+ok('a draft: a second editor of the unit sees it too', can(editorNoRole, 'draft').view);
+ok('a draft: the manager does not see it yet', !can(manager, 'draft').view && !can(manager, 'returned').view);
+ok('a draft: the CNS does not see it yet', !can(cns, 'draft').view);
+ok('a draft: a view-only account does not see it', !can(viewer, 'draft').view && can(viewer, 'approved').view);
+ok('a draft: an administrator sees every draft', can(admin, 'draft').view && can(admin, 'returned').view);
 // CNS
 ok('the CNS approves', can(cns, 'pending_cns').approve);
 ok('the CNS returns at the CNS stage', can(cns, 'pending_cns').return);
@@ -73,7 +80,7 @@ ok('the CNS does not act at the manager stage', !can(cns, 'pending_manager').for
 ok('the CNS cannot sign a sheet they sent themselves', !can(cns, 'pending_cns', cfg, { sentBy: 'nasrin' }).approve);
 ok('an administrator may (self-approval is an admin exception)', can(admin, 'pending_cns', cfg, { sentBy: 'admin' }).approve);
 ok('the CNS cannot reopen', !can(cns, 'approved').reopen);
-ok('the CNS sees every unit', can(cns, 'draft').view);
+ok('the CNS sees every unit once sent', can(cns, 'pending_cns').view && can(cns, 'approved').view && can(cns, 'pending_manager').view);
 // Admin
 ok('an administrator holds every right in its state', can(admin, 'draft').send && can(admin, 'pending_manager').forward && can(admin, 'pending_cns').approve && can(admin, 'approved').reopen);
 ok('an administrator may still edit a pending sheet, never an approved one', can(admin, 'pending_cns').edit && !can(admin, 'approved').edit);
