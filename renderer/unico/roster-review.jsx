@@ -111,13 +111,16 @@ function RiTracker({ doc, signers }) {
   const ok = st === 'approved' && lastIdx(['approve']) >= 0 ? h[lastIdx(['approve'])] : null;
   const ret = st === 'returned' ? { stage: doc.returnStage, by: doc.returnedByName || doc.returnedBy, at: doc.returnedAt, note: doc.returnNote } : null;
   const nm = (p) => (p && p.name) || '';
+  // The person's own designation (server: signers.*.desig) when the step names the Setup person.
+  const own = (who, p, role) => (K.signerLine ? K.signerLine(who, p, role).text : role);
+  const prepWho = (sent && doc.preparedBy) || nm(sg.incharge), chkWho = (fwd && doc.checkedBy) || nm(sg.manager), okWho = (ok && doc.approvedBy) || nm(sg.cns);
   const steps = [
-    { label: 'Prepared', who: (sent && doc.preparedBy) || nm(sg.incharge) || 'In-charge not set', role: 'In-charge',
+    { label: 'Prepared', who: prepWho || 'In-charge not set', role: own(prepWho, sg.incharge, 'In-charge'),
       state: sent ? 'done' : 'current', sub: sent ? 'Sent ' + K.when(sent.at) : st === 'returned' ? 'Being corrected after return' : 'Not sent yet' },
-    { label: 'Checked', who: (fwd && doc.checkedBy) || nm(sg.manager) || 'Manager not set', role: 'Nurse Manager',
+    { label: 'Checked', who: chkWho || 'Manager not set', role: own(chkWho, sg.manager, 'Nurse Manager'),
       state: fwd ? 'done' : st === 'pending_manager' ? 'current' : (ret && ret.stage === 'manager') ? 'returned' : (sent && sent.action === 'send_cns') ? 'skipped' : 'todo',
       sub: fwd ? 'Forwarded ' + K.when(fwd.at) : st === 'pending_manager' ? 'Checking now' : (ret && ret.stage === 'manager') ? 'Returned ' + K.when(ret.at) : (sent && sent.action === 'send_cns') ? 'Skipped — sent straight to CNS' : 'Waiting' },
-    { label: 'Approved', who: (ok && doc.approvedBy) || nm(sg.cns) || 'CNS not set', role: 'Chief of Nursing Services',
+    { label: 'Approved', who: okWho || 'CNS not set', role: own(okWho, sg.cns, 'Chief of Nursing Services'),
       state: ok ? 'done' : st === 'pending_cns' ? 'current' : (ret && ret.stage === 'cns') ? 'returned' : 'todo',
       sub: ok ? 'Approved ' + K.when(ok.at) : st === 'pending_cns' ? 'Awaiting approval' : (ret && ret.stage === 'cns') ? 'Returned ' + K.when(ret.at) : 'Waiting' },
   ];
@@ -484,7 +487,13 @@ function RiPreview({ row, year, month, staff, onBack, onDecide, busy, setRoute }
       const role = { prepared: 'In-charge, ' + deptName, checked: 'Nurse Manager', approved: 'Chief of Nursing Services' };
       const byName = (nm) => { const k = String(nm || '').trim().toLowerCase(); return k ? (staff || []).find((e) => e && !e.former && String(e.name || '').trim().toLowerCase() === k) : null; };
       signPeople = {};
-      ['prepared', 'checked', 'approved'].forEach((k) => { const e = byName(def[k]); signPeople[k] = e ? { name: e.name, line: K.signLine(e) || role[k] } : { name: def[k], line: role[k] }; });
+      const sgs = extra.signers || {}, setupOf = { prepared: sgs.incharge, checked: sgs.manager, approved: sgs.cns };
+      ['prepared', 'checked', 'approved'].forEach((k) => {
+        const e = byName(def[k]);
+        if (e) { signPeople[k] = { name: e.name, line: K.signLine(e) || role[k] }; return; }
+        // The designation the server read from the person's own staff record (same as the sheet's sign-off).
+        signPeople[k] = { name: def[k], line: K.signerLine ? K.signerLine(def[k], setupOf[k], role[k]).text : role[k] };
+      });
     }
     return K.printHtml({ dept, deptName, year, month, doc, rows: view.rows, grid: view.grid, signers: extra.signers, signPeople, colourDesign: false, summary: true, cards: false, legend: true, printedBy: me });
   }, [doc, view, extra, dept, deptName, year, month, me, staff]);   // eslint-disable-line react-hooks/exhaustive-deps

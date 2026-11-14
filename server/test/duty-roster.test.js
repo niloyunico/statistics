@@ -562,6 +562,33 @@ roster.mount(app, { requireApi: as, requireRead: as });
     assert.deepEqual(Object.keys((await call('GET', '/api/rosters/NICU/2029/1')).body.roster.guests), [], '...and does not bring them back');
     assert.ok(logged.some((l) => l.action === 'roster_guest_removed'), 'the removal is logged');
 
+    /* ---- one unit, any spelling: "Neonatal ICU" is NICU (the department list's name for it) ---- */
+    const idx = await roster.deptIndex();
+    let canon = roster.buildCanon(idx, ['NICU', 'NICU'], ['NICU', 'NICU', 'Neonatal ICU', 'Neonatal ICU', 'neonatal icu', 'Nowhere Ward', 'NICU, MICU']);
+    assert.equal(canon['Neonatal ICU'], 'NICU', 'a sheet-less spelling joins the unit that has the sheets');
+    assert.equal(canon['neonatal icu'], 'NICU');
+    assert.equal(canon.NICU, 'NICU');
+    assert.equal(canon['Nowhere Ward'], undefined, 'a name of no department is not mapped');
+    assert.equal(canon['NICU, MICU'], undefined, 'a combined department is left alone');
+    // SAFETY: a spelling with its own sheets is never mapped away — its drafts stay on the list.
+    canon = roster.buildCanon(idx, ['NICU', 'NICU', 'Neonatal ICU'], ['Neonatal ICU', 'Neonatal ICU', 'Neonatal ICU', 'NICU']);
+    assert.equal(canon['Neonatal ICU'], 'Neonatal ICU', 'a spelling holding a sheet stays its own unit');
+    // No sheets anywhere: the spelling most people carry.
+    canon = roster.buildCanon(idx, [], ['Neonatal ICU', 'NICU', 'NICU']);
+    assert.equal(canon['Neonatal ICU'], 'NICU');
+    // The route: the screen gets only the names that move.
+    roster.__resetCanon();
+    const scN = (await call('GET', '/api/rosters/scope')).body;
+    assert.ok(scN.canon && typeof scN.canon === 'object', 'the screen gets the map');
+    assert.ok(Object.keys(scN.canon).every((k) => scN.canon[k] !== k));
+    // The staff record behind a login (for the sign-off designation).
+    assert.equal(roster.staffOfAccount({ staffId: 5 }, [{ id: 5, designation: 'Staff Nurse' }]).designation, 'Staff Nurse');
+    assert.equal(roster.staffOfAccount({ staffEmpId: '11129' }, [{ id: 7, emp_id: '11129' }]).id, 7);
+    assert.equal(roster.staffOfAccount({ name: 'Asha  rani' }, [{ id: 1, name: 'Asha Rani' }, { id: 2, name: 'Asha Rani', former: true }]).id, 1, 'a unique active name');
+    assert.equal(roster.staffOfAccount({ name: 'Twin' }, [{ id: 1, name: 'Twin' }, { id: 2, name: 'Twin' }]), null, 'two people of one name: no guess');
+    const sw = await roster.signersWithDesig({ incharge: { username: 'rahima', name: 'Rahima Akter' }, manager: null });
+    assert.equal(sw.incharge.name, 'Rahima Akter', 'a signer with no staff record is returned as it was');
+
     // The print log.
     assert.equal((await call('POST', '/api/rosters/print', { kind: 'staff', target: 'Rahima', detail: 'May-Nov 2026' }, 'rahima')).body.ok, true);
     assert.ok(logged.some((l) => l.action === 'roster_print' && l.opts.target === 'Rahima'));

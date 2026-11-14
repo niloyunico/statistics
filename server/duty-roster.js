@@ -360,6 +360,78 @@ const deptKeyOf = (index, dept) => {
   return hit ? hit.id : null;
 };
 
+/* ONE UNIT, ANY SPELLING. A staff record's department is free text: the department list names a
+   unit "Neonatal ICU" while its people and sheets say "NICU", so a nurse given the department from
+   the list landed on a separate roster. Every department text the register and the sheets use is
+   mapped to one unit name per canonical department (deptIndex keys — the same match access uses):
+   the name that already has sheets, else the one most staff carry. A name of no department maps
+   to itself. Nothing stored is rewritten. → { name: unitName } */
+/* SAFETY: a spelling that already HAS roster sheets is never mapped away (it stays its own unit, so
+   no draft or published sheet ever drops off the list — live: "Level- 9" Oct and "Level-9" Nov both
+   hold drafts). A combined department ("MICU, SICU, ER") belongs to several units and is left alone.
+   Only a sheet-less spelling joins its department's main unit. Pure: index = deptIndex(). */
+function buildCanon(index, sheetDepts, staffUnits) {
+  const groups = {};
+  const add = (name, kind) => {
+    const n = s(name, 120); if (!n || n.indexOf(',') >= 0) return;
+    const key = deptKeyOf(index, n); if (!key) return;
+    const g = groups[key] || (groups[key] = new Map());
+    const c = g.get(n) || { sheets: 0, staff: 0 }; c[kind]++; g.set(n, c);
+  };
+  (sheetDepts || []).forEach((n) => add(n, 'sheets'));
+  (staffUnits || []).forEach((n) => add(n, 'staff'));
+  const canon = {};
+  Object.keys(groups).forEach((key) => {
+    const g = [...groups[key].entries()].sort((a, b) => (b[1].sheets - a[1].sheets) || (b[1].staff - a[1].staff) || a[0].localeCompare(b[0]));
+    g.forEach(([n, c]) => { canon[n] = c.sheets > 0 ? n : g[0][0]; });
+  });
+  return canon;
+}
+let _canon = null, _canonTs = 0;
+async function unitCanon() {
+  if (_canon && Date.now() - _canonTs < IDX_TTL) return _canon;
+  const index = await deptIndex();
+  let sheets = [], staffUnits = [];
+  try { sheets = (await listAll()).map((d) => d && d.dept).filter(Boolean); } catch (e) { sheets = []; }
+  try { staffUnits = ((await require('./staff-roster').loadRoster({ cached: true })) || []).filter((p) => p && p.is_active !== false && !p.former).map(rosterUnitOf); } catch (e) { staffUnits = []; }
+  _canon = buildCanon(index, sheets, staffUnits); _canonTs = Date.now();
+  return _canon;
+}
+const canonUnit = (canon, name) => (canon && canon[name]) || name;
+// The unit name already in use for a canonical department id (null when nobody / no sheet uses it yet).
+const canonOfKey = (canon, index, id) => { const n = Object.keys(canon || {}).find((x) => deptKeyOf(index, x) === id); return n ? canon[n] : null; };
+
+/* The staff record behind a login: linked record, else employee no., else a unique name match. */
+const sigKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
+function staffOfAccount(u, staffAll) {
+  if (!u) return null;
+  const all = staffAll || [];
+  let p = null;
+  if (u.staffId != null && u.staffId !== '') p = all.find((e) => e && String(e.id) === String(u.staffId));
+  if (!p && u.staffEmpId) p = all.find((e) => e && e.emp_id && String(e.emp_id) === String(u.staffEmpId));
+  if (!p && u.name) { const m = all.filter((e) => e && !e.former && sigKey(e.name) === sigKey(u.name)); if (m.length === 1) p = m[0]; }
+  return p || null;
+}
+/* The sign-off names with each person's own designation and department, read live from their staff
+   record (so it follows the profile). A signer with no linked record is returned as it was. */
+async function signersWithDesig(signers) {
+  const out = Object.assign({}, signers || {});
+  const keys = ['incharge', 'manager', 'cns'].filter((k) => out[k] && out[k].username);
+  if (!keys.length) return out;
+  let users = null, staffAll = [];
+  try { users = await require('./db').getUsers(); } catch (e) { users = null; }
+  try { staffAll = (await require('./staff-roster').loadRoster({ cached: true })) || []; } catch (e) { staffAll = []; }
+  for (const k of keys) {
+    try {
+      const sg = out[k];
+      const u = users && typeof users.findOne === 'function' ? await users.findOne({ username: sg.username }) : null;
+      const p = staffOfAccount(u || { name: sg.name }, staffAll);
+      if (p) out[k] = Object.assign({}, sg, { desig: p.designation || '', dept: p.current_department || '' });
+    } catch (e) { /* this signer stays as it was */ }
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ the config --- */
 
 const person = (p) => (p && p.username) ? { username: s(p.username, 80), name: s(p.name || p.username, 120) } : null;
@@ -545,7 +617,7 @@ async function decorate(req, doc, stub) {
   const key = deptKeyOf(await deptIndex(), target && target.dept);
   const actor = await actorOf(req, target);
   const can = W.rights(actor, target, cfg.depts[key] || {}, cfg.cns);
-  const signers = signersFor(cfg, key);
+  const signers = await signersWithDesig(signersFor(cfg, key));
   // The supervisor sheet's people are a list from Setup, not a department on their records.
   const members = target && isSupervisorUnit(target.dept) ? (cfg.supervisors || []) : undefined;
   if (!doc) return { roster: null, signers, can, members };
@@ -643,11 +715,14 @@ function mount(app, opts) {
       // Every unit the register knows, plus any unit that already has a sheet — a ward
       // whose staff have all been archived must not lose access to its own past rosters.
       const names = new Set();
+      // One unit per department, whatever spelling a record or sheet uses ("Neonatal ICU" = "NICU").
+      let canon = {};
+      try { canon = await unitCanon(); } catch (e) { canon = {}; }
       try {
         (await require('./staff-roster').loadRoster({ cached: true }))
-          .forEach((p) => { if (p && p.is_active !== false && !p.former) names.add(s(rosterUnitOf(p), 120)); });
+          .forEach((p) => { if (p && p.is_active !== false && !p.former) names.add(canonUnit(canon, s(rosterUnitOf(p), 120))); });
       } catch (e) { /* register unreadable -> fall back to the rosters' own departments */ }
-      (await listAll()).forEach((d) => { if (d && d.dept) names.add(d.dept); });
+      (await listAll()).forEach((d) => { if (d && d.dept) names.add(canonUnit(canon, d.dept)); });
       // Plus the units Setup names this account the In-charge of — they prepare those rosters.
       let icKeys = new Set(), icIndex = null;
       try {
@@ -658,7 +733,8 @@ function mount(app, opts) {
           if (me && d && ((d.incharge && d.incharge.username === me) || (d.manager && d.manager.username === me))) icKeys.add(k);
         });
         // A Setup unit nobody is on yet (no staff, no sheet) still belongs on their list.
-        icIndex.forEach((d) => { if (icKeys.has(d.id)) names.add(d.name); });
+        // (a department already rostered under another spelling keeps that one: canonOfKey)
+        icIndex.forEach((d) => { if (icKeys.has(d.id)) names.add(canonOfKey(canon, icIndex, d.id) || d.name); });
       } catch (e) { icKeys = new Set(); }
       const placeBound = await holdsRosterPlace(req) && (await acc.rosterDeptNames(a)) === null;
       try { const c0 = await getConfig(); if ((c0.supervisors || []).length) names.add(SUPERVISOR_UNIT); } catch (e) { /* no setup yet */ }
@@ -672,6 +748,8 @@ function mount(app, opts) {
         // Someone with a place in the chain is bound to their units, whatever the account default says.
         scope: placeBound ? 'departments' : ((a && !a.unrestricted && a.rosterScope) || 'all'),
         units,
+        // department text → the roster unit it belongs to (only the names that differ)
+        canon: Object.keys(canon).reduce((m, n) => { if (canon[n] !== n) m[n] = canon[n]; return m; }, {}),
         // Collectors and in-charges only ever receive APPROVED sheets (publishedOnly),
         // so the renderer must not offer them an editor for a unit they can only read.
         // A ward in-charge granted `rosterEdit` may build and send their own unit's
@@ -796,10 +874,11 @@ function mount(app, opts) {
       const all = await require('./staff-roster').loadRoster({ cached: true });
       const supSet = new Set(cfg.supervisors || []);
       const supVisible = supSet.size > 0 && (allowed(SUPERVISOR_UNIT) || await reviewVisible(req, cfg, index, SUPERVISOR_UNIT));
+      let canon = {}; try { canon = await unitCanon(); } catch (e) { canon = {}; }
       const out = [];
       for (const p of (all || [])) {
         if (!p || p.is_active === false || p.former) continue;
-        const dept = rosterUnitOf(p);   // a trainee belongs to the Trainee Nurses unit
+        const dept = canonUnit(canon, rosterUnitOf(p));   // a trainee belongs to the Trainee Nurses unit; "Neonatal ICU" to NICU
         const supMember = supSet.has(String(p.id));
         if (!(allowed(dept) || await reviewVisible(req, cfg, index, dept) || (supMember && supVisible))) continue;
         const o = {}; ROSTER_STAFF_FIELDS.forEach((k) => { if (p[k] !== undefined) o[k] = p[k]; });
@@ -1008,14 +1087,7 @@ function mount(app, opts) {
       // read like a job ("Nurse Manager" beside an Instructor) and is only the last resort.
       let staffAll = [];
       try { staffAll = (await require('./staff-roster').loadRoster({ cached: true })) || []; } catch (e) { staffAll = []; }
-      const nameKey = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' ');
-      const desigOf = (u) => {
-        let p = null;
-        if (u.staffId != null && u.staffId !== '') p = staffAll.find((e) => e && String(e.id) === String(u.staffId));
-        if (!p && u.staffEmpId) p = staffAll.find((e) => e && e.emp_id && String(e.emp_id) === String(u.staffEmpId));
-        if (!p && u.name) { const m = staffAll.filter((e) => e && !e.former && nameKey(e.name) === nameKey(u.name)); if (m.length === 1) p = m[0]; }
-        return (p && p.designation) || '';
-      };
+      const desigOf = (u) => { const p = staffOfAccount(u, staffAll); return (p && p.designation) || ''; };
       // A portal login can only be an In-charge (it has no review inbox); a Manager / CNS
       // place saved on one before that rule is not offered.
       const PORTAL = require('./access').PORTAL_ROLES || [];
@@ -1368,6 +1440,7 @@ module.exports = {
   effStatus: W.effStatus, rawStatuses: W.rawStatuses, resumeOnEdit: W.resumeOnEdit, PENDING: W.PENDING, EDITABLE: W.EDITABLE, HISTORY_CAP: W.HISTORY_CAP,
   applyTransition, getConfig, deptIndex, deptKeyOf, getOne, decorate, actorOf, isUnitIncharge,
   TRAINEE_UNIT, TRAINEE_ID, MANAGER_UNIT, SUPERVISOR_UNIT, isTraineeNurse, isNurseManager, rosterUnitOf, movedOutOf, normGuests, carriedGuests, normGuestKeys,
+  unitCanon, buildCanon, staffOfAccount, signersWithDesig, __resetCanon: () => { _canon = null; _canonTs = 0; },
   // The in-memory store, for the tests to plant a legacy row in.
   __mem: () => mem,
 };

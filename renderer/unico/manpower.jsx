@@ -117,9 +117,11 @@
     // The units this account may roster (/api/rosters/scope). Someone bound to a few units —
     // an In-charge of Trainee Nurses — sees only those here, as on the Rosters tab; null = all.
     const [scopeUnits, setScopeUnits] = useState(null);
+    const [canonTick, setCanonTick] = useState(0);
     useEffect(() => {
       let live = true;
       fetch('/api/rosters/scope', { credentials: 'same-origin', cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((j) => {
+        if (live && j && j.ok && j.canon && typeof j.canon === 'object') { window.__ROS_UNIT_CANON = j.canon; setCanonTick((n) => n + 1); }   // "Neonatal ICU" → "NICU"
         if (live && j && j.ok && j.scope === 'departments' && Array.isArray(j.units)) setScopeUnits(new Set(j.units));
       }).catch(() => {});
       return () => { live = false; };
@@ -143,7 +145,8 @@
     const baseUnits = useMemo(() => {
       const by = {};
       (staffStore.staff || []).filter((e) => e.is_active !== false && !e.former).forEach((e) => {
-        const dept = R.unitOf ? R.unitOf(e) : (e.current_department || 'Unassigned');   // trainees: one Trainee Nurses unit
+        const raw = R.unitOf ? R.unitOf(e) : (e.current_department || 'Unassigned');   // trainees: one Trainee Nurses unit
+        const dept = (window.__ROS_UNIT_CANON && window.__ROS_UNIT_CANON[raw]) || raw;   // one unit, any spelling
         (by[dept] = by[dept] || []).push(e);
       });
       const units = Object.keys(by).filter((d) => !scopeUnits || scopeUnits.has(d)).sort((a, b) => a.localeCompare(b)).map((dept) => {
@@ -154,7 +157,7 @@
         return { dept, div: divOf(dept), people, hc, incharge: chief ? chief.name : '—' };
       });
       return units;
-    }, [staffStore.staff, scopeUnits]);
+    }, [staffStore.staff, scopeUnits, canonTick]);
 
     /* ---- roster sheets: index once, then each (dept, y, m) the view touches ---- */
     const [index, setIndex] = useState(null);        // list of {dept, year, month, status}

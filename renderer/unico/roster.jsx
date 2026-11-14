@@ -290,12 +290,18 @@ function useRosterIndex() {
 
    `units === null` means "not answered yet / every unit" — never render a narrowed
    list from it, or an older server (no such route) would show an empty module. */
+/* ONE UNIT, ANY SPELLING: the server maps every department text to the roster unit it belongs to
+   (`canon`, e.g. "Neonatal ICU" → "NICU" — the department list's name vs the name the unit's
+   people and sheets use). Every place here that puts a person on a unit goes through rosUnitOf. */
+let ROS_CANON = {};
+const rosUnitOf = (e) => { const u = R.unitOf(e); return ROS_CANON[u] || u; };
 function useRosterScope() {
   const [state, setState] = useState({ units: null, scope: 'all', can: null, loading: true });
   useEffect(() => {
     let live = true;
     rosApi.get('/api/rosters/scope').then((r) => {
       if (!live) return;
+      if (r && r.ok && r.canon && typeof r.canon === 'object') { ROS_CANON = r.canon; try { window.__ROS_UNIT_CANON = r.canon; } catch (e) { /* no window */ } }
       if (r && r.ok) setState({ units: Array.isArray(r.units) ? r.units : null, scope: r.scope || 'all', can: r.can || null, loading: false });
       else setState((s) => ({ ...s, loading: false }));
     }).catch(() => { if (live) setState((s) => ({ ...s, loading: false })); });
@@ -485,7 +491,7 @@ const rosRowsFrom = (doc, staff, dept, withRegister, inchargeName) => {
   const guests = (doc && doc.guests) || {};
   const moved = new Set((doc && doc.movedOut) || []);
   const reg = withRegister === false ? [] : (staff || [])
-    .filter((e) => e.is_active !== false && !e.former && (supIds ? supIds.has(String(e.id)) : R.unitOf(e) === dept))
+    .filter((e) => e.is_active !== false && !e.former && (supIds ? supIds.has(String(e.id)) : rosUnitOf(e) === dept))
     .map((e) => rosRowOf(e))
     .filter((r) => !moved.has(r.empId) || Object.keys((doc && doc.grid && doc.grid[r.empId]) || {}).length);
   const known = Object.keys(all).map((k) => ({ empId: k, empIdShown: all[k].emp_id || '' }));
@@ -794,6 +800,17 @@ function RosSheetTable({ rows, grid, year, month, maxHeight }) {
   );
 }
 
+/* The line under a signer's name: their own designation + department when the box shows the Setup
+   person and the server found their staff record (signer.desig / signer.dept), else the role text.
+   → { text, own } */
+function rosSignerLine(name, signer, fallback) {
+  const same = !!(signer && name && String(signer.name || '').trim().toLowerCase() === String(name).trim().toLowerCase());
+  if (!same || !signer.desig) return { text: fallback, own: false };
+  const d = window.staffCanonDesig ? window.staffCanonDesig(signer.desig) : signer.desig;
+  const dp = signer.dept ? rosDeptName((ROS_CANON[signer.dept]) || signer.dept) : '';
+  return { text: [d, dp].filter(Boolean).join(', '), own: true };
+}
+
 /* Prepared / Checked / Approved — filled from Duty Roster → Setup, never typed per sheet.
    Before a step happens the box shows who WILL sign; after it, who did and when. */
 function RosSignOff({ signers, meta, dept }) {
@@ -807,10 +824,16 @@ function RosSignOff({ signers, meta, dept }) {
   const fwd = fwd0 && sent && fwd0.i > sent.i ? fwd0 : null;
   const ok = st === 'approved' ? lastOf(['approve']) : null;
   const skipped = sent && sent.e.action === 'send_cns';
+  // Each person's OWN designation and department, from their staff record (the server adds desig /
+  // dept to the Setup signers, read live). The roster role goes on the line under it. A box signed
+  // by someone other than the Setup person, or a person with no staff record, keeps the role text.
+  const prep = (sent && m.preparedBy) || (sg.incharge && sg.incharge.name);
+  const chk = (fwd && m.checkedBy) || (sg.manager && sg.manager.name);
+  const appr = (ok && m.approvedBy) || (sg.cns && sg.cns.name);
   const boxes = [
-    ['Prepared by', (sent && m.preparedBy) || (sg.incharge && sg.incharge.name), 'In-charge · ' + dept, sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge'],
-    ['Checked by', (fwd && m.checkedBy) || (sg.manager && sg.manager.name), 'Manager · ' + dept, fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager'],
-    ['Approved by', (ok && m.approvedBy) || (sg.cns && sg.cns.name), 'Chief of Nursing Services', ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS'],
+    ['Prepared by', prep, rosSignerLine(prep, sg.incharge, 'In-charge · ' + dept), sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge', 'In-charge for this roster'],
+    ['Checked by', chk, rosSignerLine(chk, sg.manager, 'Manager · ' + dept), fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager', 'Checks this unit’s roster'],
+    ['Approved by', appr, rosSignerLine(appr, sg.cns, 'Chief of Nursing Services'), ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS', 'Approves every unit'],
   ];
   const missing = boxes.filter((b) => b[5]).map((b) => b[6]);
   return (
@@ -821,11 +844,12 @@ function RosSignOff({ signers, meta, dept }) {
         <span style={{ fontSize: 10.5, color: '#9aa6b4' }}>names come from Duty Roster → Setup</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12 }}>
-        {boxes.map(([role, name, caption, stamp, done]) => (
+        {boxes.map(([role, name, caption, stamp, done, , , duty]) => (
           <div key={role} style={{ borderTop: '2px solid ' + (done ? '#1f9d57' : 'rgba(125,145,180,.3)'), paddingTop: 8 }}>
             <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: .6, textTransform: 'uppercase', color: '#7d8ea8' }}>{role}</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: name ? '#16202e' : '#b6c0cc', marginTop: 3 }}>{name || 'Not set'}</div>
-            <div style={{ fontSize: 10.5, color: '#9aa6b4' }}>{caption}</div>
+            <div style={{ fontSize: 10.5, color: caption.own ? '#3c4858' : '#9aa6b4', fontWeight: caption.own ? 600 : 400 }}>{caption.text}</div>
+            {caption.own && name && <div style={{ fontSize: 9.5, color: '#9aa6b4' }}>{duty}</div>}
             <span style={{ display: 'inline-block', marginTop: 5, fontSize: 9, fontWeight: 700, letterSpacing: .4, textTransform: 'uppercase', color: done ? '#157a43' : '#9aa6b4', background: done ? 'rgba(31,157,87,.13)' : 'rgba(125,145,180,.12)', padding: '2px 7px', borderRadius: 8 }}>{stamp}</span>
           </div>
         ))}
@@ -908,7 +932,7 @@ function RosterHome({ index, staffStore, scope, setRoute }) {
   const depts = useMemo(() => {
     const m = {};
     (staffStore.staff || []).filter((e) => e.is_active !== false && !e.former)
-      .forEach((e) => { const d = R.unitOf(e); m[d] = (m[d] || 0) + 1; });
+      .forEach((e) => { const d = rosUnitOf(e); m[d] = (m[d] || 0) + 1; });
     // The server lists the units this account is assigned; a unit it names but whose
     // staff are all archived still belongs on the list, so it gets a row with no count
     // rather than vanishing along with the last nurse on it.
@@ -1393,7 +1417,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     const moved = new Set(movedOut);
     const byKey = {}; (staffStore.staff || []).forEach((e) => { if (e && e.id != null) byKey[rosKey(e)] = e; });
     const home = (staffStore.staff || [])
-      .filter((e) => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : R.unitOf(e) === dept))
+      .filter((e) => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : rosUnitOf(e) === dept))
       .map((e) => rosRowOf(e))
       .filter((r) => !moved.has(r.empId) || Object.keys(grid[r.empId] || {}).length);
     const have = new Set(home.map((r) => r.empId));
@@ -1429,7 +1453,7 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const inScope = (scope && scope.inScope) || (() => true);
   const depts = useMemo(() => [...new Set((staffStore.staff || [])
     .filter((e) => e.is_active !== false && !e.former)
-    .map((e) => R.unitOf(e)).concat([dept]))]
+    .map((e) => rosUnitOf(e)).concat([dept]))]
     // The unit being viewed always stays in the list, even if nobody is on it right
     // now — dropping it would leave the switcher showing a different unit than the grid.
     .filter((d) => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
@@ -3697,9 +3721,14 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
     const byName = (nm) => { const k = String(nm || '').trim().toLowerCase(); return k ? people.find((e) => e && !e.former && e.is_active !== false && String(e.name || '').trim().toLowerCase() === k) : null; };
     const role = { prepared: 'In-charge, ' + deptName, checked: 'Nurse Manager', approved: 'Chief of Nursing Services' };
     const out = {};
+    const setupOf = { prepared: signers.incharge, checked: signers.manager, approved: signers.cns };
     ['prepared', 'checked', 'approved'].forEach((k) => {
       const e = picks[k] || byName(def[k]);
-      out[k] = e ? { name: e.name || '', line: rosSignLine(e) || role[k] } : { name: def[k], line: role[k] };
+      if (e) { out[k] = { name: e.name || '', line: rosSignLine(e) || role[k] }; return; }
+      // Not found by name in this browser's register (e.g. no staff access): the designation the
+      // server read from the person's own record — the same line as the on-screen sign-off.
+      const own = rosSignerLine(def[k], setupOf[k], role[k]);
+      out[k] = { name: def[k], line: own.text };
     });
     return out;
   }, [doc, signers, picks, staffStore.staff, deptName]);
@@ -3841,6 +3870,9 @@ function RosterView({ view, dept, year, month, setRoute }) {
   const m = Number.isInteger(Number(month)) ? Number(month) : now.getMonth();
 
   const inner = (() => {
+    // The unit map (scope.canon) decides who is on which unit: draw nothing before it is known,
+    // or a "Neonatal ICU" nurse would flash on a unit of her own and off NICU.
+    if (scope.loading) return <div style={{ display: 'grid', placeItems: 'center', height: '30vh', color: '#6c7a8c', fontSize: 13 }}>Loading the duty roster…</div>;
     if (view !== 'rosterHome' && !dept) return <RosterHome index={index} staffStore={staffStore} scope={scope} setRoute={setRoute} />;
     // A unit outside the assignment. The server refuses it anyway (403 on every roster
     // route), but a bookmark or a stale link would otherwise land on an editor that
@@ -3887,7 +3919,7 @@ window.UNICO_ROSTER_KIT = {
   ROS_STATUS, ROS_ACTIONS, ROS_HIST_LABEL, ROS_EDITABLE, statusNorm: rosStatusNorm,
   RosStatusChip, RosDecisionButtons, RosHistoryTimeline, RosReturnedBanner, RosDrawer, RosSheetTable, RosSignOff, RosVersions,
   rulesOf: rosRulesOf, findingsOf: rosFindingsOf, rowsFrom: rosRowsFrom, sheetGuests: rosSheetGuests, printHtml: rosPrintHtml,
-  deptName: rosDeptName, signNames: rosSignNames, signLine: rosSignLine, RosMarkList,
+  deptName: rosDeptName, signNames: rosSignNames, signLine: rosSignLine, signerLine: rosSignerLine, RosMarkList,
   OC_BADGE: ROS_OC_BADGE, AL_DOT: ROS_AL_DOT, MARK_CORNER: ROS_MARK_CORNER, date: rosDate,
   bColor: rosBColor, MONO: ROS_MONO,
 };

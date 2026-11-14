@@ -429,6 +429,11 @@ function useRosterIndex() {
     reload: load
   };
 }
+let ROS_CANON = {};
+const rosUnitOf = e => {
+  const u = R.unitOf(e);
+  return ROS_CANON[u] || u;
+};
 function useRosterScope() {
   const [state, setState] = useState({
     units: null,
@@ -440,6 +445,12 @@ function useRosterScope() {
     let live = true;
     rosApi.get('/api/rosters/scope').then(r => {
       if (!live) return;
+      if (r && r.ok && r.canon && typeof r.canon === 'object') {
+        ROS_CANON = r.canon;
+        try {
+          window.__ROS_UNIT_CANON = r.canon;
+        } catch (e) {}
+      }
       if (r && r.ok) setState({
         units: Array.isArray(r.units) ? r.units : null,
         scope: r.scope || 'all',
@@ -837,7 +848,7 @@ const rosRowsFrom = (doc, staff, dept, withRegister, inchargeName) => {
   const supIds = R.SUPERVISOR_UNIT === dept ? new Set((ROS_CFG && ROS_CFG.supervisors || []).map(x => String(x.id))) : null;
   const guests = doc && doc.guests || {};
   const moved = new Set(doc && doc.movedOut || []);
-  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (supIds ? supIds.has(String(e.id)) : R.unitOf(e) === dept)).map(e => rosRowOf(e)).filter(r => !moved.has(r.empId) || Object.keys(doc && doc.grid && doc.grid[r.empId] || {}).length);
+  const reg = withRegister === false ? [] : (staff || []).filter(e => e.is_active !== false && !e.former && (supIds ? supIds.has(String(e.id)) : rosUnitOf(e) === dept)).map(e => rosRowOf(e)).filter(r => !moved.has(r.empId) || Object.keys(doc && doc.grid && doc.grid[r.empId] || {}).length);
   const known = Object.keys(all).map(k => ({
     empId: k,
     empIdShown: all[k].emp_id || ''
@@ -1710,6 +1721,19 @@ function RosSheetTable({
     }, t.hours || '')));
   }))));
 }
+function rosSignerLine(name, signer, fallback) {
+  const same = !!(signer && name && String(signer.name || '').trim().toLowerCase() === String(name).trim().toLowerCase());
+  if (!same || !signer.desig) return {
+    text: fallback,
+    own: false
+  };
+  const d = window.staffCanonDesig ? window.staffCanonDesig(signer.desig) : signer.desig;
+  const dp = signer.dept ? rosDeptName(ROS_CANON[signer.dept] || signer.dept) : '';
+  return {
+    text: [d, dp].filter(Boolean).join(', '),
+    own: true
+  };
+}
 function RosSignOff({
   signers,
   meta,
@@ -1732,7 +1756,10 @@ function RosSignOff({
   const fwd = fwd0 && sent && fwd0.i > sent.i ? fwd0 : null;
   const ok = st === 'approved' ? lastOf(['approve']) : null;
   const skipped = sent && sent.e.action === 'send_cns';
-  const boxes = [['Prepared by', sent && m.preparedBy || sg.incharge && sg.incharge.name, 'In-charge · ' + dept, sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge'], ['Checked by', fwd && m.checkedBy || sg.manager && sg.manager.name, 'Manager · ' + dept, fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager'], ['Approved by', ok && m.approvedBy || sg.cns && sg.cns.name, 'Chief of Nursing Services', ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS']];
+  const prep = sent && m.preparedBy || sg.incharge && sg.incharge.name;
+  const chk = fwd && m.checkedBy || sg.manager && sg.manager.name;
+  const appr = ok && m.approvedBy || sg.cns && sg.cns.name;
+  const boxes = [['Prepared by', prep, rosSignerLine(prep, sg.incharge, 'In-charge · ' + dept), sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge', 'In-charge for this roster'], ['Checked by', chk, rosSignerLine(chk, sg.manager, 'Manager · ' + dept), fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager', 'Checks this unit’s roster'], ['Approved by', appr, rosSignerLine(appr, sg.cns, 'Chief of Nursing Services'), ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS', 'Approves every unit']];
   const missing = boxes.filter(b => b[5]).map(b => b[6]);
   return React.createElement("div", {
     style: {
@@ -1772,7 +1799,7 @@ function RosSignOff({
       gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))',
       gap: 12
     }
-  }, boxes.map(([role, name, caption, stamp, done]) => React.createElement("div", {
+  }, boxes.map(([role, name, caption, stamp, done,,, duty]) => React.createElement("div", {
     key: role,
     style: {
       borderTop: '2px solid ' + (done ? '#1f9d57' : 'rgba(125,145,180,.3)'),
@@ -1796,9 +1823,15 @@ function RosSignOff({
   }, name || 'Not set'), React.createElement("div", {
     style: {
       fontSize: 10.5,
+      color: caption.own ? '#3c4858' : '#9aa6b4',
+      fontWeight: caption.own ? 600 : 400
+    }
+  }, caption.text), caption.own && name && React.createElement("div", {
+    style: {
+      fontSize: 9.5,
       color: '#9aa6b4'
     }
-  }, caption), React.createElement("span", {
+  }, duty), React.createElement("span", {
     style: {
       display: 'inline-block',
       marginTop: 5,
@@ -1974,7 +2007,7 @@ function RosterHome({
   const depts = useMemo(() => {
     const m = {};
     (staffStore.staff || []).filter(e => e.is_active !== false && !e.former).forEach(e => {
-      const d = R.unitOf(e);
+      const d = rosUnitOf(e);
       m[d] = (m[d] || 0) + 1;
     });
     if (sc.scope === 'departments' && sc.units) sc.units.forEach(u => {
@@ -3002,7 +3035,7 @@ function RosterGrid({
     (staffStore.staff || []).forEach(e => {
       if (e && e.id != null) byKey[rosKey(e)] = e;
     });
-    const home = (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : R.unitOf(e) === dept)).map(e => rosRowOf(e)).filter(r => !moved.has(r.empId) || Object.keys(grid[r.empId] || {}).length);
+    const home = (staffStore.staff || []).filter(e => e.is_active !== false && !e.former && (dept === R.SUPERVISOR_UNIT ? !!(mem && mem.has(String(e.id))) : rosUnitOf(e) === dept)).map(e => rosRowOf(e)).filter(r => !moved.has(r.empId) || Object.keys(grid[r.empId] || {}).length);
     const have = new Set(home.map(r => r.empId));
     return home.concat(Object.keys(allGuests).filter(k => !have.has(k)).map(k => byKey[k] ? rosRowOf(byKey[k]) : rosGuestRow(k, allGuests[k])));
   }, [staffStore.staff, dept, members, allGuests, movedOut, grid]);
@@ -3041,7 +3074,7 @@ function RosterGrid({
   const pcaN = rows.filter(r => r.pca).length;
   const nurseN = rows.length - pcaN;
   const inScope = scope && scope.inScope || (() => true);
-  const depts = useMemo(() => [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => R.unitOf(e)).concat([dept]))].filter(d => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
+  const depts = useMemo(() => [...new Set((staffStore.staff || []).filter(e => e.is_active !== false && !e.former).map(e => rosUnitOf(e)).concat([dept]))].filter(d => d === dept || inScope(d)).sort(), [staffStore.staff, dept, inScope]);
   const monthUrl = '/api/rosters/' + encodeURIComponent(dept) + '/' + year + '/' + month;
   const applyMeta = r => {
     const d = r.roster;
@@ -9299,14 +9332,24 @@ function RosterPrint({
       approved: 'Chief of Nursing Services'
     };
     const out = {};
+    const setupOf = {
+      prepared: signers.incharge,
+      checked: signers.manager,
+      approved: signers.cns
+    };
     ['prepared', 'checked', 'approved'].forEach(k => {
       const e = picks[k] || byName(def[k]);
-      out[k] = e ? {
-        name: e.name || '',
-        line: rosSignLine(e) || role[k]
-      } : {
+      if (e) {
+        out[k] = {
+          name: e.name || '',
+          line: rosSignLine(e) || role[k]
+        };
+        return;
+      }
+      const own = rosSignerLine(def[k], setupOf[k], role[k]);
+      out[k] = {
         name: def[k],
-        line: role[k]
+        line: own.text
       };
     });
     return out;
@@ -9605,6 +9648,15 @@ function RosterView({
   const y = Number(year) || now.getFullYear();
   const m = Number.isInteger(Number(month)) ? Number(month) : now.getMonth();
   const inner = (() => {
+    if (scope.loading) return React.createElement("div", {
+      style: {
+        display: 'grid',
+        placeItems: 'center',
+        height: '30vh',
+        color: '#6c7a8c',
+        fontSize: 13
+      }
+    }, "Loading the duty roster\u2026");
     if (view !== 'rosterHome' && !dept) return React.createElement(RosterHome, {
       index: index,
       staffStore: staffStore,
@@ -9739,6 +9791,7 @@ window.UNICO_ROSTER_KIT = {
   deptName: rosDeptName,
   signNames: rosSignNames,
   signLine: rosSignLine,
+  signerLine: rosSignerLine,
   RosMarkList,
   OC_BADGE: ROS_OC_BADGE,
   AL_DOT: ROS_AL_DOT,
@@ -9908,22 +9961,26 @@ function RiTracker({
     note: doc.returnNote
   } : null;
   const nm = p => p && p.name || '';
+  const own = (who, p, role) => K.signerLine ? K.signerLine(who, p, role).text : role;
+  const prepWho = sent && doc.preparedBy || nm(sg.incharge),
+    chkWho = fwd && doc.checkedBy || nm(sg.manager),
+    okWho = ok && doc.approvedBy || nm(sg.cns);
   const steps = [{
     label: 'Prepared',
-    who: sent && doc.preparedBy || nm(sg.incharge) || 'In-charge not set',
-    role: 'In-charge',
+    who: prepWho || 'In-charge not set',
+    role: own(prepWho, sg.incharge, 'In-charge'),
     state: sent ? 'done' : 'current',
     sub: sent ? 'Sent ' + K.when(sent.at) : st === 'returned' ? 'Being corrected after return' : 'Not sent yet'
   }, {
     label: 'Checked',
-    who: fwd && doc.checkedBy || nm(sg.manager) || 'Manager not set',
-    role: 'Nurse Manager',
+    who: chkWho || 'Manager not set',
+    role: own(chkWho, sg.manager, 'Nurse Manager'),
     state: fwd ? 'done' : st === 'pending_manager' ? 'current' : ret && ret.stage === 'manager' ? 'returned' : sent && sent.action === 'send_cns' ? 'skipped' : 'todo',
     sub: fwd ? 'Forwarded ' + K.when(fwd.at) : st === 'pending_manager' ? 'Checking now' : ret && ret.stage === 'manager' ? 'Returned ' + K.when(ret.at) : sent && sent.action === 'send_cns' ? 'Skipped — sent straight to CNS' : 'Waiting'
   }, {
     label: 'Approved',
-    who: ok && doc.approvedBy || nm(sg.cns) || 'CNS not set',
-    role: 'Chief of Nursing Services',
+    who: okWho || 'CNS not set',
+    role: own(okWho, sg.cns, 'Chief of Nursing Services'),
     state: ok ? 'done' : st === 'pending_cns' ? 'current' : ret && ret.stage === 'cns' ? 'returned' : 'todo',
     sub: ok ? 'Approved ' + K.when(ok.at) : st === 'pending_cns' ? 'Awaiting approval' : ret && ret.stage === 'cns' ? 'Returned ' + K.when(ret.at) : 'Waiting'
   }];
@@ -10917,14 +10974,24 @@ function RiPreview({
         return k ? (staff || []).find(e => e && !e.former && String(e.name || '').trim().toLowerCase() === k) : null;
       };
       signPeople = {};
+      const sgs = extra.signers || {},
+        setupOf = {
+          prepared: sgs.incharge,
+          checked: sgs.manager,
+          approved: sgs.cns
+        };
       ['prepared', 'checked', 'approved'].forEach(k => {
         const e = byName(def[k]);
-        signPeople[k] = e ? {
-          name: e.name,
-          line: K.signLine(e) || role[k]
-        } : {
+        if (e) {
+          signPeople[k] = {
+            name: e.name,
+            line: K.signLine(e) || role[k]
+          };
+          return;
+        }
+        signPeople[k] = {
           name: def[k],
-          line: role[k]
+          line: K.signerLine ? K.signerLine(def[k], setupOf[k], role[k]).text : role[k]
         };
       });
     }

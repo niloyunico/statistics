@@ -97,12 +97,17 @@
     }));
     const dateRef = useRef(null);
     const [scopeUnits, setScopeUnits] = useState(null);
+    const [canonTick, setCanonTick] = useState(0);
     useEffect(() => {
       let live = true;
       fetch('/api/rosters/scope', {
         credentials: 'same-origin',
         cache: 'no-store'
       }).then(r => r.ok ? r.json() : null).then(j => {
+        if (live && j && j.ok && j.canon && typeof j.canon === 'object') {
+          window.__ROS_UNIT_CANON = j.canon;
+          setCanonTick(n => n + 1);
+        }
         if (live && j && j.ok && j.scope === 'departments' && Array.isArray(j.units)) setScopeUnits(new Set(j.units));
       }).catch(() => {});
       return () => {
@@ -138,7 +143,8 @@
     const baseUnits = useMemo(() => {
       const by = {};
       (staffStore.staff || []).filter(e => e.is_active !== false && !e.former).forEach(e => {
-        const dept = R.unitOf ? R.unitOf(e) : e.current_department || 'Unassigned';
+        const raw = R.unitOf ? R.unitOf(e) : e.current_department || 'Unassigned';
+        const dept = window.__ROS_UNIT_CANON && window.__ROS_UNIT_CANON[raw] || raw;
         (by[dept] = by[dept] || []).push(e);
       });
       const units = Object.keys(by).filter(d => !scopeUnits || scopeUnits.has(d)).sort((a, b) => a.localeCompare(b)).map(dept => {
@@ -157,7 +163,7 @@
         };
       });
       return units;
-    }, [staffStore.staff, scopeUnits]);
+    }, [staffStore.staff, scopeUnits, canonTick]);
     const [index, setIndex] = useState(null);
     const [sheets, setSheets] = useState({});
     useEffect(() => {
