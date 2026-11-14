@@ -294,7 +294,7 @@ function SpCompareDialog({ p, st, set, staff, match, mode, onClose, onSave, setR
 }
 
 /* ---------- one form's card ---------- */
-function SpPerson({ p, st, set, staff, match, status, open, onToggle, onOpen, onUndo, setRoute }) {
+function SpPerson({ p, st, set, staff, match, status, open, onToggle, onOpen, onUndo, onSaveOne, saving, setRoute }) {
   const view = spPlan(p, st, staff);
   const { rec, plan, choices, counts, isNew } = view;
   const rows = plan.rows.filter((r) => r.kind !== 'same');
@@ -317,6 +317,9 @@ function SpPerson({ p, st, set, staff, match, status, open, onToggle, onOpen, on
           </React.Fragment>
         ) : (
           <React.Fragment>
+            {st.choice !== 'skip' && (isNew || (rec && counts.fill + counts.replace > 0)) && (
+              <button className="btn pri sm" disabled={saving} onClick={onSaveOne} title="Save only this person now, with the ticks below">{saving ? 'Saving…' : isNew ? 'Create this person' : 'Save this person'}</button>
+            )}
             <button className="btn sm" onClick={() => onOpen('update')}>Update existing…</button>
             <button className="btn sm" onClick={() => onOpen('create')}>Create new…</button>
             <select className="sp-in" style={{ width: 'auto', maxWidth: 260 }} value={String(st.choice)} onChange={(e) => set({ choice: e.target.value, choices: {} })} title="What the batch Apply does with this form">
@@ -379,6 +382,7 @@ function StaffPasteView({ store, setRoute }) {
   const [filter, setFilter] = useState('all');
   const [openCards, setOpenCards] = useState({});
   const [dlg, setDlg] = useState(null);           // { n, mode: 'update' | 'create' }
+  const [savingN, setSavingN] = useState(null);   // the form being saved on its own
   const staff = (store && store.staff) || [];
 
   const matches = useMemo(() => (people || []).map((p) => (SI ? SI.matchPerson(Object.assign({}, p, { fields: Object.assign({}, p.fields, (state[p.n] || {}).edits || {}) }), staff) : { candidates: [] })), [people, staff, state]);
@@ -431,6 +435,19 @@ function StaffPasteView({ store, setRoute }) {
     markDone(done); setOpenCards((o) => Object.assign({}, o, { [x.p.n]: false }));
     spToast(done[0].name + (done[0].what === 'created' ? ' added to the register.' : ' updated.'));
     return true;
+  };
+  // Save ONE person straight from the card / overview row, with that card's ticks. A new person who
+  // looks like existing staff goes to the pop-up's duplicate guard instead of being created blind.
+  const saveCard = async (x) => {
+    if (x.isNew && (x.match.candidates || []).length) { setDlg({ n: x.p.n, mode: 'create' }); spToast('This may already be on the register — compare first.', 'info'); return; }
+    if (x.isNew && !String(x.pe.fields.name || '').trim()) { setErr('Form #' + x.p.n + ' has no name — type it before creating the record.'); goCard(x.p.n); return; }
+    const what = x.isNew ? 'Create a new staff record for ' + (x.pe.fields.name || 'this person') + ' (' + (x.plan.rows.length - x.counts.keep) + ' fields)?'
+      : 'Update ' + x.rec.name + (x.rec.emp_id ? ' (' + x.rec.emp_id + ')' : '') + '?\n\nFill ' + x.counts.fill + ' · replace ' + x.counts.replace + ' · keep ' + x.counts.keep + '.';
+    if (!window.confirm(what + '\n\nThe form is kept on the record; Undo is on the card.')) return;
+    setSavingN(x.p.n); setErr('');
+    try { await saveOne(x); }
+    catch (e) { setErr('#' + x.p.n + ' not saved: ' + ((e && e.message) || 'the save failed') + ' Reload the staff list and check the record before trying again.'); }
+    finally { setSavingN(null); }
   };
   const applyAll = async () => {
     if (!pending.length) return;
@@ -542,9 +559,10 @@ function StaffPasteView({ store, setRoute }) {
                           {x.st.done
                             ? <React.Fragment><button className="btn sm" onClick={() => setRoute({ view: 'staffProfile', emp: x.st.done.id })}>Profile</button> <button className="btn sm" onClick={() => undo(x)}>Undo</button></React.Fragment>
                             : <React.Fragment>
+                                {x.st.choice !== 'skip' && (x.isNew || (x.rec && x.counts.fill + x.counts.replace > 0)) && <React.Fragment><button className="btn pri sm" disabled={savingN === x.p.n} onClick={() => saveCard(x)} title="Save only this person now">{savingN === x.p.n ? 'Saving…' : 'Save'}</button>{' '}</React.Fragment>}
                                 {x.status.code === 'new'
-                                  ? <button className="btn pri sm" onClick={() => setDlg({ n: x.p.n, mode: 'create' })}>Create…</button>
-                                  : <button className="btn pri sm" onClick={() => setDlg({ n: x.p.n, mode: 'update' })}>Update…</button>}
+                                  ? <button className="btn sm" onClick={() => setDlg({ n: x.p.n, mode: 'create' })}>Create…</button>
+                                  : <button className="btn sm" onClick={() => setDlg({ n: x.p.n, mode: 'update' })}>Update…</button>}
                                 {' '}
                                 {x.status.code === 'new'
                                   ? <button className="btn sm" onClick={() => setDlg({ n: x.p.n, mode: 'update' })}>Find existing…</button>
@@ -564,10 +582,10 @@ function StaffPasteView({ store, setRoute }) {
               </div>
 
               <div className="sp-step"><i>4</i>Check each person</div>
-              <div className="sp-muted" style={{ marginBottom: 10 }}>Ticked rows are written. Blanks on the register start ticked; a mismatch starts unticked. <b>Update existing…</b> / <b>Create new…</b> open the side-by-side compare with more choices, and save that one person at once.</div>
-              {shown.map((x) => <SpPerson key={x.p.n} p={x.p} st={x.st} set={(patch) => setOne(x.p.n, patch)} staff={staff} match={x.match} status={x.status} open={!!openCards[x.p.n]} onToggle={() => setOpenCards((o) => Object.assign({}, o, { [x.p.n]: !o[x.p.n] }))} onOpen={(mode) => setDlg({ n: x.p.n, mode })} onUndo={() => undo(x)} setRoute={setRoute} />)}
+              <div className="sp-muted" style={{ marginBottom: 10 }}>Each person is saved on their own: set the ticks on their card and press <b>Save this person</b> (or <b>Create this person</b>). Blanks on the register start ticked; a mismatch starts unticked. <b>Update existing…</b> / <b>Create new…</b> open the side-by-side compare with more choices.</div>
+              {shown.map((x) => <SpPerson key={x.p.n} p={x.p} st={x.st} set={(patch) => setOne(x.p.n, patch)} staff={staff} match={x.match} status={x.status} open={!!openCards[x.p.n]} onToggle={() => setOpenCards((o) => Object.assign({}, o, { [x.p.n]: !o[x.p.n] }))} onOpen={(mode) => setDlg({ n: x.p.n, mode })} onUndo={() => undo(x)} onSaveOne={() => saveCard(x)} saving={savingN === x.p.n} setRoute={setRoute} />)}
 
-              <div className="sp-step" style={{ marginTop: 6 }}><i>5</i>Save the rest together</div>
+              <div className="sp-step" style={{ marginTop: 6 }}><i>5</i>Or save all the rest together (optional)</div>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button className="btn pri" disabled={busy || !pending.length} onClick={applyAll}>{busy ? 'Saving…' : 'Save ' + pending.length + ' form' + (pending.length === 1 ? '' : 's')}</button>
                 <span className="sp-muted">{pending.length - nNew} update{pending.length - nNew === 1 ? '' : 's'} · {nNew} new · {items.filter((x) => x.st.done).length} already saved · {items.length - pending.length - items.filter((x) => x.st.done).length} skipped or nothing to change</span>

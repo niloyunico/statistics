@@ -10321,6 +10321,8 @@ function SpPerson({
   onToggle,
   onOpen,
   onUndo,
+  onSaveOne,
+  saving,
   setRoute
 }) {
   const view = spPlan(p, st, staff);
@@ -10386,7 +10388,12 @@ function SpPerson({
   }, "Open profile"), React.createElement("button", {
     className: "btn sm",
     onClick: onUndo
-  }, "Undo")) : React.createElement(React.Fragment, null, React.createElement("button", {
+  }, "Undo")) : React.createElement(React.Fragment, null, st.choice !== 'skip' && (isNew || rec && counts.fill + counts.replace > 0) && React.createElement("button", {
+    className: "btn pri sm",
+    disabled: saving,
+    onClick: onSaveOne,
+    title: "Save only this person now, with the ticks below"
+  }, saving ? 'Saving…' : isNew ? 'Create this person' : 'Save this person'), React.createElement("button", {
     className: "btn sm",
     onClick: () => onOpen('update')
   }, "Update existing\u2026"), React.createElement("button", {
@@ -10483,6 +10490,7 @@ function StaffPasteView({
   const [filter, setFilter] = useState('all');
   const [openCards, setOpenCards] = useState({});
   const [dlg, setDlg] = useState(null);
+  const [savingN, setSavingN] = useState(null);
   const staff = store && store.staff || [];
   const matches = useMemo(() => (people || []).map(p => SI ? SI.matchPerson(Object.assign({}, p, {
     fields: Object.assign({}, p.fields, (state[p.n] || {}).edits || {})
@@ -10583,6 +10591,32 @@ function StaffPasteView({
     }));
     spToast(done[0].name + (done[0].what === 'created' ? ' added to the register.' : ' updated.'));
     return true;
+  };
+  const saveCard = async x => {
+    if (x.isNew && (x.match.candidates || []).length) {
+      setDlg({
+        n: x.p.n,
+        mode: 'create'
+      });
+      spToast('This may already be on the register — compare first.', 'info');
+      return;
+    }
+    if (x.isNew && !String(x.pe.fields.name || '').trim()) {
+      setErr('Form #' + x.p.n + ' has no name — type it before creating the record.');
+      goCard(x.p.n);
+      return;
+    }
+    const what = x.isNew ? 'Create a new staff record for ' + (x.pe.fields.name || 'this person') + ' (' + (x.plan.rows.length - x.counts.keep) + ' fields)?' : 'Update ' + x.rec.name + (x.rec.emp_id ? ' (' + x.rec.emp_id + ')' : '') + '?\n\nFill ' + x.counts.fill + ' · replace ' + x.counts.replace + ' · keep ' + x.counts.keep + '.';
+    if (!window.confirm(what + '\n\nThe form is kept on the record; Undo is on the card.')) return;
+    setSavingN(x.p.n);
+    setErr('');
+    try {
+      await saveOne(x);
+    } catch (e) {
+      setErr('#' + x.p.n + ' not saved: ' + (e && e.message || 'the save failed') + ' Reload the staff list and check the record before trying again.');
+    } finally {
+      setSavingN(null);
+    }
   };
   const applyAll = async () => {
     if (!pending.length) return;
@@ -10852,14 +10886,19 @@ function StaffPasteView({
   }, "Profile"), " ", React.createElement("button", {
     className: "btn sm",
     onClick: () => undo(x)
-  }, "Undo")) : React.createElement(React.Fragment, null, x.status.code === 'new' ? React.createElement("button", {
+  }, "Undo")) : React.createElement(React.Fragment, null, x.st.choice !== 'skip' && (x.isNew || x.rec && x.counts.fill + x.counts.replace > 0) && React.createElement(React.Fragment, null, React.createElement("button", {
     className: "btn pri sm",
+    disabled: savingN === x.p.n,
+    onClick: () => saveCard(x),
+    title: "Save only this person now"
+  }, savingN === x.p.n ? 'Saving…' : 'Save'), ' '), x.status.code === 'new' ? React.createElement("button", {
+    className: "btn sm",
     onClick: () => setDlg({
       n: x.p.n,
       mode: 'create'
     })
   }, "Create\u2026") : React.createElement("button", {
-    className: "btn pri sm",
+    className: "btn sm",
     onClick: () => setDlg({
       n: x.p.n,
       mode: 'update'
@@ -10909,7 +10948,7 @@ function StaffPasteView({
     style: {
       marginBottom: 10
     }
-  }, "Ticked rows are written. Blanks on the register start ticked; a mismatch starts unticked. ", React.createElement("b", null, "Update existing\u2026"), " / ", React.createElement("b", null, "Create new\u2026"), " open the side-by-side compare with more choices, and save that one person at once."), shown.map(x => React.createElement(SpPerson, {
+  }, "Each person is saved on their own: set the ticks on their card and press ", React.createElement("b", null, "Save this person"), " (or ", React.createElement("b", null, "Create this person"), "). Blanks on the register start ticked; a mismatch starts unticked. ", React.createElement("b", null, "Update existing\u2026"), " / ", React.createElement("b", null, "Create new\u2026"), " open the side-by-side compare with more choices."), shown.map(x => React.createElement(SpPerson, {
     key: x.p.n,
     p: x.p,
     st: x.st,
@@ -10926,13 +10965,15 @@ function StaffPasteView({
       mode
     }),
     onUndo: () => undo(x),
+    onSaveOne: () => saveCard(x),
+    saving: savingN === x.p.n,
     setRoute: setRoute
   })), React.createElement("div", {
     className: "sp-step",
     style: {
       marginTop: 6
     }
-  }, React.createElement("i", null, "5"), "Save the rest together"), React.createElement("div", {
+  }, React.createElement("i", null, "5"), "Or save all the rest together (optional)"), React.createElement("div", {
     style: {
       display: 'flex',
       gap: 10,
