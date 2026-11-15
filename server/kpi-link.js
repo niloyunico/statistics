@@ -178,7 +178,7 @@ function linkedMonthlyFrom(ctx, def, yms) {
   if (rule === 'docaudit') {
     months.forEach((ym) => {
       const c = (ctx.docAudit || {})[ym];
-      if (c && (c.den > 0)) out[ym] = { num: c.num, den: c.den, value: c.value, source: 'doc-audit', areas: c.areas || null };
+      if (c && (c.den > 0)) out[ym] = { num: c.num, den: c.den, value: c.value, source: 'doc-audit', areas: c.areas || null, records: c.records || null, byTool: c.byTool || null };
     });
     return out;
   }

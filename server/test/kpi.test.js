@@ -518,5 +518,62 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   r = await call('GET /api/kpi/definitions', viewer);
   assert.ok(r.body.defs.find((d) => d.id === SAT).doc.facts.some(([l, v]) => l === 'Measured' && /^Every 6 months/.test(v)));
 
+  /* ---- 2C owes nothing before the Documentation Audit module existed (floorStart, never stored) ---- */
+  const DOCK = 'kpi-documentation';
+  const docListed = (await call('GET /api/kpi/defs', viewer)).body.defs.find((d) => d.id === DOCK);
+  if (docListed) {
+    deps.docAuditSince = async () => null;
+    const missingNow = async () => (await call('GET /api/kpi/missing', manager, { query: { month: '2026-10' } })).body.missing.map((m) => m.id);
+    const before = await missingNow();
+    deps.docAuditSince = async () => '2026-11';
+    assert.equal((await call('GET /api/kpi/defs', viewer)).body.defs.find((d) => d.id === DOCK).floorStart, '2026-11', 'the defs carry the floor');
+    r = await call('GET /api/kpi/values', viewer, { query: { from: '2026-09', to: '2026-10' } });
+    assert.equal(r.body.values[DOCK]['2026-10'].notStarted, true, 'October is before the audit module: not owed');
+    const after = await missingNow();
+    if (before.indexOf(DOCK) >= 0) assert.ok(after.indexOf(DOCK) < 0, 'and no longer in the missing list');
+    assert.ok(!kpi._mem.kpiDefs.get(DOCK).floorStart, 'the floor is never stored');
+    deps.docAuditSince = async () => null;
+  }
+  assert.equal(K.startOf({ startMonth: '2026-10', floorStart: '2026-11' }, {}), '2026-11');
+  assert.equal(K.startOf({ startMonth: '2026-12', floorStart: '2026-11' }, {}), '2026-12', 'a later own start wins');
+
+  /* ---- "up to now": a report may include the running month, but is never finalised while it runs ---- */
+  r = await call('GET /api/kpi/report/:id', viewer, { params: { id: K.reportId('2026-10', '2026-11') } });
+  assert.equal(r.status, 200, 'a period ending with the running month can be read');
+  r = await call('POST /api/kpi/report/:id/finalize', manager, { params: { id: K.reportId('2026-11', '2026-11') } });
+  assert.equal(r.status, 400); assert.equal(r.body.code, 'running');
+
+  /* ---- Delete this month (administrators): blank in Nursing KPI only ---- */
+  const blank = (who, kpiId, month, note) => call('POST /api/kpi/values/:kpi/:month/blank', who, { params: { kpi: kpiId, month }, body: note == null ? {} : { note } });
+  assert.equal((await blank(manager, 'kpi-turnover', '2026-10', 'x')).status, 403, 'administrators only');
+  assert.equal((await blank(admin, 'kpi-turnover', '2026-10')).status, 400, 'a reason is required');
+  const shownBefore = (await call('GET /api/kpi/values', viewer, { query: { from: '2026-09', to: '2026-10' } })).body.values['kpi-turnover']['2026-10'].value;
+  r = await blank(admin, 'kpi-turnover', '2026-10', 'October not complete');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual([r.body.cell.source, r.body.cell.value, r.body.cell.note], ['deleted', null, 'October not complete']);
+  const hist = kpi._mem.kpiMonths.get('kpi-turnover:2026-10').history;
+  assert.equal(hist[hist.length - 1].action, 'deleted by an administrator'); assert.equal(hist[hist.length - 1].was, shownBefore, 'the figure it hid is kept');
+  assert.equal(logged.pop().action, 'kpi_value');
+  r = await call('GET /api/kpi/values', viewer, { query: { from: '2026-09', to: '2026-10' } });
+  assert.equal(r.body.values['kpi-turnover']['2026-10'].source, 'deleted');
+  assert.equal((await blank(admin, 'kpi-turnover', '2026-10', 'again')).body.unchanged, true);
+  assert.equal((await call('DELETE /api/kpi/values/:kpi/:month', manager, { params: { kpi: 'kpi-turnover', month: '2026-10' } })).status, 403, 'only an administrator restores');
+  r = await call('DELETE /api/kpi/values/:kpi/:month', admin, { params: { kpi: 'kpi-turnover', month: '2026-10' } });
+  assert.equal(r.status, 200); assert.notEqual(r.body.cell.source, 'deleted', 'restored');
+  assert.equal(r.body.cell.value, shownBefore, 'the typed figure the deletion hid is back');
+  assert.ok(!kpi._mem.kpiMonths.get('kpi-turnover:2026-10').removedAt);
+  // Typing a figure over a deleted month replaces the deletion (kept in the history).
+  await blank(admin, 'kpi-turnover', '2026-10', 'redo');
+  r = await put(manager, 'kpi-turnover', '2026-10', { num: 4, den: 100 });
+  assert.equal(r.status, 200, JSON.stringify(r.body)); assert.deepEqual([r.body.cell.source, r.body.cell.value], ['manual', 4]);
+  assert.ok(!kpi._mem.kpiMonths.get('kpi-turnover:2026-10').blanked, 'the mark is gone');
+  // A source sending figures again restores a deleted month of the KPIs linked to it — and only those.
+  await blank(admin, 'kpi-clabsi', '2026-10', 'quarter not complete');
+  await blank(admin, 'kpi-turnover', '2026-10', 'keep this one');
+  const back = await kpi.restoreBlanked(CLABSI, ['2026-10'], 'Test');
+  assert.deepEqual(back, ['kpi-clabsi:2026-10']);
+  assert.ok(kpi._mem.kpiMonths.get('kpi-clabsi:2026-10').removedAt);
+  assert.ok(kpi._mem.kpiMonths.get('kpi-turnover:2026-10').blanked && !kpi._mem.kpiMonths.get('kpi-turnover:2026-10').removedAt, 'another KPI stays deleted');
+
   console.log('Nursing KPI checks passed.');
 })().catch((e) => { console.error(e); process.exit(1); });

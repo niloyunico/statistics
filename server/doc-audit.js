@@ -557,9 +557,19 @@ async function monthlyFigures(yms) {
     });
     const rows = Object.values(byDept).map((d) => Object.assign(d, { value: d.yes + d.no > 0 ? DA.round1((d.yes / (d.yes + d.no)) * 100) : null }));
     const num = rows.reduce((s, d) => s + d.yes, 0), den = rows.reduce((s, d) => s + d.yes + d.no, 0);
-    out[ym] = { num, den: den || null, value: den > 0 ? DA.round1((num / den) * 100) : null, source: 'doc-audit', areas: rows.length, records: mine.length, byDept: rows };
+    // Records per audit tool — KPI 2C pools every tool; the audit screen's per-tool totals differ.
+    const byTool = {};
+    mine.forEach((x) => { const k = x.toolName || x.toolId || 'tool'; byTool[k] = (byTool[k] || 0) + 1; });
+    out[ym] = { num, den: den || null, value: den > 0 ? DA.round1((num / den) * 100) : null, source: 'doc-audit', areas: rows.length, records: mine.length, byDept: rows, byTool };
   });
   return out;
+}
+/* The month this module was set up (`seededAt`): Documentation Accuracy (KPI 2C) owes no figure
+   before it — there were no audits to count. null when not set up / the KPI link is off. */
+async function moduleSince() {
+  const cfg = await getConfig();
+  if (cfg.kpiLink === false || !cfg.seededAt) return null;
+  return DA.hospitalNow(cfg.seededAt).month;
 }
 /* The departments expected to audit each month (enabled), for the KPI's "units expected" —
    from the month the module was set up (`since`): no department owes an audit for a month before
@@ -1367,4 +1377,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, monthlyFigures, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, ensureCathPostopMerge, ensureKpiTrim, ensureAnaesOther, cfgFor, _mem: mem };
+module.exports = { mount, monthlyFigures, moduleSince, enabledDepts, ensureSeed, ensureCathSplit, ensureAldreteItem, ensureOtAreaMerge, ensureOtPostopMerge, ensureCathPostopMerge, ensureKpiTrim, ensureAnaesOther, cfgFor, _mem: mem };

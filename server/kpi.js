@@ -258,7 +258,22 @@ function pickSchedule(b, cur) {
 const SCHED_FIELDS = ['freqMonths', 'cycleMonths', 'cycles', 'startMonth'];
 const schedOfDoc = (d) => ({ freqMonths: K.freqOf(d), cycleMonths: K.has(d && d.cycleMonths) ? +d.cycleMonths : null, cycles: K.has(d && d.cycles) ? +d.cycles : null, startMonth: (d && K.isMonth(d.startMonth)) ? d.startMonth : null });
 const schedWords = (s) => K.freqLabel(s, true) + (s.cycleMonths || s.cycles ? ' · ' + (s.cycles || 'programme') + ' cycle(s) of ' + (s.cycleMonths ? s.cycleMonths + ' months' : 'programme length') : '') + (s.startMonth ? ' · from ' + K.fmtMonth(s.startMonth) : '');
-const defsAsPlain = (docs) => activeDefs(docs).map((d) => Object.assign({ id: d._id }, d));
+/* A KPI fed by the Documentation Audit (2C) owes nothing before that module was set up: its start
+   is floored at the module's first month (def.floorStart — read by kpi-core startOf, never stored).
+   Without it, 2C ("starts Oct 2026") showed October as missing although no audit could exist yet. */
+const DOC_AUDIT_IND = 'ind-nursing-documentation-accuracy';
+const fromAuditModule = (d) => !!(d && d.source && (d.source.rule === 'docaudit' || d.source.indId === DOC_AUDIT_IND));
+let _since = { at: 0, v: null };
+async function auditSince(deps) {
+  if (deps && typeof deps.docAuditSince === 'function') return deps.docAuditSince();
+  if (Date.now() - _since.at < 60000) return _since.v;
+  let v = null;
+  try { v = await require('./doc-audit').moduleSince(); } catch (e) { v = null; }
+  _since = { at: Date.now(), v };
+  return v;
+}
+const withFloor = (d, since) => (since && fromAuditModule(d) ? Object.assign({}, d, { floorStart: since }) : d);
+const defsAsPlain = (docs, since) => activeDefs(docs).map((d) => withFloor(Object.assign({ id: d._id }, d), since));
 
 /* A report's live body: rows for the period, plus 12 months of trend ending with it. With
    `calc`, every row also carries the evidence for each month of the period (how the figure
@@ -267,7 +282,7 @@ async function computeReport(from, to, cfg, deps, opts) {
   const months = K.monthsBetween(from, to);
   const trendMonths = months.length >= 12 ? months : K.monthsBetween(K.addMonth(to, -11), to);
   const all = [...new Set(trendMonths.concat(months))].sort();
-  const defs = defsAsPlain(await allDocs(DEFS));
+  const defs = defsAsPlain(await allDocs(DEFS), await auditSince(deps));
   const v = await valuesFor(defs, all, deps, cfg);
   const rows = K.buildRows(defs, v.cells, months, trendMonths, cfg);
   const out = { months, trendMonths, rows, summary: K.summarize(rows) };
@@ -399,7 +414,8 @@ function mount(app, opts) {
       await ensureReady(now());
       const docs = await allDocs(DEFS);
       const all = req.query.all === '1' && can(a, 'edit');
-      res.json({ ok: true, defs: (all ? docs.slice().sort((x, y) => (x.order || 0) - (y.order || 0)) : activeDefs(docs)).map(cleanDef) });
+      const since = await auditSince(deps);
+      res.json({ ok: true, defs: (all ? docs.slice().sort((x, y) => (x.order || 0) - (y.order || 0)) : activeDefs(docs)).map((d) => withFloor(cleanDef(d), since)) });
     } catch (e) { fail(res, e, 'Could not load the KPIs.'); }
   });
 
@@ -620,7 +636,7 @@ function mount(app, opts) {
       const months = K.monthsBetween(from, to);
       await ensureReady(now());
       const cfg = await getConfig();
-      const defs = defsAsPlain(await allDocs(DEFS));
+      const defs = defsAsPlain(await allDocs(DEFS), await auditSince(deps));
       const v = await valuesFor(defs, months, deps, cfg);
       // Data checks per cell (error / warn marks on the grid) — only when asked: they read the
       // submissions and Device Days too.
@@ -649,7 +665,7 @@ function mount(app, opts) {
       if (!K.isMonth(ym)) return res.status(400).json({ ok: false, error: 'Invalid month.' });
       const doc = await getDoc(DEFS, String(req.params.kpi || ''));
       if (!doc) return res.status(404).json({ ok: false, error: 'This KPI no longer exists.' });
-      const def = Object.assign({ id: doc._id }, doc);
+      const def = withFloor(Object.assign({ id: doc._id }, doc), await auditSince(deps));
       const cfg = await getConfig();
       const months = K.monthsBetween(K.addMonth(ym, -6), ym);
       const v = await valuesFor([def], months, deps, cfg);
@@ -677,7 +693,7 @@ function mount(app, opts) {
       if (live && b.baseUpdatedAt !== undefined && b.baseUpdatedAt !== cur.updatedAt) {
         return res.status(409).json({ ok: false, code: 'stale', error: 'Someone else saved this month while you were typing. Their figure is shown now — check it before saving again.', current: { num: cur.num, den: cur.den, value: cur.value, note: cur.note, updatedAt: cur.updatedAt, updatedBy: cur.updatedByName || cur.updatedBy } });
       }
-      const dd = Object.assign({ id: def._id }, def);
+      const dd = withFloor(Object.assign({ id: def._id }, def), await auditSince(deps));
       const cfg = await getConfig();
       // A KPI measured every N months owes one figure per period, in the period's last month.
       const f = K.freqOf(dd);
@@ -730,17 +746,65 @@ function mount(app, opts) {
       const kpiId = String(req.params.kpi || ''), ym = String(req.params.month || '');
       const cur = await getDoc(MONTHS, kpiId + ':' + ym);
       if (!cur || cur.removedAt) return res.json({ ok: true, unchanged: true });
+      // A month an administrator deleted is restored by an administrator.
+      if (cur.blanked && !a.unrestricted) return res.status(403).json({ ok: false, error: 'Only an administrator can restore a deleted month.' });
       const def = await getDoc(DEFS, kpiId);
       const t = now();
-      const doc = Object.assign({}, cur, { removedAt: t, removedBy: actor(req, a), updatedAt: stamp(t), updatedBy: actor(req, a), updatedByName: nameOf(req, a),
-        history: (cur.history || []).concat([{ at: t, by: actor(req, a), action: cur.override ? 'reverted to the system figure' : 'cleared' }]).slice(-50) });
+      // Undoing a deletion that hid a TYPED figure brings that figure back; otherwise the system figure shows.
+      const back = cur.blanked && cur.hidTyped ? cur.hidTyped : null;
+      const what = cur.blanked ? (back ? 'deletion undone — the typed figure is back' : 'deletion undone — the system figure is shown again') : cur.override ? 'reverted to the system figure' : 'cleared';
+      const stampOf = { updatedAt: stamp(t), updatedBy: actor(req, a), updatedByName: nameOf(req, a), history: (cur.history || []).concat([{ at: t, by: actor(req, a), action: what }]).slice(-50) };
+      const doc = back
+        ? Object.assign({}, cur, back, { blanked: false, hidTyped: null, removedAt: null, removedBy: null }, stampOf)
+        : Object.assign({}, cur, { blanked: false, removedAt: t, removedBy: actor(req, a) }, stampOf);
       if (!(await putDoc(MONTHS, doc, cur.updatedAt))) return res.status(409).json({ ok: false, error: 'Someone else saved this month at the same moment. Reload and try again.' });
-      activity.log(req, 'kpi_value', { target: ((def && def.name) || kpiId) + ' · ' + K.fmtMonth(ym), detail: cur.override ? 'reverted to the system figure' : 'cleared' });
+      activity.log(req, 'kpi_value', { target: ((def && def.name) || kpiId) + ' · ' + K.fmtMonth(ym), detail: what });
       const cfgNow = await getConfig();
       const auto = def ? (await systemFor(Object.assign({ id: def._id }, def), [ym], cfgNow, deps))[ym] : null;
       const autoFill = K.cfgOf(cfgNow).autoFill !== false && !(def && def.autoFill === false);
-      res.json({ ok: true, cell: K.resolveCell(auto, null, { autoFill }) });
+      res.json({ ok: true, cell: K.resolveCell(auto, back ? doc : null, { autoFill }) });
     } catch (e) { fail(res, e, 'Could not clear the figure.'); }
+  });
+
+  /* DELETE A MONTH'S FIGURE (administrators): the month shows empty in Nursing KPI — a system figure
+     from the quality data included — until it is restored (DELETE above), a figure is typed over it,
+     or (KPI 3B) the Call bell figures are sent again. The quality data itself is NOT touched.
+     Body { note } — the reason, required, kept in the history. */
+  app.post('/api/kpi/values/:kpi/:month/blank', guard, async (req, res) => {
+    try {
+      const a = await resolve(req, res, null); if (!a) return;
+      if (!a.unrestricted) return res.status(403).json({ ok: false, error: 'Only an administrator can delete a month’s figure.' });
+      const kpiId = String(req.params.kpi || ''), ym = String(req.params.month || '');
+      if (!K.isMonth(ym)) return res.status(400).json({ ok: false, error: 'Invalid month.' });
+      const def = await getDoc(DEFS, kpiId);
+      if (!def || def.removedAt) return res.status(404).json({ ok: false, error: 'This KPI no longer exists.' });
+      const note = str(body(req).note, 500);
+      if (!note) return res.status(400).json({ ok: false, code: 'note', error: 'Say why this month’s figure is being deleted — the reason is kept in the history.' });
+      const id = kpiId + ':' + ym;
+      const cur = await getDoc(MONTHS, id);
+      if (cur && !cur.removedAt && cur.blanked) return res.json({ ok: true, unchanged: true });
+      const dd = Object.assign({ id: def._id }, def);
+      const cfg = await getConfig();
+      const auto = (await systemFor(dd, [ym], cfg, deps))[ym] || null;
+      const autoFill = K.cfgOf(cfg).autoFill !== false && dd.autoFill !== false;
+      const shown = K.resolveCell(auto, cur && !cur.removedAt ? cur : null, { autoFill });
+      // A TYPED figure under the deletion is kept, so Restore brings back exactly what was shown.
+      const hidTyped = cur && !cur.removedAt && !cur.blanked && (K.has(cur.value) || K.has(cur.num))
+        ? { num: cur.num, den: cur.den, value: cur.value, note: cur.note || '', override: !!cur.override, autoAt: cur.autoAt || null, confirmed: !!cur.confirmed, deviation: cur.deviation || null } : null;
+      const t = now();
+      const doc = {
+        _id: id, kpiId, month: ym, num: null, den: null, value: null, note, blanked: true, hidTyped,
+        override: false, autoAt: auto && K.has(auto.value) ? { num: auto.num, den: auto.den, value: auto.value, source: auto.source } : null,
+        confirmed: false, deviation: null,
+        enteredAt: (cur && cur.enteredAt) || t, enteredBy: (cur && cur.enteredBy) || actor(req, a),
+        blankedAt: t, blankedBy: actor(req, a), blankedByName: nameOf(req, a),
+        updatedAt: stamp(t), updatedBy: actor(req, a), updatedByName: nameOf(req, a), removedAt: null, removedBy: null,
+        history: ((cur && cur.history) || []).concat([{ at: t, by: actor(req, a), action: 'deleted by an administrator', note, was: K.has(shown.value) ? shown.value : null, wasSource: shown.source }]).slice(-50),
+      };
+      if (!(await putDoc(MONTHS, doc, cur ? cur.updatedAt : null))) return res.status(409).json({ ok: false, code: 'stale', error: 'Someone else saved this month at the same moment. Reload and try again.' });
+      activity.log(req, 'kpi_value', { target: def.name + ' · ' + K.fmtMonth(ym), detail: 'deleted by an administrator' + (K.has(shown.value) ? ' (was ' + K.fmt(dd, shown.value) + ')' : '') + ' · ' + note.slice(0, 160) });
+      res.json({ ok: true, cell: K.resolveCell(auto, doc, { autoFill }) });
+    } catch (e) { fail(res, e, 'Could not delete the figure.'); }
   });
 
   /* ----------------------------------------------------------------- reports */
@@ -881,6 +945,8 @@ function mount(app, opts) {
       const cfg = await getConfig();
       const cur = await getDoc(REPORTS, id);
       if (cur && !cur.removedAt && cur.state === 'final') return res.json({ ok: true, report: reportOut(cur, null, cfg), unchanged: true });
+      // A period that reaches into the running month ("up to now") is a look so far, never frozen.
+      if (p.to >= K.thisMonth(now())) return res.status(400).json({ ok: false, code: 'running', error: K.fmtMonthLong(p.to) + ' is not over yet — a report can be finalised once the month has ended.' });
       const t = now();
       // Zero tolerance: every error-level data check must be fixed or acknowledged with a
       // reason (for exactly the data it looked at) before the figures can be frozen.
@@ -978,7 +1044,7 @@ function mount(app, opts) {
   /* The KPI documents that are not a period report: the KPI Definition document (Word) and the
      year's Data collection calendar (screen, Excel). Print / PDF of both are made in the browser. */
   const liveDefsWithNames = async () => {
-    const defs = defsAsPlain(await allDocs(DEFS));
+    const defs = defsAsPlain(await allDocs(DEFS), await auditSince(deps));
     let catalog = [], areas = [];
     try { const ctx = await link.loadContext([K.lastClosedMonth(now())], deps); catalog = link.indicatorCatalog(ctx); areas = link.areaList(ctx); } catch (e) { catalog = []; }
     const indName = (id) => { const x = catalog.find((c) => String(c.id) === String(id)); return x ? x.name : null; };
@@ -991,7 +1057,7 @@ function mount(app, opts) {
     try {
       const a = await resolve(req, res, 'view'); if (!a) return;
       const cfg = await getConfig();
-      const defs = defsAsPlain(await allDocs(DEFS));
+      const defs = defsAsPlain(await allDocs(DEFS), await auditSince(deps));
       const cal = K.calendar(defs, req.query.year, cfg);
       res.json({ ok: true, calendar: cal, defs: defs.map((d) => ({ id: d.id, code: d.code || '', name: d.name, pillar: d.pillar, freqMonths: K.freqOf(d), freq: K.freqLabel(d, true),
         linked: !!(d.source && d.source.indId), autoFill: d.autoFill !== false, units: (d.units || []).length, startMonth: K.startOf(d, cfg), schedule: K.scheduleText(d, cfg) })) });
@@ -1035,7 +1101,7 @@ function mount(app, opts) {
       const ym = K.isMonth(req.query.month) ? req.query.month : K.lastClosedMonth(now());
       const docs = await allDocs(DEFS);
       const cfg = await getConfig();
-      const defs = defsAsPlain(docs);
+      const defs = defsAsPlain(docs, await auditSince(deps));
       // Each KPI owes its latest due month on or before `ym`: the month itself for a monthly KPI,
       // the last ended period for one measured less often. A KPI not started yet owes nothing.
       const dueOf = new Map(defs.map((d) => [d.id, K.lastDue(d, ym, cfg)]));
@@ -1105,4 +1171,28 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount, ensureDraft, ensureSeed, ensureDocAuditLink, computeReport, _mem: mem };
+/* A month an administrator deleted ("Delete this month") comes back when its source sends figures
+   again — the Call bell page's "Update KPI 3B" for that month: the deletion is undone (history +
+   activity), so the full figure shows. Only KPIs linked to `indId`; only deleted months. → [ids] */
+async function restoreBlanked(indId, months, byName) {
+  const out = [];
+  const defs = (await allDocs(DEFS)).filter((d) => d && !d.removedAt && d.source && d.source.indId === indId);
+  for (const d of defs) {
+    for (const ym of (months || []).filter(K.isMonth)) {
+      const cur = await getDoc(MONTHS, d._id + ':' + ym);
+      if (!cur || cur.removedAt || !cur.blanked) continue;
+      const t = Date.now();
+      const who = byName || 'system';
+      const doc = Object.assign({}, cur, { blanked: false, removedAt: t, removedBy: who, updatedAt: stamp(t), updatedBy: who, updatedByName: who,
+        history: (cur.history || []).concat([{ at: t, by: who, action: 'deletion undone — the source figures were sent again' }]).slice(-50) });
+      if (await putDoc(MONTHS, doc, cur.updatedAt)) {
+        out.push(d._id + ':' + ym);
+        const entry = { action: 'kpi_value', username: 'system', name: who, target: (d.name || d._id) + ' · ' + K.fmtMonth(ym), detail: 'deleted month restored — the source figures were sent again' };
+        try { if (activity.record) await activity.record(entry); } catch (e) { /* never blocks the send */ }
+      }
+    }
+  }
+  return out;
+}
+
+module.exports = { mount, ensureDraft, ensureSeed, ensureDocAuditLink, computeReport, restoreBlanked, auditSince, _mem: mem };

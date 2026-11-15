@@ -149,7 +149,10 @@
 
     const toBody = (n) => (typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined') ? window.ReactDOM.createPortal(n, document.body) : n;   // a .card (backdrop-filter) would trap position:fixed
     return toBody(
-      <div className="modal-bg" onMouseDown={e => { if (e.target === e.currentTarget) cancel(); }}>
+      // A confirmation is always on top: it is often opened FROM another dialog (Nursing KPI's
+      // dialogs sit at z-index 1200, above .modal-bg's 1000 — "Revert / Clear / Restore" asked
+      // behind the dialog and could not be pressed).
+      <div className="modal-bg" style={{ zIndex: 10000 }} onMouseDown={e => { if (e.target === e.currentTarget) cancel(); }}>
         <div className="modal" style={{ width: 'min(420px,92vw)' }}>
           <div style={{ padding: '22px 22px 18px' }}>
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>

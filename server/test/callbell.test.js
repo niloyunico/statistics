@@ -47,7 +47,7 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
 
   /* ---- server: upload → store (no double counting) → quality ---- */
   const applied = [];
-  const hidden = new Set(['Level 9']), restoredLog = [];
+  const hidden = new Set(['Level 9']), restoredLog = [], restoreCalls = [];
   const quality = { 'Level 9': true, 'Overall Hospital': true, 'Level 11': false };
   const routes = {};
   const reg = (m) => (path, g, h) => { routes[m + ' ' + path] = h; };
@@ -59,6 +59,8 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
     parsePdf: async (buf) => buf.slice(5).toString(),
     // the Quality console had removed the indicator on Level 9: sending restores it
     unhide: async (areas) => { const back = areas.filter((a) => hidden.has(a)); back.forEach((a) => hidden.delete(a)); restoredLog.push(...back); return back; },
+    // KPI 3B months an administrator deleted come back when the figures are sent
+    restoreBlanked: async (indId, months, by) => { restoreCalls.push({ indId, months, by }); return months.map((m) => 'kpi-call-bell:' + m); },
   } });
   const admin = { unrestricted: true, username: 'admin', name: 'Admin', perms: null };
   const viewer = { unrestricted: false, username: 'v', perms: { kpi: ['view'] } };
@@ -148,6 +150,9 @@ const L11 = page('11th Floor A', ['11072026-10-20 10:00:00----2026-10-20 10:01:0
   assert.equal((await call('POST /api/callbell/send', admin, { body: { months: ['bogus'] } })).status, 400);
   res = await call('POST /api/callbell/send', admin, { body: { months: ['2026-12'] } });
   assert.equal(res.status, 200);
+  assert.deepEqual(restoreCalls[restoreCalls.length - 1], { indId: 'ind-call-bell-response', months: ['2026-12'], by: 'Admin' }, 'a deleted KPI 3B month is restored by the send');
+  assert.deepEqual(res.body.restored, ['kpi-call-bell:2026-12']);
+  assert.ok(!res.body.sent.some((x) => x.restoredKpiMonths), 'kept apart from the per-unit results');
   assert.equal(last('Overall Hospital', 'Dec-26').den, 3); assert.equal(last('Level 10', 'Dec-26').num, 2.33);
   res = await call('GET /api/callbell/summary', viewer, { query: { month: '2026-12' } });
   assert.ok(res.body.hospital.sent && res.body.hospital.sent.calls === 3);

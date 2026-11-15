@@ -39,6 +39,12 @@
     const j = await r.json().catch(() => null);
     if (!j) throw new Error('The server did not answer. Please try again.');
     if (!j.ok) { const e = new Error(j.error || 'Something went wrong.'); e.status = r.status; e.body = j; throw e; }
+    // An audit saved / completed / signed / published / removed changes KPI 2C (Documentation
+    // Accuracy): tell every open Nursing KPI screen — this tab and the others — to re-read now.
+    const m = String((opts && opts.method) || 'GET').toUpperCase();
+    if (m !== 'GET' && /\/api\/doc-audit\/(audits|bulk|config)/.test(url)) {
+      try { window.dispatchEvent(new Event('kpi:data-changed')); localStorage.setItem('kpiDataBump', String(Date.now())); } catch (e) { /* private window */ }
+    }
     return j;
   }
   const post = (url, body, method) => api(url, { method: method || 'POST', body: JSON.stringify(body || {}) });
@@ -1032,8 +1038,20 @@
                       <div><button className="da-btn sm" style={{ marginTop: 4 }} onClick={() => setCap({ dept: r, month: p.to, tool: cur, summary: r.months[p.to] || s })}>{meta.canEdit ? 'Action plan' : 'View plan'}</button></div></td>
                   </tr>;
                 })}
-                {data.hospital[cur.id] && <tr className="tot"><td>HOSPITAL TOTAL</td><td className="n">{data.hospital[cur.id].total.records}</td>{data.hospital[cur.id].total.kpis.map((k) => <td key={k.id} className="n">{kCell(k, data.hospital[cur.id].total.records)}</td>)}<td style={{ fontSize: 11.8 }}>{data.hospital[cur.id].total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')}</td><td /></tr>}
+                {data.hospital[cur.id] && <tr className="tot"><td>HOSPITAL TOTAL<div className="da-sub" style={{ fontWeight: 600 }}>{cur.short || cur.name} only</div></td><td className="n">{data.hospital[cur.id].total.records}</td>{data.hospital[cur.id].total.kpis.map((k) => <td key={k.id} className="n">{kCell(k, data.hospital[cur.id].total.records)}</td>)}<td style={{ fontSize: 11.8 }}>{data.hospital[cur.id].total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')}</td><td /></tr>}
               </tbody></table></div>
+            {/* The one figure Nursing KPI 2C uses: every tool pooled. The tool table above is one tool
+                only, so its HOSPITAL TOTAL can differ (IPD 80.0% vs 81.6% all tools). */}
+            {(() => {
+              const ov = data.overall.total;
+              if (!ov || !ov.records) return null;
+              const split = (data.tools || []).map((t) => [t, data.hospital[t.id]]).filter((x) => x[1] && x[1].total.records).map(([t, h]) => (t.short || t.name) + ' ' + h.total.records).join(' · ');
+              return <div className="da-pad" style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', background: '#f2f7fd', borderTop: '1px solid var(--line, #e3e9f0)' }}>
+                <b style={{ fontSize: 12.5 }}>ALL TOOLS — the figure Nursing KPI 2C (Documentation Accuracy) uses:</b>
+                <b style={{ fontSize: 15, color: ov.accuracy >= 90 ? '#14713f' : '#a3172f' }}>{pctTxt(ov.accuracy)}</b>
+                <span className="da-sub">{ov.records} audit(s){split ? ' · ' + split : ''} · Σ Yes ÷ Σ (Yes + No) over every completed audit</span>
+              </div>;
+            })()}
             <div className="da-pad da-sub">Policy 9: a department below target for 2 consecutive months submits a corrective action plan with owner and due date, focused on its top 3 failing criteria (PDSA). Hover a KPI for its formula.</div>
           </div>}
           {data.months.length > 1 && data.rows.length > 0 && <div className="da-card">
@@ -1391,7 +1409,7 @@
       + '<table class="kt"><thead><tr><th>Department</th><th class="n">Records</th><th class="n">Nurses</th>' + t.kpis.map((k) => '<th class="n">' + esc(k.name) + '<br>' + (k.direction === 'lower' ? '≤ ' : '≥ ') + k.target + '%</th>').join('') + '<th>Top 3 failing criteria</th></tr></thead><tbody>'
       + audited.map((r) => '<tr><td class="d">' + esc(r.name) + (r.caps.length ? ' <span class="chip">CAP due</span>' : '') + (r.minRecords && r.total.records < r.minRecords * data.months.length ? '<br><small>' + r.total.records + ' of min ' + r.minRecords * data.months.length + '</small>' : '') + '</td><td class="n">' + r.total.records + '</td><td class="n">' + r.total.nurses + '</td>'
         + r.total.kpis.map((k) => '<td class="n">' + kv(k, r.total.records) + '</td>').join('') + '<td>' + esc(r.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count + (g.critical ? ' (C)' : '')).join(', ') || '—') + '</td></tr>').join('')
-      + (h ? '<tr class="tot"><td>HOSPITAL TOTAL</td><td class="n">' + h.total.records + '</td><td class="n">' + h.total.nurses + '</td>' + h.total.kpis.map((k) => '<td class="n">' + kv(k, h.total.records) + '</td>').join('') + '<td>' + esc(h.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>' : '')
+      + (h ? '<tr class="tot"><td>HOSPITAL TOTAL<br><small>' + esc(t.short || t.name) + ' only</small></td><td class="n">' + h.total.records + '</td><td class="n">' + h.total.nurses + '</td>' + h.total.kpis.map((k) => '<td class="n">' + kv(k, h.total.records) + '</td>').join('') + '<td>' + esc(h.total.topFailing.map((g) => '#' + g.no + ' ×' + g.count).join(', ')) + '</td></tr>' : '')
       + '</tbody></table>'
       + (idle.length ? '<div class="none blk"><b>No audits in this period:</b> ' + esc(idle.map((r) => r.name).join(', ')) + '</div>' : '')
       + '<div class="legend blk">' + t.kpis.map((k) => '<b>' + esc(k.name) + '</b> = ' + esc(DA.KPI_FORMULA_LABEL[k.formula] || '') + (k.criteria && k.criteria.length ? ' (criteria ' + k.criteria.map((c) => '#' + c.replace('c', '')).join(', ') + ')' : '')).join(' · ') + ' · <span class="off">red ▼</span> = below target · (C) = critical criterion.</div>';
@@ -1437,7 +1455,7 @@
       trend = '<table class="kt"><thead><tr><th>Department</th>' + data.months.map((m) => '<th class="n">' + esc(DA.fmtMonth(m)) + '</th>').join('') + '<th class="n">Period</th></tr></thead><tbody>'
         + audited.map((r) => '<tr><td class="d">' + esc(r.name) + '</td>' + data.months.map((m) => { const s2 = r.months[m]; return '<td class="n ' + band(s2.accuracy) + '">' + (s2.accuracy == null ? '·' : s2.accuracy + '%') + (s2.records ? '<small>' + s2.records + ' rec.</small>' : '') + '</td>'; }).join('')
           + '<td class="n ' + band(r.total.accuracy) + '"><b>' + (r.total.accuracy == null ? '—' : r.total.accuracy + '%') + '</b><small>' + r.total.records + ' rec.</small></td></tr>').join('')
-        + '<tr class="tot"><td>ALL DEPARTMENTS</td>' + data.months.map((m) => { const s2 = data.overall.months[m]; return '<td class="n">' + (s2.accuracy == null ? '·' : s2.accuracy + '%') + '<small>' + s2.records + ' rec.</small></td>'; }).join('') + '<td class="n">' + (data.overall.total.accuracy == null ? '—' : data.overall.total.accuracy + '%') + '</td></tr></tbody></table>'
+        + '<tr class="tot"><td>ALL DEPARTMENTS · ALL TOOLS<br><small>the figure Nursing KPI 2C uses</small></td>' + data.months.map((m) => { const s2 = data.overall.months[m]; return '<td class="n">' + (s2.accuracy == null ? '·' : s2.accuracy + '%') + '<small>' + s2.records + ' rec.</small></td>'; }).join('') + '<td class="n">' + (data.overall.total.accuracy == null ? '—' : data.overall.total.accuracy + '%') + '</td></tr></tbody></table>'
         + '<div class="legend">Documentation accuracy = Σ Yes ÷ Σ (Yes + No). Shading: ≥ 95% · ≥ 90% · ≥ 80% · below 80%.</div>';
     }
     // 4. criterion gaps per tool

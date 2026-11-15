@@ -314,8 +314,14 @@ function mount(app, opts) {
       }
       const out = [];
       for (const ym of months) out.push.apply(out, (await sendMonth(ym, nameOf(req, a))).map((x) => Object.assign({ month: ym }, x)));
+      // A KPI 3B month an administrator deleted ("Delete this month") comes back with these figures.
+      let restored = [];
+      try {
+        const restore = DEPS.restoreBlanked || require('./kpi').restoreBlanked;
+        restored = (await restore(IND_ID, months, nameOf(req, a))) || [];
+      } catch (e) { /* the send itself succeeded */ }
       activity.log(req, 'callbell_send', { target: 'Call Bell Response Time', detail: (b.force === true ? 're-sent ' : '') + months.join(', ') + ' · ' + out.filter((x) => !x.error && !x.skipped).length + ' figure(s) written' });
-      res.json({ ok: true, sent: out });
+      res.json({ ok: true, sent: out, restored });
     } catch (e) { fail(res, e, 'Could not send the figures.'); }
   });
 

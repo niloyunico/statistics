@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=1b21c94bb6","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=0b300a4cb9","docaudit":"/dist/docaudit.chunk.js?v=c326eb8769","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=88b6f0a949","manpower":"/dist/manpower.chunk.js?v=97ea3ad106","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=1b21c94bb6","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=5ef7468366","docaudit":"/dist/docaudit.chunk.js?v=d8122b8679","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=88b6f0a949","manpower":"/dist/manpower.chunk.js?v=97ea3ad106","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7060,7 +7060,12 @@ window.QI_CORRECTIONS_BY_DEFID = {
   /* When a KPI starts counting: its own start month if it has one, else the programme's
      ("All KPIs start on", cfg.cycleStart). Cycles, targets and missing-data checks all count from
      here; months before it are "not started" and never reported as missing. */
-  const startOf = (def, cfg) => (def && isMonth(def.startMonth) ? def.startMonth : cfgOf(cfg).cycleStart);
+  // `floorStart` (set by the server, never stored): a KPI fed by a module cannot owe a month before
+  // that module existed — e.g. Documentation Accuracy before the Documentation Audit was set up.
+  const startOf = (def, cfg) => {
+    const own = def && isMonth(def.startMonth) ? def.startMonth : cfgOf(cfg).cycleStart;
+    return def && isMonth(def.floorStart) && def.floorStart > own ? def.floorStart : own;
+  };
   const isStarted = (def, ym, cfg) => isMonth(ym) && ym >= startOf(def, cfg);
   // A KPI that counts: not archived and not switched off (disabled KPIs stay on Manage KPIs only).
   const isLive = (d) => !!d && d.active !== false && !d.removedAt && !d.disabled;
@@ -7285,6 +7290,14 @@ window.QI_CORRECTIONS_BY_DEFID = {
   function resolveCell(auto, saved, opts) {
     const a = auto && (has(auto.value) || has(auto.num)) ? auto : null;
     const fill = !(opts && opts.autoFill === false);
+    // Deleted by an administrator: the month shows empty in Nursing KPI (the quality data is not
+    // touched). `hidden` keeps the system figure for the dialog; Restore / a typed figure / a
+    // Call bell send brings a figure back.
+    if (saved && !saved.removedAt && saved.blanked) {
+      return { num: null, den: null, value: null, source: 'deleted', note: saved.note || '', deleted: true, auto: null, hidden: a, hint: null,
+        hiddenTyped: saved.hidTyped && (has(saved.hidTyped.value) || has(saved.hidTyped.num)) ? { num: saved.hidTyped.num, den: saved.hidTyped.den, value: saved.hidTyped.value } : null,
+        savedAt: saved.updatedAt, savedBy: saved.updatedByName || saved.updatedBy || '', blankedAt: saved.blankedAt || null };
+    }
     if (saved && !saved.removedAt) {
       return { num: has(saved.num) ? saved.num : null, den: has(saved.den) ? saved.den : null, value: has(saved.value) ? saved.value : null,
         source: a && fill ? 'edited' : 'manual', note: saved.note || '', auto: fill ? a : null, hint: fill ? null : a,
@@ -19087,6 +19100,9 @@ Object.assign(window, {
     const toBody = n => typeof window !== 'undefined' && window.ReactDOM && window.ReactDOM.createPortal && typeof document !== 'undefined' ? window.ReactDOM.createPortal(n, document.body) : n;
     return toBody(React.createElement("div", {
       className: "modal-bg",
+      style: {
+        zIndex: 10000
+      },
       onMouseDown: e => {
         if (e.target === e.currentTarget) cancel();
       }

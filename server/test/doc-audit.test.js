@@ -333,6 +333,10 @@ const allYes = (tool) => { const a = {}; tool.criteria.forEach((c) => { a[c.id] 
   const exp2 = await docAudit.enabledDepts();
   assert.deepEqual(exp2.map((d) => d.deptId).sort(), ['dialysis', 'er', 'lvl9'], 'expected departments: the enabled ones (OPD is not audited)');
   assert.equal(exp2[0].since, '2026-11', 'expected only from the month the module was set up');
+  assert.equal(await docAudit.moduleSince(), '2026-11', 'KPI 2C owes nothing before this month');
+  const tools = figs['2026-11'].byTool;
+  assert.ok(tools && Object.values(tools).reduce((a, b) => a + b, 0) === figs['2026-11'].records, 'records per audit tool add up');
+  assert.equal(cell.records, figs['2026-11'].records, 'KPI 2C says how many audits its figure covers');
 
   /* ---- settings ---- */
   assert.equal((await call('PUT /api/doc-audit/config', incharge, { body: { kpiLink: false } })).status, 403);

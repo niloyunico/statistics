@@ -107,7 +107,12 @@
   /* When a KPI starts counting: its own start month if it has one, else the programme's
      ("All KPIs start on", cfg.cycleStart). Cycles, targets and missing-data checks all count from
      here; months before it are "not started" and never reported as missing. */
-  const startOf = (def, cfg) => (def && isMonth(def.startMonth) ? def.startMonth : cfgOf(cfg).cycleStart);
+  // `floorStart` (set by the server, never stored): a KPI fed by a module cannot owe a month before
+  // that module existed — e.g. Documentation Accuracy before the Documentation Audit was set up.
+  const startOf = (def, cfg) => {
+    const own = def && isMonth(def.startMonth) ? def.startMonth : cfgOf(cfg).cycleStart;
+    return def && isMonth(def.floorStart) && def.floorStart > own ? def.floorStart : own;
+  };
   const isStarted = (def, ym, cfg) => isMonth(ym) && ym >= startOf(def, cfg);
   // A KPI that counts: not archived and not switched off (disabled KPIs stay on Manage KPIs only).
   const isLive = (d) => !!d && d.active !== false && !d.removedAt && !d.disabled;
@@ -332,6 +337,14 @@
   function resolveCell(auto, saved, opts) {
     const a = auto && (has(auto.value) || has(auto.num)) ? auto : null;
     const fill = !(opts && opts.autoFill === false);
+    // Deleted by an administrator: the month shows empty in Nursing KPI (the quality data is not
+    // touched). `hidden` keeps the system figure for the dialog; Restore / a typed figure / a
+    // Call bell send brings a figure back.
+    if (saved && !saved.removedAt && saved.blanked) {
+      return { num: null, den: null, value: null, source: 'deleted', note: saved.note || '', deleted: true, auto: null, hidden: a, hint: null,
+        hiddenTyped: saved.hidTyped && (has(saved.hidTyped.value) || has(saved.hidTyped.num)) ? { num: saved.hidTyped.num, den: saved.hidTyped.den, value: saved.hidTyped.value } : null,
+        savedAt: saved.updatedAt, savedBy: saved.updatedByName || saved.updatedBy || '', blankedAt: saved.blankedAt || null };
+    }
     if (saved && !saved.removedAt) {
       return { num: has(saved.num) ? saved.num : null, den: has(saved.den) ? saved.den : null, value: has(saved.value) ? saved.value : null,
         source: a && fill ? 'edited' : 'manual', note: saved.note || '', auto: fill ? a : null, hint: fill ? null : a,
