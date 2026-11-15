@@ -26,6 +26,7 @@
 const express = require('express');
 const settings = require('./settings');
 const match = require('./staff-match');
+const census = require('./staff-census');
 
 const COLL = 'h360Employees';
 const baseUrl = () => (process.env.HIS_BASE_URL || 'https://his.unicohospitals.com').replace(/\/+$/, '');
@@ -39,12 +40,15 @@ function fail(status, message) {
   return error;
 }
 const dhakaDay = (d = new Date()) => new Date(d.getTime() + 6 * 3600 * 1000).toISOString().slice(0, 10);
-const sweepPrefixes = () => Array.from({ length: 200 }, (_, i) => String(1000 + i));
+// The census sweep is gentle on H360 (the hospital's live system): 2 searches at a time, a pause between.
+const SWEEP_CONCURRENCY = 2;
+const SWEEP_SHORT = 0.9;          // a sweep meeting fewer than this share of the people known before marks nobody gone
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const activeOf = (rows) => (rows || []).filter((r) => r && r.is_active !== false && !r.former);
 const slim = (res) => ({ ...res, at: res.at || new Date().toISOString() });
 
 // Run fn over items, CONCURRENCY at a time, until the list or the time runs out. Returns how many were taken.
-async function pool(items, until, fn, stop = () => false, n = CONCURRENCY) {
+async function pool(items, until, fn, stop = () => false, n = CONCURRENCY, pause = 0) {
   let next = 0;
   let begun = false;
   const worker = async () => {
@@ -52,6 +56,7 @@ async function pool(items, until, fn, stop = () => false, n = CONCURRENCY) {
       begun = true;
       const item = items[next++];
       await fn(item);
+      if (pause) await sleep(pause);
     }
   };
   await Promise.all(Array.from({ length: n }, worker));
@@ -63,6 +68,7 @@ function createStaffService(deps = {}) {
   const openSession = deps.openSession || ((cfg, cookies, resume) => require('./session-http').open(cfg, { cookies, resume: resume || undefined }));
   const loadRegister = deps.loadRegister || (() => require('../staff-roster').loadRoster({ cached: true }));
   const STEP_MS = deps.stepMs || Number(process.env.H360_STAFF_STEP_MS) || 20000;
+  const PAUSE_MS = deps.pauseMs != null ? deps.pauseMs : (Number(process.env.H360_SWEEP_PAUSE_MS) || 150);
   const cache = new Map();
   let live = null;
 
@@ -136,12 +142,13 @@ function createStaffService(deps = {}) {
   }
 
   // H360's people for one search, from a 60-second memory when the same text was just asked.
-  async function search(d, term) {
+  // fresh: a sweep always asks H360 (a minute-old answer could hide a new person or a leaver).
+  async function search(d, term, fresh) {
     const text = String(term || '').trim();
     if (text.length < 3) return [];
     const key = text.toLowerCase();
     const hit = cache.get(key);
-    if (hit && Date.now() - hit.at < SEARCH_CACHE_MS) return hit.rows;
+    if (!fresh && hit && Date.now() - hit.at < SEARCH_CACHE_MS) return hit.rows;
     let rows;
     let failedAt = 0;
     for (let attempt = 0; ; attempt++) {
@@ -395,13 +402,75 @@ function createStaffService(deps = {}) {
     return { list: judged, summary: match.summary(judged), last: lastInfo(doc), previous: doc.previous ? { finishedAt: doc.previous.finishedAt, statusById: doc.previous.statusById } : null, run: publicRun(doc.run) };
   }
 
-  /* ---------- sweep: who is in H360 but not in our register ---------- */
+  /* ---------- sweep: who is in H360 Nursing Services (used by "Not in register" and the Census) ----------
+     Four-digit prefix searches from 1000 up to a block past the highest employee code known, 2 at a
+     time with a pause (H360 is the hospital's live system). A prefix answering many people is searched
+     again in tenths. Nobody is ever removed: a Nursing Services person the sweep did not meet gets
+     `goneSince` only when the sweep had no errors AND met at least 90% of the people known before it
+     started — otherwise H360 may simply have answered short, and nobody is marked. */
+  async function maxKnownCode(d) {
+    let max = 0;
+    const top = await d.collection(COLL).find({}, { projection: { code: 1 } }).toArray();
+    for (const r of top) { const n = Number(r.code); if (Number.isFinite(n) && n < 1e6 && n > max) max = n; }
+    for (const r of (await loadRegister()) || []) { const n = Number(String(r.emp_id || '').trim()); if (Number.isFinite(n) && n < 1e6 && n > max) max = n; }
+    return max;
+  }
+  const knownNursing = (d) => d.collection(COLL).countDocuments({ nursing: true, goneSince: { $exists: false } });
+
+  async function newSweep(d, by) {
+    const queue = census.sweepPrefixes(await maxKnownCode(d));
+    return { id: require('crypto').randomBytes(6).toString('hex'), startedAt: new Date().toISOString(), by: by || '', total: queue.length, queue, seen: 0, errors: 0, knownBefore: await knownNursing(d), lockedAt: null };
+  }
+
+  // One time-boxed slice of a sweep. Returns the run's new state (queue left, totals) and a fatal error.
+  async function sweepWork(d, run, until) {
+    const keep = codesOf(await loadRegister());
+    const queue = run.queue.slice();
+    const added = [];
+    let seen = run.seen || 0, errors = run.errors || 0, fatal = null;
+    const answered = new Set();
+    await pool(queue, until, async (prefix) => {
+      try {
+        const rows = await search(d, prefix, true);
+        seen += rows.length;
+        await remember(d, rows, keep, run.id);
+        if (rows.length >= SPLIT_AT && prefix.length < 5) for (let k = 0; k < 10; k++) added.push(prefix + k);
+        answered.add(prefix);
+      } catch (err) {
+        if (err.status === 409 || err.status === 503) { fatal = err.message; return; }
+        errors++;
+        answered.add(prefix);
+      }
+    }, () => Boolean(fatal), SWEEP_CONCURRENCY, PAUSE_MS);
+    return { ...run, queue: queue.filter((p) => !answered.has(p)).concat(added), total: run.total + added.length, seen, errors, error: fatal };
+  }
+
+  // A finished sweep: mark (never remove) the people it did not meet, when it is safe to.
+  async function finishSweep(d, run) {
+    const col = d.collection(COLL);
+    const start = new Date(run.startedAt);
+    const met = await col.countDocuments({ nursing: true, lastSeenAt: { $gte: start } });
+    const before = run.knownBefore || 0;
+    const short = before > 0 && met < Math.ceil(before * SWEEP_SHORT);
+    let marked = 0;
+    let held = '';
+    if (run.errors) held = `${run.errors} H360 search(es) failed`;
+    else if (short) held = `H360 answered ${met} Nursing Services people, fewer than the ${before} known before`;
+    if (!held) {
+      const r = await col.updateMany({ nursing: true, lastSeenAt: { $lt: start }, goneSince: { $exists: false } }, { $set: { goneSince: new Date() } });
+      marked = r.modifiedCount || 0;
+    }
+    const count = await knownNursing(d);
+    const last = { finishedAt: new Date().toISOString(), startedAt: run.startedAt, by: run.by, nursing: count, met, knownBefore: before, searches: run.total, errors: run.errors || 0, marked, held };
+    await settings.write(d, 'staffSweep', { last }, { run: '' });
+    return last;
+  }
+
   async function sweepStart(by) {
     const d = await db();
     const doc = (await settings.read(d, 'staffSweep')) || {};
     if (doc.run && doc.run.lockedAt && Date.now() - new Date(doc.run.lockedAt).getTime() < 75000) return publicRun(doc.run);
-    const queue = sweepPrefixes();
-    const run = { id: require('crypto').randomBytes(6).toString('hex'), startedAt: new Date().toISOString(), by: by || '', total: queue.length, queue, seen: 0, errors: 0, lockedAt: null };
+    const run = await newSweep(d, by);
     await settings.write(d, 'staffSweep', { run });
     return publicRun(run);
   }
@@ -413,43 +482,181 @@ function createStaffService(deps = {}) {
     if (!run || (id && run.id !== id)) return { run: null, last: doc.last || null };
     if (run.lockedAt && Date.now() - new Date(run.lockedAt).getTime() < 75000) throw fail(423, 'The H360 sweep is being run from another window.');
     await settings.write(d, 'staffSweep', { 'run.lockedAt': new Date() });
-    const register = await loadRegister();
-    const keep = codesOf(register);
-    const queue = run.queue.slice();
-    const added = [];
-    let seen = run.seen || 0, errors = run.errors || 0, fatal = null;
-    const until = Date.now() + (budgetMs || STEP_MS);
-    const answered = new Set();
-    await pool(queue, until, async (prefix) => {
-      try {
-        const rows = await search(d, prefix);
-        seen += rows.length;
-        await remember(d, rows, keep, run.id);
-        if (rows.length >= SPLIT_AT && prefix.length < 5) for (let k = 0; k < 10; k++) added.push(prefix + k);
-        answered.add(prefix);
-      } catch (err) {
-        if (err.status === 409 || err.status === 503) { fatal = err.message; return; }
-        errors++;
-        answered.add(prefix);
-      }
-    }, () => Boolean(fatal));
-    const rest = queue.filter((p) => !answered.has(p)).concat(added);
-    if (rest.length) {
-      await settings.write(d, 'staffSweep', { 'run.queue': rest, 'run.total': run.total + added.length, 'run.seen': seen, 'run.errors': errors, 'run.lockedAt': null, 'run.error': fatal });
-      return { run: publicRun({ ...run, total: run.total + added.length, queue: rest, error: fatal }), last: doc.last || null };
+    const next = await sweepWork(d, run, Date.now() + (budgetMs || STEP_MS));
+    if (next.queue.length) {
+      await settings.write(d, 'staffSweep', { 'run.queue': next.queue, 'run.total': next.total, 'run.seen': next.seen, 'run.errors': next.errors, 'run.lockedAt': null, 'run.error': next.error });
+      return { run: publicRun(next), last: doc.last || null };
     }
-    // Finished. Nursing people this sweep did not meet are marked, never removed.
-    const col = d.collection(COLL);
-    if (!errors) await col.updateMany({ nursing: true, sweepId: { $ne: run.id }, goneSince: { $exists: false } }, { $set: { goneSince: new Date() } });
-    const count = await col.countDocuments({ nursing: true, goneSince: { $exists: false } });
-    const last = { finishedAt: new Date().toISOString(), startedAt: run.startedAt, by: run.by, nursing: count, searches: run.total, errors };
-    await settings.write(d, 'staffSweep', { last }, { run: '' });
-    return { run: null, last };
+    return { run: null, last: await finishSweep(d, next) };
   }
 
-  async function snapshot() {
+  /* ---------- Census: H360 Nursing Services against our register (administrators) ----------
+     Phase 1 the sweep above. Phase 2 our active records whose emp ID is not in the Nursing Services
+     list are searched one by one (emp ID, then phone / name — the Bulk Verify search) to say whether
+     they work elsewhere in the hospital, are not in H360, or hold someone else's ID. The lists are
+     worked out again on every opening from what is kept and the register AS IT IS NOW. */
+  const CENSUS = 'staffCensus';
+  const publicCensusRun = (run) => (!run ? null : {
+    id: run.id, phase: run.phase, startedAt: run.startedAt, by: run.by || '', error: run.error || null,
+    total: run.total + (run.outsideTotal || 0), done: (run.total - (run.queue || []).length) + ((run.outsideTotal || 0) - (run.outsideQueue || []).length),
+    remaining: (run.queue || []).length + (run.outsideQueue || []).length,
+  });
+  async function groupOverrides(d) {
+    const g = (await settings.read(d, 'staffCensusGroups')) || {};
+    return census.cleanOverrides(g.map || {});
+  }
+  async function setGroups(map, by) {
     const d = await db();
-    return d.collection(COLL).find({ goneSince: { $exists: false } }).toArray();
+    const clean = census.cleanOverrides(map);
+    await settings.write(d, 'staffCensusGroups', { map: clean, by: by || '', at: new Date() });
+    return clean;
+  }
+
+  async function censusStart(by) {
+    const d = await db();
+    await cfgOf(d);   // no H360 login: say so now, not half-way
+    const doc = (await settings.read(d, CENSUS)) || {};
+    if (doc.run && doc.run.lockedAt && Date.now() - new Date(doc.run.lockedAt).getTime() < 75000) return publicCensusRun(doc.run);
+    const run = { ...(await newSweep(d, by)), phase: 'sweep', outsideQueue: [], outsideTotal: 0, outside: {} };
+    await settings.write(d, CENSUS, { run });
+    return publicCensusRun(run);
+  }
+
+  async function censusStep(id, budgetMs) {
+    const d = await db();
+    const doc = (await settings.read(d, CENSUS)) || {};
+    const run = doc.run;
+    if (!run || (id && run.id !== id)) return { run: null, last: censusLastInfo(doc) };
+    if (run.lockedAt && Date.now() - new Date(run.lockedAt).getTime() < 75000) throw fail(423, 'The H360 census is being run from another window.');
+    await settings.write(d, CENSUS, { 'run.lockedAt': new Date() });
+    const until = Date.now() + (budgetMs || STEP_MS);
+    if (run.phase === 'sweep') {
+      const next = await sweepWork(d, run, until);
+      if (next.error || next.queue.length) {
+        await settings.write(d, CENSUS, { 'run.queue': next.queue, 'run.total': next.total, 'run.seen': next.seen, 'run.errors': next.errors, 'run.lockedAt': null, 'run.error': next.error });
+        return { run: publicCensusRun(next) };
+      }
+      const sweep = await finishSweep(d, next);
+      // Phase 2: our active records the Nursing Services list does not hold.
+      const codes = new Set((await snapshot()).filter((h) => h.nursing).map((h) => String(h.code)));
+      const ids = activeOf(await loadRegister()).filter((r) => !codes.has(String(r.emp_id || '').trim())).map((r) => r.id);
+      const set = { 'run.queue': [], 'run.total': next.total, 'run.seen': next.seen, 'run.errors': next.errors, 'run.phase': 'outside', 'run.sweep': sweep, 'run.outsideQueue': ids, 'run.outsideTotal': ids.length, 'run.lockedAt': null, 'run.error': null };
+      await settings.write(d, CENSUS, set);
+      return { run: publicCensusRun({ ...next, phase: 'outside', outsideQueue: ids, outsideTotal: ids.length }) };
+    }
+    // phase 'outside'
+    const register = await loadRegister();
+    const byId = new Map(register.map((r) => [String(r.id), r]));
+    const queue = (run.outsideQueue || []).slice();
+    const outside = { ...(run.outside || {}) };
+    const answered = new Set();
+    const fresh = [];
+    let fatal = null;
+    await pool(queue, until, async (rid) => {
+      const rec = byId.get(String(rid));
+      if (!rec) { answered.add(rid); return; }
+      try {
+        const res = await checkRecord(d, rec, register);
+        outside[rid] = res;
+        fresh.push(res);
+      } catch (err) {
+        if (err.status === 409 || err.status === 503) { fatal = err.message; return; }
+        outside[rid] = slim({ id: rec.id, empId: rec.emp_id || '', name: rec.name, status: 'error', error: err.message, fields: [], suggestions: [] });
+      }
+      answered.add(rid);
+    }, () => Boolean(fatal), SWEEP_CONCURRENCY, PAUSE_MS);
+    await keepOnRecords(d, fresh).catch(() => 0);
+    const rest = queue.filter((rid) => !answered.has(rid));
+    if (rest.length || fatal) {
+      await settings.write(d, CENSUS, { 'run.outsideQueue': rest, 'run.outside': outside, 'run.lockedAt': null, 'run.error': fatal });
+      return { run: publicCensusRun({ ...run, outsideQueue: rest, error: fatal }) };
+    }
+    // Finished: keep the counts (history) and what phase 2 found; the lists are rebuilt on opening.
+    const built = census.buildCensus(await snapshot({ all: true }), register, outside, await groupOverrides(d));
+    const last = { finishedAt: new Date().toISOString(), startedAt: run.startedAt, by: run.by, sweep: run.sweep || null, outside, codes: built.codes, counts: built.counts };
+    const previous = doc.last ? { finishedAt: doc.last.finishedAt, codes: doc.last.codes || [], counts: doc.last.counts || null } : doc.previous || null;
+    const history = (Array.isArray(doc.history) ? doc.history : []).concat([{ at: last.finishedAt, by: run.by, counts: built.counts }]).slice(-24);
+    await settings.write(d, CENSUS, { last, previous, history }, { run: '' });
+    return { run: null, last: censusLastInfo({ last }) };
+  }
+
+  const censusLastInfo = (doc) => (doc && doc.last ? { finishedAt: doc.last.finishedAt, startedAt: doc.last.startedAt, by: doc.last.by, sweep: doc.last.sweep || null } : null);
+
+  // The census as it stands now (no H360 request).
+  async function censusView() {
+    const d = await db();
+    const doc = (await settings.read(d, CENSUS)) || {};
+    const overrides = await groupOverrides(d);
+    const rows = await snapshot({ all: true });
+    const built = census.buildCensus(rows, await loadRegister(), (doc.last && doc.last.outside) || {}, overrides);
+    const ch = doc.previous ? census.changesSince(doc.previous.codes, doc.last ? doc.last.codes : built.codes) : null;
+    const byCode = new Map(rows.map((h) => [String(h.code), h]));
+    const name = (c) => { const h = byCode.get(c); return { code: c, name: h ? h.name : '', designation: h ? h.designation : '', dept: h ? h.dept : '' }; };
+    const sweep = (await settings.read(d, 'staffSweep')) || {};
+    return {
+      ...built, codes: undefined,
+      groupsDef: census.GROUPS, overrides,
+      last: censusLastInfo(doc), previous: doc.previous ? { finishedAt: doc.previous.finishedAt, counts: doc.previous.counts } : null,
+      history: (doc.history || []).map((h) => ({ at: h.at, by: h.by, h360: h.counts && h.counts.h360, ours: h.counts && h.counts.ours, matched: h.counts && h.counts.matched, missing: h.counts && h.counts.missing, notInNursing: h.counts && h.counts.notInNursing })),
+      changes: ch ? { joined: ch.joined.map(name), left: ch.left.map(name) } : null,
+      sweep: sweep.last || null,
+      run: publicCensusRun(doc.run),
+    };
+  }
+
+  async function censusWorkbook() {
+    const ExcelJS = require('exceljs');
+    const c = await censusView();
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'UNICO';
+    const sheet = (name, columns, rows) => {
+      const ws = wb.addWorksheet(name.slice(0, 31));
+      ws.columns = columns.map(([header, key, width]) => ({ header, key, width: width || 18 }));
+      ws.getRow(1).font = { bold: true };
+      rows.forEach((r) => ws.addRow(r));
+      ws.views = [{ state: 'frozen', ySplit: 1 }];
+    };
+    const G = Object.fromEntries(census.GROUPS.map((g) => [g.id, g.label]));
+    const H = (h) => (h ? { hCode: h.code, hName: h.name, hDesig: h.designation, hGroup: G[h.group], hUnit: h.dept, hJoin: h.joinDate, hPhone: (h.phones || []).join(', '), hGender: h.gender, hAge: h.age, hMarital: h.marital, hService: h.service } : {});
+    const R = (r) => (r ? { id: r.id, rName: r.name, empId: r.empId, rDesig: r.designation, rGroup: G[r.group], rDept: r.dept, rDoj: r.doj, rDob: r.dob, rPhone: r.phone, rGender: r.gender } : {});
+    const HC = [['H360 ID', 'hCode', 10], ['H360 name', 'hName', 28], ['H360 designation', 'hDesig', 24], ['H360 group', 'hGroup', 16], ['H360 unit', 'hUnit', 30], ['H360 joined', 'hJoin', 12], ['H360 phone', 'hPhone', 24], ['H360 gender', 'hGender', 10], ['H360 age', 'hAge', 8], ['H360 marital', 'hMarital', 10], ['H360 service', 'hService', 12]];
+    const RC = [['Our record #', 'id', 10], ['Our name', 'rName', 28], ['Our emp ID', 'empId', 10], ['Our designation', 'rDesig', 24], ['Our group', 'rGroup', 16], ['Our department', 'rDept', 20], ['Our joining date', 'rDoj', 12], ['Our date of birth', 'rDob', 12], ['Our phone', 'rPhone', 16], ['Our gender', 'rGender', 10]];
+    sheet('Summary', [['', 'k', 44], ['', 'v', 30]], [
+      { k: 'H360 Nursing Services people', v: c.counts.h360 }, { k: 'Our active staff', v: c.counts.ours }, { k: 'Paired by emp ID', v: c.counts.matched },
+      { k: 'In H360, not in our register', v: c.counts.missing }, { k: 'Previous Staff still active in H360', v: c.counts.formerActive },
+      { k: 'Ours, not in H360 Nursing Services', v: c.counts.notInNursing }, { k: 'Gone from H360, active with us', v: c.counts.goneActive },
+      { k: 'Our emp ID is another person in H360', v: c.counts.idOther }, { k: 'Nurse / PCA differs', v: c.counts.roleMismatch }, { k: 'Rank differs', v: c.counts.rankMismatch },
+      { k: 'Designation differs', v: c.counts.designation }, { k: 'Age vs our date of birth differs', v: c.counts.ageDiff }, { k: 'No date of birth with us (H360 age known)', v: c.counts.noDob },
+      { k: 'Joining date / gender / phone differs', v: c.counts.details }, { k: 'Blank with us, H360 has it', v: c.counts.fills }, { k: 'One emp ID on two records', v: c.counts.sharedIds },
+      { k: 'Census finished', v: c.last ? String(c.last.finishedAt).replace('T', ' ').slice(0, 16) + ' UTC' + (c.last.by ? ' by ' + c.last.by : '') : 'not run yet' },
+      { k: 'Note', v: 'H360 gives age in whole years, not the date of birth.' },
+    ]);
+    sheet('Groups', [['Group', 'label', 24], ['H360', 'h360', 10], ['Ours', 'ours', 10], ['Paired, same group', 'matched', 18], ['Ours − H360', 'diff', 12]], c.groups);
+    sheet('Units', [['H360 unit', 'unit', 40], ['People', 'total', 10], ['With us', 'withUs', 10], ...census.GROUPS.map((g) => [g.label, g.id, 12]), ['Our departments (paired)', 'od', 50]],
+      c.units.map((u) => ({ ...u, od: u.ourDepts.map((x) => `${x.name} ${x.n}`).join(', ') })));
+    sheet('Managers & leaders', [...HC.slice(0, 5), ...RC.slice(0, 6)], c.leaders.map((x) => ({ ...H(x.h), ...R(x.rec) })));
+    const L = c.lists;
+    sheet('In H360 not ours', [...HC, ['Maybe our record', 'maybe', 40]], L.missing.map((x) => ({ ...H(x.h), maybe: x.maybe ? `#${x.maybe.id} ${x.maybe.name} (${x.maybe.empId || 'no emp ID'}; ${x.maybe.why})` : x.idClash ? `ID used by our #${x.idClash.id} ${x.idClash.name}` : '' })));
+    sheet('Previous Staff active H360', [...HC, ...RC], L.formerActive.map((x) => ({ ...H(x.h), ...R(x.rec) })));
+    const WHY = { outside: 'In H360, outside Nursing Services', not_found: 'Emp ID not in H360', other_person: 'Emp ID is another person', no_emp_id: 'No emp ID', unchecked: 'Not checked yet', error: 'Could not check' };
+    sheet('Ours not in H360 Nursing', [['Why', 'why', 30], ...RC, ...HC, ['H360 may know as', 'sug', 40]], L.notInNursing.map((x) => ({ why: WHY[x.why] || x.why, ...R(x.rec), ...H(x.h), sug: (x.suggestions || []).map((s) => `${s.code} ${s.name} (${s.why})`).join('; ') })));
+    sheet('Gone from H360', [...RC, ...HC], L.goneActive.map((x) => ({ ...R(x.rec), ...H(x.h) })));
+    sheet('ID is another person', [...RC, ...HC], L.idOther.map((x) => ({ ...R(x.rec), ...H(x.h) })));
+    sheet('Nurse-PCA differs', [...RC, ...HC], L.roleMismatch.map((x) => ({ ...R(x.rec), ...H(x.h) })));
+    sheet('Rank differs', [...RC, ...HC], L.rankMismatch.map((x) => ({ ...R(x.rec), ...H(x.h) })));
+    sheet('Designation differs', [...RC, ...HC], L.designation.map((x) => ({ ...R(x.rec), ...H(x.h) })));
+    sheet('Age vs birth date', [...RC, ['Our age', 'oa', 8], ['H360 age', 'ha', 8], ...HC], L.ageDiff.map((x) => ({ ...R(x.rec), oa: x.ourAge, ha: x.h360Age, ...H(x.h) })));
+    sheet('No birth date', [...RC, ['H360 age', 'ha', 8], ['Born about', 'born', 12], ...HC], L.noDob.map((x) => ({ ...R(x.rec), ha: x.h360Age, born: x.born ? x.born.text : '', ...H(x.h) })));
+    sheet('Details differ', [...RC, ['Differences', 'd', 70], ...HC], L.details.map((x) => ({ ...R(x.rec), d: x.diffs.map((f) => `${f.label}: ours "${f.ours}" / H360 "${f.h360}"`).join('; '), ...H(x.h) })));
+    sheet('Blank with us', [...RC, ['H360 has', 'f', 60], ...HC], L.fills.map((x) => ({ ...R(x.rec), f: x.fills.map((f) => `${f.label}: ${f.h360}`).join('; '), ...H(x.h) })));
+    sheet('Emp ID twice', [['Emp ID', 'code', 10], ['Our records', 'recs', 60], ['H360 says', 'h', 40]], L.sharedIds.map((x) => ({ code: x.code, recs: x.recs.map((r) => `#${r.id} ${r.name}`).join('; '), h: x.h ? `${x.h.name} (${x.h.designation})` : '' })));
+    return wb;
+  }
+
+  // What is kept about H360 people; opts.all includes those a full sweep no longer met (goneSince).
+  async function snapshot(opts) {
+    const d = await db();
+    return d.collection(COLL).find(opts && opts.all ? {} : { goneSince: { $exists: false } }).toArray();
   }
 
   async function missing() {
@@ -543,7 +750,7 @@ function createStaffService(deps = {}) {
     return wb;
   }
 
-  return { signedInSince, sessionInfo, signOut, saved, options, setOptions, search, lookup, verifyOne, verifyStart, verifyStep, results, sweepStart, sweepStep, missing, info, daily, workbook, snapshot };
+  return { signedInSince, sessionInfo, signOut, saved, options, setOptions, search, lookup, verifyOne, verifyStart, verifyStep, results, sweepStart, sweepStep, missing, info, daily, workbook, snapshot, censusStart, censusStep, censusView, censusWorkbook, setGroups };
 }
 
 /* ---------------- routes ---------------- */
@@ -644,6 +851,42 @@ function mount(app, opts = {}) {
   app.get(P + '/missing', guard, route(async (req, res) => {
     res.set('Cache-Control', 'no-store');
     res.json(await service.missing());
+  }));
+
+  /* Census — administrators only (user 2026-11-15: "for staff management admin only"). */
+  const adminOnly = (req, res, next) => (!req.access || req.access.unrestricted ? next() : res.status(403).json({ error: 'The H360 census is for administrators.' }));
+  const note = (req, action, detail) => { try { require('../activity-log').log(req, action, { target: 'H360 census', detail }); } catch (err) { /* best effort */ } };
+  app.get(P + '/census', guard, adminOnly, route(async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(await service.censusView());
+  }));
+  app.post(P + '/census', guard, adminOnly, json, route(async (req, res) => {
+    const run = await service.censusStart(who(req));
+    note(req, 'h360_census_start', 'census started (' + run.total + ' H360 searches)');
+    res.json({ run });
+  }));
+  app.post(P + '/census/step', guard, adminOnly, json, route(async (req, res) => {
+    const t0 = Date.now();
+    const out = await service.censusStep(String((req.body || {}).id || ''));
+    if (!out.run && out.last) note(req, 'h360_census_done', 'census finished' + (out.last.sweep && out.last.sweep.held ? ' · nobody marked gone: ' + out.last.sweep.held : ''));
+    res.json(withSignIn(t0, out));
+  }));
+  app.put(P + '/census/groups', guard, adminOnly, json, route(async (req, res) => {
+    const map = await service.setGroups((req.body || {}).map, who(req));
+    note(req, 'h360_census_groups', Object.keys(map).length + ' designation(s) moved by hand');
+    res.json({ overrides: map });
+  }));
+  app.post(P + '/census/print', guard, adminOnly, json, route(async (req, res) => {
+    note(req, 'h360_census_print', String((req.body || {}).what || 'printed').slice(0, 80));
+    res.json({ ok: true });
+  }));
+  app.get(P + '/census.xlsx', guard, adminOnly, route(async (req, res) => {
+    const wb = await service.censusWorkbook();
+    note(req, 'h360_census_export', 'Excel downloaded');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="H360-nursing-census-${dhakaDay()}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
   }));
 
   app.get(P + '/export.xlsx', guard, route(async (req, res) => {

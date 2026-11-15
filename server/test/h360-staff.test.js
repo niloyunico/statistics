@@ -156,7 +156,7 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
   try {
     const register = JSON.parse(JSON.stringify(reg));
     const before = JSON.stringify(register);
-    const service = staff.createStaffService({ sharedDb: async () => db, loadRegister: async () => register, stepMs: 1500 });
+    const service = staff.createStaffService({ sharedDb: async () => db, loadRegister: async () => register, stepMs: 1500, pauseMs: 0 });
 
     await assert.rejects(service.lookup('11809'), (err) => err.status === 409 && /No H360 login/.test(err.message));
     await settings.saveLogin(db, 'tester', 'secret-pass', 'admin');
@@ -215,6 +215,59 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
     assert.ok(!kept.some((k) => k.code === '10123'), 'other hospital staff are not stored');
     ok('sweep: H360 Nursing Services people missing from the register are found; the doctor is not stored');
 
+    // Census (administrators): the sweep reaches a block past the highest code (12xxx), then our
+    // records the Nursing Services list does not hold are searched one by one.
+    const nurse = (code, name) => ({ doctor_id: 'c' + code, person_code: code, full_name: name, gender_txt: 'Female', marital_status: 'Single', age: '26', phone_mobile: '', su_name: 'Nursing Services - CCU', designation: 'Staff Nurse', join_date: '01-01-2026', lenght_service: '0Y 10M ' });
+    mock.state.employees.push(nurse('12005', 'Nabila Next Block'));
+    const runCensus = async () => { let s = { run: await service.censusStart('tester') }; for (let i = 0; s.run && i < 400; i++) s = await service.censusStep(s.run.id); assert.strictEqual(s.run, null); return service.censusView(); };
+    let cv = await runCensus();
+    assert.ok(cv.lists.missing.some((x) => x.h.code === '12005'), 'a 12xxx code is found though no 12xxx was known before');
+    assert.deepStrictEqual([cv.counts.h360, cv.counts.ours], [5, 6]);
+    const whyNot = Object.fromEntries(cv.lists.notInNursing.map((x) => [x.rec.id, x.why]));
+    assert.deepStrictEqual(whyNot, { 5: 'no_emp_id', 6: 'not_found' });
+    assert.deepStrictEqual(cv.lists.idOther.map((x) => x.rec.id), [4]);
+    assert.deepStrictEqual(cv.lists.sharedIds.map((x) => x.code), ['11410']);
+    assert.strictEqual(cv.groups.find((x) => x.id === 'pca').h360, 2);
+    assert.strictEqual(cv.last.sweep.held, '');
+    assert.ok(Array.isArray(cv.history) && cv.history.length === 1);
+    ok('census: H360 Nursing Services counted by group (12xxx codes reached), ours outside the list searched one by one, lists built');
+
+    // A short H360 answer marks nobody gone; a real leaver is marked (never removed) when the sweep is complete.
+    for (let k = 10; k < 16; k++) mock.state.employees.push(nurse('120' + k, 'Census Nurse ' + k));
+    cv = await runCensus();
+    assert.strictEqual(cv.counts.h360, 11);
+    const all = mock.state.employees.slice();
+    mock.state.employees = all.filter((e) => !['12010', '12011', '12012', '12013', '11843'].includes(e.person_code));
+    cv = await runCensus();
+    assert.ok(/fewer than/.test(cv.last.sweep.held), 'H360 answered short: held');
+    assert.strictEqual(await db.collection('h360Employees').countDocuments({ goneSince: { $exists: true } }), 0, 'nobody marked gone');
+    mock.state.employees = all.filter((e) => e.person_code !== '12015');
+    cv = await runCensus();
+    assert.strictEqual(cv.last.sweep.held, '');
+    const goneDoc = await db.collection('h360Employees').findOne({ _id: '12015' });
+    assert.ok(goneDoc && goneDoc.goneSince, 'the leaver is marked, and kept');
+    assert.strictEqual(cv.counts.h360, 10);
+    assert.deepStrictEqual(cv.changes.left.map((x) => x.code), ['12015']);
+    mock.state.employees = all;
+    cv = await runCensus();
+    assert.ok(!(await db.collection('h360Employees').findOne({ _id: '12015' })).goneSince, 'met again: no longer gone');
+    assert.deepStrictEqual(cv.changes.joined.map((x) => x.code), ['12015']);
+    ok('safety: a short H360 answer (<90% of the people known) marks nobody gone; a complete sweep marks a leaver (kept, never removed)');
+
+    await service.setGroups({ 'Patient Care Assistant': 'nurse', junk: 'x' }, 'tester');
+    cv = await service.censusView();
+    assert.deepStrictEqual(cv.overrides, { 'patient care assistant': 'nurse' });
+    assert.strictEqual(cv.groups.find((x) => x.id === 'pca').h360, 0);
+    await service.setGroups({}, 'tester');
+    const run2 = await service.censusStart('tester');
+    await settings.write(db, 'staffCensus', { 'run.lockedAt': new Date() });
+    await assert.rejects(service.censusStep(run2.id), (err) => err.status === 423);
+    await settings.write(db, 'staffCensus', { 'run.lockedAt': null });
+    for (let s = { run: run2 }, i = 0; s.run && i < 400; i++) s = await service.censusStep(s.run.id);
+    const cwb = await service.censusWorkbook();
+    assert.ok(['Summary', 'Groups', 'Units', 'Managers & leaders', 'In H360 not ours', 'No birth date'].every((n) => cwb.getWorksheet(n)));
+    ok('census: admin group choices change the counts; a run open in another window is refused (423); Excel has every list');
+
     assert.deepStrictEqual(await service.daily(2000), ['daily check is off']);
     assert.strictEqual((await service.setOptions({ daily: true }, 'tester')).daily, true);
     assert.ok((await service.daily(3000)).some((x) => /verify/.test(x)));
@@ -223,7 +276,7 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
 
     // ONE sign-in for the whole app, reused by every process until H360 ends it.
     const count = (what) => mock.state.hits.filter((h) => h === what).length;
-    const fresh = () => staff.createStaffService({ sharedDb: async () => db, loadRegister: async () => register, stepMs: 1500 });
+    const fresh = () => staff.createStaffService({ sharedDb: async () => db, loadRegister: async () => register, stepMs: 1500, pauseMs: 0 });
     await fresh().signOut();
     mock.state.hits.length = 0;
     const first = fresh();
@@ -300,6 +353,8 @@ const listen = (app) => new Promise((resolve) => { const s = http.createServer(a
     const codeFor = async (acc, path) => { who = acc; return (await fetch(gBase + path)).status; };
     const viewer = { unrestricted: false, role: 'User', perms: { staff: ['view'] }, staffScope: 'all', subMenus: null };
     assert.strictEqual(await codeFor({ unrestricted: true }, '/api/h360-staff/status'), 200);
+    assert.strictEqual(await codeFor({ unrestricted: true }, '/api/h360-staff/census'), 200);
+    assert.strictEqual(await codeFor({ ...viewer, perms: { staff: ['view', 'edit'] }, subMenus: { staff: ['staffAll', 'staffH360'] } }, '/api/h360-staff/census'), 403, 'the census is for administrators only');
     assert.strictEqual(await codeFor(viewer, '/api/h360-staff/status'), 403);
     assert.strictEqual(await codeFor(viewer, '/api/h360-staff/search?q=11809'), 403);
     assert.strictEqual(await codeFor(viewer, '/api/h360-staff/saved/1'), 403);

@@ -5,6 +5,7 @@
      Bulk Verify   every active record checked; counts per status, "new since last run", Excel
      Not in register  H360 Nursing Services staff we hold no record for (the sweep)
      Duplicates & IDs shared emp IDs, an ID that belongs to someone else in H360
+     Census        administrators: H360 Nursing Services counted by group against our register (staff-h360-census.jsx)
    plus window.StaffH360Card (the "H360 record" card on the staff profile).
 
    On H360 only the Employee Search is used; nothing there is pressed or written. Our register
@@ -640,7 +641,10 @@ function StaffH360View({ store, setRoute }) {
   useEffect(() => { reload(); }, []);
   const pick = (t) => { setTab(t); try { localStorage.setItem('uniconurse.h360check.tab', t); } catch (e) {} };
   const ready = !!(info && info.login);
-  const TABS = [['lookup', 'Lookup'], ['verify', 'Bulk Verify'], ['missing', 'Not in register'], ['dups', 'Duplicates & IDs']];
+  // Census: administrators only (server-checked too).
+  const admin = !!(info && info.isAdmin);
+  const TABS = (admin ? [['census', 'Census']] : []).concat([['lookup', 'Lookup'], ['verify', 'Bulk Verify'], ['missing', 'Not in register'], ['dups', 'Duplicates & IDs']]);
+  const shown = tab === 'census' && info && !admin ? 'lookup' : tab;
   return (
     <div style={{ display: 'grid', gap: 14 }}>
       <HxStyle />
@@ -649,7 +653,7 @@ function StaffH360View({ store, setRoute }) {
           <Ic d={I.check} s={16} c="var(--blue)" />
           <div><h3>H360 Check</h3><div className="sub">Our staff register compared with the hospital's H360 employee list. H360 is only searched, never changed.</div></div>
           <span className="spacer" />
-          <div className="seg" style={{ flexWrap: 'wrap' }}>{TABS.map(([id, label]) => <button key={id} className={tab === id ? 'on' : ''} onClick={() => pick(id)}>{label}</button>)}</div>
+          <div className="seg" style={{ flexWrap: 'wrap' }}>{TABS.map(([id, label]) => <button key={id} className={shown === id ? 'on' : ''} onClick={() => pick(id)}>{label}</button>)}</div>
         </div>
         <div className="card-b">
           {err && <div className="hx-alert red">{err}</div>}
@@ -667,10 +671,11 @@ function StaffH360View({ store, setRoute }) {
             {info.session.active && hxIsAdmin() && <button className="btn sm" onClick={async () => { try { await hxApi('/api/h360-staff/session', { method: 'DELETE' }); hxToast('Signed out of H360.'); } catch (e) { setErr(e.message); } reload(); }}>Sign out of H360</button>}
           </div>}
           {info && !info.login && <div className="hx-alert amber">No H360 login is saved on this server{info.loginElsewhere ? ' (one was saved on another server, which this one cannot open)' : ''}. An administrator saves it once in Supervisor Reports → H360 Scan; this screen then works for everyone with staff access.</div>}
-          {tab === 'lookup' && <HxLookup store={store} setRoute={setRoute} ready={ready} />}
-          {tab === 'verify' && <HxVerify store={store} setRoute={setRoute} ready={ready} info={info} reload={reload} />}
-          {tab === 'missing' && <HxMissing setRoute={setRoute} ready={ready} info={info} reload={reload} />}
-          {tab === 'dups' && <HxDuplicates store={store} setRoute={setRoute} />}
+          {shown === 'census' && admin && (window.HxCensus ? <window.HxCensus store={store} setRoute={setRoute} ready={ready} info={info} reload={reload} /> : <div className="hx-muted">Loading…</div>)}
+          {shown === 'lookup' && <HxLookup store={store} setRoute={setRoute} ready={ready} />}
+          {shown === 'verify' && <HxVerify store={store} setRoute={setRoute} ready={ready} info={info} reload={reload} />}
+          {shown === 'missing' && <HxMissing setRoute={setRoute} ready={ready} info={info} reload={reload} />}
+          {shown === 'dups' && <HxDuplicates store={store} setRoute={setRoute} />}
         </div>
       </div>
     </div>
@@ -728,3 +733,5 @@ function StaffH360Card({ emp, store }) {
 }
 
 Object.assign(window, { StaffH360View, StaffH360Card });
+// Shared with the Census tab (staff-h360-census.jsx): each bundled file is wrapped on its own.
+window.UNICO_HX = { hxApi, hxToast, hxWhen, hxDate, hxAgo, hxCanEdit, hxRunSteps, hxOurDepts, hxDeptFor, HxProgress, HxCompare, HxAllFields, HxSuggestions, HxPill, HX_STATUS };
