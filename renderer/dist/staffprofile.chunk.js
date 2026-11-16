@@ -12757,6 +12757,8 @@ function HcAddDialog({
   const K = window.UNICO_HX;
   const ours = useMemoHC(() => K.hxOurDepts(store), [store && store.staff]);
   const role0 = h.group === 'pca' ? 'PCA' : 'Nurse';
+  const h360Unit = String(h.dept || '').replace(/^s*nursing servicess*[-–:]?s*/i, '').trim();
+  const unitOffer = h360Unit && !ours.some(d => String(d).trim().toLowerCase() === h360Unit.toLowerCase()) ? h360Unit : '';
   const [f, setF] = useStateHC({
     name: h.name || '',
     emp_id: h.code || '',
@@ -12779,10 +12781,10 @@ function HcAddDialog({
     const ph = String(f.phone || '').replace(/\D/g, '').slice(-10);
     return (store.staff || []).filter(r => String(r.emp_id || '').trim() && String(r.emp_id).trim() === String(f.emp_id).trim() || ph.length === 10 && String(r.phone || '').replace(/\D/g, '').slice(-10) === ph || NM && NM.nameScore && NM.nameScore(r.name, f.name) >= (NM.SAME_NAME || 0.8)).slice(0, 5);
   }, [store.staff, f.emp_id, f.phone, f.name]);
-  const missing = ['name', 'emp_id', 'role', 'current_department'].filter(k => !String(f[k] || '').trim());
+  const missing = ['name', 'emp_id', 'role'].filter(k => !String(f[k] || '').trim());
   const save = async () => {
     if (missing.length) {
-      setErr('Fill in: ' + missing.join(', ').replace('emp_id', 'emp ID').replace('current_department', 'department') + '.');
+      setErr('Fill in: ' + missing.join(', ').replace('emp_id', 'emp ID') + '.');
       return;
     }
     if (dup.length && !anyway) {
@@ -12898,12 +12900,18 @@ function HcAddDialog({
     onChange: set('current_department')
   }, React.createElement("option", {
     value: ""
-  }, "Choose\u2026"), ours.map(d => React.createElement("option", {
+  }, "Not set \u2014 add later"), unitOffer && React.createElement("optgroup", {
+    label: "H360 unit"
+  }, React.createElement("option", {
+    value: unitOffer
+  }, unitOffer)), React.createElement("optgroup", {
+    label: "Our departments"
+  }, ours.map(d => React.createElement("option", {
     key: d,
     value: d
-  }, d))), React.createElement("span", {
+  }, d)))), React.createElement("span", {
     className: "hc-side"
-  }, "H360 unit: ", h.dept || '—')), React.createElement("label", null, "Joining date", React.createElement("input", {
+  }, "H360 unit: ", h.dept || '—', " \xB7 optional")), React.createElement("label", null, "Joining date", React.createElement("input", {
     className: "hx-input",
     type: "date",
     value: f.doj,

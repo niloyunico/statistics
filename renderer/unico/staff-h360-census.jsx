@@ -75,6 +75,9 @@ function HcAddDialog({ h, maybe, groups, store, onClose, onDone }) {
   const K = window.UNICO_HX;
   const ours = useMemoHC(() => K.hxOurDepts(store), [store && store.staff]);
   const role0 = h.group === 'pca' ? 'PCA' : 'Nurse';
+  // H360's own unit name without the "Nursing Services - " part — offered as a choice when it is not one of ours.
+  const h360Unit = String(h.dept || '').replace(/^s*nursing servicess*[-–:]?s*/i, '').trim();
+  const unitOffer = h360Unit && !ours.some((d) => String(d).trim().toLowerCase() === h360Unit.toLowerCase()) ? h360Unit : '';
   const [f, setF] = useStateHC({
     name: h.name || '', emp_id: h.code || '', role: role0, designation: h.designation || '', current_department: K.hxDeptFor(h.dept, ours) || '',
     doj: h.joinDate || '', phone: (h.phones || [])[0] || '', alt: (h.phones || []).slice(1).join(', '), gender: h.gender || '',
@@ -91,9 +94,9 @@ function HcAddDialog({ h, maybe, groups, store, onClose, onDone }) {
       || (ph.length === 10 && String(r.phone || '').replace(/\D/g, '').slice(-10) === ph)
       || (NM && NM.nameScore && NM.nameScore(r.name, f.name) >= (NM.SAME_NAME || 0.8))).slice(0, 5);
   }, [store.staff, f.emp_id, f.phone, f.name]);
-  const missing = ['name', 'emp_id', 'role', 'current_department'].filter((k) => !String(f[k] || '').trim());
+  const missing = ['name', 'emp_id', 'role'].filter((k) => !String(f[k] || '').trim());
   const save = async () => {
-    if (missing.length) { setErr('Fill in: ' + missing.join(', ').replace('emp_id', 'emp ID').replace('current_department', 'department') + '.'); return; }
+    if (missing.length) { setErr('Fill in: ' + missing.join(', ').replace('emp_id', 'emp ID') + '.'); return; }
     if (dup.length && !anyway) { setErr('We may already hold this person — open their record first, or tick “Create anyway”.'); return; }
     setBusy(true); setErr('');
     try {
@@ -130,7 +133,7 @@ function HcAddDialog({ h, maybe, groups, store, onClose, onDone }) {
           <label>Emp ID<input className="hx-input" value={f.emp_id} onChange={set('emp_id')} /></label>
           <label>Role<select className="hx-input" value={f.role} onChange={set('role')}><option>Nurse</option><option>PCA</option></select></label>
           <label>Designation<input className="hx-input" value={f.designation} onChange={set('designation')} /></label>
-          <label>Our department<select className="hx-input" value={f.current_department} onChange={set('current_department')}><option value="">Choose…</option>{ours.map((d) => <option key={d} value={d}>{d}</option>)}</select><span className="hc-side">H360 unit: {h.dept || '—'}</span></label>
+          <label>Our department<select className="hx-input" value={f.current_department} onChange={set('current_department')}><option value="">Not set — add later</option>{unitOffer && <optgroup label="H360 unit"><option value={unitOffer}>{unitOffer}</option></optgroup>}<optgroup label="Our departments">{ours.map((d) => <option key={d} value={d}>{d}</option>)}</optgroup></select><span className="hc-side">H360 unit: {h.dept || '—'} · optional</span></label>
           <label>Joining date<input className="hx-input" type="date" value={f.doj} onChange={set('doj')} /></label>
           <label>Phone<input className="hx-input" value={f.phone} onChange={set('phone')} /></label>
           <label>Alternative phone<input className="hx-input" value={f.alt} onChange={set('alt')} /></label>
