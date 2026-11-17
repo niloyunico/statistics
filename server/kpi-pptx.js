@@ -51,6 +51,14 @@ const THANKS = path.join(__dirname, 'kpi', 'deck-thanks.jpg');
 const hex = (c) => String(c || '').replace('#', '').toUpperCase() || MUTED;
 const cut = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s; };
 const when = (t) => new Date(t || Date.now()).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'long', year: 'numeric' });
+/* Data labels: the value printed on every bar / point, in the KPI's own unit and decimals.
+   Values are rounded first so a label never shows 80.267857. */
+const dpOf = (r) => (r && K.has(r.decimals) ? Math.min(Math.max(+r.decimals, 0), 4) : (K.unitKind(r) === 'money' ? 0 : 2));
+const rnd = (r, v) => (v == null || !K.has(v) ? null : K.round(Number(v), dpOf(r)));
+const labelFmt = (r) => { const k = K.unitKind(r); return k === 'pct' ? 'General"%"' : k === 'min' ? 'General" min"' : k === 'money' ? '"Tk "#,##0' : 'General'; };
+const LBL = { showValue: true, dataLabelFontFace: FONT, dataLabelFontBold: true };
+// A month's colour on a KPI trend: its status against that month's target (blue when no target).
+const monthColor = (r, v, t, cfg) => { if (v == null) return ST.nodata; const st = K.statusOf(r, v, t, cfg); return st === 'notarget' ? BLUE : ST[st] || BLUE; };
 
 function build(report, opts) {
   const PptxGenJS = require('pptxgenjs'); // lazy: only this export pays for it
@@ -96,11 +104,21 @@ function build(report, opts) {
   /* ---- 1. title ---- */
   {
     const s = slide();
-    s.addText(cfg.reportTitle, { x: 1.4, y: 2.15, w: 10.5, h: 1.0, fontFace: FONT, fontSize: 40, bold: true, color: NAVY });
-    s.addText((report.from === report.to ? 'Monthly report — ' : 'Report for ') + period, { x: 1.4, y: 3.15, w: 10.5, h: 0.6, fontFace: FONT, fontSize: 22, color: BLUE });
+    s.addShape(pptx.ShapeType.rect, { x: 1.4, y: 1.55, w: 0.12, h: 2.6, fill: { color: TEAL }, line: { color: TEAL } });
+    s.addText('NURSING DEPARTMENT', { x: 1.7, y: 1.5, w: 7.4, h: 0.4, fontFace: FONT, fontSize: 12, bold: true, color: TEAL, charSpacing: 3 });
+    s.addText(cfg.reportTitle, { x: 1.7, y: 1.9, w: 7.4, h: 1.25, fontFace: FONT, fontSize: 38, bold: true, color: NAVY, fit: 'shrink', valign: 'top' });
+    s.addText((report.from === report.to ? 'Monthly report — ' : 'Report for ') + period, { x: 1.7, y: 3.15, w: 7.4, h: 0.55, fontFace: FONT, fontSize: 22, color: BLUE });
     const cyc = report.cycle || K.cycleOf(report.to, cfg);
     s.addText(cfg.hospitalName + '  ·  ' + cyc.label + (cyc.monthNo ? ', month ' + cyc.monthNo + ' of ' + cyc.of : '') + '  ·  ' + rows.length + ' KPIs in ' + pillars.length + ' pillars',
-      { x: 1.4, y: 3.8, w: 10.5, h: 0.4, fontFace: FONT, fontSize: 13, color: MUTED });
+      { x: 1.7, y: 3.72, w: 7.6, h: 0.4, fontFace: FONT, fontSize: 12.5, color: MUTED });
+    // The KPI score as a ring: the share of scored KPIs on target.
+    if (sum.score != null) {
+      s.addChart(pptx.ChartType.doughnut, [{ name: 'Score', labels: ['On target', 'Not yet'], values: [sum.score, Math.max(0, 100 - sum.score)] }], {
+        x: 9.45, y: 1.45, w: 2.75, h: 2.75, holeSize: 74, chartColors: [TEAL, 'E3E9F0'], showLegend: false, showValue: false, showPercent: false, showTitle: false, dataBorder: { pt: 0.5, color: 'FFFFFF' },
+      });
+      s.addText([{ text: sum.score + '%', options: { fontSize: 30, bold: true, color: NAVY, breakLine: true } }, { text: 'KPI score', options: { fontSize: 10, color: MUTED } }],
+        { x: 9.45, y: 2.32, w: 2.75, h: 1.0, fontFace: FONT, align: 'center', valign: 'middle' });
+    }
     const chips = [['met', sum.met], ['near', sum.near], ['off', sum.off], ['nodata', sum.nodata + (sum.notarget || 0)]];
     chips.forEach(([k, n], i) => {
       s.addText([{ text: String(n), options: { fontSize: 24, bold: true, color: ST[k], breakLine: true } }, { text: k === 'nodata' ? 'No data / no target' : K.STATUS[k].label, options: { fontSize: 10, color: MUTED } }],
@@ -128,24 +146,25 @@ function build(report, opts) {
     s.addTable([hdr].concat(zebra(body)), tableOpts(0.6, 1.45, 12.1, [0.55, 4.3, 1.15, 1.3, 1.15, 1.6, 1.15, 0.9], { rowH: rh, fontSize: rows.length > 18 ? 8 : 9 }));
   }
 
-  /* ---- 3. status by pillar (native 3D) + overall doughnut ---- */
+  /* ---- 3. status by pillar + overall doughnut (flat, every segment labelled with its count) ---- */
   {
     const s = slide();
     heading(s, 'Where we stand, pillar by pillar', 'Status overview');
     const labels = pillars.map((p) => cut(p.label, 26));
     const series = ['met', 'near', 'off', 'nodata'].map((k) => ({ name: k === 'nodata' ? 'No data / no target' : K.STATUS[k].label,
       labels, values: pillars.map((p) => rowsOf(p).filter((r) => (k === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' : r.status === k)).length) }));
-    s.addChart(pptx.ChartType.bar3d, series, {
-      x: 0.6, y: 1.5, w: 7.7, h: 5.3, barDir: 'col', barGrouping: 'stacked', bar3DShape: 'box', v3DRAngAx: true, v3DRotX: 12, v3DRotY: 18, v3DPerspective: 20, chartColors: [ST.met, ST.near, ST.off, ST.nodata],
-      showLegend: true, legendPos: 'b', legendFontSize: 10, legendFontFace: FONT, catAxisLabelFontSize: 10, catAxisLabelFontFace: FONT, valAxisLabelFontSize: 9,
-      valAxisMinVal: 0, valAxisMajorUnit: 1, valGridLine: { color: 'E3E9F0', size: 0.5 }, showValue: false, serGridLine: { style: 'none' },
+    s.addChart(pptx.ChartType.bar, series, Object.assign({}, LBL, {
+      x: 0.6, y: 1.5, w: 7.7, h: 5.3, barDir: 'col', barGrouping: 'stacked', barGapWidthPct: 55, chartColors: [ST.met, ST.near, ST.off, ST.nodata], dataBorder: { pt: 1, color: 'FFFFFF' },
+      showLegend: true, legendPos: 'b', legendFontSize: 10, legendFontFace: FONT, catAxisLabelFontSize: 10.5, catAxisLabelFontFace: FONT, catAxisLabelColor: INK, valAxisLabelFontSize: 9, valAxisLabelColor: MUTED,
+      valAxisMinVal: 0, valAxisMajorUnit: 1, valGridLine: { color: 'E3E9F0', size: 0.5 }, catAxisLineShow: false, valAxisLineShow: false,
+      dataLabelFormatCode: '0;;;', dataLabelColor: 'FFFFFF', dataLabelFontSize: 12, dataLabelPosition: 'ctr', // a zero segment prints nothing
       showTitle: true, title: 'KPIs by status in each pillar', titleFontSize: 12, titleColor: NAVY, titleFontFace: FONT,
-    });
+    }));
     const tot = [['met', sum.met], ['near', sum.near], ['off', sum.off], ['nodata', sum.nodata + (sum.notarget || 0)]].filter(([, n]) => n > 0);
     if (tot.length) {
       s.addChart(pptx.ChartType.doughnut, [{ name: 'KPIs', labels: tot.map(([k]) => (k === 'nodata' ? 'No data / no target' : K.STATUS[k].label)), values: tot.map(([, n]) => n) }], {
-        x: 8.55, y: 1.5, w: 4.2, h: 3.9, holeSize: 58, chartColors: tot.map(([k]) => ST[k]), showLegend: true, legendPos: 'b', legendFontSize: 9, legendFontFace: FONT,
-        showPercent: false, showValue: true, dataLabelColor: 'FFFFFF', dataLabelFontSize: 11, dataLabelFontBold: true,
+        x: 8.55, y: 1.5, w: 4.2, h: 3.9, holeSize: 55, chartColors: tot.map(([k]) => ST[k]), showLegend: true, legendPos: 'b', legendFontSize: 9, legendFontFace: FONT, dataBorder: { pt: 1.5, color: 'FFFFFF' },
+        showPercent: false, showValue: true, dataLabelColor: 'FFFFFF', dataLabelFontSize: 13, dataLabelFontBold: true, dataLabelFontFace: FONT,
         showTitle: true, title: 'All ' + rows.length + ' KPIs', titleFontSize: 12, titleColor: NAVY, titleFontFace: FONT,
       });
     }
@@ -154,19 +173,33 @@ function build(report, opts) {
     { x: 8.55, y: 5.55, w: 4.2, h: 1.15, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: 'EAF6FB' }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
   }
 
-  /* ---- 4. achievement vs target, every KPI (native 3D, one colour per status) ---- */
+  /* Achievement bars: one bar per KPI, best first, coloured by status, the % printed on each bar. */
+  const achievementChart = (s, list, box, nameLen) => {
+    const sorted = list.slice().sort((a, b) => b.achievement - a.achievement);
+    const cols = sorted.map((r) => ST[r.status] || BLUE);
+    s.addChart(pptx.ChartType.bar, [{ name: '% of target achieved', labels: sorted.map((r) => (r.code ? r.code + '  ' : '') + cut(r.name, nameLen)), values: sorted.map((r) => Math.round(r.achievement)) }],
+      Object.assign({}, LBL, box, {
+        barDir: 'bar', catAxisOrientation: 'maxMin', barGapWidthPct: 45, chartColors: cols.length > 1 ? cols : cols.concat(cols),
+        showLegend: false, catAxisLabelFontSize: sorted.length > 12 ? 8.5 : 10, catAxisLabelFontFace: FONT, catAxisLabelColor: INK, catAxisLineShow: false,
+        valAxisMinVal: 0, valAxisMaxVal: 150, valAxisMajorUnit: 25, valAxisLabelFontSize: 8.5, valAxisLabelColor: MUTED, valAxisLabelFormatCode: '0"%"', valGridLine: { color: 'E3E9F0', size: 0.5 },
+        dataLabelFormatCode: '0"%"', dataLabelPosition: 'outEnd', dataLabelColor: INK, dataLabelFontSize: sorted.length > 12 ? 8.5 : 10,
+      }));
+  };
+  const legendChips = (s, x, y) => {
+    [['met', 'On target'], ['near', 'Close to target'], ['off', 'Needs action']].forEach(([k, l], i) => {
+      s.addShape(pptx.ShapeType.roundRect, { x: x + i * 1.85, y: y + 0.07, w: 0.2, h: 0.2, rectRadius: 0.04, fill: { color: ST[k] }, line: { color: ST[k] } });
+      s.addText(l, { x: x + i * 1.85 + 0.26, y, w: 1.55, h: 0.34, fontFace: FONT, fontSize: 9.5, color: INK, valign: 'middle' });
+    });
+  };
+
+  /* ---- 4. achievement vs target, every KPI ---- */
   const scored = rows.filter((r) => r.achievement != null);
   if (style === 'full' && scored.length) {
     const s = slide();
-    heading(s, 'Achievement against target', '100 = exactly on target');
-    const labels = scored.map((r) => r.code || cut(r.name, 10));
-    const series = ['met', 'near', 'off'].map((k) => ({ name: K.STATUS[k].label, labels, values: scored.map((r) => (r.status === k ? r.achievement : 0)) }));
-    s.addChart(pptx.ChartType.bar3d, series, {
-      x: 0.6, y: 1.45, w: 12.1, h: 4.75, barDir: 'col', barGrouping: 'stacked', bar3DShape: 'box', v3DRAngAx: true, v3DRotX: 12, v3DRotY: 18, v3DPerspective: 20, chartColors: [ST.met, ST.near, ST.off],
-      showLegend: true, legendPos: 't', legendFontSize: 10, legendFontFace: FONT, catAxisLabelFontSize: 10, valAxisLabelFontSize: 9, valAxisMinVal: 0, valAxisMaxVal: 150, valAxisMajorUnit: 25,
-      valGridLine: { color: 'E3E9F0', size: 0.5 }, serGridLine: { style: 'none' }, valAxisTitle: '% of target achieved', showValAxisTitle: true, valAxisTitleFontSize: 9,
-    });
-    s.addText(scored.map((r) => r.code + ' ' + cut(r.name, 34)).join('   ·   '), { x: 0.6, y: 6.25, w: 12.1, h: 0.65, fontFace: FONT, fontSize: 8, color: MUTED, valign: 'top' });
+    heading(s, 'Achievement against target', '100% = exactly on target');
+    achievementChart(s, scored, { x: 0.6, y: 1.45, w: 12.1, h: 5.05 }, 40);
+    legendChips(s, 0.75, 6.55);
+    s.addText('Higher-is-better: value ÷ target. Lower-is-better: target ÷ value. Capped at 150%.', { x: 6.4, y: 6.55, w: 6.3, h: 0.34, fontFace: FONT, fontSize: 8.5, color: MUTED, align: 'right', valign: 'middle', italic: true });
   }
 
   /* ---- per pillar ---- */
@@ -193,13 +226,23 @@ function build(report, opts) {
     // full: divider
     {
       const s = slide();
-      s.addShape(pptx.ShapeType.rect, { x: 1.4, y: 2.55, w: 0.14, h: 1.9, fill: { color: hex(p.color) }, line: { color: hex(p.color) } });
-      s.addText(p.label, { x: 1.75, y: 2.45, w: 9.5, h: 1.0, fontFace: FONT, fontSize: 34, bold: true, color: NAVY });
+      const sc = list.filter((r) => r.achievement != null);
+      const textW = sc.length ? 5.6 : 10.5;
+      s.addShape(pptx.ShapeType.rect, { x: 0.9, y: 1.75, w: 0.14, h: 1.9, fill: { color: hex(p.color) }, line: { color: hex(p.color) } });
+      s.addText('PILLAR', { x: 1.25, y: 1.6, w: textW, h: 0.35, fontFace: FONT, fontSize: 11, bold: true, color: hex(p.color), charSpacing: 3 });
+      s.addText(p.label, { x: 1.25, y: 1.95, w: textW, h: 1.1, fontFace: FONT, fontSize: 32, bold: true, color: NAVY, fit: 'shrink', valign: 'top' });
       const c = K.summarize(list);
       s.addText(list.length + ' KPI' + (list.length === 1 ? '' : 's') + '  ·  ' + c.met + ' on target  ·  ' + c.near + ' close  ·  ' + c.off + ' need action  ·  ' + (c.nodata + c.notarget) + ' without data or target',
-        { x: 1.75, y: 3.45, w: 10.5, h: 0.45, fontFace: FONT, fontSize: 14, color: MUTED });
-      s.addText(list.map((r) => ({ text: r.code + '  ' + r.name, options: { breakLine: true, color: ST[r.status] === ST.nodata ? MUTED : INK } })),
-        { x: 1.75, y: 4.0, w: 10.5, h: 2.6, fontFace: FONT, fontSize: 12, valign: 'top' });
+        { x: 1.25, y: 3.05, w: textW, h: 0.6, fontFace: FONT, fontSize: 12.5, color: MUTED, valign: 'top' });
+      // each KPI with a status dot and its value
+      s.addText(list.map((r) => [
+        { text: '●  ', options: { color: ST[r.status] || MUTED } },
+        { text: r.code + '  ' + cut(r.name, sc.length ? 34 : 70), options: { color: ST[r.status] === ST.nodata ? MUTED : INK } },
+        { text: '   ' + fv(r, r.period.value), options: { bold: true, color: ST[r.status] === ST.nodata ? MUTED : NAVY, breakLine: true } },
+      ]).reduce((a, x) => a.concat(x), []), { x: 1.25, y: 3.8, w: textW, h: 3.0, fontFace: FONT, fontSize: list.length > 7 ? 10.5 : 12, valign: 'top', paraSpaceAfter: 3 });
+      if (sc.length) {
+        achievementChart(s, sc, { x: 7.2, y: 1.5, w: 5.6, h: Math.min(5.2, 1.2 + sc.length * 0.55), showTitle: true, title: '% of target achieved', titleFontSize: 11, titleColor: NAVY, titleFontFace: FONT }, 17);
+      }
     }
     list.forEach((r) => kpiSlide(r, p));
   });
@@ -227,17 +270,24 @@ function build(report, opts) {
     ];
     s.addTable(tbl, { x: 0.6, y: 1.45, w: 7.0, colW: [1.35, 5.65], fontFace: FONT, border: { type: 'solid', pt: 0.5, color: LINE }, margin: 0.06, valign: 'middle', rowH: [0.55, 0.36, 0.36, 0.36, Math.min(2.6, Math.max(0.9, 0.22 + acts.length * (acts.length > 6 ? 0.2 : 0.24))), 0.45, 0.32, 0.6] });
 
-    // trend (native line chart: the figure month by month against the target)
+    // trend: a column per month (coloured by its status against that month's target, the value
+    // printed on top) with the target as a dashed line — a native combo chart, editable in PowerPoint.
     const tr = (r.trend || []);
     if (tr.some((t) => t.v != null)) {
       const labels = tr.map((t) => K.fmtMonth(t.m).replace(' 20', " '"));
-      const data = [{ name: 'Actual', labels, values: tr.map((t) => (t.v == null ? null : t.v)) }];
-      if (tr.some((t) => t.t != null)) data.push({ name: 'Target', labels, values: tr.map((t) => (t.t == null ? null : t.t)) });
-      s.addChart(pptx.ChartType.line, data, {
-        x: 7.85, y: 1.4, w: 4.95, h: 3.55, chartColors: [BLUE, TEAL], lineSize: 2.25, lineDataSymbol: 'circle', lineDataSymbolSize: 6, displayBlanksAs: r.freqMonths > 1 ? 'span' : 'gap',
-        showLegend: true, legendPos: 'b', legendFontSize: 9, legendFontFace: FONT, catAxisLabelFontSize: 8, valAxisLabelFontSize: 8, valGridLine: { color: 'E3E9F0', size: 0.5 },
-        showTitle: true, title: (r.freqMonths > 1 ? 'One point per period · last ' + tr.length + ' months' : 'Last ' + tr.length + ' months') + (r.unit ? ' (' + cut(r.unit, 28) + ')' : ''), titleFontSize: 10.5, titleColor: NAVY, titleFontFace: FONT,
-        valAxisMinVal: 0,
+      const vals = tr.map((t) => rnd(r, t.v));
+      const cols = tr.map((t) => monthColor(r, t.v, t.t, cfg));
+      const fmtCode = labelFmt(r);
+      const parts = [{ type: pptx.ChartType.bar, data: [{ name: 'Actual', labels, values: vals }],
+        options: Object.assign({}, LBL, { barDir: 'col', barGapWidthPct: 55, chartColors: cols.length > 1 ? cols : cols.concat(cols), dataLabelPosition: 'inEnd', dataLabelFormatCode: fmtCode, dataLabelColor: 'FFFFFF', dataLabelFontSize: tr.length > 9 ? 7.5 : 9.5 }) }];
+      const hasT = tr.some((t) => t.t != null);
+      if (hasT) parts.push({ type: pptx.ChartType.line, data: [{ name: 'Target', labels, values: tr.map((t) => rnd(r, t.t)) }],
+        options: { chartColors: [TEAL], lineSize: 2, lineDash: 'dash', lineDataSymbol: 'none', showValue: false } });
+      s.addChart(parts, {
+        x: 7.85, y: 1.4, w: 4.95, h: 3.55, showLegend: hasT, legendPos: 'b', legendFontSize: 9, legendFontFace: FONT,
+        catAxisLabelFontSize: 8, catAxisLabelColor: INK, valAxisLabelFontSize: 8, valAxisLabelColor: MUTED, valAxisLabelFormatCode: fmtCode, valGridLine: { color: 'E3E9F0', size: 0.5 }, valAxisLineShow: false,
+        showTitle: true, title: (r.freqMonths > 1 ? 'One bar per period · last ' + tr.length + ' months' : 'Last ' + tr.length + ' months') + (r.unit ? ' (' + cut(r.unit, 28) + ')' : ''), titleFontSize: 10.5, titleColor: NAVY, titleFontFace: FONT,
+        valAxisMinVal: 0, displayBlanksAs: 'gap',
       });
     } else {
       s.addText('No monthly figures yet — enter them in Nursing KPI → Data Update.', { x: 7.85, y: 2.4, w: 4.95, h: 1.2, fontFace: FONT, fontSize: 11, color: MUTED, align: 'center', valign: 'middle', fill: { color: 'F3F5F8' }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });

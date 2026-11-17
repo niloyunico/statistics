@@ -953,9 +953,14 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       fill: col
     }));
   }
-  function usePeriod(meta, key, def, yearCap) {
-    const [p, setP] = useState(() => lsGet('kpi_period_' + key) || {
-      preset: def || '6m'
+  function usePeriod(meta, key, def, yearCap, liveDef) {
+    const [p, setP] = useState(() => {
+      const v = lsGet('kpi_period_' + key) || {
+        preset: def || '6m'
+      };
+      return liveDef && v.live === undefined ? Object.assign({}, v, {
+        live: true
+      }) : v;
     });
     useEffect(() => {
       lsSet('kpi_period_' + key, p);
@@ -1677,7 +1682,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     setRoute,
     showCalc
   }) {
-    const [p, setP, range] = usePeriod(meta, 'dash', '6m');
+    const [p, setP, range] = usePeriod(meta, 'dash', '6m', null, true);
     const [rep, setRep] = useState(null);
     const [err, setErr] = useState('');
     const [fPillar, setFPillar] = useState('');
@@ -2773,7 +2778,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         setAllStart(meta.config.cycleStart);
       }
     }
-    const [p, setP, range] = usePeriod(meta, 'entry', '6m', 'all');
+    const [p, setP, range] = usePeriod(meta, 'entry', '6m', 'all', true);
     const [vals, setVals] = useState(null);
     const [err, setErr] = useState('');
     const [only, setOnly] = useState(false);
@@ -2890,7 +2895,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       setP: setP,
       range: range,
       presets: ['1m', '3m', '6m', '12m', 'year', 'cycle1', 'cycle2', 'custom'],
-      maxMonth: meta.thisMonth
+      maxMonth: meta.thisMonth,
+      liveOpt: true
     }), React.createElement("span", {
       style: {
         flex: 1
@@ -3156,7 +3162,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         future = m > meta.thisMonth,
         ch = checksOf(d.id, m);
       const pre = !future && c.notStarted;
-      const cls = future ? 'future' : pre ? 'future' : c.source === 'partial' ? 'partial' : c.source === 'deleted' ? '' : isGap(c) ? 'missing' : '';
+      const cls = future ? 'future' : pre ? 'future' : c.source === 'partial' ? 'partial' : c.source === 'deleted' ? '' : isGap(c) && m < meta.thisMonth ? 'missing' : '';
       const tip = (ch ? ch.items.map(x => (x.level === 'error' ? '✖ ' : '▲ ') + x.text).join('\n') + '\n' : '') + (pre ? 'Before this KPI starts (' + K.fmtMonth(K.startOf(d, meta.config)) + ') — not counted' : c.note || srcOf(c.source).long);
       return React.createElement("td", {
         key: m,

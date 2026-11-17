@@ -439,8 +439,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   /* ============================================================ period picker === */
   /* `yearCap`: how far a running year reaches — the last closed month on the Dashboard and in
      Reports ("2026 so far"); all twelve months in Data Update (future months show greyed out). */
-  function usePeriod(meta, key, def, yearCap) {
-    const [p, setP] = useState(() => lsGet('kpi_period_' + key) || { preset: def || '6m' });
+  function usePeriod(meta, key, def, yearCap, liveDef) {
+    // `liveDef`: "Up to now" is ON unless the person switched it off — the running month's figures
+    // (e.g. this month's documentation audits → 2C) show by themselves. A saved choice from before
+    // the switch existed has no `live` key and takes the default.
+    const [p, setP] = useState(() => { const v = lsGet('kpi_period_' + key) || { preset: def || '6m' }; return liveDef && v.live === undefined ? Object.assign({}, v, { live: true }) : v; });
     useEffect(() => { lsSet('kpi_period_' + key, p); }, [p, key]);
     const range = useMemo(() => {
       if (!meta) return null;
@@ -705,7 +708,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
 
   /* ============================================================== dashboard === */
   function Dashboard({ meta, setRoute, showCalc }) {
-    const [p, setP, range] = usePeriod(meta, 'dash', '6m');
+    const [p, setP, range] = usePeriod(meta, 'dash', '6m', null, true);
     const [rep, setRep] = useState(null);
     const [err, setErr] = useState('');
     const [fPillar, setFPillar] = useState('');
@@ -1120,7 +1123,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       try { await api('/api/kpi/config', { method: 'PUT', body: JSON.stringify({ cycleStart: allStart }) }); toast('All KPIs now start ' + K.fmtMonthLong(allStart) + '.', 'success'); refreshBadge(); if (reload) reload(); setTick((t) => t + 1); }
       catch (e) { toast(e.message, 'error'); setAllStart(meta.config.cycleStart); }
     }
-    const [p, setP, range] = usePeriod(meta, 'entry', '6m', 'all');
+    const [p, setP, range] = usePeriod(meta, 'entry', '6m', 'all', true);
     const [vals, setVals] = useState(null);
     const [err, setErr] = useState('');
     const [only, setOnly] = useState(false);
@@ -1192,7 +1195,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     return (
       <div className="kp-wrap">
         <div className="kp-card kp-bar">
-          <PeriodPicker meta={meta} p={p} setP={setP} range={range} presets={['1m', '3m', '6m', '12m', 'year', 'cycle1', 'cycle2', 'custom']} maxMonth={meta.thisMonth} />
+          <PeriodPicker meta={meta} p={p} setP={setP} range={range} presets={['1m', '3m', '6m', '12m', 'year', 'cycle1', 'cycle2', 'custom']} maxMonth={meta.thisMonth} liveOpt />
           <span style={{ flex: 1 }} />
           <input className="kp-in" placeholder="Find a KPI…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 170 }} />
           <label style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5, fontWeight: 600, cursor: 'pointer' }}><input type="checkbox" checked={only} onChange={(e) => setOnly(e.target.checked)} style={{ width: 'auto' }} />Only gaps</label>
@@ -1255,7 +1258,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                       const m = sg.months[0];
                       const c = cellOf(d.id, m), future = m > meta.thisMonth, ch = checksOf(d.id, m);
                       const pre = !future && c.notStarted;
-                      const cls = future ? 'future' : pre ? 'future' : c.source === 'partial' ? 'partial' : c.source === 'deleted' ? '' : isGap(c) ? 'missing' : '';
+                      const cls = future ? 'future' : pre ? 'future' : c.source === 'partial' ? 'partial' : c.source === 'deleted' ? '' : isGap(c) && m < meta.thisMonth ? 'missing' : ''; // the running month is not "missing" yet
                       const tip = (ch ? ch.items.map((x) => (x.level === 'error' ? '✖ ' : '▲ ') + x.text).join('\n') + '\n' : '') + (pre ? 'Before this KPI starts (' + K.fmtMonth(K.startOf(d, meta.config)) + ') — not counted' : (c.note || srcOf(c.source).long));
                       return <td key={m} style={{ position: 'relative' }}><button className={'kp-cell ' + cls} disabled={future} style={pre ? { cursor: 'pointer' } : undefined} onClick={() => setEdit({ def: d, ym: m, cell: c, k: Date.now(), checks: ch ? ch.items : [] })} title={tip}>
                         {future ? <span>—</span> : pre && !K.has(c.value) ? <span style={{ fontSize: 10.5 }}>starts {K.fmtMonth(K.startOf(d, meta.config)).replace(' 20', " '")}</span> : isGap(c) ? <span style={{ fontSize: 11.5, fontWeight: 700, color: c.source === 'deleted' ? '#8b98ab' : undefined }}>{c.source === 'deleted' ? 'Deleted' : c.source === 'partial' ? '! den.' : '+ Add'}</span> : <b style={pre ? { color: '#a3adba' } : undefined}>{K.fmt(d, c.value, { bare: true })}</b>}
