@@ -290,7 +290,9 @@ function build(report, opts) {
         valAxisMinVal: 0, displayBlanksAs: 'gap',
       });
     } else {
-      s.addText('No monthly figures yet — enter them in Nursing KPI → Data Update.', { x: 7.85, y: 2.4, w: 4.95, h: 1.2, fontFace: FONT, fontSize: 11, color: MUTED, align: 'center', valign: 'middle', fill: { color: 'F3F5F8' }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
+      s.addText(r.status === 'notstarted' && K.isMonth(r.startMonth) && r.startMonth > report.to
+        ? 'This KPI starts in ' + K.fmtMonthLong(r.startMonth) + ' — after this report ends (' + K.fmtMonthLong(report.to) + '). Make a report that includes ' + K.fmtMonthLong(r.startMonth) + ' to show its figures.'
+        : 'No monthly figures yet — enter them in Nursing KPI → Data Update.', { x: 7.85, y: 2.4, w: 4.95, h: 1.2, fontFace: FONT, fontSize: 11, color: MUTED, align: 'center', valign: 'middle', fill: { color: 'F3F5F8' }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
     }
     // three tiles
     const tile = (x, big, small, col, bg) => s.addText([{ text: big, options: { fontSize: 17, bold: true, color: col, breakLine: true } }, { text: small, options: { fontSize: 8.5, color: MUTED } }],

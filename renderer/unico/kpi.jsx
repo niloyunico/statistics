@@ -1281,7 +1281,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
 
   /* ================================================================ reports === */
   function ReportsHome({ meta, setRoute }) {
-    const [p, setP, range] = usePeriod(meta, 'rep', '1m');
+    const [p, setP, range] = usePeriod(meta, 'rep', '1m', null, true);
     const [list, setList] = useState(null);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
@@ -1655,6 +1655,17 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           {rep.stored && meta.canDelete && (rep.state !== 'final' || meta.isAdmin) && <Btn danger disabled={!!busy} onClick={() => act('remove')}>Remove</Btn>}
         </div>
         {rep.state === 'draft' && rep.reopenedAt && <div className="kp-banner info"><span style={{ fontSize: 16 }}>✎</span><div><b>Open for editing</b> — re-opened from final by {rep.reopenedBy || '—'} · {when(rep.reopenedAt)}. Make the changes, then press <b>Finalise</b> again.</div></div>}
+        {(() => {
+          // A KPI that starts after this report ends (2C Documentation Accuracy from Nov 2026 in a
+          // Jun–Oct report) has no figure here — nor in the PowerPoint / PDF / Excel. Offer the same
+          // report running up to now.
+          const later = (rep.rows || []).filter((r) => r.status === 'notstarted' && K.isMonth(r.startMonth) && r.startMonth > rep.to && r.startMonth <= meta.thisMonth);
+          if (!later.length || rep.to >= meta.thisMonth) return null;
+          const to = meta.thisMonth;
+          const from = K.monthDiff(rep.from, to) >= K.MAX_MONTHS ? K.addMonth(to, -(K.MAX_MONTHS - 1)) : rep.from;
+          return <div className="kp-banner info"><span style={{ fontSize: 16 }}>ⓘ</span><div><b>{later.map((r) => (r.code ? r.code + ' ' : '') + r.name).join(', ')}</b> {later.length > 1 ? 'start' : 'starts'} in {K.fmtMonthLong(later[0].startMonth)} — after this report ends ({K.fmtMonthLong(rep.to)}), so {later.length > 1 ? 'they have' : 'it has'} no figure here, nor in the PowerPoint, PDF or Excel.{' '}
+            <button onClick={() => setRoute({ view: 'kpiReports', report: K.reportId(from, to) })}>Open {K.fmtRange(from, to)} (so far)</button></div></div>;
+        })()}
         {rep.state === 'preview' && <div className="kp-banner info">This is a preview. Press “Save as draft” (or start typing a comment) to keep it with its commentary and sign-off.</div>}
         {rep.state !== 'final' && rep.quality && rep.quality.unresolved.length > 0 && <div className="kp-banner"><span style={{ fontSize: 16 }}>⚑</span><div><b>{rep.quality.unresolved.length} data error{rep.quality.unresolved.length > 1 ? 's' : ''} must be fixed or acknowledged before this report can be final.</b> {meta.canEdit && <button onClick={() => setAckItems(rep.quality.unresolved)}>Review them</button>}</div></div>}
         {rep.state !== 'final' && rep.quality && !rep.quality.unresolved.length && <div className="kp-banner ok"><span style={{ fontSize: 16 }}>✓</span><div>All data checks are settled{rep.quality.acknowledged ? ' (' + rep.quality.acknowledged + ' acknowledged with a reason)' : ''}{rep.quality.warns ? ' · ' + rep.quality.warns + ' warning(s) are printed on the report' : ''}.</div></div>}

@@ -3257,7 +3257,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     meta,
     setRoute
   }) {
-    const [p, setP, range] = usePeriod(meta, 'rep', '1m');
+    const [p, setP, range] = usePeriod(meta, 'rep', '1m', null, true);
     const [list, setList] = useState(null);
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
@@ -4412,7 +4412,24 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       style: {
         fontSize: 16
       }
-    }, "\u270E"), React.createElement("div", null, React.createElement("b", null, "Open for editing"), " \u2014 re-opened from final by ", rep.reopenedBy || '—', " \xB7 ", when(rep.reopenedAt), ". Make the changes, then press ", React.createElement("b", null, "Finalise"), " again.")), rep.state === 'preview' && React.createElement("div", {
+    }, "\u270E"), React.createElement("div", null, React.createElement("b", null, "Open for editing"), " \u2014 re-opened from final by ", rep.reopenedBy || '—', " \xB7 ", when(rep.reopenedAt), ". Make the changes, then press ", React.createElement("b", null, "Finalise"), " again.")), (() => {
+      const later = (rep.rows || []).filter(r => r.status === 'notstarted' && K.isMonth(r.startMonth) && r.startMonth > rep.to && r.startMonth <= meta.thisMonth);
+      if (!later.length || rep.to >= meta.thisMonth) return null;
+      const to = meta.thisMonth;
+      const from = K.monthDiff(rep.from, to) >= K.MAX_MONTHS ? K.addMonth(to, -(K.MAX_MONTHS - 1)) : rep.from;
+      return React.createElement("div", {
+        className: "kp-banner info"
+      }, React.createElement("span", {
+        style: {
+          fontSize: 16
+        }
+      }, "\u24D8"), React.createElement("div", null, React.createElement("b", null, later.map(r => (r.code ? r.code + ' ' : '') + r.name).join(', ')), " ", later.length > 1 ? 'start' : 'starts', " in ", K.fmtMonthLong(later[0].startMonth), " \u2014 after this report ends (", K.fmtMonthLong(rep.to), "), so ", later.length > 1 ? 'they have' : 'it has', " no figure here, nor in the PowerPoint, PDF or Excel.", ' ', React.createElement("button", {
+        onClick: () => setRoute({
+          view: 'kpiReports',
+          report: K.reportId(from, to)
+        })
+      }, "Open ", K.fmtRange(from, to), " (so far)")));
+    })(), rep.state === 'preview' && React.createElement("div", {
       className: "kp-banner info"
     }, "This is a preview. Press \u201CSave as draft\u201D (or start typing a comment) to keep it with its commentary and sign-off."), rep.state !== 'final' && rep.quality && rep.quality.unresolved.length > 0 && React.createElement("div", {
       className: "kp-banner"
