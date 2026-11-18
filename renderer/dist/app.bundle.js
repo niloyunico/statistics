@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=8362849d7c","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=e5b7052805","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=53a430cb67","docaudit":"/dist/docaudit.chunk.js?v=d8122b8679","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=88b6f0a949","manpower":"/dist/manpower.chunk.js?v=97ea3ad106","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=8362849d7c","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=fb0fc281e2","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=53a430cb67","docaudit":"/dist/docaudit.chunk.js?v=d8122b8679","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=328b35defe","manpower":"/dist/manpower.chunk.js?v=97ea3ad106","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -11529,6 +11529,7 @@ function unicoModuleLevel(mid) {
   return p[mid] || 'none';
 }
 function unicoCan(mid, action) {
+  if ((action === 'edit' || action === 'add' || action === 'delete') && !unicoWriteAllowed()) return false;
   const p = unicoUserPerms();
   if (!p) return true;
   const val = mid === 'attrition' && !Object.prototype.hasOwnProperty.call(p, 'attrition') ? p.perf : p[mid];
@@ -11544,6 +11545,7 @@ function unicoCanAccessModule(mid) {
 }
 function unicoCanAccessView(view) {
   if (view === 'profile' || view === 'home' || view === 'dcResponsibles') return true;
+  if (Object.prototype.hasOwnProperty.call(UNICO_ADMIN_VIEWS, view)) return unicoIsAdminSession();
   const ds = unicoDsScreenOf(view);
   if (ds && unicoDsScreens().indexOf(ds) < 0) return false;
   if (!unicoSubViewOk(view)) return false;
@@ -11624,6 +11626,273 @@ function unicoFirstAllowedHome() {
     if (unicoCanAccessModule(homes[i][0])) return unicoModuleLanding(homes[i][0], homes[i][1]);
   }
   return null;
+}
+const UNICO_LIMIT_NOTICES = {
+  1: 'Your account has an administrator notice.',
+  2: 'Your access is currently view-only. Changes cannot be saved.',
+  3: 'Data submissions are currently paused for your account.',
+  4: 'Your access is currently limited'
+};
+function unicoIsAdminSession() {
+  const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+  return !u || u.role === 'Administrator';
+}
+function unicoNormLimit(l) {
+  if (!l || typeof l !== 'object') return null;
+  const n = Number(l.level);
+  if (!Number.isInteger(n) || n < 1 || n > 4) return null;
+  return {
+    level: n,
+    message: typeof l.message === 'string' ? l.message.slice(0, 500) : ''
+  };
+}
+function unicoLimit() {
+  if (unicoIsAdminSession()) return {
+    level: 0,
+    message: ''
+  };
+  return unicoNormLimit(typeof window !== 'undefined' ? window.__UNICO_LIMIT__ : null) || {
+    level: 0,
+    message: ''
+  };
+}
+function unicoWriteAllowed() {
+  return unicoLimit().level < 2;
+}
+function unicoSubmitAllowed() {
+  return unicoLimit().level < 3;
+}
+function unicoLimitBlocks(kind) {
+  const lv = unicoLimit().level;
+  if (kind === 'submit' && lv >= 3) return UNICO_LIMIT_NOTICES[3];
+  return lv >= 2 ? UNICO_LIMIT_NOTICES[2] : '';
+}
+function unicoSetLimit(next) {
+  const before = JSON.stringify(unicoNormLimit(window.__UNICO_LIMIT__));
+  const n = unicoIsAdminSession() ? null : unicoNormLimit(next);
+  window.__UNICO_LIMIT__ = n;
+  if (JSON.stringify(n) !== before) {
+    try {
+      window.dispatchEvent(new CustomEvent('unico:limit-changed', {
+        detail: n
+      }));
+    } catch (e) {}
+    return true;
+  }
+  return false;
+}
+let _unicoLimitBusy = null;
+function unicoRefreshLimit() {
+  const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
+  if (!u || !u.username) return Promise.resolve(false);
+  if (_unicoLimitBusy) return _unicoLimitBusy;
+  _unicoLimitBusy = fetch('/api/me?lite=1', {
+    credentials: 'same-origin',
+    cache: 'no-store'
+  }).then(r => r.ok ? r.json() : null).then(j => {
+    if (!j || !j.ok || j.degraded) return false;
+    return unicoSetLimit(j.limit || null);
+  }).catch(() => false).then(v => {
+    _unicoLimitBusy = null;
+    return v;
+  });
+  return _unicoLimitBusy;
+}
+let _unicoLimitToast = {
+  msg: '',
+  at: 0
+};
+function unicoOnLimitRefusal(body, url) {
+  try {
+    const lvl = Number(body && body.level) || 0;
+    if (lvl > unicoLimit().level) unicoRefreshLimit();
+    if (lvl >= 4) return;
+    if (/\/api\/data(\?|$)/.test(url || '')) return;
+    const msg = String(body && body.error || UNICO_LIMIT_NOTICES[2]);
+    const now = Date.now();
+    if (msg === _unicoLimitToast.msg && now - _unicoLimitToast.at < 6000) return;
+    _unicoLimitToast = {
+      msg,
+      at: now
+    };
+    if (window.UI && window.UI.toast) window.UI.toast(msg, 'warn');
+  } catch (e) {}
+}
+(function () {
+  if (typeof window === 'undefined' || !window.fetch || window.__unicoFetchLimitHook) return;
+  window.__unicoFetchLimitHook = true;
+  const orig = window.fetch;
+  window.fetch = function (input, init) {
+    return orig.apply(this, arguments).then(function (r) {
+      try {
+        if (r && r.status === 403) {
+          const url = String(input && input.url || input || '');
+          if (url.indexOf('/api/') >= 0 || /^\/s\//.test(url)) {
+            r.clone().json().then(function (j) {
+              if (j && j.code === 'limited') unicoOnLimitRefusal(j, url);
+            }).catch(function () {});
+          }
+        }
+      } catch (e) {}
+      return r;
+    });
+  };
+})();
+function LimitBanner({
+  limit
+}) {
+  const l = unicoNormLimit(limit);
+  if (!l || l.level >= 4) return null;
+  const warn = l.level >= 2;
+  return React.createElement("div", {
+    role: "status",
+    "aria-live": "polite",
+    className: "unico-limit-banner",
+    style: {
+      display: 'flex',
+      alignItems: 'flex-start',
+      gap: 10,
+      padding: '9px 16px',
+      fontSize: 12.8,
+      lineHeight: 1.45,
+      background: warn ? '#fff4e0' : '#eaf5fc',
+      color: warn ? '#6b4a00' : '#0b4a6b',
+      borderBottom: '1px solid ' + (warn ? '#efd08a' : '#bfe0f2'),
+      overflowWrap: 'anywhere'
+    }
+  }, React.createElement("span", {
+    style: {
+      flex: '0 0 auto',
+      marginTop: 1
+    }
+  }, React.createElement(Ic, {
+    d: warn ? I.shield : I.bell,
+    s: 16
+  })), React.createElement("div", {
+    style: {
+      minWidth: 0
+    }
+  }, React.createElement("strong", {
+    style: {
+      fontWeight: 700
+    }
+  }, UNICO_LIMIT_NOTICES[l.level]), l.message && React.createElement("span", {
+    style: {
+      whiteSpace: 'pre-wrap'
+    }
+  }, ' ', l.message)));
+}
+function LimitLockScreen({
+  limit
+}) {
+  const l = unicoNormLimit(limit) || {
+    level: 4,
+    message: ''
+  };
+  return React.createElement("div", {
+    role: "main",
+    style: {
+      minHeight: '100vh',
+      display: 'grid',
+      placeItems: 'center',
+      padding: '24px 16px',
+      boxSizing: 'border-box',
+      fontFamily: '"IBM Plex Sans",system-ui,sans-serif'
+    }
+  }, React.createElement("div", {
+    style: {
+      width: '100%',
+      maxWidth: 440,
+      boxSizing: 'border-box',
+      background: 'linear-gradient(152deg,rgba(255,255,255,.86),rgba(236,247,255,.6))',
+      backdropFilter: 'blur(26px) saturate(1.75)',
+      WebkitBackdropFilter: 'blur(26px) saturate(1.75)',
+      border: '1px solid rgba(255,255,255,.92)',
+      boxShadow: '0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09)',
+      borderRadius: 16,
+      padding: '28px 26px',
+      textAlign: 'center'
+    }
+  }, React.createElement("img", {
+    src: "unico/logo.svg",
+    alt: "UNICO",
+    style: {
+      height: 34,
+      margin: '0 auto 16px',
+      display: 'block'
+    }
+  }), React.createElement("div", {
+    style: {
+      fontSize: 17,
+      fontWeight: 700,
+      color: '#16202e',
+      marginBottom: 8
+    }
+  }, UNICO_LIMIT_NOTICES[4]), React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: '#3c4858',
+      lineHeight: 1.55,
+      marginBottom: 12
+    }
+  }, "An administrator has restricted workspace access for your account. You are still signed in, and you can sign out below."), l.message && React.createElement("div", {
+    style: {
+      fontSize: 13,
+      color: '#16202e',
+      lineHeight: 1.5,
+      textAlign: 'left',
+      whiteSpace: 'pre-wrap',
+      overflowWrap: 'anywhere',
+      background: '#f1f6fb',
+      border: '1px solid #e3e9f1',
+      borderRadius: 10,
+      padding: '10px 13px',
+      marginBottom: 12
+    }
+  }, l.message), React.createElement("a", {
+    href: "/logout",
+    style: {
+      display: 'inline-block',
+      borderRadius: 9,
+      padding: '10px 24px',
+      fontSize: 13,
+      fontWeight: 700,
+      color: '#fff',
+      textDecoration: 'none',
+      background: 'linear-gradient(135deg,#27a8db,#0072a3)'
+    }
+  }, "Sign out")));
+}
+const UNICO_ADMIN_VIEWS = {};
+function unicoRegisterAdminView(def) {
+  if (!unicoIsAdminSession() || !def || typeof def.view !== 'string' || typeof def.render !== 'function') return false;
+  UNICO_ADMIN_VIEWS[def.view] = def;
+  try {
+    window.dispatchEvent(new CustomEvent('unico:admin-ext', {
+      detail: def.view
+    }));
+  } catch (e) {}
+  return true;
+}
+function unicoAdminViews() {
+  return unicoIsAdminSession() ? Object.keys(UNICO_ADMIN_VIEWS).map(k => UNICO_ADMIN_VIEWS[k]) : [];
+}
+function unicoAdminView(view) {
+  return unicoIsAdminSession() && Object.prototype.hasOwnProperty.call(UNICO_ADMIN_VIEWS, view) ? UNICO_ADMIN_VIEWS[view] : null;
+}
+let _unicoAdminExtLoaded = false;
+function unicoLoadAdminExt() {
+  if (_unicoAdminExtLoaded || !unicoIsAdminSession()) return;
+  const list = typeof window !== 'undefined' && Array.isArray(window.__UNICO_ADMIN_EXT__) ? window.__UNICO_ADMIN_EXT__ : [];
+  if (!list.length) return;
+  _unicoAdminExtLoaded = true;
+  list.forEach(src => {
+    if (typeof src !== 'string' || src.indexOf('/api/') !== 0) return;
+    const s = document.createElement('script');
+    s.src = src;
+    s.async = true;
+    (document.head || document.documentElement).appendChild(s);
+  });
 }
 function unicoRefreshPerms() {
   const u = typeof window !== 'undefined' && window.__UNICO_USER__ || null;
@@ -12871,7 +13140,32 @@ function Sidebar({
         title: dcBadge + ' waiting for approval'
       }, dcBadge)))));
     }));
-  })), React.createElement("div", {
+  }), (() => {
+    const ext = unicoAdminViews();
+    if (!ext.length) return null;
+    const secs = [];
+    ext.forEach(d => {
+      const k = d.section || '';
+      if (secs.indexOf(k) < 0) secs.push(k);
+    });
+    return secs.map(sec => React.createElement(React.Fragment, {
+      key: 'ext-' + sec
+    }, sec && React.createElement("div", {
+      className: "sb-sec"
+    }, sec), ext.filter(d => (d.section || '') === sec).map(d => React.createElement("div", {
+      key: d.view,
+      className: 'sb-item' + (view === d.view ? ' active' : ''),
+      onClick: () => setRoute({
+        view: d.view
+      }),
+      title: d.title || d.label
+    }, React.createElement(Ic, {
+      d: d.icon || I.shield,
+      s: 18
+    }), React.createElement("span", {
+      className: "lbl"
+    }, d.label)))));
+  })()), React.createElement("div", {
     className: "sb-bg",
     "aria-hidden": "true"
   }), React.createElement("div", {
@@ -14231,6 +14525,22 @@ Object.assign(window, {
   unicoModuleLevel,
   unicoUserPerms,
   unicoRefreshPerms
+});
+Object.assign(window, {
+  UNICO_LIMIT_NOTICES,
+  unicoLimit,
+  unicoWriteAllowed,
+  unicoSubmitAllowed,
+  unicoSetLimit,
+  unicoRefreshLimit,
+  unicoLimitBlocks,
+  LimitBanner,
+  LimitLockScreen,
+  unicoIsAdminSession,
+  unicoRegisterAdminView,
+  unicoAdminViews,
+  unicoAdminView,
+  unicoLoadAdminExt
 });
 Object.assign(window, {
   UNICO_DS_SCREENS,
@@ -28600,6 +28910,7 @@ window.LockScreen = LockScreen;
   const report = r => {
     const detail = String(r && r.error || 'The database did not confirm the save.');
     if (/session expired/i.test(detail)) return;
+    if (r && r.limited) return;
     const kind = r && r.conflict ? 'save_conflict' : r && r.forbidden ? 'save_forbidden' : 'save_failed';
     const sig = kind + '|' + detail;
     const now = Date.now();
@@ -29216,6 +29527,40 @@ function App() {
     window.addEventListener('unico:perms-changed', h);
     return () => window.removeEventListener('unico:perms-changed', h);
   }, []);
+  const [limit, setLimit] = useState(() => window.unicoLimit ? window.unicoLimit() : {
+    level: 0,
+    message: ''
+  });
+  useEffect(() => {
+    const h = () => setLimit(window.unicoLimit ? window.unicoLimit() : {
+      level: 0,
+      message: ''
+    });
+    window.addEventListener('unico:limit-changed', h);
+    let last = 0;
+    const tick = e => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (e !== 'tick' && Date.now() - last < 5000) return;
+      last = Date.now();
+      if (window.unicoRefreshLimit) window.unicoRefreshLimit();
+    };
+    const poll = setInterval(() => tick('tick'), 30000);
+    window.addEventListener('focus', tick);
+    document.addEventListener('visibilitychange', tick);
+    return () => {
+      clearInterval(poll);
+      window.removeEventListener('unico:limit-changed', h);
+      window.removeEventListener('focus', tick);
+      document.removeEventListener('visibilitychange', tick);
+    };
+  }, []);
+  const [extRev, setExtRev] = useState(0);
+  useEffect(() => {
+    const h = () => setExtRev(r => r + 1);
+    window.addEventListener('unico:admin-ext', h);
+    if (window.unicoLoadAdminExt) window.unicoLoadAdminExt();
+    return () => window.removeEventListener('unico:admin-ext', h);
+  }, []);
   useEffect(() => {
     let stamp = Date.now(),
       busy = false;
@@ -29308,7 +29653,14 @@ function App() {
   let crumbs = ['UNICO'],
     body = null,
     actions = null;
-  if (route.view === 'dashboard') {
+  const adminExt = window.unicoAdminView ? window.unicoAdminView(route.view) : null;
+  if (adminExt) {
+    crumbs = ['UNICO'].concat(Array.isArray(adminExt.crumbs) ? adminExt.crumbs : [adminExt.label || '']);
+    body = adminExt.render({
+      setRoute,
+      depts: safeDepts
+    });
+  } else if (route.view === 'dashboard') {
     crumbs = ['UNICO', 'Dashboard'];
     body = React.createElement(Dashboard, {
       layout: layout,
@@ -29853,13 +30205,22 @@ function App() {
       onUnlock: () => setLocked(false)
     });
   }
+  const limitLevel = limit && limit.level || 0;
+  if (limitLevel >= 4 && typeof LimitLockScreen !== 'undefined') {
+    return React.createElement(LimitLockScreen, {
+      limit: limit
+    });
+  }
+  const limitBanner = limitLevel >= 1 && typeof LimitBanner !== 'undefined' ? React.createElement(LimitBanner, {
+    limit: limit
+  }) : null;
   const PORTAL_ROLES = ['collector', 'incharge'];
   if (typeof window !== 'undefined' && window.__UNICO_USER__ && PORTAL_ROLES.indexOf(window.__UNICO_USER__.role) >= 0) {
     if (typeof CollectorPortal === 'undefined') {
       if (window.unicoLoadChunk) window.unicoLoadChunk('datacollection').catch(() => {});
       return React.createElement(ModuleLoading, null);
     }
-    return React.createElement(React.Fragment, null, React.createElement(CollectorPortal, null), typeof AppCredit !== 'undefined' && React.createElement(AppCredit, null));
+    return React.createElement(React.Fragment, null, limitBanner, React.createElement(CollectorPortal, null), typeof AppCredit !== 'undefined' && React.createElement(AppCredit, null));
   }
   const accessMods = window.unicoAllowedModules ? window.unicoAllowedModules() : null;
   if (Array.isArray(accessMods) && accessMods.length === 0) {
@@ -29902,7 +30263,7 @@ function App() {
     onClick: () => setCollapsed(true)
   }), React.createElement("div", {
     className: "main"
-  }, React.createElement(TopBar, {
+  }, limitBanner, React.createElement(TopBar, {
     route: route,
     setRoute: setRoute,
     menuExpanded: !collapsed,

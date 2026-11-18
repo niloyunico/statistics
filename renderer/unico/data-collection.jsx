@@ -7,6 +7,8 @@
    - Submission Log: recent submissions.
    All persistence is via the /api/* endpoints (server/data-collection.js). The
    browser session cookie is sent automatically, so it works behind the login gate. */
+// Access limit (ui.jsx unicoLimitBlocks): '' when sending is allowed, else the notice. Supplementary — the server refuses anyway.
+const dcLimitBlock = () => (window.unicoLimitBlocks ? window.unicoLimitBlocks('submit') : '');
 (function () {
   const { useState, useEffect, useMemo } = React;
   const Ic = window.Ic, I = window.I, SectionTitle = window.SectionTitle;
@@ -462,7 +464,7 @@
             <textarea style={{ ...inputStyle, minHeight: 58, resize: 'vertical' }} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. wrong count entered — should be Y not X" autoFocus />
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button className="btn sm" onClick={onEdit} disabled={busy}>Edit my values</button>
-              <button className="btn pri sm" onClick={onSend} disabled={busy || none || !String(reason || '').trim()}>{busy ? 'Sending…' : 'Send edit request'}</button>
+              <button className="btn pri sm" onClick={onSend} disabled={(busy || none || !String(reason || '').trim()) || !!dcLimitBlock()} title={dcLimitBlock() || undefined}>{busy ? 'Sending…' : 'Send edit request'}</button>
             </div>
           </div>
         </div>
@@ -1042,7 +1044,7 @@
         </div>
         <textarea style={{ ...inputStyle, minHeight: 54, resize: 'vertical' }} value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} placeholder="Why is this field needed? (required)" />
         {err && <div role="alert" style={{ fontSize: 12, fontWeight: 600, color: 'var(--rose)', marginTop: 6 }}>{err}</div>}
-        <div style={{ marginTop: 8 }}><button className="btn sm" disabled={busy} onClick={submit}><Ic d={I.plus} s={13} />{busy ? 'Sending…' : 'Send request'}</button></div>
+        <div style={{ marginTop: 8 }}><button className="btn sm" disabled={(busy) || !!dcLimitBlock()} title={dcLimitBlock() || undefined} onClick={submit}><Ic d={I.plus} s={13} />{busy ? 'Sending…' : 'Send request'}</button></div>
         <div style={{ ...DC_FR_HEAD, margin: '14px 0 6px' }}>Your field requests</div>
         {mine === null ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>Loading…</div>
           : rows.length === 0 ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>None yet for {name}.</div>
@@ -1342,7 +1344,7 @@
           )}
           {monthPending && <Banner>{dept ? dept.name : ''} · {monthLabel(month)} already has a submission pending review — wait for the admin to approve or reject it before editing.</Banner>}
           <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button className="btn pri" disabled={busy || monthPending} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Submitting…' : (monthPending ? 'Pending review' : (pCorrection ? 'Submit correction for review' : 'Submit for review'))}</button>
+            <button className="btn pri" disabled={(busy || monthPending) || !!dcLimitBlock()} title={dcLimitBlock() || undefined} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Submitting…' : (monthPending ? 'Pending review' : (pCorrection ? 'Submit correction for review' : 'Submit for review'))}</button>
             <button className="btn" disabled={busy || !draftKey} onClick={() => {
               if (!draftKey) return;
               if (dcDraftSave(draftKey, values)) { setDraftAt(Date.now()); toast('Draft saved on this device', 'success'); }
@@ -2370,7 +2372,7 @@
           {submitError && <div role="alert" style={{ margin: '0 18px 12px', padding: 12, border: '1px solid var(--rose)', borderRadius: 8, color: 'var(--rose)', background: 'var(--panel,#fff)' }}>{submitError}</div>}
           {/* 4 — actions */}
           <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px 12px', padding: '11px ' + pad + 'px', borderTop: '1px solid var(--line-2)', background: 'rgba(247,249,252,.6)', borderRadius: '0 0 16px 16px' }}>
-            <button className="btn pri" style={btnBig || undefined} disabled={busy} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
+            <button className="btn pri" style={btnBig || undefined} disabled={(busy) || !!dcLimitBlock()} title={dcLimitBlock() || undefined} onClick={submit}><Ic d={I.check} s={15} />{busy ? 'Saving…' : (qCorrection ? 'Submit correction for review' : 'Save monthly value')}</button>
             <button className="btn" style={narrow ? { minHeight: 44 } : undefined} disabled={busy} onClick={clearForm}>Clear</button>
             <span style={{ flex: narrow ? '1 1 100%' : '1 1 160px', textAlign: narrow ? 'left' : 'right', fontSize: 11.5, fontWeight: 600, color: !indId ? 'var(--muted)' : needCount > 0 ? 'var(--blue-700)' : 'var(--pos)' }}>
               {!indId ? 'Choose an indicator to start'
@@ -4578,7 +4580,7 @@
           </div>
         )}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button onClick={submit} disabled={busy || !touched.length} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.4)', background: touched.length ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(125,145,180,.25)', color: '#fff', padding: '10px 18px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: touched.length && !busy ? 'pointer' : 'default', fontFamily: 'inherit', boxShadow: touched.length ? '0 8px 22px rgba(0,144,202,.4)' : 'none' }}>
+          <button onClick={submit} disabled={(busy || !touched.length) || !!dcLimitBlock()} title={dcLimitBlock() || undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: '1px solid rgba(255,255,255,.4)', background: touched.length ? 'linear-gradient(135deg,#27a8db,#0072a3)' : 'rgba(125,145,180,.25)', color: '#fff', padding: '10px 18px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: touched.length && !busy ? 'pointer' : 'default', fontFamily: 'inherit', boxShadow: touched.length ? '0 8px 22px rgba(0,144,202,.4)' : 'none' }}>
             {CP_ICON('M20 6L9 17l-5-5', 15)}{busy ? 'Sending…' : 'Submit ' + (touched.length || '') + ' month' + (touched.length === 1 ? '' : 's')}
           </button>
           {touched.length > 0 && (
@@ -5104,7 +5106,7 @@
                     <React.Fragment>
                       <button onClick={() => { setDraft(null); setBrush(''); setNote(null); }} disabled={!!busy} style={btn('ghost')}>Cancel</button>
                       <button onClick={() => save(false)} disabled={!!busy} style={btn('go')}>{busy === 'save' ? 'Saving…' : 'Save draft'}</button>
-                      {can.submit && <button onClick={() => save(true)} disabled={!!busy} style={btn('ok')}>{busy === 'submit' ? 'Sending…' : 'Send for approval'}</button>}
+                      {can.submit && <button onClick={() => save(true)} disabled={(!!busy) || !!dcLimitBlock()} title={dcLimitBlock() || undefined} style={btn('ok')}>{busy === 'submit' ? 'Sending…' : 'Send for approval'}</button>}
                     </React.Fragment>
                   )}
                 </div>
@@ -6688,7 +6690,7 @@ function StaffPrintOptions({role,onDone}){
             <textarea value={f.note} onChange={set('note')} rows={3} style={Object.assign({}, inp, { resize: 'vertical' })} placeholder="Cover, vacancy, increased census…" />
           </div>
           <div style={{ display: 'flex', gap: 9, marginTop: 13, flexWrap: 'wrap' }}>
-            <button onClick={submit} disabled={busy} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: 0, background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '10px 18px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
+            <button onClick={submit} disabled={(busy) || !!dcLimitBlock()} title={dcLimitBlock() || undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 7, border: 0, background: 'linear-gradient(135deg,#27a8db,#0072a3)', color: '#fff', padding: '10px 18px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', boxShadow: '0 8px 22px rgba(0,144,202,.4)' }}>
               {busy ? 'Sending…' : (editing ? 'Send the correction' : 'Send request')}
             </button>
             {editing && <button onClick={() => { setEditing(null); setF(blank); }} style={{ border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.7)', color: '#3c4858', padding: '10px 16px', borderRadius: 10, fontSize: 12.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>}

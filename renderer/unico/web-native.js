@@ -98,6 +98,13 @@
   function attemptPersist(data, tries) {
     var patch = changes(data);
     if(!Object.keys(patch.data).length && !patch.removed.length) return Promise.resolve({ok:true});
+    // The administrator has made this account read-only (window.unicoLimit, level 2+): the server
+    // would refuse the save, and the notice above the top bar already says changes cannot be
+    // saved. Nothing is sent and nothing is acknowledged, so the edit stays in this browser.
+    try {
+      var lim = typeof window.unicoLimit === 'function' ? window.unicoLimit() : null;
+      if (lim && lim.level >= 2) return Promise.resolve({ ok: false, limited: true, error: 'Your access is currently view-only. Changes cannot be saved.' });
+    } catch (e) { /* no limit helper yet: let the server decide */ }
     return fetch(API + '/api/data', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },

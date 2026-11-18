@@ -31,3 +31,8 @@ __pycache__/
 .env.*
 **/.env
 **/.env.*
+
+# The Control Centre screen's SOURCE (administrator-only). It is built into
+# server/admin-ui/ and served by an administrator-only route; it must never be a public
+# static file under /unico/.
+renderer/unico/control-centre.jsx

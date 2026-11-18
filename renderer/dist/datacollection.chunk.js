@@ -1,6 +1,7 @@
 /* ===== data-collection.jsx ===== */
 (function(){
 function _extends() { return _extends = Object.assign ? Object.assign.bind() : function (n) { for (var e = 1; e < arguments.length; e++) { var t = arguments[e]; for (var r in t) ({}).hasOwnProperty.call(t, r) && (n[r] = t[r]); } return n; }, _extends.apply(null, arguments); }
+const dcLimitBlock = () => window.unicoLimitBlocks ? window.unicoLimitBlocks('submit') : '';
 (function () {
   const {
     useState,
@@ -829,7 +830,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, "Edit my values"), React.createElement("button", {
       className: "btn pri sm",
       onClick: onSend,
-      disabled: busy || none || !String(reason || '').trim()
+      disabled: busy || none || !String(reason || '').trim() || !!dcLimitBlock(),
+      title: dcLimitBlock() || undefined
     }, busy ? 'Sending…' : 'Send edit request')))));
   }
   function DcPendingNotice({
@@ -2231,7 +2233,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, React.createElement("button", {
       className: "btn sm",
-      disabled: busy,
+      disabled: busy || !!dcLimitBlock(),
+      title: dcLimitBlock() || undefined,
       onClick: submit
     }, React.createElement(Ic, {
       d: I.plus,
@@ -2912,7 +2915,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, React.createElement("button", {
       className: "btn pri",
-      disabled: busy || monthPending,
+      disabled: busy || monthPending || !!dcLimitBlock(),
+      title: dcLimitBlock() || undefined,
       onClick: submit
     }, React.createElement(Ic, {
       d: I.check,
@@ -5383,7 +5387,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
     }, React.createElement("button", {
       className: "btn pri",
       style: btnBig || undefined,
-      disabled: busy,
+      disabled: busy || !!dcLimitBlock(),
+      title: dcLimitBlock() || undefined,
       onClick: submit
     }, React.createElement(Ic, {
       d: I.check,
@@ -10616,7 +10621,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, React.createElement("button", {
       onClick: submit,
-      disabled: busy || !touched.length,
+      disabled: busy || !touched.length || !!dcLimitBlock(),
+      title: dcLimitBlock() || undefined,
       style: {
         display: 'inline-flex',
         alignItems: 'center',
@@ -11914,7 +11920,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       style: btn('go')
     }, busy === 'save' ? 'Saving…' : 'Save draft'), can.submit && React.createElement("button", {
       onClick: () => save(true),
-      disabled: !!busy,
+      disabled: !!busy || !!dcLimitBlock(),
+      title: dcLimitBlock() || undefined,
       style: btn('ok')
     }, busy === 'submit' ? 'Sending…' : 'Send for approval'))), draft && React.createElement("div", {
       style: {
@@ -16448,7 +16455,8 @@ function _extends() { return _extends = Object.assign ? Object.assign.bind() : f
       }
     }, React.createElement("button", {
       onClick: submit,
-      disabled: busy,
+      disabled: busy || !!dcLimitBlock(),
+      title: dcLimitBlock() || undefined,
       style: {
         display: 'inline-flex',
         alignItems: 'center',

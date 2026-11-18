@@ -474,6 +474,29 @@ async function usersModuleActions(req) {
   return i <= 0 ? [] : PERM_LEVEL_ACTIONS.slice(0, i);   // a level never grants 'print'
 }
 
+/* Last sign-in per account ({ username: ts }), read from the activity log's `login` rows (no
+   field on the account is written for it). Informational: a trimmed or cleared log just means
+   "unknown", never "never". Shared by GET /api/users/last-seen and the Control Centre. Throws
+   when the store cannot be read; callers decide what that means. */
+async function lastSignIns() {
+  const out = {};
+  const h = await db.getDbHandle().catch(() => null);
+  let rows = [];
+  const d1store = (() => { try { return require('./d1-store'); } catch (e) { return null; } })();
+  if (d1store && d1store.enabled('activity')) {
+    const d1 = require('./d1');
+    rows = await d1store.withSchema(() => d1.query("SELECT username, MAX(ts) AS ts FROM activity_log WHERE action = 'login' GROUP BY username", []));
+  } else if (h) {
+    rows = await h.collection('activity_log').aggregate([
+      { $match: { action: 'login' } },
+      { $group: { _id: '$username', ts: { $max: '$ts' } } },
+    ]).toArray();
+    rows = rows.map((r) => ({ username: r._id, ts: r.ts }));
+  }
+  rows.forEach((r) => { const k = norm(r.username); if (k && r.ts) out[k] = Number(r.ts); });
+  return out;
+}
+
 function mount(app, opts) {
   const requireApi = (opts && opts.requireApi) || ((req, res, next) => { req.user = null; next(); });
   const VERB = { view: 'view', add: 'create', edit: 'modify', delete: 'delete' };
@@ -673,22 +696,7 @@ function mount(app, opts) {
      "unknown", never "never". */
   app.get('/api/users/last-seen', guard('view'), async (req, res) => {
     try {
-      const out = {};
-      const h = await db.getDbHandle().catch(() => null);
-      let rows = [];
-      const d1store = (() => { try { return require('./d1-store'); } catch (e) { return null; } })();
-      if (d1store && d1store.enabled('activity')) {
-        const d1 = require('./d1');
-        rows = await d1store.withSchema(() => d1.query("SELECT username, MAX(ts) AS ts FROM activity_log WHERE action = 'login' GROUP BY username", []));
-      } else if (h) {
-        rows = await h.collection('activity_log').aggregate([
-          { $match: { action: 'login' } },
-          { $group: { _id: '$username', ts: { $max: '$ts' } } },
-        ]).toArray();
-        rows = rows.map((r) => ({ username: r._id, ts: r.ts }));
-      }
-      rows.forEach((r) => { const k = norm(r.username); if (k && r.ts) out[k] = Number(r.ts); });
-      res.json({ ok: true, lastSeen: out });
+      res.json({ ok: true, lastSeen: await lastSignIns() });
     } catch (e) { res.json({ ok: true, lastSeen: {}, degraded: true }); }
   });
 
@@ -1131,4 +1139,4 @@ function mount(app, opts) {
   });
 }
 
-module.exports = { mount };
+module.exports = { mount, safe, lastSignIns, ROLES };

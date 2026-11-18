@@ -1412,6 +1412,19 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const [hiddenDraft, setHiddenDraft] = useState(null);
   // "Show who entered": each cell tagged with the person who last entered it (server: cellBy).
   const [showWho, setShowWho] = useState(false);
+  /* "Fit month to screen": every day of the month in view at once, no sideways scrolling. The
+     day columns take their width from the space the grid actually has (measured), between 24
+     and 40 px. Remembered in THIS browser only — a non-`unico_` key, so it is never synced. */
+  const [fitMonth, setFitMonth] = useState(() => { try { return localStorage.getItem(ROS_FIT_KEY) !== '0'; } catch (e) { return true; } });
+  useEffect(() => { try { localStorage.setItem(ROS_FIT_KEY, fitMonth ? '1' : '0'); } catch (e) { /* private window */ } }, [fitMonth]);
+  const [gridW, setGridW] = useState(0);
+  const gridRO = useRef(null);
+  const gridBoxRef = React.useCallback((el) => {
+    if (gridRO.current) { gridRO.current.disconnect(); gridRO.current = null; }
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((ents) => { const w = Math.floor(ents[0].contentRect.width); setGridW((p) => (p === w ? p : w)); });
+    ro.observe(el); gridRO.current = ro;
+  }, []);
   const staff = useMemo(() => {
     const mem = members ? new Set(members.map(String)) : null;
     const moved = new Set(movedOut);
@@ -1826,6 +1839,13 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   const monthLabel = R.MONTHS[month] + ' ' + year;
   const monShort = R.MONTHS[month].slice(0, 3);
   const dowOf = (d) => rosDow(year, month, d);
+  // Fit month to screen: the name column and the six totals keep their width; the days share
+  // the rest. Each day cell is the shift chip + 2 px padding on each side.
+  const FIT_NAME_W = 220, FIT_TOT_W = 174;
+  const cellW = fitMonth && gridW > 0
+    ? Math.max(24, Math.min(40, Math.floor((gridW - FIT_NAME_W - FIT_TOT_W - 2) / days) - 4))
+    : 40;
+  const compactHead = fitMonth && cellW < 38;   // "13" under "Fri" instead of "13-Nov"
 
   const kpiVals = useMemo(() => {
     let shifts = 0, hours = 0, leave = 0;
@@ -1882,10 +1902,10 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     const b = R.bucketOf(c) || '', col = rosBColor(b);
     const queued = queue.some((q) => (q.aId === empId && q.aDi === d) || (q.bId === empId && q.bDi === d));
     return {
-      display: 'inline-grid', placeItems: 'center', width: 40, minWidth: 40, padding: '4px 2px', borderRadius: 6, position: 'relative',
+      display: 'inline-grid', placeItems: 'center', width: cellW, minWidth: cellW, boxSizing: fitMonth ? 'border-box' : 'content-box', padding: '4px ' + (cellW < 32 ? 0 : 2) + 'px', borderRadius: cellW < 32 ? 5 : 6, position: 'relative',
       cursor: brush ? 'crosshair' : 'pointer', userSelect: 'none',
       border: '1px solid ' + (c ? (b === 'O' ? 'rgba(125,145,180,.3)' : col) : 'rgba(125,145,180,.22)'),
-      fontFamily: ROS_MONO, fontSize: 10, fontWeight: 700,
+      fontFamily: ROS_MONO, fontSize: cellW < 30 ? 9 : 10, fontWeight: 700, whiteSpace: 'nowrap',
       color: c ? (b === 'O' ? '#6c7a8c' : '#fff') : '#c4ccd6',
       background: c ? (b === 'O' ? 'rgba(125,145,180,.16)' : 'linear-gradient(140deg,' + col + ',' + col + 'c4)') : 'rgba(255,255,255,.55)',
       outline: queued ? '2px dashed #0090ca' : 'none', outlineOffset: 1,
@@ -2082,6 +2102,11 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid ' + (showWho ? 'rgba(0,144,202,.4)' : 'rgba(125,145,180,.3)'), background: showWho ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.65)', color: showWho ? '#0072a3' : '#3c4858', padding: '5px 11px', borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
               <Ic d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z" s={12} sw={2} />{showWho ? 'Hide who entered' : 'Show who entered'}
             </button>
+            <button type="button" onClick={() => setFitMonth((v) => !v)} aria-pressed={fitMonth}
+              title={fitMonth ? 'Every day of the month fits on the screen. Click for wider cells (scroll sideways).' : 'Fit every day of the month on the screen at once'}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid ' + (fitMonth ? 'rgba(0,144,202,.4)' : 'rgba(125,145,180,.3)'), background: fitMonth ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.65)', color: fitMonth ? '#0072a3' : '#3c4858', padding: '5px 11px', borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+              <Ic d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" s={12} sw={2} />{fitMonth ? 'Whole month ✓' : 'Fit month to screen'}
+            </button>
             {canEdit && rosIsAdmin() && (
               <button type="button" onClick={() => setAddOpen(true)} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid rgba(0,144,202,.35)', background: 'rgba(0,144,202,.08)', color: '#0072a3', padding: '5px 11px', borderRadius: 9, fontSize: 10.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                 <Ic d="M12 5v14M5 12h14" s={12} sw={2.4} />Add staff from another unit
@@ -2185,22 +2210,22 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
             );
           })()}
 
-          <div style={{ overflowX: 'auto' }}>
+          <div ref={gridBoxRef} style={{ overflowX: 'auto' }}>
             {rows.length === 0 ? (
               <div style={{ padding: 34, textAlign: 'center', color: '#6c7a8c' }}>No active staff are assigned to {dept}.</div>
             ) : (
-              <table style={{ borderCollapse: 'collapse', fontSize: 11.5, minWidth: 1180 }}>
+              <table style={fitMonth ? { borderCollapse: 'collapse', fontSize: 11.5, width: '100%' } : { borderCollapse: 'collapse', fontSize: 11.5, minWidth: 1180 }}>
                 <thead>
                   <tr>
-                    <th style={{ position: 'sticky', left: 0, zIndex: 2, background: 'linear-gradient(180deg,#f6fafe,#e9f1fa)', textAlign: 'left', padding: '8px 10px', fontSize: 9.5, letterSpacing: .5, textTransform: 'uppercase', color: '#7d8ea8', borderBottom: '1px solid rgba(125,145,180,.28)', borderRight: '1px solid rgba(125,145,180,.2)', minWidth: 190 }}>S/N · Emp-ID · Staff name · Designation</th>
+                    <th style={{ position: 'sticky', left: 0, zIndex: 2, background: 'linear-gradient(180deg,#f6fafe,#e9f1fa)', textAlign: 'left', padding: '8px 10px', fontSize: 9.5, letterSpacing: .5, textTransform: 'uppercase', color: '#7d8ea8', borderBottom: '1px solid rgba(125,145,180,.28)', borderRight: '1px solid rgba(125,145,180,.2)', ...(fitMonth ? { width: FIT_NAME_W, minWidth: FIT_NAME_W, maxWidth: FIT_NAME_W, boxSizing: 'border-box' } : { minWidth: 190 }) }}>S/N · Emp-ID · Staff name · Designation</th>
                     {Array.from({ length: days }, (_, k) => k + 1).map((d) => {
                       const fri = rosIsFri(year, month, d);
                       return (
                         <th key={d} onClick={() => fillCol(d)}
                           title={canEdit ? (brush ? 'Fill ' + R.MONTHS[month] + ' ' + d + ' with ' + brush + ' for every nurse' : 'Pick a brush code, then click a day heading to fill that whole column') : ''}
-                          style={{ padding: '6px 3px', textAlign: 'center', minWidth: 42, borderBottom: '1px solid rgba(125,145,180,.28)', background: fri ? 'rgba(0,144,202,.07)' : 'rgba(240,246,252,.9)', cursor: canEdit ? 'pointer' : 'default' }}>
+                          style={{ padding: fitMonth ? '6px 0' : '6px 3px', textAlign: 'center', minWidth: fitMonth ? cellW + 4 : 42, borderBottom: '1px solid rgba(125,145,180,.28)', background: fri ? 'rgba(0,144,202,.07)' : 'rgba(240,246,252,.9)', cursor: canEdit ? 'pointer' : 'default' }}>
                           <div style={{ fontSize: 8.5, color: '#9aa6b4' }}>{dowOf(d)}</div>
-                          <div style={{ fontFamily: ROS_MONO, fontSize: 10.5, fontWeight: 700, color: '#3c4858' }}>{d}-{monShort}</div>
+                          <div style={{ fontFamily: ROS_MONO, fontSize: compactHead ? 11 : 10.5, fontWeight: 700, color: '#3c4858', whiteSpace: 'nowrap' }}>{compactHead ? d : d + '-' + monShort}</div>
                         </th>
                       );
                     })}
@@ -2227,16 +2252,16 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
                         onDrop={(e) => { e.preventDefault(); const id = rowDragId.current; rowDragId.current = null; setRowDrag(null); if (!id || id === x.empId) return; const r = e.currentTarget.getBoundingClientRect(); const after = e.clientY > r.top + r.height / 2; const ids = rows.map((k) => k.empId).filter((k) => k !== id); moveRow(id, ids.indexOf(x.empId) + (after ? 1 : 0)); }}
                         style={{ background: rowDrag && rowDrag.id === x.empId ? 'rgba(0,144,202,.08)' : si % 2 ? 'rgba(244,249,254,.5)' : 'transparent', transition: 'background .15s',
                           boxShadow: rowDrag && rowDrag.over === x.empId ? (rowDrag.after ? 'inset 0 -3px 0 #0090ca' : 'inset 0 3px 0 #0090ca') : 'none' }}>
-                        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'rgba(250,252,255,.98)', padding: '4px 9px 4px 4px', borderBottom: '1px solid rgba(125,145,180,.14)', borderRight: '1px solid rgba(125,145,180,.2)' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <td style={{ position: 'sticky', left: 0, zIndex: 1, background: 'rgba(250,252,255,.98)', padding: '4px 9px 4px 4px', borderBottom: '1px solid rgba(125,145,180,.14)', borderRight: '1px solid rgba(125,145,180,.2)', ...(fitMonth ? { width: FIT_NAME_W, maxWidth: FIT_NAME_W, boxSizing: 'border-box' } : null) }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, ...(fitMonth ? { width: FIT_NAME_W - 13, overflow: 'hidden' } : null) }} title={fitMonth ? x.name + (x.desig ? ' · ' + x.desig : '') : undefined}>
                             <span draggable={canEdit} title={canEdit ? 'Drag to move this person up or down' : ''}
                               onDragStart={(e) => { if (!canEdit) { e.preventDefault(); return; } try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', x.empId); } catch (er) { /* old browser */ } rowDragId.current = x.empId; setRowDrag({ id: x.empId, over: null, after: false }); }}
                               onDragEnd={() => { rowDragId.current = null; setRowDrag(null); }}
                               style={{ cursor: canEdit ? 'grab' : 'default', color: canEdit ? '#9aa6b4' : '#d6dce4', fontSize: 12, lineHeight: 1, letterSpacing: -2, padding: '6px 2px', userSelect: 'none', flexShrink: 0 }}>⋮⋮</span>
                             <MK.Av name={x.name} emp={x} empId={x.empIdShown} size={28} radius={rosAvRadius(28)} />
                             <div style={{ minWidth: 0, flex: 1 }}>
-                              <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap' }}>{x.name}</div>
-                              <div style={{ fontSize: 9.5, color: '#9aa6b4', whiteSpace: 'nowrap' }}><span style={{ fontFamily: ROS_MONO }}>{x.empIdShown || '—'}</span> · {x.desig || '—'}</div>
+                              <div style={{ fontSize: 12, fontWeight: 600, color: '#16202e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{x.name}</div>
+                              <div style={{ fontSize: 9.5, color: '#9aa6b4', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><span style={{ fontFamily: ROS_MONO }}>{x.empIdShown || '—'}</span> · {x.desig || '—'}</div>
                             </div>
                             <select value="" title="Row tools" onChange={(e) => { const v = e.target.value; e.target.value = ''; rowTool(x.empId, v); }}
                               style={{ width: 26, height: 24, flexShrink: 0, boxSizing: 'border-box', padding: '0 2px', borderRadius: 7, border: '1px solid rgba(125,145,180,.28)', background: 'rgba(255,255,255,.7)', fontFamily: 'inherit', fontSize: 10, color: '#6c7a8c', cursor: 'pointer', appearance: 'none', WebkitAppearance: 'none', textAlign: 'center', textAlignLast: 'center' }}>
@@ -3639,6 +3664,8 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
 // ticking "Summary cards" turned them on for the whole hospital. The cards start hidden; the
 // other choices come over once from the old shared key.
 const ROS_PRINT_OPT_KEY = 'unicoRosterPrintOpts.v2';
+// Monthly grid "Fit month to screen" (this browser only; deliberately not an `unico_` key).
+const ROS_FIT_KEY = 'unicoRosterFitMonth.v1';
 const ROS_PRINT_OPT_OLD = 'unico_roster_print_opts_v1';
 // The sheet's added staff: its own plus those carried from earlier months (month GET).
 const rosSheetGuests = (r) => ({ ...((r && r.guestsCarried) || {}), ...((r && r.roster && r.roster.guests) || {}) });

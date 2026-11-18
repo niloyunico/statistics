@@ -3028,6 +3028,33 @@ function RosterGrid({
   const [addOpen, setAddOpen] = useState(false);
   const [hiddenDraft, setHiddenDraft] = useState(null);
   const [showWho, setShowWho] = useState(false);
+  const [fitMonth, setFitMonth] = useState(() => {
+    try {
+      return localStorage.getItem(ROS_FIT_KEY) !== '0';
+    } catch (e) {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(ROS_FIT_KEY, fitMonth ? '1' : '0');
+    } catch (e) {}
+  }, [fitMonth]);
+  const [gridW, setGridW] = useState(0);
+  const gridRO = useRef(null);
+  const gridBoxRef = React.useCallback(el => {
+    if (gridRO.current) {
+      gridRO.current.disconnect();
+      gridRO.current = null;
+    }
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(ents => {
+      const w = Math.floor(ents[0].contentRect.width);
+      setGridW(p => p === w ? p : w);
+    });
+    ro.observe(el);
+    gridRO.current = ro;
+  }, []);
   const staff = useMemo(() => {
     const mem = members ? new Set(members.map(String)) : null;
     const moved = new Set(movedOut);
@@ -3588,6 +3615,10 @@ function RosterGrid({
   const monthLabel = R.MONTHS[month] + ' ' + year;
   const monShort = R.MONTHS[month].slice(0, 3);
   const dowOf = d => rosDow(year, month, d);
+  const FIT_NAME_W = 220,
+    FIT_TOT_W = 174;
+  const cellW = fitMonth && gridW > 0 ? Math.max(24, Math.min(40, Math.floor((gridW - FIT_NAME_W - FIT_TOT_W - 2) / days) - 4)) : 40;
+  const compactHead = fitMonth && cellW < 38;
   const kpiVals = useMemo(() => {
     let shifts = 0,
       hours = 0,
@@ -3706,17 +3737,19 @@ function RosterGrid({
     return {
       display: 'inline-grid',
       placeItems: 'center',
-      width: 40,
-      minWidth: 40,
-      padding: '4px 2px',
-      borderRadius: 6,
+      width: cellW,
+      minWidth: cellW,
+      boxSizing: fitMonth ? 'border-box' : 'content-box',
+      padding: '4px ' + (cellW < 32 ? 0 : 2) + 'px',
+      borderRadius: cellW < 32 ? 5 : 6,
       position: 'relative',
       cursor: brush ? 'crosshair' : 'pointer',
       userSelect: 'none',
       border: '1px solid ' + (c ? b === 'O' ? 'rgba(125,145,180,.3)' : col : 'rgba(125,145,180,.22)'),
       fontFamily: ROS_MONO,
-      fontSize: 10,
+      fontSize: cellW < 30 ? 9 : 10,
       fontWeight: 700,
+      whiteSpace: 'nowrap',
       color: c ? b === 'O' ? '#6c7a8c' : '#fff' : '#c4ccd6',
       background: c ? b === 'O' ? 'rgba(125,145,180,.16)' : 'linear-gradient(140deg,' + col + ',' + col + 'c4)' : 'rgba(255,255,255,.55)',
       outline: queued ? '2px dashed #0090ca' : 'none',
@@ -4344,7 +4377,31 @@ function RosterGrid({
     d: "M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8z",
     s: 12,
     sw: 2
-  }), showWho ? 'Hide who entered' : 'Show who entered'), canEdit && rosIsAdmin() && React.createElement("button", {
+  }), showWho ? 'Hide who entered' : 'Show who entered'), React.createElement("button", {
+    type: "button",
+    onClick: () => setFitMonth(v => !v),
+    "aria-pressed": fitMonth,
+    title: fitMonth ? 'Every day of the month fits on the screen. Click for wider cells (scroll sideways).' : 'Fit every day of the month on the screen at once',
+    style: {
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      border: '1px solid ' + (fitMonth ? 'rgba(0,144,202,.4)' : 'rgba(125,145,180,.3)'),
+      background: fitMonth ? 'rgba(0,144,202,.12)' : 'rgba(255,255,255,.65)',
+      color: fitMonth ? '#0072a3' : '#3c4858',
+      padding: '5px 11px',
+      borderRadius: 9,
+      fontSize: 10.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      whiteSpace: 'nowrap'
+    }
+  }, React.createElement(Ic, {
+    d: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",
+    s: 12,
+    sw: 2
+  }), fitMonth ? 'Whole month ✓' : 'Fit month to screen'), canEdit && rosIsAdmin() && React.createElement("button", {
     type: "button",
     onClick: () => setAddOpen(true),
     style: {
@@ -4712,6 +4769,7 @@ function RosterGrid({
       key: i
     }, i ? '  ·  ' : '', rosWhen(e.at), " \u2014 ", e.name || e.by, " (", e.count, " cell", e.count === 1 ? '' : 's', ")"))));
   })(), React.createElement("div", {
+    ref: gridBoxRef,
     style: {
       overflowX: 'auto'
     }
@@ -4722,7 +4780,11 @@ function RosterGrid({
       color: '#6c7a8c'
     }
   }, "No active staff are assigned to ", dept, ".") : React.createElement("table", {
-    style: {
+    style: fitMonth ? {
+      borderCollapse: 'collapse',
+      fontSize: 11.5,
+      width: '100%'
+    } : {
       borderCollapse: 'collapse',
       fontSize: 11.5,
       minWidth: 1180
@@ -4741,7 +4803,14 @@ function RosterGrid({
       color: '#7d8ea8',
       borderBottom: '1px solid rgba(125,145,180,.28)',
       borderRight: '1px solid rgba(125,145,180,.2)',
-      minWidth: 190
+      ...(fitMonth ? {
+        width: FIT_NAME_W,
+        minWidth: FIT_NAME_W,
+        maxWidth: FIT_NAME_W,
+        boxSizing: 'border-box'
+      } : {
+        minWidth: 190
+      })
     }
   }, "S/N \xB7 Emp-ID \xB7 Staff name \xB7 Designation"), Array.from({
     length: days
@@ -4752,9 +4821,9 @@ function RosterGrid({
       onClick: () => fillCol(d),
       title: canEdit ? brush ? 'Fill ' + R.MONTHS[month] + ' ' + d + ' with ' + brush + ' for every nurse' : 'Pick a brush code, then click a day heading to fill that whole column' : '',
       style: {
-        padding: '6px 3px',
+        padding: fitMonth ? '6px 0' : '6px 3px',
         textAlign: 'center',
-        minWidth: 42,
+        minWidth: fitMonth ? cellW + 4 : 42,
         borderBottom: '1px solid rgba(125,145,180,.28)',
         background: fri ? 'rgba(0,144,202,.07)' : 'rgba(240,246,252,.9)',
         cursor: canEdit ? 'pointer' : 'default'
@@ -4767,11 +4836,12 @@ function RosterGrid({
     }, dowOf(d)), React.createElement("div", {
       style: {
         fontFamily: ROS_MONO,
-        fontSize: 10.5,
+        fontSize: compactHead ? 11 : 10.5,
         fontWeight: 700,
-        color: '#3c4858'
+        color: '#3c4858',
+        whiteSpace: 'nowrap'
       }
-    }, d, "-", monShort));
+    }, compactHead ? d : d + '-' + monShort));
   }), [['G', 26], ['M', 26], ['E', 26], ['N', 26], ['O', 26], ['Hours', 44]].map(([label, w], i, arr) => {
     const right = arr.slice(i + 1).reduce((a, x) => a + x[1], 0);
     return React.createElement("th", {
@@ -4867,14 +4937,24 @@ function RosterGrid({
         background: 'rgba(250,252,255,.98)',
         padding: '4px 9px 4px 4px',
         borderBottom: '1px solid rgba(125,145,180,.14)',
-        borderRight: '1px solid rgba(125,145,180,.2)'
+        borderRight: '1px solid rgba(125,145,180,.2)',
+        ...(fitMonth ? {
+          width: FIT_NAME_W,
+          maxWidth: FIT_NAME_W,
+          boxSizing: 'border-box'
+        } : null)
       }
     }, React.createElement("div", {
       style: {
         display: 'flex',
         alignItems: 'center',
-        gap: 6
-      }
+        gap: 6,
+        ...(fitMonth ? {
+          width: FIT_NAME_W - 13,
+          overflow: 'hidden'
+        } : null)
+      },
+      title: fitMonth ? x.name + (x.desig ? ' · ' + x.desig : '') : undefined
     }, React.createElement("span", {
       draggable: canEdit,
       title: canEdit ? 'Drag to move this person up or down' : '',
@@ -4924,13 +5004,17 @@ function RosterGrid({
         fontSize: 12,
         fontWeight: 600,
         color: '#16202e',
-        whiteSpace: 'nowrap'
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
       }
     }, x.name), React.createElement("div", {
       style: {
         fontSize: 9.5,
         color: '#9aa6b4',
-        whiteSpace: 'nowrap'
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
       }
     }, React.createElement("span", {
       style: {
@@ -9137,6 +9221,7 @@ function rosPrintHtml({
   return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + (official ? officialCss : css) + '</style></head><body>' + html + '</body></html>';
 }
 const ROS_PRINT_OPT_KEY = 'unicoRosterPrintOpts.v2';
+const ROS_FIT_KEY = 'unicoRosterFitMonth.v1';
 const ROS_PRINT_OPT_OLD = 'unico_roster_print_opts_v1';
 const rosSheetGuests = r => ({
   ...(r && r.guestsCarried || {}),

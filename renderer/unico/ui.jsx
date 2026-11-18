@@ -183,6 +183,10 @@ function unicoModuleLevel(mid){ const p=unicoUserPerms(); if(!p) return 'delete'
    and nothing on screen says why: tick Print for it in Users & Roles. The reasoning, and
    why this must not be "fixed" by making a level imply print, is in server/access.js. */
 function unicoCan(mid, action){
+  // An administrator's restriction on this account (server/limit-control.js): from level 2
+  // nothing may be changed. Supplementary only — the server refuses the write either way.
+  // Checked before the perms map, because portal accounts carry none and are limited too.
+  if((action==='edit'||action==='add'||action==='delete') && !unicoWriteAllowed()) return false;
   const p=unicoUserPerms(); if(!p) return true;   // admin / open local mode -> full
   // 'attrition' was part of Performance until 2026-10: a map saved before it existed keeps
   // Performance's grant for it (same rule as server/access.js can()).
@@ -200,6 +204,8 @@ function unicoCanAccessModule(mid){ return unicoCan(mid,'view'); }
 // 'dcResponsibles' is only a legacy redirect (app.jsx) that renders nothing and picks a
 // destination this session can open, which gates itself — gating the redirect would bounce first.
 function unicoCanAccessView(view){ if(view==='profile'||view==='home'||view==='dcResponsibles') return true;
+  // An administrator-only screen registered at runtime (unicoRegisterAdminView): administrators only.
+  if(Object.prototype.hasOwnProperty.call(UNICO_ADMIN_VIEWS, view)) return unicoIsAdminSession();
   // A Data Submission screen also needs that screen granted to this person.
   const ds=unicoDsScreenOf(view); if(ds && unicoDsScreens().indexOf(ds)<0) return false;
   // A screen behind a sub-menu this person was not given (Access Control → Module access).
@@ -283,6 +289,160 @@ function unicoFirstAllowedHome(){
 // (its buttons 403'd). Re-read the live grant; on a change FIRST pull the data it now allows —
 // a newly granted module's overlay was never sent to this tab, and a store opened on that blank
 // copy would save it over the hospital's — then tell the shell to re-render ('unico:perms-changed').
+/* ===== ACCESS LIMITS — this person's OWN restriction, nothing else ==================
+   The server resolves it (server/limit-control.js) and enforces it on every request; this
+   side only mirrors it so the screen can say so honestly and stop offering what would be
+   refused. window.__UNICO_LIMIT__ = { level 1–4, message } or null. It is injected at page
+   load and refreshed from GET /api/me (unicoRefreshLimit); 'unico:limit-changed' fires on
+   every change. Administrators are never limited. */
+const UNICO_LIMIT_NOTICES={
+  1:'Your account has an administrator notice.',
+  2:'Your access is currently view-only. Changes cannot be saved.',
+  3:'Data submissions are currently paused for your account.',
+  4:'Your access is currently limited',
+};
+function unicoIsAdminSession(){ const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null; return !u || u.role==='Administrator'; }
+function unicoNormLimit(l){
+  if(!l||typeof l!=='object') return null;
+  const n=Number(l.level);
+  if(!Number.isInteger(n)||n<1||n>4) return null;
+  return { level:n, message:typeof l.message==='string'?l.message.slice(0,500):'' };
+}
+function unicoLimit(){
+  if(unicoIsAdminSession()) return { level:0, message:'' };
+  return unicoNormLimit(typeof window!=='undefined'?window.__UNICO_LIMIT__:null) || { level:0, message:'' };
+}
+// From level 2: nothing can be saved. From level 3: submissions are paused too.
+function unicoWriteAllowed(){ return unicoLimit().level<2; }
+function unicoSubmitAllowed(){ return unicoLimit().level<3; }
+// For a control: '' when allowed, else the notice to show as its tooltip / explanation.
+// 'submit' = sending data (refused from level 2 like every write; its own wording from 3).
+function unicoLimitBlocks(kind){
+  const lv=unicoLimit().level;
+  if(kind==='submit' && lv>=3) return UNICO_LIMIT_NOTICES[3];
+  return lv>=2 ? UNICO_LIMIT_NOTICES[2] : '';
+}
+function unicoSetLimit(next){
+  const before=JSON.stringify(unicoNormLimit(window.__UNICO_LIMIT__));
+  const n=unicoIsAdminSession()?null:unicoNormLimit(next);
+  window.__UNICO_LIMIT__=n;
+  if(JSON.stringify(n)!==before){ try{ window.dispatchEvent(new CustomEvent('unico:limit-changed',{detail:n})); }catch(e){} return true; }
+  return false;
+}
+// Re-read the restriction from /api/me (the light form). A degraded answer (the server could
+// not read the account) is ignored, exactly like the permissions refresh below.
+let _unicoLimitBusy=null;
+function unicoRefreshLimit(){
+  const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
+  if(!u || !u.username) return Promise.resolve(false);
+  if(_unicoLimitBusy) return _unicoLimitBusy;
+  _unicoLimitBusy=fetch('/api/me?lite=1',{credentials:'same-origin',cache:'no-store'})
+    .then(r=>r.ok?r.json():null)
+    .then(j=>{ if(!j||!j.ok||j.degraded) return false; return unicoSetLimit(j.limit||null); })
+    .catch(()=>false)
+    .then(v=>{ _unicoLimitBusy=null; return v; });
+  return _unicoLimitBusy;
+}
+// A request the server refused because of the restriction: say so in the server's own words
+// (deduplicated), and pick the new level up at once rather than at the next poll.
+let _unicoLimitToast={ msg:'', at:0 };
+function unicoOnLimitRefusal(body, url){
+  try{
+    const lvl=Number(body&&body.level)||0;
+    if(lvl>unicoLimit().level) unicoRefreshLimit();
+    if(lvl>=4) return;                                       // the lock screen says it already
+    if(/\/api\/data(\?|$)/.test(url||'')) return;           // the save bar (web-native.js) says it already
+    const msg=String((body&&body.error)||UNICO_LIMIT_NOTICES[2]);
+    const now=Date.now();
+    if(msg===_unicoLimitToast.msg && now-_unicoLimitToast.at<6000) return;
+    _unicoLimitToast={ msg, at:now };
+    if(window.UI&&window.UI.toast) window.UI.toast(msg,'warn');
+  }catch(e){}
+}
+// One shared hook for every module's requests: modules build their own fetch calls, so a
+// refused write is noticed here once instead of in fifty places. The response is passed on
+// untouched; only a clone is read.
+(function(){
+  if(typeof window==='undefined' || !window.fetch || window.__unicoFetchLimitHook) return;
+  window.__unicoFetchLimitHook=true;
+  const orig=window.fetch;
+  window.fetch=function(input, init){
+    return orig.apply(this, arguments).then(function(r){
+      try{
+        if(r && r.status===403){
+          const url=String((input&&input.url)||input||'');
+          if(url.indexOf('/api/')>=0 || /^\/s\//.test(url)){
+            r.clone().json().then(function(j){ if(j&&j.code==='limited') unicoOnLimitRefusal(j,url); }).catch(function(){});
+          }
+        }
+      }catch(e){}
+      return r;
+    });
+  };
+})();
+// The honest notice for levels 1–3, above the top bar. Text only: the administrator's
+// message is rendered as a React text node, never as HTML.
+function LimitBanner({limit}){
+  const l=unicoNormLimit(limit);
+  if(!l||l.level>=4) return null;
+  const warn=l.level>=2;
+  return (
+    <div role="status" aria-live="polite" className="unico-limit-banner"
+      style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 16px',fontSize:12.8,lineHeight:1.45,
+        background:warn?'#fff4e0':'#eaf5fc',color:warn?'#6b4a00':'#0b4a6b',
+        borderBottom:'1px solid '+(warn?'#efd08a':'#bfe0f2'),overflowWrap:'anywhere'}}>
+      <span style={{flex:'0 0 auto',marginTop:1}}><Ic d={warn?I.shield:I.bell} s={16}/></span>
+      <div style={{minWidth:0}}>
+        <strong style={{fontWeight:700}}>{UNICO_LIMIT_NOTICES[l.level]}</strong>
+        {l.message && <span style={{whiteSpace:'pre-wrap'}}>{' '}{l.message}</span>}
+      </div>
+    </div>
+  );
+}
+// Level 4: the workspace is replaced. The session stays signed in until they sign out.
+function LimitLockScreen({limit}){
+  const l=unicoNormLimit(limit)||{level:4,message:''};
+  return (
+    <div role="main" style={{minHeight:'100vh',display:'grid',placeItems:'center',padding:'24px 16px',boxSizing:'border-box',fontFamily:'"IBM Plex Sans",system-ui,sans-serif'}}>
+      <div style={{width:'100%',maxWidth:440,boxSizing:'border-box',background:'linear-gradient(152deg,rgba(255,255,255,.86),rgba(236,247,255,.6))',backdropFilter:'blur(26px) saturate(1.75)',WebkitBackdropFilter:'blur(26px) saturate(1.75)',border:'1px solid rgba(255,255,255,.92)',boxShadow:'0 14px 42px rgba(31,59,90,.14),0 4px 16px rgba(0,144,202,.09)',borderRadius:16,padding:'28px 26px',textAlign:'center'}}>
+        <img src="unico/logo.svg" alt="UNICO" style={{height:34,margin:'0 auto 16px',display:'block'}}/>
+        <div style={{fontSize:17,fontWeight:700,color:'#16202e',marginBottom:8}}>{UNICO_LIMIT_NOTICES[4]}</div>
+        <div style={{fontSize:13,color:'#3c4858',lineHeight:1.55,marginBottom:12}}>An administrator has restricted workspace access for your account. You are still signed in, and you can sign out below.</div>
+        {l.message && <div style={{fontSize:13,color:'#16202e',lineHeight:1.5,textAlign:'left',whiteSpace:'pre-wrap',overflowWrap:'anywhere',background:'#f1f6fb',border:'1px solid #e3e9f1',borderRadius:10,padding:'10px 13px',marginBottom:12}}>{l.message}</div>}
+        <a href="/logout" style={{display:'inline-block',borderRadius:9,padding:'10px 24px',fontSize:13,fontWeight:700,color:'#fff',textDecoration:'none',background:'linear-gradient(135deg,#27a8db,#0072a3)'}}>Sign out</a>
+      </div>
+    </div>
+  );
+}
+
+/* ===== ADMINISTRATOR-ONLY SCREENS, registered at runtime ===========================
+   Their code is never in this bundle: the server gives administrators (and nobody else) the
+   script URLs in window.__UNICO_ADMIN_EXT__ and serves them through administrator-only
+   routes. A script calls unicoRegisterAdminView({ view, section, label, icon, crumbs,
+   render }) and the shell adds its sidebar row and route. Registration is refused for
+   anyone who is not an administrator. */
+const UNICO_ADMIN_VIEWS={};
+function unicoRegisterAdminView(def){
+  if(!unicoIsAdminSession() || !def || typeof def.view!=='string' || typeof def.render!=='function') return false;
+  UNICO_ADMIN_VIEWS[def.view]=def;
+  try{ window.dispatchEvent(new CustomEvent('unico:admin-ext',{detail:def.view})); }catch(e){}
+  return true;
+}
+function unicoAdminViews(){ return unicoIsAdminSession() ? Object.keys(UNICO_ADMIN_VIEWS).map(k=>UNICO_ADMIN_VIEWS[k]) : []; }
+function unicoAdminView(view){ return unicoIsAdminSession() && Object.prototype.hasOwnProperty.call(UNICO_ADMIN_VIEWS, view) ? UNICO_ADMIN_VIEWS[view] : null; }
+let _unicoAdminExtLoaded=false;
+function unicoLoadAdminExt(){
+  if(_unicoAdminExtLoaded || !unicoIsAdminSession()) return;
+  const list=(typeof window!=='undefined' && Array.isArray(window.__UNICO_ADMIN_EXT__)) ? window.__UNICO_ADMIN_EXT__ : [];
+  if(!list.length) return;
+  _unicoAdminExtLoaded=true;
+  list.forEach(src=>{
+    if(typeof src!=='string' || src.indexOf('/api/')!==0) return;   // same-origin API routes only
+    const s=document.createElement('script'); s.src=src; s.async=true;
+    (document.head||document.documentElement).appendChild(s);
+  });
+}
+
 function unicoRefreshPerms(){
   const u=(typeof window!=='undefined' && window.__UNICO_USER__)||null;
   if(!u || !u.username || u.role==='Administrator' || ['collector','incharge','nurse','pca'].indexOf(u.role)>=0) return Promise.resolve(false);
@@ -873,6 +1033,18 @@ function Sidebar({route, setRoute, collapsed, depts}){
           </React.Fragment>
           );
         })}
+        {/* Administrator-only screens registered at runtime (nothing here for anyone else). */}
+        {(()=>{ const ext=unicoAdminViews(); if(!ext.length) return null; const secs=[]; ext.forEach(d=>{ const k=d.section||''; if(secs.indexOf(k)<0) secs.push(k); });
+          return secs.map(sec=>(
+            <React.Fragment key={'ext-'+sec}>
+              {sec && <div className="sb-sec">{sec}</div>}
+              {ext.filter(d=>(d.section||'')===sec).map(d=>(
+                <div key={d.view} className={'sb-item'+(view===d.view?' active':'')} onClick={()=>setRoute({view:d.view})} title={d.title||d.label}>
+                  <Ic d={d.icon||I.shield} s={18}/><span className="lbl">{d.label}</span>
+                </div>
+              ))}
+            </React.Fragment>
+          )); })()}
       </div>
       {/* Decorative only. The hospital picture is a faint backdrop painted BEHIND the menu,
           so it takes no room and never moves an item. The slogan appears above the footer
@@ -1375,6 +1547,9 @@ function SectionTitle({icon,title,sub,right}){
 Object.assign(window,{ Ic, I, DEPT_ICON, Sidebar, TopBar, Delta, SectionTitle, ModuleSwitch, ViewTabs, unicoViewTabs, unicoModuleOf,
   UNICO_ACCESS_MODULES, unicoAccessModuleOf, unicoAllowedModules, unicoCanAccessModule, unicoCanAccessView, unicoFirstAllowedHome,
   unicoCan, unicoModuleLevel, unicoUserPerms, unicoRefreshPerms });
+// Access limits (this person's own) + administrator-only screens registered at runtime.
+Object.assign(window,{ UNICO_LIMIT_NOTICES, unicoLimit, unicoWriteAllowed, unicoSubmitAllowed, unicoSetLimit, unicoRefreshLimit,
+  unicoLimitBlocks, LimitBanner, LimitLockScreen, unicoIsAdminSession, unicoRegisterAdminView, unicoAdminViews, unicoAdminView, unicoLoadAdminExt });
 // Data Submission screens: read by app.jsx (routes) and data-collection.jsx (the screens).
 Object.assign(window,{ UNICO_DS_SCREENS, unicoDsScreens, unicoDsViewOf, unicoDsScreenOf, unicoHhScreenOn });
 Object.assign(window,{ unicoSubMenus, unicoSubMenuOk, unicoSubViewOk, unicoModuleLanding });

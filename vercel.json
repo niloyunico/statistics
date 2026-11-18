@@ -24,7 +24,8 @@
           "renderer/unico/doc-audit-core.js",
           "renderer/unico/callbell-core.js",
           "renderer/nurse-app.html",
-          "renderer/admin-app.html"
+          "renderer/admin-app.html",
+          "server/admin-ui/**"
         ]
       }
     },
@@ -63,6 +64,10 @@
       "headers": {
         "Cache-Control": "public, max-age=604800"
       }
+    },
+    {
+      "src": "/unico/control-centre.jsx",
+      "dest": "server/web.js"
     },
     {
       "src": "/unico/(.*)",

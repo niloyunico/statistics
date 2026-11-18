@@ -1280,7 +1280,38 @@ async function denIsAdminOnly(spec) {
 }
 
 /* ---------------- submissions (pending -> approve/reject) ---------------- */
+/* SUBMISSIONS PAUSED (Control Centre, level 3 and above). Checked HERE, in the one function
+   every submission path ends in -- the signed-in forms, the public share links (/s/:code) and
+   anything added later -- so no entry point can miss it. The account is the sender's own
+   login (submittedByUser), or for a share link the account linked to the link's responsible
+   person; a link with no linked account follows the hospital-wide ("everyone") level.
+   Administrators are exempt (limit-control resolves their role first). An unreadable
+   setting fails open, exactly like the request guards. Open local mode is never limited. */
+async function accountForSubmission(meta) {
+  const users = await getUsers();
+  if (meta && meta.submittedByUser) return users.findOne({ username: String(meta.submittedByUser).trim().toLowerCase() });
+  const rid = meta && meta.responsible && meta.responsible.id;
+  if (rid && typeof users.find === 'function') {
+    const linked = await users.find({ responsibleId: String(rid) }).limit(1).toArray();
+    return linked[0] || null;
+  }
+  return null;
+}
+async function refuseIfSubmissionsPaused(meta) {
+  let lim = null;
+  try {
+    if (typeof session.authRequired !== 'function' || !session.authRequired()) return;
+    const u = await accountForSubmission(meta || {});
+    lim = await require('./limit-control').limitFor(u ? { username: u.username, role: u.role || 'User' } : { username: '', role: '' });
+  } catch (e) { return; }
+  if (lim && lim.level >= 3) {
+    const e = new Error(accessRoles.LIMIT_MESSAGES.submission);
+    e.status = accessRoles.LIMIT_STATUS; e.code = 'limited'; e.level = lim.level;
+    throw e;
+  }
+}
 async function createSubmission(spec, meta) {
+  await refuseIfSubmissionsPaused(meta);
   const rec = Object.assign({}, spec, {
     status: 'pending',
     responsible: normResp(meta && meta.responsible),
@@ -2009,7 +2040,7 @@ function mount(app, opts) {
     const mine = [req.user.name, req.user.sub, scope && scope.name].filter(Boolean);
     return mine.includes(s.submittedBy) || !!(s.responsible && mine.includes(s.responsible.name));
   };
-  const sendErr = (res, e, fallback) => res.status(e.status || fallback || 400).json({ ok: false, error: String(e.message || e), code: e.code, prior: e.prior, pendingId: e.pendingId });
+  const sendErr = (res, e, fallback) => res.status(e.status || fallback || 400).json({ ok: false, error: String(e.message || e), code: e.code, level: e.level, prior: e.prior, pendingId: e.pendingId });
   /* Is this caller held to its own departments / areas / indicators? Every legacy portal
      account is, and so is a normal account holding Data Submission without Data Collection
      (access.dataScoped). Judged on the RESOLVED live account (req.access, set by
@@ -2173,8 +2204,16 @@ function mount(app, opts) {
       res.json({ ok: true, stats: await getStats() });
     } catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
+  // Explicit level-3 freeze at each submission entry point (the guard refuses every write from
+  // level 2 already; this keeps the submission wording and covers a guard added without it).
+  const pausedReply = (req, res) => {
+    if (!req.access || typeof accessRoles.submissionPaused !== 'function' || !accessRoles.submissionPaused(req.access)) return false;
+    res.status(accessRoles.LIMIT_STATUS).json(accessRoles.limitBody(req.access, 'submission'));
+    return true;
+  };
   app.post('/api/submissions/patient', guard, async (req, res) => {
     try {
+      if (pausedReply(req, res)) return;
       if (req.access && !accessRoles.maySubmitKind(req.access, 'patient')) return res.status(403).json({ ok: false, error: 'Your account is not set up to submit patient statistics.' });
       const deny = await denyIfOutOfScope(req, 'patient', String((req.body && req.body.department) || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
@@ -2185,6 +2224,7 @@ function mount(app, opts) {
   });
   app.post('/api/submissions/quality', guard, async (req, res) => {
     try {
+      if (pausedReply(req, res)) return;
       if (req.access && !accessRoles.maySubmitKind(req.access, 'quality')) return res.status(403).json({ ok: false, error: 'Your account is not set up to submit quality indicator data.' });
       const deny = await denyIfOutOfScope(req, 'quality', String((req.body && req.body.area) || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
@@ -2242,6 +2282,7 @@ function mount(app, opts) {
   });
   // Field requests: a unit asks for a custom field (own departments only); an administrator decides.
   app.post('/api/departments/:id/field-requests', guard, async (req, res) => {
+    if (pausedReply(req, res)) return;
     try {
       const deny = await denyIfOutOfScope(req, 'patient', String(req.params.id || '').trim());
       if (deny) return res.status(403).json({ ok: false, error: deny });
@@ -2279,6 +2320,7 @@ function mount(app, opts) {
   // Owner (or admin) withdraws a still-PENDING submission: a soft status, never a delete.
   app.post('/api/submissions/:id/withdraw', guard, async (req, res) => {
     try {
+      if (pausedReply(req, res)) return;
       const s = await getSubmissionById(req.params.id);
       if (!s) return res.status(404).json({ ok: false, error: 'Submission not found.' });
       if (!isAdminReq(req) && !(await ownsSubmission(req, s))) return res.status(403).json({ ok: false, error: 'You can only withdraw your own submissions.' });
@@ -2288,6 +2330,7 @@ function mount(app, opts) {
   // Admin: correct a PENDING submission's values/note before approving it.
   app.patch('/api/submissions/:id', guard, async (req, res) => {
     try {
+      if (pausedReply(req, res)) return;
       const s = await getSubmissionById(req.params.id);
       if (!s) return res.status(404).json({ ok: false, error: 'Submission not found.' });
       // Admins edit anything AT ANY TIME (incl. approved — the change re-applies to live data
@@ -2516,6 +2559,14 @@ function mount(app, opts) {
     catch (e) { res.status(500).json({ ok: false, error: String(e.message || e) }); }
   });
   app.post('/s/:code/submit', async (req, res) => {
+    // A signed-in browser using a share link is held to its OWN restriction too (the link's
+    // linked account is checked again inside createSubmission).
+    try {
+      if (typeof session.authRequired === 'function' && session.authRequired() && session.userFromReq(req)) {
+        const a = await accessRoles.forRequest(req);
+        if (a && accessRoles.submissionPaused(a)) return res.status(accessRoles.LIMIT_STATUS).json(accessRoles.limitBody(a, 'submission'));
+      }
+    } catch (e) { /* undecidable here: createSubmission still checks the link's account */ }
     // sendErr: the 409s carry code / prior / pendingId so the public page can react like the app.
     try { res.json(await shortlinkSubmit(req.params.code, req.body || {})); } catch (e) { sendErr(res, e); }
   });

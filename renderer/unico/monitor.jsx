@@ -28,6 +28,9 @@
     const detail=String((r&&r.error)||'The database did not confirm the save.');
     // An expired session cannot report anything — its own banner already sends the person to sign in.
     if(/session expired/i.test(detail)) return;
+    // Not sent because an administrator made this account read-only (web-native.js): a
+    // deliberate restriction the person is already told about, not a system fault.
+    if(r&&r.limited) return;
     const kind=r&&r.conflict?'save_conflict':r&&r.forbidden?'save_forbidden':'save_failed';
     const sig=kind+'|'+detail; const now=Date.now();
     if(recent[sig]&&now-recent[sig]<120000) return;       // retries of one failure are one event

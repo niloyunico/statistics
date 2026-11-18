@@ -834,4 +834,32 @@ function mount(app, opts) {
   app.get(P + '/presence', G, async (req, res) => { try { res.json({ ok: true, online: Array.from(await presence()) }); } catch (e) { fail(res, 500, 'Server error.'); } });
 }
 
-module.exports = { mount, FEATURES, DEFAULT_SETTINGS, effectiveFeatures, cleanSettings };
+/* Presence outside the phone app: the console's own /api/me poll marks its signed-in user as
+   seen, in the SAME userState.lastSeen the phone directory uses (one presence for the whole
+   app). Throttled per user per server instance, and only ever for the authenticated session's
+   own username — callers pass req.user.sub, never anything the client sent. */
+const PRESENCE_EVERY_MS = 60000;
+const _touched = new Map();
+async function touchPresence(username) {
+  const id = String(username || '').trim().toLowerCase();
+  if (!id) return;
+  const now = nowMs();
+  if (now - (_touched.get(id) || 0) < PRESENCE_EVERY_MS) return;
+  _touched.set(id, now);
+  if (_touched.size > 2000) _touched.forEach((ts, k) => { if (now - ts > PRESENCE_EVERY_MS) _touched.delete(k); });
+  const c = await col('userState');
+  if (c) { await c.updateOne({ _id: id }, { $set: { lastSeen: now } }, { upsert: true }); return; }
+  const cur = memList('userState').find((y) => y.id === id);
+  if (cur) cur.lastSeen = now; else memList('userState').unshift({ id, lastSeen: now });
+}
+// { username: lastSeen } for everyone seen in the last `withinMs` (default: ever recorded).
+async function presenceMap(withinMs) {
+  const filter = withinMs ? { lastSeen: { $gt: nowMs() - withinMs } } : { lastSeen: { $gt: 0 } };
+  const rows = await list('userState', filter);
+  const out = {};
+  rows.forEach((r) => { if (r && r.id && Number(r.lastSeen)) out[String(r.id)] = Number(r.lastSeen); });
+  return out;
+}
+const ONLINE_MS = 5 * 60000;
+
+module.exports = { mount, FEATURES, DEFAULT_SETTINGS, effectiveFeatures, cleanSettings, touchPresence, presenceMap, ONLINE_MS };

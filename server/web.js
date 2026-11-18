@@ -226,6 +226,45 @@ function warmingPage() {
     + '</div></body></html>';
 }
 
+/* Level 4 (Control Centre): the workspace is unavailable to this account. A plain page with
+   NO data in it — the app shell is not sent at all, so nothing of the hospital's reaches the
+   browser while the restriction stands. It says so honestly, shows the administrator's
+   message as text, offers sign-out, and reloads by itself once the restriction is lifted
+   (or the session ends). */
+function limitedPage(message) {
+  const msg = message ? '<p class="msg">' + escapeHtml(message).replace(/\n/g, '<br/>') + '</p>' : '';
+  return '<!DOCTYPE html>'
+    + '<html lang="en"><head><meta charset="UTF-8"/>'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1.0"/>'
+    + '<title>Access limited - UNICO</title>'
+    + '<link rel="icon" type="image/svg+xml" href="/unico/logo-mark.svg"/>'
+    + '<style>'
+    + 'body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px 16px;box-sizing:border-box;'
+    + 'font-family:"IBM Plex Sans",system-ui,Segoe UI,sans-serif;background:#0d1b2e;'
+    + 'background-image:radial-gradient(1100px 700px at 18% -10%,rgba(39,168,219,.16),transparent 60%);color:#16202e}'
+    + '.card{width:100%;max-width:440px;box-sizing:border-box;text-align:center;background:#fff;border:1px solid #e3e9f1;'
+    + 'border-radius:16px;padding:30px 28px;box-shadow:0 20px 50px rgba(5,12,24,.45)}'
+    + '.logo{height:34px;margin:0 auto 18px;display:block}'
+    + 'h1{margin:0 0 10px;font-size:19px}p{margin:0 0 10px;font-size:13.5px;line-height:1.6;color:#3c4858}'
+    + '.msg{white-space:normal;word-break:break-word;text-align:left;background:#f1f6fb;border:1px solid #e3e9f1;'
+    + 'border-radius:10px;padding:10px 13px;color:#16202e}'
+    + '.btn{display:inline-block;margin-top:8px;border-radius:9px;padding:10px 24px;font-size:13.5px;font-weight:700;'
+    + 'color:#fff;text-decoration:none;background:linear-gradient(135deg,#27a8db,#0072a3)}'
+    + '</style></head><body><main class="card" role="main">'
+    + '<img class="logo" src="/unico/logo.svg" alt="UNICO"/>'
+    + '<h1>Your access is currently limited</h1>'
+    + '<p>An administrator has restricted workspace access for your account. You are still signed in, and you can sign out below.</p>'
+    + msg
+    + '<a class="btn" href="/logout">Sign out</a>'
+    + '</main><script>(function(){'
+    // Back to the workspace as soon as the restriction is lifted; to sign-in when the session ends.
+    + 'function chk(){fetch("/api/me?lite=1",{credentials:"same-origin",cache:"no-store"}).then(function(r){'
+    + 'if(r.status===401){location.href="/login";return null;}return r.ok?r.json():null;}).then(function(j){'
+    + 'if(j&&j.ok&&!j.degraded&&!(j.limit&&j.limit.level>=4))location.reload();})["catch"](function(){});}'
+    + 'setInterval(chk,30000);window.addEventListener("focus",chk);'
+    + '})();</script></body></html>';
+}
+
 // A failed user-scope read, as distinct from getUserScope's legitimate null (no such user).
 const SCOPE_FAILED = Symbol('scope-failed');
 
@@ -233,6 +272,16 @@ async function serveIndex(req, res) {
   let html;
   try { html = fs.readFileSync(INDEX_FILE, 'utf8'); }
   catch (e) { return res.status(500).type('text').send('renderer/index.html not found'); }
+
+  // The account's restriction level (Control Centre), resolved BEFORE any data is read: at
+  // level 4 the page carries nothing but the notice. null = could not be resolved here; the
+  // code below handles a dead session exactly as before.
+  const limitAccess = await access.forRequest(req).catch(() => null);
+  const limitNow = access.limitOf(limitAccess);
+  if (limitAccess && limitNow.level >= 4) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(access.LIMIT_STATUS).type('html').send(limitedPage(limitNow.message));
+  }
 
   // Fetch all five queries CONCURRENTLY — one wall-clock round-trip instead of
   // serial ones, so the shell starts streaming sooner. Each query falls back
@@ -411,6 +460,11 @@ async function serveIndex(req, res) {
   // otherwise an empty snapshot from a database blip would wipe the browser's copy and
   // then mirror that emptiness back.
   const authoritative = !!appRes && !appRes.rescued && !(restricted && restricted.degraded);
+  const adminExt = [];
+  if (limitAccess && limitAccess.unrestricted) {
+    const cc = require('./control-centre').uiScriptUrl();
+    if (cc) adminExt.push(cc);
+  }
 
   const inject =
     '<script>window.__UNICO_SNAPSHOT_AUTHORITATIVE__=' + (authoritative ? 'true' : 'false') + ';' +
@@ -420,6 +474,11 @@ async function serveIndex(req, res) {
     'window.__UNICO_QUALITY__=' + safeJSON(quality) + ';' +
     'window.__UNICO_DEPT_MAP__=' + safeJSON(deptMap) + ';' +
     'window.__UNICO_USER__=' + safeJSON(userInject) + ';' +
+    // Only THIS person's own restriction (levels 1-3 show a notice). Never the configuration.
+    'window.__UNICO_LIMIT__=' + safeJSON(limitNow.level > 0 ? limitNow : null) + ';' +
+    // Administrator-only screens: their script URL is given to administrators and nobody else
+    // (the script itself is served by an administrator-only route).
+    (adminExt.length ? 'window.__UNICO_ADMIN_EXT__=' + safeJSON(adminExt) + ';' : '') +
     (formulas.length ? 'window.__UNICO_QI_CORRECTIONS__=' + safeJSON(qiByName) + ';window.__UNICO_QI_FORMULAS__=' + safeJSON(formulas) + ';' : '') +
     (req.unicoLanding ? 'window.__UNICO_INITIAL_ROUTE__=' + safeJSON(req.unicoLanding) + ';' : '') +
     '</script>\n' +
@@ -727,8 +786,13 @@ app.get('/collect', function (req, res) {
 // straight on the home screen and a signed-out one sees the app's login.
 function servePhoneApp(file) {
   const full = path.join(RENDERER, file);
-  return function (req, res) {
+  return async function (req, res) {
     res.set('Cache-Control', 'no-store');
+    // Workspace unavailable (level 4): the phone apps get the same notice as the console.
+    if (session.authRequired() && session.userFromReq(req)) {
+      const a = await access.forRequest(req).catch(() => null);
+      if (a && access.limitOf(a).level >= 4) return res.status(access.LIMIT_STATUS).type('html').send(limitedPage(access.limitOf(a).message));
+    }
     res.sendFile(full, function (err) { if (err && !res.headersSent) res.status(500).type('text').send('renderer/' + file + ' not found'); });
   };
 }
@@ -960,6 +1024,8 @@ require('./data-collection').mount(app, { requireApi: [session.requireApi, acces
 
 // User Management module: admin-only account CRUD over the `users` collection.
 require('./users-admin').mount(app, { requireApi: session.requireApi });
+// Control Centre (access restriction levels) — administrators only, checked on every route.
+require('./control-centre').mount(app, { requireApi: session.requireApi });
 
 // Admin activity log: read/clear the auth + user-management audit trail.
 // The audit trail names who signed in, from which IP, and what they changed — it was
@@ -1116,6 +1182,9 @@ require('./phone-app').mount(app, { requireApi: [session.requireApi, access.atta
 // The app's own source (jsx/js/css) is transpiled in-browser by Babel, so it MUST
 // NOT be cached — otherwise edits don't show until a manual hard-refresh. Mark those
 // no-store (revalidated every load); large immutable vendor libs may still cache.
+// The Control Centre's source is administrator-only: it is built into server/admin-ui/ and
+// served by its own guarded route, never as a public static file.
+app.use('/unico/control-centre.jsx', (req, res) => res.status(404).type('text').send('Not found'));
 app.use(express.static(RENDERER, {
   index: false,
   setHeaders: function (res, filePath) {

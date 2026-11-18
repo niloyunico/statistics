@@ -76,6 +76,35 @@ function App(){
   // re-runs the route guard below for the view already open.
   const [permsRev,setPermsRev]=useState(0);
   useEffect(()=>{ const h=()=>setPermsRev(r=>r+1); window.addEventListener('unico:perms-changed',h); return ()=>window.removeEventListener('unico:perms-changed',h); },[]);
+  // This person's own access restriction (ui.jsx unicoLimit). Kept in state so the banner,
+  // the lock screen and every unicoCan()-gated button follow a change without a reload.
+  const [limit,setLimit]=useState(()=>window.unicoLimit?window.unicoLimit():{level:0,message:''});
+  useEffect(()=>{
+    const h=()=>setLimit(window.unicoLimit?window.unicoLimit():{level:0,message:''});
+    window.addEventListener('unico:limit-changed',h);
+    // Restrictions should land within about half a minute, so they are polled more often than
+    // the 60 s data refresh — the light /api/me form only (no profile read). Also on refocus.
+    let last=0;
+    const tick=(e)=>{
+      if(typeof document!=='undefined' && document.visibilityState==='hidden') return;
+      if(e!=='tick' && Date.now()-last<5000) return;
+      last=Date.now();
+      if(window.unicoRefreshLimit) window.unicoRefreshLimit();
+    };
+    const poll=setInterval(()=>tick('tick'),30000);
+    window.addEventListener('focus',tick);
+    document.addEventListener('visibilitychange',tick);
+    return ()=>{ clearInterval(poll); window.removeEventListener('unico:limit-changed',h); window.removeEventListener('focus',tick); document.removeEventListener('visibilitychange',tick); };
+  },[]);
+  // Administrator-only screens arrive as their own script (ui.jsx unicoLoadAdminExt) and
+  // register themselves; re-render when one does.
+  const [extRev,setExtRev]=useState(0);
+  useEffect(()=>{
+    const h=()=>setExtRev(r=>r+1);
+    window.addEventListener('unico:admin-ext',h);
+    if(window.unicoLoadAdminExt) window.unicoLoadAdminExt();
+    return ()=>window.removeEventListener('unico:admin-ext',h);
+  },[]);
   // Long-lived tabs go stale: department/quality snapshots are injected at page LOAD,
   // and an approval made in ANOTHER tab (or by a collector) never reaches this one.
   // On tab refocus (away ≥15s), refetch both; the refreshers dispatch
@@ -176,7 +205,13 @@ function App(){
   },[needChunk,chunkReady]);
 
   let crumbs=['UNICO'], body=null, actions=null;
-  if(route.view==='dashboard'){
+  const adminExt=window.unicoAdminView?window.unicoAdminView(route.view):null;
+  if(adminExt){
+    // A registered administrator-only screen (unicoRegisterAdminView). unicoCanAccessView
+    // already refuses it to everyone else; the server refuses its API too.
+    crumbs=['UNICO'].concat(Array.isArray(adminExt.crumbs)?adminExt.crumbs:[adminExt.label||'']);
+    body=adminExt.render({setRoute, depts:safeDepts});
+  } else if(route.view==='dashboard'){
     crumbs=['UNICO','Dashboard'];
     body=<Dashboard layout={layout} depts={depts} period={period} openDept={openDept} onFill={(id)=>setRoute({view:'input',dept:id})} setRoute={setRoute}/>;
     actions=(
@@ -414,6 +449,11 @@ function App(){
 
   if(window.unicoSession && window.unicoSession.configured() && !authed){ return <CloudLogin onLogin={()=>setAuthed(true)}/>; }
   if(locked){ return <LockScreen onUnlock={()=>setLocked(false)}/>; }
+  // Workspace unavailable (level 4): nothing of the workspace is drawn — no sidebar, no route.
+  // The server refuses its API meanwhile; this page only says so and offers sign-out.
+  const limitLevel=(limit&&limit.level)||0;
+  if(limitLevel>=4 && typeof LimitLockScreen!=='undefined'){ return <LimitLockScreen limit={limit}/>; }
+  const limitBanner=(limitLevel>=1 && typeof LimitBanner!=='undefined') ? <LimitBanner limit={limit}/> : null;
   // The two PORTAL roles get ONLY the data-collection portal — every other module
   // (dashboard, statistics, staff, quality…) is hidden. A nurse in-charge sees the
   // same portal with the ward screens turned on; the portal itself decides that from
@@ -428,7 +468,7 @@ function App(){
       if(window.unicoLoadChunk) window.unicoLoadChunk('datacollection').catch(()=>{});
       return <ModuleLoading/>;
     }
-    return <React.Fragment><CollectorPortal/>{typeof AppCredit!=='undefined' && <AppCredit/>}</React.Fragment>;
+    return <React.Fragment>{limitBanner}<CollectorPortal/>{typeof AppCredit!=='undefined' && <AppCredit/>}</React.Fragment>;
   }
   // Per-module access: a 'User' with no workspaces granted has nothing to show.
   const accessMods = window.unicoAllowedModules ? window.unicoAllowedModules() : null;
@@ -454,6 +494,7 @@ function App(){
       <Sidebar route={route} setRoute={setRoute} collapsed={collapsed} depts={depts}/>
       {!collapsed && <button className="sb-backdrop" aria-label="Close menu" onClick={()=>setCollapsed(true)}/>}
       <div className="main">
+        {limitBanner}
         <TopBar route={route} setRoute={setRoute} menuExpanded={!collapsed} onBurger={()=>setCollapsed(c=>!c)} crumbs={crumbs} actions={actions} depts={depts} onFill={(id)=>setRoute({view:'input',dept:id})} period={period} setPeriod={setPeriod}/>
         {/* Section tabs for the screens inside a destination (ui.jsx UNICO_VIEW_TABS).
             OUTSIDE the keyed body on purpose: the key remounts on every view change, and

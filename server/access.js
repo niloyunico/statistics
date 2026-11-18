@@ -168,7 +168,9 @@ const cleanRosterRole = require('./roster-workflow').cleanRosterRole;
 // Resolved authority for one request. `unrestricted` covers open local-PC mode
 // (REQUIRE_AUTH=false) and the Administrator role — both may do anything.
 function unrestricted(user) {
-  return { unrestricted: true, username: (user && user.sub) || null, role: (user && user.role) || null, staffScope: 'all', rosterScope: 'all', rosterDepartments: [], rosterEdit: true, rosterRole: '' };
+  // limit: administrators (and open local mode) are never restricted — fixed here, before
+  // any restriction setting is even looked at (server/limit-control.js).
+  return { unrestricted: true, username: (user && user.sub) || null, role: (user && user.role) || null, staffScope: 'all', rosterScope: 'all', rosterDepartments: [], rosterEdit: true, rosterRole: '', limit: { level: 0, message: '' } };
 }
 
 // Permissions come from the DATABASE, never from the JWT. The token carries only
@@ -241,7 +243,8 @@ async function forRequest(req) {
   // out here would bounce them to a /login that cannot reach the database either, so a
   // brief outage became a lockout. An empty perms map is the safe reading of "unknown".
   if (u === DB_UNREACHABLE) {
-    return { unrestricted: false, degraded: true, username: claims.sub, name: claims.name, role: 'User', perms: {}, departments: [], qualityAreas: [], staffScope: 'self', staffId: null, staffEmpId: '', rosterScope: 'departments', rosterDepartments: [], rosterEdit: false, rosterRole: '' };
+    // limit 0: an outage is never read as a restriction (it already grants nothing).
+    return { unrestricted: false, degraded: true, username: claims.sub, name: claims.name, role: 'User', perms: {}, departments: [], qualityAreas: [], staffScope: 'self', staffId: null, staffEmpId: '', rosterScope: 'departments', rosterDepartments: [], rosterEdit: false, rosterRole: '', limit: { level: 0, message: '' } };
   }
   if (!u || u.active === false) return null;              // deactivated -> session dies now
   // Session revocation: bumping sessionEpoch on the user doc invalidates every token
@@ -253,7 +256,7 @@ async function forRequest(req) {
   if (role === 'Administrator') return unrestricted(claims);
 
   const perms = (u.perms && typeof u.perms === 'object' && !Array.isArray(u.perms)) ? u.perms : {};
-  return {
+  const out = {
     unrestricted: false,
     username: u.username,
     name: u.name || u.username,
@@ -296,6 +299,96 @@ async function forRequest(req) {
     // May see the "Documentation audits" card on staff profiles (its own grant, independent of the module).
     auditProfileView: u.auditProfileView === true,
   };
+  // The administrator's restriction level for this account (Control Centre), from a 15 s
+  // cache. An unreadable setting fails OPEN to level 0 — never a guessed restriction.
+  try { out.limit = await limitControl().limitFor(out); } catch (e) { out.limit = { level: 0, message: '' }; }
+  return out;
+}
+
+/* ------------------------------------------------------------- access limits --- */
+
+// Lazy: limit-control reaches the database module, which this file already depends on.
+const limitControl = () => require('./limit-control');
+
+// What every refused request says. Honest and short; nothing about who set it or why.
+const LIMIT_MESSAGES = {
+  write: 'Your access is currently view-only. Changes cannot be saved.',
+  submission: 'Data submissions are currently paused for your account.',
+  locked: 'Your access is currently limited.',
+};
+const LIMIT_STATUS = 403; // a permission restriction, like every other refusal in this API
+const isRead = (method) => /^(GET|HEAD|OPTIONS)$/i.test(String(method || 'GET'));
+const pathOf = (req) => String((req && (req.originalUrl || req.url)) || '').split('?')[0].replace(/\/+$/, '') || '/';
+
+// Endpoints a level-4 account still reaches: who am I (the notice needs it), signing in,
+// signing out and the public health check. Nothing else.
+function limitAllowed(method, path) {
+  const m = String(method || 'GET').toUpperCase();
+  if (path === '/api/me' && m === 'GET') return true;
+  if ((path === '/api/login' || path === '/api/logout') && m === 'POST') return true;
+  if (path === '/api/health' && m === 'GET') return true;
+  return false;
+}
+// A print RECORD (POST …/print) only logs that a page was printed. Printing is a read in this
+// app's permission model ('print' is its own action, never a write), so a view-only account
+// may still print what it can see. Refused at level 4 with everything else.
+const PRINT_LOG = /^\/api\/[a-z0-9-]+\/print$/;
+// Data / submission endpoints: at level 3 and above they answer with the submission notice.
+const SUBMISSION_PATHS = [
+  /^\/api\/submissions(\/|$)/, /^\/api\/data$/, /^\/api\/field-requests(\/|$)/, /^\/api\/departments\/[^/]+\/field-requests$/,
+  /^\/api\/device-days(\/|$)/, /^\/api\/kpi\/values(\/|$)/, /^\/api\/doc-audit\/(audits|bulk|mine)(\/|$)/,
+  /^\/api\/callbell\/(upload|send)$/, /^\/api\/supervisor-reports(\/|$)/, /^\/api\/staff-requests(\/|$)/,
+  /^\/api\/phone\/(incidents|shift-reports|med-requests|requests|handover)(\/|$)/, /^\/s\/[^/]+\/submit$/,
+];
+const isSubmissionPath = (path) => SUBMISSION_PATHS.some((re) => re.test(path));
+
+function limitOf(access) {
+  const l = access && access.limit;
+  if (!access || access.unrestricted || !l) return { level: 0, message: '' };
+  return { level: Number.isInteger(l.level) ? Math.max(0, Math.min(4, l.level)) : 0, message: typeof l.message === 'string' ? l.message : '' };
+}
+// May this account send data submissions right now? (Level 3 and above: no.)
+function submissionPaused(access) { return limitOf(access).level >= 3; }
+// The refusal body for one request. `kind` forces the submission wording.
+function limitBody(access, kind) {
+  const level = limitOf(access).level;
+  const error = level >= 3 && kind === 'submission' ? LIMIT_MESSAGES.submission
+    : level >= 4 ? LIMIT_MESSAGES.locked : LIMIT_MESSAGES.write;
+  return { ok: false, code: 'limited', level, error };
+}
+// Would this request be refused, and with what? null = let it through.
+function limitDecision(access, method, path) {
+  const level = limitOf(access).level;
+  if (level < 2) return null;                                  // 0 normal, 1 notice only
+  if (limitAllowed(method, path)) return null;
+  const read = isRead(method);
+  if (level >= 4) return limitBody(access, isSubmissionPath(path) ? 'submission' : 'locked');
+  if (read) return null;                                       // 2–3: reads stay available
+  if (PRINT_LOG.test(path) && String(method).toUpperCase() === 'POST') return null;
+  return limitBody(access, isSubmissionPath(path) ? 'submission' : 'write');
+}
+// Enforce the limit for this request. Returns true when it answered (refused) the request.
+function enforceLimit(req, res, access) {
+  const a = access || (req && req.access);
+  const refusal = limitDecision(a, req && req.method, pathOf(req));
+  if (!refusal) return false;
+  res.status(LIMIT_STATUS).json(refusal);
+  return true;
+}
+/* The shared chokepoint for EVERY /api route (index.js mounts it before any route). Several
+   modules guard themselves inside their handlers rather than through requirePerm /
+   requireModule / attach, so the named guards alone would leave a gap. Only a signed-in
+   request is judged; anything else continues to its route, which answers 401 itself. */
+async function limitGate(req, res, next) {
+  try {
+    const session = require('./session');
+    if (!session.authRequired()) return next();
+    if (limitAllowed(req.method, pathOf(req))) return next();
+    if (!session.userFromReq(req)) return next();
+    const a = await forRequest(req);
+    if (a && enforceLimit(req, res, a)) return;
+  } catch (e) { /* undecidable: the route's own guard still runs */ }
+  next();
 }
 
 /* The two PORTAL roles. Neither carries a perms map: they do not open the admin
@@ -610,6 +703,7 @@ function requirePerm(mid, action, opts) {
       const access = await forRequest(req);
       if (!access) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
       req.access = access;
+      if (enforceLimit(req, res, access)) return;   // the administrator's restriction level, before any grant
       // The handler scopes these callers itself (web.js collectorScope). A Data Submission
       // holder is let through the same way a portal account always was.
       if (allowCollector && (isPortal(access) || (submitsData(access) && !can(access, mid, action || 'view')))) return next();
@@ -653,6 +747,7 @@ function requireModule(mid) {
       const a = await forRequest(req);
       if (!a) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
       req.access = a;
+      if (enforceLimit(req, res, a)) return;        // restriction level first: no module grant bypasses it
       if (a.unrestricted) return next();
       if (isPortal(a)) {
         if ((PORTAL_MODULES[a.role] || []).indexOf(mid) >= 0) return next();
@@ -690,6 +785,7 @@ async function attach(req, res, next) {
     const access = await forRequest(req);
     if (!access) return res.status(401).json({ ok: false, error: 'Not authenticated.' });
     req.access = access;
+    if (enforceLimit(req, res, access)) return;
     next();
   } catch (e) { res.status(500).json({ ok: false, error: 'Server error.' }); }
 }
@@ -1034,6 +1130,7 @@ module.exports = {
   ROSTER_SCOPES, cleanRosterScope, rosterDeptNames, rosterVisible, ROSTER_ROLES, cleanRosterRole,
   KEY_MODULE, moduleOfKey,
   forRequest, attach, requirePerm, requireModule, actionForMethod, can, canWrite, invalidate, submitScoped,
+  enforceLimit, limitGate, limitDecision, limitBody, limitOf, submissionPaused, isSubmissionPath, LIMIT_MESSAGES, LIMIT_STATUS,
   filterStaff, staffVisible, scopedDeptNames, deptsOfStaff,
   scopeSnapshot, mergeAppData, mergeStaffOverlay, mayReadKey, mayWriteKey,
 };

@@ -80,6 +80,12 @@ app.use(express.json({ limit: '12mb' })); // app-state snapshots can be sizable
 // time, after the route's own session guard has resolved the caller.
 app.use(audit.middleware);
 
+// ACCESS LIMITS (Control Centre): the administrator's restriction level is enforced HERE for
+// every /api route, before any route runs — several modules guard themselves inside their
+// handlers, so the named guards in access.js (which enforce it too) could not cover them all.
+// Signed-in, non-administrator requests only; identity, sign-in and sign-out stay reachable.
+app.use('/api', access.limitGate);
+
 // Cross-origin access. The default was '*' — with a Bearer token that let any site's
 // script call this API on a user's behalf. When login is required, default to
 // same-origin only (no CORS header at all) unless ALLOWED_ORIGINS names real origins.
@@ -166,6 +172,16 @@ app.get('/api/me', async (req, res) => {
   req.user = claims;
   const a = await access.forRequest(req).catch(() => null);
   if (!a) return res.status(401).json({ ok: false });
+  // Presence for the Control Centre: this poll marks the SESSION's own user as seen
+  // (throttled; never a username the client supplied). Best effort.
+  try { require('./phone-app').touchPresence(claims.sub).catch(() => {}); } catch (e) { /* presence is optional */ }
+  // Only this person's own restriction, and only when there is one: never the configuration,
+  // another account's state, who set it, or which rule produced it.
+  const limit = a.limit && a.limit.level > 0 ? { level: a.limit.level, message: a.limit.message || '' } : undefined;
+  // ?lite=1 — the console's frequent restriction poll: identity + limit, no profile read.
+  if (req.query && req.query.lite === '1') {
+    return res.json({ ok: true, user: { username: claims.sub, name: claims.name, role: claims.role }, limit, degraded: a.degraded ? true : undefined });
+  }
   // The phone apps (Nurse App / Admin App) build their home screen from the
   // account's own profile — the departments it is scoped to, its designation,
   // phone and photo — so read those off the live user document. A lookup failure
@@ -207,6 +223,7 @@ app.get('/api/me', async (req, res) => {
     // Database unreachable: perms above is the empty stand-in, not a revocation. The console's
     // live perms refresh must ignore it or a blip hides every workspace.
     degraded: a.degraded ? true : undefined,
+    limit,
   });
 });
 
@@ -244,6 +261,9 @@ app.put('/api/data', requireAuth, access.attach, async (req, res) => {
   // mirroring their localStorage back here would clobber the admin's full overlay.
   // Collectors persist real data through /api/submissions — accept and no-op here.
   if (req.user && access.PORTAL_ROLES.indexOf(req.user.role) >= 0) return res.json({ ok: true, skipped: true });
+  // Submissions paused for this account (level 3+): an explicit refusal, on top of the
+  // read-only refusal the guards already give from level 2.
+  if (access.submissionPaused(req.access)) return res.status(access.LIMIT_STATUS).json(access.limitBody(req.access, 'submission'));
   const data = req.body && req.body.data;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return res.status(400).json({ ok: false, error: 'A data object is required.' });
   // The app state is a mirror of localStorage: a flat map of string->string. Enforce
