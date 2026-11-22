@@ -61,7 +61,7 @@ const labelFmt = (r) => { const k = K.unitKind(r); return k === 'pct' ? 'General
 /* ONE size scale for the whole deck (2026-11-22: the text was too small to read on a projector —
    tables at 8–9.5 pt, chart axes at 8 pt). Nothing below the "small" size anywhere; a slide that
    cannot hold its content at these sizes continues on the next slide instead of shrinking it. */
-const FS = { foot: 10, kicker: 12, title: 28, th: 12.5, td: 12, small: 11, axis: 12, label: 13, legend: 12, chartTitle: 14 };
+const FS = { foot: 12, kicker: 14, title: 34, th: 16, td: 16, small: 14, axis: 16, label: 18, legend: 15, chartTitle: 18 };
 // The deck's chart look: Calibri everywhere, a soft dashed grid, no axis lines, a faint plot background.
 const GRID = { color: 'DCE3EB', size: 0.75, style: 'dash' };
 const CHART = {
@@ -74,6 +74,17 @@ const BAR_SHADOW = { type: 'outer', blur: 4, offset: 2, angle: 90, color: '1B2B3
 const LBL = { showValue: true, dataLabelFontFace: FONT, dataLabelFontBold: true, dataLabelFontSize: FS.label };
 // A month's colour on a KPI trend: its status against that month's target (blue when no target).
 const monthColor = (r, v, t, cfg) => { if (v == null) return ST.nodata; const st = K.statusOf(r, v, t, cfg); return st === 'notarget' ? BLUE : ST[st] || BLUE; };
+
+// Each bar its own shade: the n-th bar of the same colour alternates lighter / darker around the
+// status colour, so neighbouring bars differ while green still means on target, red needs action.
+const SHADE_STEPS = [0, 0.2, -0.18, 0.3, -0.3, 0.1, -0.1, 0.25, -0.24, 0.15];
+const shadeHex = (hexCol, k) => {
+  const c = String(hexCol).replace('#', '');
+  const v = [0, 2, 4].map((i) => parseInt(c.slice(i, i + 2), 16));
+  const out = v.map((x) => Math.round(k >= 0 ? x + (255 - x) * k : x * (1 + k)));
+  return out.map((x) => Math.max(0, Math.min(255, x)).toString(16).padStart(2, '0')).join('').toUpperCase();
+};
+const shadeBars = (cols) => { const seen = {}; return cols.map((c) => { const n = seen[c] = (seen[c] || 0) + 1; return shadeHex(c, SHADE_STEPS[(n - 1) % SHADE_STEPS.length]); }); };
 
 function build(report, opts) {
   const PptxGenJS = require('pptxgenjs'); // lazy: only this export pays for it
@@ -98,16 +109,19 @@ function build(report, opts) {
   pptx.subject = 'Nursing KPI report';
   pptx.defineSlideMaster({
     title: 'KPI', background: { path: BG },
-    objects: [{ text: { text: cfg.reportTitle + '  ·  ' + period + (report.state === 'final' ? '' : '  ·  draft'), options: { x: 0.55, y: 7.0, w: 9, h: 0.3, fontFace: FONT, fontSize: FS.foot, color: MUTED } } }],
+    objects: [{ text: { text: cfg.reportTitle + '  ·  ' + period, options: { x: 0.55, y: 7.0, w: 9, h: 0.3, fontFace: FONT, fontSize: FS.foot, color: MUTED } } }],
     slideNumber: { x: 12.25, y: 6.98, w: 0.6, h: 0.3, fontFace: FONT, fontSize: FS.foot, color: MUTED },
   });
   pptx.defineSlideMaster({ title: 'THANKS', background: { path: THANKS } });
 
   const slide = () => pptx.addSlide({ masterName: 'KPI' });
+  // About 44 characters of a 34 pt bold title fit between the margin and the logo.
+  const titleSize = (t) => Math.max(22, Math.min(FS.title, Math.floor(FS.title * 44 / Math.max(1, String(t || '').length))));
   const heading = (s, title, kicker, color) => {
-    if (kicker) s.addText(kicker.toUpperCase(), { x: 0.6, y: 0.28, w: 9.4, h: 0.34, fontFace: FONT, fontSize: FS.kicker, bold: true, color: hex(color || BLUE), charSpacing: 1.5 });
-    s.addText(title, { x: 0.6, y: kicker ? 0.58 : 0.4, w: 10.2, h: 0.66, fontFace: FONT, fontSize: FS.title, bold: true, color: NAVY, fit: 'shrink' });
-    s.addShape(pptx.ShapeType.rect, { x: 0.62, y: kicker ? 1.26 : 1.1, w: 1.1, h: 0.06, fill: { color: hex(color || TEAL) }, line: { color: hex(color || TEAL) } });
+    // '!!' names: PowerPoint's Morph pairs these across slides, so the title, kicker and accent bar glide.
+    if (kicker) s.addText(kicker.toUpperCase(), { objectName: '!!kicker', x: 0.6, y: 0.24, w: 9.6, h: 0.36, fontFace: FONT, fontSize: FS.kicker, bold: true, color: hex(color || BLUE), charSpacing: 1.5 });
+    s.addText(title, { objectName: '!!title', x: 0.6, y: kicker ? 0.56 : 0.38, w: 10.4, h: 0.74, fontFace: FONT, fontSize: titleSize(title), bold: true, color: NAVY, fit: 'shrink', valign: 'middle' });
+    s.addShape(pptx.ShapeType.rect, { objectName: '!!accent', x: 0.62, y: kicker ? 1.32 : 1.16, w: 1.1, h: 0.07, fill: { color: hex(color || TEAL) }, line: { color: hex(color || TEAL) } });
   };
   const head = (t, extra) => ({ text: t, options: Object.assign({ fill: { color: NAVY }, color: 'FFFFFF', bold: true, fontSize: FS.th, align: 'center', valign: 'middle' }, extra || {}) });
   const cell = (t, extra) => ({ text: t == null ? '' : String(t), options: Object.assign({ fontSize: FS.td, color: INK, valign: 'middle' }, extra || {}) });
@@ -126,7 +140,7 @@ function build(report, opts) {
       if (k > 0) { s = cont(k); top = 1.5; }
       const per = Math.max(1, Math.floor((BOTTOM - top) / rowH) - 1);
       const part = body.slice(i, i + per);
-      s.addTable([hdr].concat(part), tableOpts(x, top, colW.reduce((a, c) => a + c, 0), colW, Object.assign({ rowH }, extra || {})));
+      s.addTable([hdr].concat(part), tableOpts(x, top, colW.reduce((a, c) => a + c, 0), colW, Object.assign({ rowH, objectName: '!!table' }, extra || {})));
       end = top + (part.length + 1) * rowH;
       i += per; k++;
     } while (i < body.length);
@@ -137,28 +151,27 @@ function build(report, opts) {
   /* ---- 1. title ---- */
   {
     const s = slide();
-    s.addShape(pptx.ShapeType.rect, { x: 1.4, y: 1.55, w: 0.12, h: 2.6, fill: { color: TEAL }, line: { color: TEAL } });
-    s.addText('NURSING DEPARTMENT', { x: 1.7, y: 1.5, w: 7.4, h: 0.4, fontFace: FONT, fontSize: 12, bold: true, color: TEAL, charSpacing: 3 });
-    s.addText(cfg.reportTitle, { x: 1.7, y: 1.9, w: 7.4, h: 1.25, fontFace: FONT, fontSize: 38, bold: true, color: NAVY, fit: 'shrink', valign: 'top' });
-    s.addText((report.from === report.to ? 'Monthly report — ' : 'Report for ') + period, { x: 1.7, y: 3.15, w: 7.4, h: 0.55, fontFace: FONT, fontSize: 22, color: BLUE });
+    s.addShape(pptx.ShapeType.rect, { objectName: '!!accent', x: 1.4, y: 1.55, w: 0.12, h: 2.6, fill: { color: TEAL }, line: { color: TEAL } });
+    s.addText('NURSING DEPARTMENT', { objectName: '!!kicker', x: 1.7, y: 1.45, w: 7.4, h: 0.42, fontFace: FONT, fontSize: 15, bold: true, color: TEAL, charSpacing: 3 });
+    s.addText(cfg.reportTitle, { objectName: '!!title', x: 1.7, y: 1.88, w: 7.5, h: 1.3, fontFace: FONT, fontSize: 42, bold: true, color: NAVY, fit: 'shrink', valign: 'top' });
+    s.addText((report.from === report.to ? 'Monthly report — ' : 'Report for ') + period, { x: 1.7, y: 3.18, w: 7.5, h: 0.58, fontFace: FONT, fontSize: 26, color: BLUE });
     const cyc = report.cycle || K.cycleOf(report.to, cfg);
     s.addText(cfg.hospitalName + '  ·  ' + cyc.label + (cyc.monthNo ? ', month ' + cyc.monthNo + ' of ' + cyc.of : '') + '  ·  ' + rows.length + ' KPIs in ' + pillars.length + ' pillars',
-      { x: 1.7, y: 3.72, w: 7.6, h: 0.42, fontFace: FONT, fontSize: 14, color: MUTED });
+      { x: 1.7, y: 3.78, w: 7.6, h: 0.5, fontFace: FONT, fontSize: 16, color: MUTED });
     // The KPI score as a ring: the share of scored KPIs on target.
     if (sum.score != null) {
       s.addChart(pptx.ChartType.doughnut, [{ name: 'Score', labels: ['On target', 'Not yet'], values: [sum.score, Math.max(0, 100 - sum.score)] }], {
-        x: 9.45, y: 1.45, w: 2.75, h: 2.75, holeSize: 74, chartColors: [TEAL, 'E3E9F0'], showLegend: false, showValue: false, showPercent: false, showTitle: false, dataBorder: { pt: 0.5, color: 'FFFFFF' },
+        objectName: '!!ring',
+        x: 9.45, y: 1.45, w: 2.75, h: 2.75, holeSize: 74, chartColors: [TEAL, 'E3E9F0'], showLegend: false, showValue: false, dataLabelFontSize: FS.label, showPercent: false, showTitle: false, dataBorder: { pt: 0.5, color: 'FFFFFF' },
       });
-      s.addText([{ text: sum.score + '%', options: { fontSize: 34, bold: true, color: NAVY, breakLine: true } }, { text: 'KPI score', options: { fontSize: FS.small + 1, color: MUTED } }],
+      s.addText([{ text: sum.score + '%', options: { fontSize: 38, bold: true, color: NAVY, breakLine: true } }, { text: 'KPI score', options: { fontSize: FS.td, color: MUTED } }],
         { x: 9.45, y: 2.32, w: 2.75, h: 1.0, fontFace: FONT, align: 'center', valign: 'middle' });
     }
     const chips = [['met', sum.met], ['near', sum.near], ['off', sum.off], ['nodata', sum.nodata + (sum.notarget || 0)]];
     chips.forEach(([k, n], i) => {
-      s.addText([{ text: String(n), options: { fontSize: 30, bold: true, color: ST[k], breakLine: true } }, { text: k === 'nodata' ? 'No data / no target' : K.STATUS[k].label, options: { fontSize: FS.td, color: INK } }],
-        { x: 1.4 + i * 2.45, y: 4.5, w: 2.25, h: 1.25, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: ST_BG[k] }, line: { color: ST[k], width: 1.25 }, shape: pptx.ShapeType.roundRect, rectRadius: 0.14, shadow: { type: 'outer', blur: 6, offset: 2, angle: 90, color: '1B2B3D', opacity: 0.14 } });
+      s.addText([{ text: String(n), options: { fontSize: 34, bold: true, color: ST[k], breakLine: true } }, { text: k === 'nodata' ? 'No data / no target' : K.STATUS[k].label, options: { fontSize: FS.td, color: INK } }],
+        { objectName: '!!tile' + i, x: 1.4 + i * 2.45, y: 4.5, w: 2.25, h: 1.25, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: ST_BG[k] }, line: { color: ST[k], width: 1.25 }, shape: pptx.ShapeType.roundRect, rectRadius: 0.14, shadow: { type: 'outer', blur: 6, offset: 2, angle: 90, color: '1B2B3D', opacity: 0.14 } });
     });
-    s.addText('Prepared ' + when(o.now) + (o.by ? ' by ' + o.by : '') + (report.state === 'final' ? '  ·  FINAL' + (report.finalizedBy ? ' (' + report.finalizedBy + ')' : '') : '  ·  DRAFT'),
-      { x: 1.4, y: 6.05, w: 10.5, h: 0.4, fontFace: FONT, fontSize: FS.td, color: MUTED, italic: true });
   }
 
   /* ---- 2. scorecard ---- */
@@ -168,7 +181,7 @@ function build(report, opts) {
     const multi = report.months && report.months.length > 1;
     const hdr = [head('#'), head('KPI', { align: 'left' }), head('Baseline'), head(multi ? 'Period' : 'Current'), head('Target'), head('Variance'), head('Status'), head('Trend')];
     const body = rows.map((r) => [
-      cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(r.name, 52)),
+      cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(r.name, 36)),
       cell(r.baseline && K.has(r.baseline.value) ? fv(r, r.baseline.value) : '—', { align: 'center', color: MUTED }),
       { text: [{ text: fv(r, r.period.value), options: { bold: true, breakLine: !!resultOf(r) } }].concat(resultOf(r) ? [{ text: resultOf(r), options: { fontSize: FS.small, color: MUTED } }] : []), options: { align: 'center', valign: 'middle', fontSize: FS.td, color: INK } },
       cell(K.has(r.target) ? fv(r, r.target) : '—', { align: 'center' }),
@@ -176,7 +189,7 @@ function build(report, opts) {
       cell(trendTxt(r.trendDir), { align: 'center', fontSize: FS.small, color: r.trendDir === 'improving' ? ST.met : r.trendDir === 'worsening' ? ST.off : MUTED }),
     ]);
     // A readable row height; more KPIs than fit continue on the next slide (header repeated).
-    pagedTable(s, hdr, zebra(body), 0.6, 1.5, [0.6, 4.1, 1.15, 1.35, 1.15, 1.6, 1.2, 0.95], 0.42, contSlide('KPI scorecard', period));
+    pagedTable(s, hdr, zebra(body), 0.6, 1.55, [0.6, 3.55, 1.15, 1.4, 1.15, 1.55, 1.3, 1.4], 0.54, contSlide('KPI scorecard', period));
   }
 
   /* ---- 3. status by pillar + overall doughnut (flat, every segment labelled with its count) ---- */
@@ -188,6 +201,7 @@ function build(report, opts) {
       labels, values: pillars.map((p) => rowsOf(p).filter((r) => (k === 'nodata' ? r.status === 'nodata' || r.status === 'notarget' : r.status === k)).length) }));
     const maxN = Math.max(1, ...pillars.map((p) => rowsOf(p).length));
     s.addChart(pptx.ChartType.bar, series, Object.assign({}, CHART, LBL, {
+      objectName: '!!chart',
       x: 0.6, y: 1.5, w: 7.7, h: 5.35, barDir: 'col', barGrouping: 'stacked', barGapWidthPct: 38, chartColors: [ST.met, ST.near, ST.off, ST.nodata], dataBorder: { pt: 1.5, color: 'FFFFFF' }, shadow: BAR_SHADOW,
       showLegend: true, legendPos: 't', catAxisLabelFontSize: FS.axis + 1, catAxisLabelFontBold: true,
       valAxisMinVal: 0, valAxisMajorUnit: maxN > 12 ? 2 : 1, valAxisLabelFormatCode: '0',
@@ -197,12 +211,12 @@ function build(report, opts) {
     const tot = [['met', sum.met], ['near', sum.near], ['off', sum.off], ['nodata', sum.nodata + (sum.notarget || 0)]].filter(([, n]) => n > 0);
     if (tot.length) {
       s.addChart(pptx.ChartType.doughnut, [{ name: 'KPIs', labels: tot.map(([k]) => (k === 'nodata' ? 'No data / no target' : K.STATUS[k].label)), values: tot.map(([, n]) => n) }], Object.assign({}, CHART, {
-        plotArea: {}, x: 8.55, y: 1.5, w: 4.2, h: 3.95, holeSize: 58, chartColors: tot.map(([k]) => ST[k]), showLegend: true, legendPos: 'b', dataBorder: { pt: 2, color: 'FFFFFF' },
+        objectName: '!!ring', plotArea: {}, x: 8.55, y: 1.5, w: 4.2, h: 3.95, holeSize: 58, chartColors: tot.map(([k]) => ST[k]), showLegend: true, legendPos: 'b', dataBorder: { pt: 2, color: 'FFFFFF' },
         showPercent: false, showValue: true, dataLabelColor: 'FFFFFF', dataLabelFontSize: FS.label + 2, dataLabelFontBold: true, dataLabelFontFace: FONT,
         showTitle: true, title: 'All ' + rows.length + ' KPIs',
       }));
     }
-    s.addText([{ text: (sum.score == null ? '—' : sum.score + '%'), options: { fontSize: 30, bold: true, color: NAVY, breakLine: true } },
+    s.addText([{ text: (sum.score == null ? '—' : sum.score + '%'), options: { fontSize: 34, bold: true, color: NAVY, breakLine: true } },
       { text: 'of the KPIs with a target and data are on target', options: { fontSize: FS.small, color: MUTED } }],
     { x: 8.55, y: 5.55, w: 4.2, h: 1.25, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: 'EAF6FB' }, line: { color: 'BFE0F2', width: 1 }, shape: pptx.ShapeType.roundRect, rectRadius: 0.12 });
   }
@@ -213,7 +227,7 @@ function build(report, opts) {
   const ACH_MAX = 150;
   const achievementChart = (s, list, box, nameLen, layout) => {
     const sorted = list.slice().sort((a, b) => b.achievement - a.achievement);
-    const cols = sorted.map((r) => ST[r.status] || BLUE);
+    const cols = shadeBars(sorted.map((r) => ST[r.status] || BLUE));
     const L = layout || { x: 0.3, y: box.showTitle ? 0.14 : 0.02, w: 0.64, h: box.showTitle ? 0.74 : 0.86 };
     const many = sorted.length > 12;
     // The 100% line, drawn first so the bars and their labels sit on top of it. The plot area is
@@ -224,7 +238,7 @@ function build(report, opts) {
     s.addText('▲ Target 100%', { x: lx - 0.9, y: ly + lh + 0.02, w: 1.8, h: 0.3, fontFace: FONT, fontSize: FS.small, bold: true, color: NAVY, align: 'center', valign: 'top' });
     s.addChart(pptx.ChartType.bar, [{ name: '% of target achieved', labels: sorted.map((r) => (r.code ? r.code + '  ' : '') + cut(r.name, nameLen)), values: sorted.map((r) => Math.min(ACH_MAX, Math.round(r.achievement))) }],
       Object.assign({}, CHART, LBL, box, {
-        layout: L, plotArea: {}, valAxisHidden: true, barDir: 'bar', catAxisOrientation: 'maxMin', barGapWidthPct: many ? 35 : 45, chartColors: cols.length > 1 ? cols : cols.concat(cols), shadow: BAR_SHADOW,
+        objectName: '!!chart', layout: L, plotArea: {}, valAxisHidden: true, barDir: 'bar', catAxisOrientation: 'maxMin', barGapWidthPct: many ? 35 : 45, chartColors: cols.length > 1 ? cols : cols.concat(cols), shadow: BAR_SHADOW,
         showLegend: false, catAxisLabelFontSize: many ? FS.small : FS.axis,
         valAxisMinVal: 0, valAxisMaxVal: ACH_MAX, valAxisMajorUnit: 25, valAxisLabelFormatCode: '0"%"',
         dataLabelFormatCode: '0"%"', dataLabelPosition: 'outEnd', dataLabelColor: INK, dataLabelFontSize: many ? FS.small : FS.label,
@@ -240,11 +254,15 @@ function build(report, opts) {
   /* ---- 4. achievement vs target, every KPI ---- */
   const scored = rows.filter((r) => r.achievement != null);
   if (style === 'full' && scored.length) {
-    const s = slide();
-    heading(s, 'Achievement against target', '100% = exactly on target');
-    achievementChart(s, scored, { x: 0.6, y: 1.6, w: 12.1, h: 4.9 }, 40);
-    legendChips(s, 0.75, 6.52);
-    s.addText('Higher-is-better: value ÷ target. Lower-is-better: target ÷ value. Capped at 150%.', { x: 7.1, y: 6.52, w: 5.6, h: 0.38, fontFace: FONT, fontSize: FS.small, color: MUTED, align: 'right', valign: 'middle', italic: true });
+    // At most 10 bars a slide, so the 16 pt labels stay readable; more continue on the next slide.
+    const PER = 10, sortedAll = scored.slice().sort((a, b) => b.achievement - a.achievement);
+    for (let i = 0; i < sortedAll.length; i += PER) {
+      const s = slide();
+      heading(s, 'Achievement against target' + (i ? ' (continued)' : ''), '100% = exactly on target');
+      achievementChart(s, sortedAll.slice(i, i + PER), { x: 0.6, y: 1.6, w: 12.1, h: 4.85 }, 34);
+      legendChips(s, 0.75, 6.52);
+      s.addText('Higher-is-better: value ÷ target. Lower-is-better: target ÷ value. Capped at 150%.', { x: 7.1, y: 6.52, w: 5.6, h: 0.38, fontFace: FONT, fontSize: FS.small, color: MUTED, align: 'right', valign: 'middle', italic: true });
+    }
   }
 
   /* ---- per pillar ---- */
@@ -255,12 +273,12 @@ function build(report, opts) {
       heading(s, p.label, 'Pillar', p.color);
       const months = (report.months || []).slice(-6);
       const hdr = [head('#'), head('KPI', { align: 'left' }), head('Unit')].concat(months.map((m) => head(K.fmtMonth(m).replace(' 20', " '")))).concat([head('Period'), head('Target'), head('Status')]);
-      const body = list.map((r) => [cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(r.name, 40)), cell(cut(r.unit, 34), { fontSize: FS.small, color: MUTED, align: 'center' })]
+      const body = list.map((r) => [cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(r.name, 34)), cell(cut(r.unit, 30), { fontSize: FS.small, color: MUTED, align: 'center' })]
         .concat(months.map((m) => cell(monthTxt(r, m, fv), { align: 'center', fontSize: FS.small })))
         .concat([cell(fv(r, r.period.value), { align: 'center', bold: true }), cell(K.has(r.target) ? fv(r, r.target) : '—', { align: 'center' }), stCell(r.status)]));
       const fixed = 0.55 + 1.3 + 1.15 + 1.1 + 1.25;
       const rest = 12.1 - fixed - months.length * 0.92;
-      const RH = 0.52; // room for a unit on two lines ('per 1000 patient-days')
+      const RH = 0.62; // room for a unit on two lines ('per 1000 patient-days') at 14 pt
       const placed = pagedTable(s, hdr, zebra(body), 0.6, 1.5, [0.55, rest, 1.3].concat(months.map(() => 0.92)).concat([1.15, 1.1, 1.25]), RH, contSlide(p.label, 'Pillar', p.color));
       // Commentary below the table when it fits there, else on a slide of its own — never on top.
       const cmts = list.filter((r) => (report.commentary || {})[r.kpiId]);
@@ -272,7 +290,7 @@ function build(report, opts) {
         } else {
           const c = slide();
           heading(c, p.label + ' — commentary', 'Pillar', p.color);
-          c.addText(bullets, { x: 0.8, y: 1.6, w: 11.7, h: 5.1, fontFace: FONT, fontSize: 15, color: INK, valign: 'top', paraSpaceAfter: 8 });
+          c.addText(bullets, { x: 0.8, y: 1.65, w: 11.7, h: 5.1, fontFace: FONT, fontSize: 18, color: INK, valign: 'top', paraSpaceAfter: 8 });
         }
       }
       return;
@@ -284,19 +302,22 @@ function build(report, opts) {
       const textW = sc.length ? 5.6 : 10.5;
       s.addShape(pptx.ShapeType.rect, { x: 0.9, y: 1.75, w: 0.14, h: 1.9, fill: { color: hex(p.color) }, line: { color: hex(p.color) } });
       s.addText('PILLAR', { x: 1.25, y: 1.6, w: textW, h: 0.35, fontFace: FONT, fontSize: FS.kicker, bold: true, color: hex(p.color), charSpacing: 3 });
-      s.addText(p.label, { x: 1.25, y: 1.95, w: textW, h: 1.1, fontFace: FONT, fontSize: 34, bold: true, color: NAVY, fit: 'shrink', valign: 'top' });
+      s.addText(p.label, { objectName: '!!title', x: 1.25, y: 1.95, w: textW, h: 1.1, fontFace: FONT, fontSize: String(p.label).length > (sc.length ? 22 : 40) ? 28 : 40, bold: true, color: NAVY, fit: 'shrink', valign: 'top' });
       const c = K.summarize(list);
       s.addText(list.length + ' KPI' + (list.length === 1 ? '' : 's') + '  ·  ' + c.met + ' on target  ·  ' + c.near + ' close  ·  ' + c.off + ' need action  ·  ' + (c.nodata + c.notarget) + ' without data or target',
-        { x: 1.25, y: 3.05, w: textW, h: 0.65, fontFace: FONT, fontSize: 14, color: MUTED, valign: 'top' });
+        { x: 1.25, y: 3.05, w: textW, h: 0.7, fontFace: FONT, fontSize: 16, color: MUTED, valign: 'top' });
       // each KPI with a status dot and its value
       s.addText(list.map((r) => [
         { text: '●  ', options: { color: ST[r.status] || MUTED } },
-        { text: r.code + '  ' + cut(r.name, sc.length ? 30 : 64), options: { color: ST[r.status] === ST.nodata ? MUTED : INK } },
+        { text: r.code + '  ' + cut(r.name, sc.length ? 24 : 56), options: { color: ST[r.status] === ST.nodata ? MUTED : INK } },
         { text: '   ' + fv(r, r.period.value), options: { bold: true, color: ST[r.status] === ST.nodata ? MUTED : NAVY, breakLine: true } },
-      ]).reduce((a, x) => a.concat(x), []), { x: 1.25, y: 3.75, w: textW, h: 3.15, fontFace: FONT, fontSize: list.length > 7 ? FS.small + 1 : 14, valign: 'top', paraSpaceAfter: list.length > 7 ? 2 : 4 });
+      ]).reduce((a, x) => a.concat(x), []), { x: 1.25, y: 3.75, w: textW, h: 3.15, fontFace: FONT, fontSize: list.length > 7 ? FS.small : FS.td, valign: 'top', paraSpaceAfter: list.length > 7 ? 2 : 4 });
       if (sc.length) {
-        achievementChart(s, sc, { x: 7.05, y: 1.45, w: 5.85, h: Math.min(5.3, 1.4 + sc.length * 0.6), showTitle: true, title: '% of target achieved' }, 16,
-          { x: 0.36, y: sc.length > 3 ? 0.14 : 0.24, w: 0.56, h: sc.length > 3 ? 0.74 : 0.56 });
+        // At most 7 bars here (the furthest from target); the full chart is on "Achievement against target".
+        const shownSc = sc.length > 7 ? sc.slice().sort((a, b) => a.achievement - b.achievement).slice(0, 7) : sc;
+        if (shownSc.length < sc.length) s.addText(shownSc.length + ' of ' + sc.length + ' shown — the furthest from target', { x: 7.05, y: 6.62, w: 5.85, h: 0.3, fontFace: FONT, fontSize: FS.small, color: MUTED, italic: true, align: 'right' });
+        achievementChart(s, shownSc, { x: 7.05, y: 1.45, w: 5.85, h: Math.min(5.1, 1.5 + shownSc.length * 0.65), showTitle: true, title: '% of target achieved' }, 14,
+          { x: 0.4, y: shownSc.length > 3 ? 0.15 : 0.25, w: 0.47, h: shownSc.length > 3 ? 0.72 : 0.54 });
       }
     }
     list.forEach((r) => kpiSlide(r, p));
@@ -317,23 +338,23 @@ function build(report, opts) {
     const cm = (report.commentary || {})[r.kpiId];
     const remarksAll = String(r.remarks || '').trim();
     // What stays on this slide, and what moves to the notes slide.
-    const SHOW_ACTS = 3, ACT_LEN = 95, REMARK_LEN = 120;
+    const SHOW_ACTS = 2, ACT_LEN = 50, REMARK_LEN = 70;
     const actsShort = allActs.length <= SHOW_ACTS && allActs.every((x) => actLine(x).length <= ACT_LEN);
     const remarkShort = !cm && remarksAll.length <= REMARK_LEN && remarksAll.indexOf('\n') < 0;
     const needNotes = !actsShort || !remarkShort || !!cm;
 
     const label = (t) => ({ text: t, options: { fill: { color: NAVY }, color: 'FFFFFF', bold: true, fontSize: FS.th, valign: 'middle' } });
     const tbl = [
-      [label('Objective'), cell(cut(r.objective, 150))],
+      [label('Objective'), cell(cut(r.objective, 110))],
       [label('Current'), cell(fv(r, r.period.value) + (r.unit && K.unitKind(r) === 'num' ? '  ' + r.unit : '') + (resultOf(r) ? '   — ' + resultOf(r) : '') + '   (baseline ' + base + ')', { bold: true })],
       [label('Target'), cell(cut(tg, 90))],
       [label('Variance'), cell(K.gapLabel(r, r.period.value, r.target) + '   ·   ' + K.STATUS[r.status].label, { bold: true, color: ST[r.status] })],
-      [label('Formula'), cell(cut(r.formulaText, 120), { fontSize: FS.small, italic: true })],
-      [label('Tracking'), cell(cut((r.schedule || r.frequency || 'Monthly') + (r.trackingNote ? ' · ' + r.trackingNote : '') + (r.nextDue ? ' · next result ' + K.fmtMonth(r.nextDue) : ''), 90), { fontSize: FS.small })],
-      [label('Remarks'), cell(remarkShort ? (remarksAll || '—') : (cm ? 'Commentary and remarks — see the next slide' : cut(remarksAll.split(/\n+/)[0], 70) + '  … see the next slide'), { fontSize: FS.small, color: remarkShort ? INK : MUTED, italic: !remarkShort })],
+      [label('Formula'), cell(cut(r.formulaText, 100), { fontSize: FS.small, italic: true })],
+      [label('Tracking'), cell(cut((r.schedule || r.frequency || 'Monthly') + (r.trackingNote ? ' · ' + r.trackingNote : '') + (r.nextDue ? ' · next result ' + K.fmtMonth(r.nextDue) : ''), 70), { fontSize: FS.small })],
+      [label('Remarks'), cell(remarkShort ? (remarksAll || '—') : (cm ? 'See the next slide' : cut(remarksAll.split(/\n+/)[0], 40) + '  … next slide'), { fontSize: FS.small, color: remarkShort ? INK : MUTED, italic: !remarkShort })],
     ];
-    const rowH = [0.72, 0.42, 0.42, 0.42, 0.56, 0.4, 0.5];
-    s.addTable(tbl, { x: 0.6, y: 1.5, w: 6.3, colW: [1.45, 4.85], fontFace: FONT, border: { type: 'solid', pt: 0.5, color: LINE }, margin: [0.03, 0.08, 0.03, 0.08], valign: 'middle', rowH });
+    const rowH = [0.8, 0.5, 0.5, 0.5, 0.62, 0.5, 0.5];
+    s.addTable(tbl, { objectName: '!!table', x: 0.6, y: 1.5, w: 6.3, colW: [1.45, 4.85], fontFace: FONT, border: { type: 'solid', pt: 0.5, color: LINE }, margin: [0.03, 0.08, 0.03, 0.08], valign: 'middle', rowH });
     // the action plan, under the table
     const actY = 1.5 + rowH.reduce((a, x) => a + x, 0) + 0.12;
     const actH = 6.9 - actY;
@@ -342,7 +363,7 @@ function build(report, opts) {
       .concat(shown.length ? shown.map((x, i) => ({ text: cut(actLine(x), ACT_LEN), options: { bullet: { indent: 13 }, breakLine: i < shown.length - 1 || !actsShort, color: x.status === 'done' ? ST.met : INK } }))
         : [{ text: 'No action plan recorded.', options: { color: MUTED, breakLine: false } }])
       .concat(!actsShort ? [{ text: (allActs.length > SHOW_ACTS ? 'All ' + allActs.length + ' actions' : 'The full action plan') + ' on the next slide →', options: { italic: true, color: MUTED } }] : []);
-    s.addText(actRuns, { x: 0.6, y: actY, w: 6.3, h: actH, fontFace: FONT, fontSize: FS.td, valign: 'top', paraSpaceAfter: 2, fill: { color: 'F6F9FC' }, line: { color: 'E1E8F0', width: 0.75 }, margin: [6, 10, 6, 10] }); // text-box margins are in points
+    s.addText(actRuns, { objectName: '!!panel', x: 0.6, y: actY, w: 6.3, h: actH, fontFace: FONT, fontSize: FS.td, valign: 'top', paraSpaceAfter: 2, fill: { color: 'F6F9FC' }, line: { color: 'E1E8F0', width: 0.75 }, margin: [6, 10, 6, 10] }); // text-box margins are in points
 
     // trend: a column per month (coloured by its status against that month's target, the value on
     // each column) with the target as a dashed line — a native combo chart, editable in PowerPoint.
@@ -351,7 +372,7 @@ function build(report, opts) {
     if (tr.some((t) => t.v != null)) {
       const labels = tr.map((t) => K.fmtMonth(t.m).replace(' 20', " '"));
       const vals = tr.map((t) => rnd(r, t.v));
-      const cols = tr.map((t) => monthColor(r, t.v, t.t, cfg));
+      const cols = shadeBars(tr.map((t) => monthColor(r, t.v, t.t, cfg)));
       const fmtCode = labelFmt(r);
       const dense = tr.length > 9;
       const parts = [{ type: pptx.ChartType.bar, data: [{ name: 'Actual', labels, values: vals }],
@@ -359,9 +380,9 @@ function build(report, opts) {
           dataLabelPosition: dense ? 'outEnd' : 'inEnd', dataLabelFormatCode: fmtCode, dataLabelColor: dense ? INK : 'FFFFFF', dataLabelFontSize: dense ? FS.small : FS.label }) }];
       const hasT = tr.some((t) => t.t != null);
       if (hasT) parts.push({ type: pptx.ChartType.line, data: [{ name: 'Target', labels, values: tr.map((t) => rnd(r, t.t)) }],
-        options: { chartColors: [NAVY], lineSize: 2.5, lineDash: 'dash', lineDataSymbol: 'circle', lineDataSymbolSize: 7, lineDataSymbolLineColor: NAVY, showValue: false } });
+        options: { chartColors: [NAVY], lineSize: 2.5, lineDash: 'dash', lineDataSymbol: 'circle', lineDataSymbolSize: 7, lineDataSymbolLineColor: NAVY, showValue: false, dataLabelFontSize: FS.label } });
       s.addChart(parts, Object.assign({}, CHART, {
-        x: CX, y: 1.45, w: CW, h: 3.95, showLegend: false,
+        objectName: '!!chart', x: CX, y: 1.45, w: CW, h: 3.95, showLegend: false,
         catAxisLabelFontSize: dense ? FS.small : FS.axis, valAxisLabelFormatCode: fmtCode,
         showTitle: true, title: (r.freqMonths > 1 ? 'One bar per period · last ' + tr.length + ' months' : 'Last ' + tr.length + ' months') + (r.unit ? ' (' + cut(r.unit, 20) + ')' : '') + (hasT ? '  ·  dashed line = target' : ''),
         valAxisMinVal: 0, displayBlanksAs: 'gap',
@@ -369,12 +390,12 @@ function build(report, opts) {
     } else {
       s.addText(r.status === 'notstarted' && K.isMonth(r.startMonth) && r.startMonth > report.to
         ? 'This KPI starts in ' + K.fmtMonthLong(r.startMonth) + ' — after this report ends (' + K.fmtMonthLong(report.to) + '). Make a report that includes ' + K.fmtMonthLong(r.startMonth) + ' to show its figures.'
-        : 'No monthly figures yet — enter them in Nursing KPI → Data Update.', { x: CX, y: 2.2, w: CW, h: 1.6, fontFace: FONT, fontSize: 14, color: MUTED, align: 'center', valign: 'middle', fill: { color: 'F3F5F8' }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
+        : 'No monthly figures yet — enter them in Nursing KPI → Data Update.', { x: CX, y: 2.2, w: CW, h: 1.6, fontFace: FONT, fontSize: 16, color: MUTED, align: 'center', valign: 'middle', fill: { color: 'F3F5F8' }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
     }
     // three result tiles across the chart's width
     const TW = (CW - 0.2) / 3;
-    const tile = (i, big, small, col, bg, line) => s.addText([{ text: big, options: { fontSize: 22, bold: true, color: col, breakLine: true } }, { text: small, options: { fontSize: FS.small, color: MUTED } }],
-      { x: CX + i * (TW + 0.1), y: 5.5, w: TW, h: 1.08, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: bg }, line: { color: line, width: 1 }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
+    const tile = (i, big, small, col, bg, line) => s.addText([{ text: big, options: { fontSize: String(big).length > 12 ? 18 : String(big).length > 9 ? 20 : 26, bold: true, color: col, breakLine: true } }, { text: small, options: { fontSize: FS.small, color: MUTED } }],
+      { objectName: '!!tile' + i, x: CX + i * (TW + 0.1), y: 5.5, w: TW, h: 1.08, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: bg }, line: { color: line, width: 1 }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
     tile(0, fv(r, r.period.value), resultOf(r) ? cut(resultOf(r), 22) : report.months && report.months.length > 1 ? 'Period value' : 'This month', NAVY, 'EAF6FB', 'BFE0F2');
     tile(1, K.has(r.target) ? fv(r, r.target) : '—', 'Target', NAVY, 'EEF7F5', 'C4E6E0');
     tile(2, K.STATUS[r.status].label, r.achievement != null ? r.achievement + '% of target' : (r.trendDir ? r.trendDir : 'status'), ST[r.status], ST_BG[r.status], ST[r.status]);
@@ -382,8 +403,6 @@ function build(report, opts) {
 
     // The notes slide: the whole action plan, the commentary and the full remarks, at a large size.
     if (needNotes) {
-      const n = slide();
-      heading(n, (r.code ? r.code + '. ' : '') + r.name + ' — action plan & notes', p.label, p.color);
       const runs = [];
       const section = (t) => runs.push({ text: t, options: { bold: true, color: hex(p.color || BLUE), fontSize: FS.kicker, charSpacing: 1, breakLine: true } });
       if (allActs.length) {
@@ -396,8 +415,38 @@ function build(report, opts) {
         section('REMARKS');
         remarksAll.split(/\n+/).map((t) => t.trim()).filter(Boolean).slice(0, 12).forEach((t) => runs.push({ text: cut(t, 300), options: { bullet: { indent: 16 }, breakLine: true, color: INK } }));
       }
-      const many = runs.length > 14;
-      n.addText(runs, { x: 0.8, y: 1.6, w: 11.7, h: 5.2, fontFace: FONT, fontSize: many ? FS.td + 1 : 15, color: INK, valign: 'top', paraSpaceAfter: many ? 4 : 7 });
+      // Estimated height of each line (characters per line at the size, plus paragraph space); the
+      // runs are dealt onto as many slides as they need, 18 pt when one slide is enough, else 16 pt.
+      const CAP = 5.0;
+      const runH = (x, pt, cpl, para) => (x.isHead ? 0.34 : Math.max(1, Math.ceil(String(x.text).length / cpl)) * pt * 1.22 / 72 + para / 72);
+      runs.forEach((x) => { x.isHead = !!(x.options && x.options.charSpacing); });
+      const total = (pt, cpl, para) => runs.reduce((a, x) => a + runH(x, pt, cpl, para), 0);
+      const big = total(18, 96, 7) <= CAP;
+      const pt = big ? 18 : FS.td, cpl = big ? 96 : 108, para = big ? 7 : 4;
+      const pages = [[]];
+      let used = 0, lastHead = null;
+      runs.forEach((x) => {
+        const h = runH(x, pt, cpl, para);
+        if (x.isHead) lastHead = x;
+        if (used + h > CAP && pages[pages.length - 1].length) {
+          const cur = pages[pages.length - 1];
+          const next = [];
+          // never leave a section heading alone at the bottom; repeat it on the next slide
+          if (cur[cur.length - 1].isHead) next.push(cur.pop());
+          else if (!x.isHead && lastHead) next.push({ text: lastHead.text + ' (continued)', options: lastHead.options, isHead: true });
+          pages.push(next);
+          used = next.reduce((a, y) => a + runH(y, pt, cpl, para), 0);
+        }
+        pages[pages.length - 1].push(x);
+        used += h;
+      });
+      pages.forEach((pg, i) => {
+        const n = slide();
+        heading(n, (r.code ? r.code + '. ' : '') + r.name, p.label + '  ·  action plan & notes' + (pages.length > 1 ? '  ·  ' + (i + 1) + ' of ' + pages.length : ''), p.color);
+        const last = pg.length - 1;
+        const out = pg.map((x, j) => ({ text: x.text, options: Object.assign({}, x.options, { breakLine: j < last }) }));
+        n.addText(out, { objectName: '!!panel', x: 0.8, y: 1.6, w: 11.7, h: 5.2, fontFace: FONT, fontSize: pt, color: INK, valign: 'top', paraSpaceAfter: para });
+      });
     }
   }
 
@@ -409,9 +458,9 @@ function build(report, opts) {
     if (tracked.length) {
       const s = slide();
       heading(s, 'Action plans in progress', tracked.length + ' with an owner or due date');
-      const body = tracked.map(({ r, x }) => [cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(x.text, 110)), cell(cut(x.owner || '—', 26)),
+      const body = tracked.map(({ r, x }) => [cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(x.text, 85)), cell(cut(x.owner || '—', 22)),
         cell(x.due ? K.fmtMonth(x.due) : '—', { align: 'center', color: x.due && x.due < report.to ? ST.off : INK }), cell(K.ACTION_LABEL[x.status] || x.status, { align: 'center' })]);
-      pagedTable(s, [head('#'), head('Action', { align: 'left' }), head('Owner'), head('Due'), head('Status')], zebra(body), 0.6, 1.5, [0.65, 6.95, 2.1, 1.15, 1.25], 0.44, contSlide('Action plans in progress', tracked.length + ' with an owner or due date'));
+      pagedTable(s, [head('#'), head('Action', { align: 'left' }), head('Owner'), head('Due'), head('Status')], zebra(body), 0.6, 1.55, [0.65, 6.75, 2.2, 1.2, 1.3], 0.56, contSlide('Action plans in progress', tracked.length + ' with an owner or due date'));
     }
   }
 
@@ -429,12 +478,12 @@ function build(report, opts) {
       const nd = rows.filter((r) => r.status === 'nodata');
       if (nd.length) lines.push({ text: nd.length + ' have no figures for the period: ' + nd.map((r) => r.code).join(', ') + '.', options: { bullet: true, breakLine: true } });
     }
-    s.addText(lines, { x: 0.6, y: 1.5, w: 12.1, h: 3.7, fontFace: FONT, fontSize: 15, color: INK, valign: 'top', paraSpaceAfter: 8 });
+    s.addText(lines, { x: 0.6, y: 1.55, w: 12.1, h: 3.8, fontFace: FONT, fontSize: 17, color: INK, valign: 'top', paraSpaceAfter: 8 });
     const sig = report.signoff || {};
     [['Prepared by', sig.prepared], ['Reviewed by', sig.reviewed], ['Recommended by', sig.recommended], ['Approved by', sig.approved]].forEach(([l, n], i) => {
       const x = 0.6 + i * 3.08;
       s.addShape(pptx.ShapeType.line, { x, y: 5.7, w: 2.75, h: 0, line: { color: INK, width: 0.75 } });
-      s.addText([{ text: l.toUpperCase(), options: { fontSize: FS.small, bold: true, color: MUTED, charSpacing: 1, breakLine: true } }, { text: n || ' ', options: { fontSize: 14, color: INK } }],
+      s.addText([{ text: l.toUpperCase(), options: { fontSize: FS.small, bold: true, color: MUTED, charSpacing: 1, breakLine: true } }, { text: n || ' ', options: { fontSize: 16, color: INK } }],
         { x, y: 5.76, w: 2.75, h: 0.9, fontFace: FONT, valign: 'top' });
     });
   }
@@ -464,7 +513,7 @@ function build(report, opts) {
         cell(u.value == null ? '—' : fv(r, u.value), { align: 'center', bold: true, fontSize: FS.small }), cell(cut([...u.sources].join(', '), 34), { fontSize: FS.small, align: 'center', color: [...u.sources].some((x) => /MISSING|No denominator|Denominator 0/.test(x)) ? ST.off : INK }),
         cell(cut([...u.approvers].join(', ') || '—', 48), { fontSize: FS.small })]);
       if (!body.length) body.push([cell(r.linked ? 'No unit reported this KPI in the period.' : 'Typed in the KPI module — see the entries below.', { colspan: 7, color: MUTED })]);
-      const unitsEnd = pagedTable(s, hdr, zebra(body), 0.6, 2.85, [2.75, 0.95, 1.5, 1.5, 1.15, 1.9, 2.35], 0.36, contSlide('Calculation — ' + (r.code ? r.code + '. ' : '') + r.name, p.label, p.color), { fontSize: FS.small });
+      const unitsEnd = pagedTable(s, hdr, zebra(body), 0.6, 2.95, [2.7, 1.05, 1.5, 1.5, 1.15, 1.9, 2.3], 0.5, contSlide('Calculation — ' + (r.code ? r.code + '. ' : '') + r.name, p.label, p.color), { fontSize: FS.small });
       // the checks on this KPI and how each was settled
       const cs = (report.quality && report.quality.checks || []).filter((c) => c.kpiId === r.kpiId && c.level !== 'info');
       if (cs.length) {
@@ -484,15 +533,41 @@ function build(report, opts) {
     if (all.length) {
       const nameOf = (id) => (rows.find((x) => x.kpiId === id) || {}).code || id;
       const body = all.map((c) => [cell(c.level === 'error' ? 'Error' : 'Warning', { bold: true, color: LVL[c.level], align: 'center' }), cell(nameOf(c.kpiId), { align: 'center', bold: true, color: NAVY }), cell(K.fmtMonth(c.ym), { align: 'center' }),
-        cell(cut(c.text, 140), { fontSize: FS.small }), cell(c.ack ? cut(c.ack.by + ': ' + c.ack.reason, 100) : (c.level === 'error' ? 'NOT RESOLVED' : '—'), { fontSize: FS.small, color: c.ack ? INK : (c.level === 'error' ? ST.off : MUTED) })]);
-      pagedTable(s, [head('Level'), head('KPI'), head('Month'), head('What was found', { align: 'left' }), head('Acknowledged', { align: 'left' })], zebra(body), 0.6, 1.5, [1.05, 0.75, 1.05, 5.75, 3.5], 0.44, contSlide('Data quality', 'continued'));
+        cell(cut(c.text, 110), { fontSize: FS.small }), cell(c.ack ? cut(c.ack.by + ': ' + c.ack.reason, 100) : (c.level === 'error' ? 'NOT RESOLVED' : '—'), { fontSize: FS.small, color: c.ack ? INK : (c.level === 'error' ? ST.off : MUTED) })]);
+      pagedTable(s, [head('Level'), head('KPI'), head('Month'), head('What was found', { align: 'left' }), head('Acknowledged', { align: 'left' })], zebra(body), 0.6, 1.55, [1.15, 0.8, 1.1, 5.55, 3.5], 0.62, contSlide('Data quality', 'continued'));
     } else s.addText('Every figure in this report passed the data checks.', { x: 0.6, y: 2.2, w: 12.1, h: 0.6, fontFace: FONT, fontSize: 18, color: ST.met });
     if (report.dataFingerprint) s.addText('Data fingerprint ' + String(report.dataFingerprint).slice(7, 19), { x: 0.6, y: 6.6, w: 6, h: 0.3, fontFace: FONT, fontSize: FS.small, color: MUTED });
   }
 
   pptx.addSlide({ masterName: 'THANKS' });
 
-  return pptx.write({ outputType: 'nodebuffer' });
+  return pptx.write({ outputType: 'nodebuffer' }).then(addMorph);
 }
 
-module.exports = { build };
+/* MORPH on every slide change (0.5 s), still click to advance. pptxgenjs writes no transitions,
+   so each slide's XML gets one after it is built. Shapes that share a '!!' name (titles, accent
+   bar, charts, tables, tiles) glide into each other, and text morphs word by word. PowerPoint
+   before 2019 / Office 365 takes the Fallback: a quick fade. Any failure here returns the deck
+   untouched — the animation can never break the export. */
+const MORPH_XML = '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+  + '<mc:Choice xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" Requires="p159">'
+  + '<p:transition spd="fast" p14:dur="500"><p159:morph option="byWord"/></p:transition></mc:Choice>'
+  + '<mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent>';
+const SLIDE_XML = /^ppt\/slides\/slide\d+\.xml$/;
+async function addMorph(buf) {
+  try {
+    const JSZip = require('jszip');
+    const zip = await JSZip.loadAsync(buf);
+    const names = Object.keys(zip.files).filter((n) => SLIDE_XML.test(n));
+    for (const n of names) {
+      let xml = await zip.file(n).async('string');
+      if (xml.indexOf('<p:transition') >= 0 || xml.indexOf('</p:sld>') < 0) continue;
+      // p:transition goes after p:clrMapOvr and before p:timing (if any).
+      xml = xml.indexOf('<p:timing') >= 0 ? xml.replace('<p:timing', MORPH_XML + '<p:timing') : xml.replace('</p:sld>', MORPH_XML + '</p:sld>');
+      zip.file(n, xml);
+    }
+    return await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  } catch (e) { return buf; }
+}
+
+module.exports = { build, addMorph, MORPH_XML };
