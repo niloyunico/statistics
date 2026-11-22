@@ -3416,8 +3416,15 @@ function rosSignNames(doc, signers) {
    up, so it must read on any mono printer — black ink, ruled cells, plain codes, and only two
    greys, far apart: solid for a day off, light + hatched for leave. colourDesign = the
    letterhead band with coloured shift pills. */
-function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, signPeople, colourDesign, summary, cards, legend, pcaNewPage, printedBy }) {
+/* separatePages: nurses and PCAs each get a COMPLETE page of their own (header, table, AL,
+   legend, notes, signatures) — for a ward that posts or files the two rosters apart. The older
+   `pcaNewPage` (just a page break before the PCA table) is read as the same choice.
+   fitA4: each page block is scaled down, if it has to be, so it prints on ONE A4 landscape
+   page (with separatePages: one page for nurses, one for PCAs). Both default to off, so every
+   other caller (the review screen) prints exactly as before. */
+function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, signPeople, colourDesign, summary, cards, legend, pcaNewPage, separatePages, fitA4, printedBy }) {
   const official = !colourDesign;
+  const apart = !!(separatePages || pcaNewPage);
   const days = R.daysIn(year, month);
   const ds = Array.from({ length: days }, (_, i) => i + 1);
   const dn = deptName || dept;
@@ -3483,13 +3490,15 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
       + '<tbody>' + (body || '<tr><td colspan="' + (days + 4 + tb.length) + '" style="padding:14px;color:#7b8796">No staff on this roster.</td></tr>') + sums + '</tbody></table></div>';
   };
   const nurses = rows.filter((r) => !r.pca), pcas = rows.filter((r) => r.pca);
-  const tables = pcas.length
-    ? tableFor(nurses, 'Nursing staff · ' + nurses.length, 'gn') + tableFor(pcas, 'Patient care assistants · ' + pcas.length, 'gp' + (pcaNewPage ? ' np' : ''))
+  const split = apart && pcas.length > 0 && nurses.length > 0;
+  const tables = pcas.length && !split
+    ? tableFor(nurses, 'Nursing staff · ' + nurses.length, 'gn') + tableFor(pcas, 'Patient care assistants · ' + pcas.length, 'gp')
     : tableFor(rows, '', '');
-  // The legend explains the codes on THIS sheet only — a unit that works M4 / E4 / N2 does
-  // not need the hospital's whole catalogue printed under its roster.
+  // The legend explains the codes on THIS sheet (or page) only — a unit that works M4 / E4 / N2
+  // does not need the hospital's whole catalogue printed under its roster.
+  const legendFor = (list) => {
   const used = new Set();
-  rows.forEach((r) => { const row = (grid && grid[r.empId]) || {}; Object.keys(row).forEach((d) => { if (row[d]) used.add(String(row[d])); }); });
+  list.forEach((r) => { const row = (grid && grid[r.empId]) || {}; Object.keys(row).forEach((d) => { if (row[d]) used.add(String(row[d])); }); });
   const groups = R.BUCKETS.concat([{ id: 'O', label: 'Leave / off', color: '#8b98ab' }])
     .filter((b, i, a) => a.findIndex((x) => x.id === b.id) === i)
     .map((b) => ({ b, codes: R.SHIFTS.filter((s) => s.bucket === b.id && used.has(s.code)) }))
@@ -3512,7 +3521,9 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
       + (anyMark ? '<div class="lgb"><b>On call</b><span><i>•</i> after a code = on call as well</span></div>' : '')
       + (unknown.length ? '<div class="lgb"><b>Other</b>' + unknown.map((c) => '<span><i>' + rosEsc(c) + '</i></span>').join('') + '</div>' : '')
       + '</div></div>');
-  const at = new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
+  return legendHtml;
+  };
+  const at =new Date().toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
   const d2 = (d) => String(d).padStart(2, '0') + ' ' + R.MONTHS[month].slice(0, 3) + ' ' + year;
   const period = d2(1) + ' – ' + d2(days);
   /* The month at a glance, for the cards under the header band — every figure read from the
@@ -3547,12 +3558,14 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     ['Hours', hrs + ' h', perHrs.length ? (Math.min.apply(null, perHrs) === Math.max.apply(null, perHrs) ? Math.min.apply(null, perHrs) + ' h each' : Math.min.apply(null, perHrs) + '–' + Math.max.apply(null, perHrs) + ' h per person') : '', 'sl'],
   ];
   /* Alternative leave: which worked day each AL stands in for — so a reader sees what it was for. */
+  const alFor = (list) => {
   const alRows = [];
-  rows.forEach((r) => { const row = g0[r.empId] || {}; ds.forEach((d) => { if (row[d] !== 'AL') return; const a = (alm[r.empId] || {})[d] || {};
+  list.forEach((r) => { const row = g0[r.empId] || {}; ds.forEach((d) => { if (row[d] !== 'AL') return; const a = (alm[r.empId] || {})[d] || {};
     alRows.push([r.name, dayLbl(d) + ' ' + year, a.for ? rosDate(a.for) : '—', a.note || '']); }); });
-  const alHtml = !alRows.length ? '' : '<div class="alx"><div class="lgh">Alternative leave</div><table class="alt"><colgroup><col style="width:34%"><col style="width:14%"><col style="width:18%"><col></colgroup>'
+  return !alRows.length ? '' :'<div class="alx"><div class="lgh">Alternative leave</div><table class="alt"><colgroup><col style="width:34%"><col style="width:14%"><col style="width:18%"><col></colgroup>'
     + '<thead><tr><th>Name</th><th>AL on</th><th>In lieu of (date worked)</th><th>Reason</th></tr></thead><tbody>'
     + alRows.map(([n, on, f, why]) => '<tr><td>' + rosEsc(n) + '</td><td>' + rosEsc(on) + '</td><td><b>' + rosEsc(f) + '</b></td><td>' + rosEsc(why) + '</td></tr>').join('') + '</tbody></table></div>';
+  };
   const NAVY = '#0d3a5c';
   const css = '@page{size:A4 landscape;margin:7mm 8mm 9mm;@bottom-right{content:"Page " counter(page) " of " counter(pages);font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}@bottom-left{content:"Duty Roster · ' + String(dn).replace(/["\\]/g, '') + ' · ' + R.MONTHS[month] + ' ' + year + '";font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}}'
     + '*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}'
@@ -3639,25 +3652,44 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     + '.signs .ln{border-top:1pt solid #000;padding-top:3px}.signs span{display:block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase}.signs b{display:block;font-size:9pt}.signs em{display:block;font-style:normal;font-size:7.5pt;color:#333}.signs .dt{margin-top:5px;font-size:7.5pt}'
     + '.end{margin-top:6px;padding-top:3px;border-top:.75pt solid #000;display:flex;justify-content:space-between;font-size:7pt}';
   const stLabel = (ROS_STATUS[rosStatusNorm(doc ? doc.status : null)] || {}).label || 'Draft';
-  const head = official
+  // `group`: which staff a separate page holds ('' = the whole unit on one sheet).
+  const headFor = (group) => (official
     ? '<header class="lh"><div><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></div>'
-      + '<div class="lhm"><div class="org">UNICO Hospitals PLC</div><div class="dv">Nursing Services</div><h1>DUTY ROSTER</h1></div>'
+      + '<div class="lhm"><div class="org">UNICO Hospitals PLC</div><div class="dv">Nursing Services</div><h1>DUTY ROSTER</h1>' + (group ? '<div class="grpn">' + rosEsc(group) + '</div>' : '') + '</div>'
       + '<div class="lhr"><table class="meta"><tr><th>Department</th><td>' + rosEsc(dn) + '</td></tr><tr><th>Month</th><td>' + rosEsc(R.MONTHS[month] + ' ' + year) + '</td></tr>'
       + '<tr><th>Period</th><td>' + rosEsc(period) + '</td></tr><tr><th>Status</th><td>' + rosEsc(stLabel + (doc && doc.revision ? ' · Rev ' + doc.revision : '')) + '</td></tr></table></div></header><div class="rule"></div>'
     : '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>'
       + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>'
-      + '<div class="rtx"><div class="kind">Nursing Services</div><div class="dp">' + rosEsc(dn) + '</div></div></header>';
-  const html = head
-    + (cards !== false ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>')
-    + tables + alHtml
-    // Legend and notes side by side, and kept on the same page as the signatures.
-    + '<div class="foot"><div class="lnr">' + (legendHtml || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>'
+      + '<div class="rtx"><div class="kind">' + rosEsc(group ? 'Nursing Services · ' + group : 'Nursing Services') + '</div><div class="dp">' + rosEsc(dn) + '</div></div></header>');
+  const cardsHtml = cards !== false ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>';
+  // Legend and notes side by side, and kept on the same page as the signatures.
+  const footFor = (list) => '<div class="foot"><div class="lnr">' + (legendFor(list) || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>'
     + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>'
     + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><div class="sp"></div><div class="ln"><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + '</em>'
       + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>'
     + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>'
     + '</div>';
-  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + (official ? officialCss : css) + '</style></head><body>' + html + '</body></html>';
+  /* Page blocks. One for the whole unit; or, with separate pages, one complete block per group —
+     each with its own header, table, alternative leave, legend (its own codes), notes and
+     signatures — the second starting on a new page. The summary cards describe the whole unit,
+     so they print once, on the first page. */
+  const pageOf = (inner, cls) => '<section class="pg' + (cls ? ' ' + cls : '') + '">' + inner + '</section>';
+  const html = split
+    ? pageOf(headFor('Nursing staff') + cardsHtml + tableFor(nurses, 'Nursing staff · ' + nurses.length, 'gn') + alFor(nurses) + footFor(nurses))
+      + pageOf(headFor('Patient care assistants') + '<div style="height:7px"></div>' + tableFor(pcas, 'Patient care assistants · ' + pcas.length, 'gp') + alFor(pcas) + footFor(pcas), 'np')
+    : pageOf(headFor('') + cardsHtml + tables + alFor(rows) + footFor(rows));
+  /* Fit to one A4 page: each block is laid out at the printable width of A4 landscape (297 mm less
+     the 8 mm margins = 281 mm) and, if it is taller than the printable height (210 − 16 = 194 mm,
+     less 2 mm to spare), zoomed down until it fits — on screen and in print alike. Re-run before
+     printing, after the fonts have loaded. The PDF download does the same by scaling its image. */
+  const pageCss = '.pg.np{break-before:page;page-break-before:always}.grpn{margin-top:2px;font-size:9pt;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}'
+    + (fitA4 ? '.pg{break-inside:avoid;page-break-inside:avoid;margin:0 auto}' : '');
+  const fitJs = !fitA4 ? '' : '<script>(function(){var MM=96/25.4,W=Math.floor(281*MM),H=Math.floor(192*MM);'
+    + 'function fit(){var ps=document.querySelectorAll(".pg");for(var i=0;i<ps.length;i++){var p=ps[i];p.style.zoom="";p.style.width=W+"px";'
+    + 'var z=Math.min(1,H/Math.max(1,p.scrollHeight),W/Math.max(1,p.scrollWidth));p.style.zoom=String(Math.floor(z*1000)/1000);p.setAttribute("data-fit",String(z));}}'
+    + 'window.__rosFit=fit;if(document.readyState==="complete")fit();else window.addEventListener("load",fit);window.addEventListener("beforeprint",fit);'
+    + 'if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);})();</script>';
+  return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + (official ? officialCss : css) + pageCss + '</style></head><body>' + html + fitJs + '</body></html>';
 }
 
 // Per browser: a 'unico_*' key is synced to the server and shared by everyone, so one person
@@ -3713,12 +3745,14 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [opt, setOpt] = useState(() => {
-    const d = { colourDesign: false, summary: true, cards: false, legend: true, pcaNewPage: false };
+    const d = { colourDesign: false, summary: true, cards: false, legend: true, separatePages: false, fitA4: false };
+    // The old "PCAs on a new page" tick becomes "Nurses and PCAs on separate pages".
+    const norm = (o) => { const x = { ...d, ...o }; if (x.pcaNewPage) x.separatePages = true; delete x.pcaNewPage; return x; };
     try {
       const now = localStorage.getItem(ROS_PRINT_OPT_KEY);
-      if (now) return { ...d, ...(JSON.parse(now) || {}) };
+      if (now) return norm(JSON.parse(now) || {});
       const { cards, ...old } = JSON.parse(localStorage.getItem(ROS_PRINT_OPT_OLD) || '{}') || {};   // eslint-disable-line no-unused-vars
-      return { ...d, ...old };
+      return norm(old);
     } catch (e) { return d; }
   });
   const [busy, setBusy] = useState(false);
@@ -3776,54 +3810,77 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   };
 
   /* A PDF file, straight to Downloads — no print dialog. The preview's own document is drawn at
-     A4-landscape width (so the file looks the same from any screen) and cut into pages at row
-     boundaries, so no person's row is ever split across two pages and the signatures stay whole. */
+     A4-landscape width (so the file looks the same from any screen), ONE PAGE BLOCK AT A TIME
+     (rosPrintHtml's <section class="pg">: the whole unit, or nurses and PCAs apart), so a new
+     block always starts a new PDF page.
+       Fit to one A4 page: each block is drawn at its natural size and the picture is scaled
+       down to fit one page (centred) — html2canvas does not honour CSS zoom, so the preview's
+       zoom is lifted while drawing.
+       Otherwise: a block taller than a page is cut at row boundaries, so no person's row is
+       ever split across two pages and the signatures stay whole. */
   const downloadPdf = async () => {
     const f = frame.current; const d0 = f && f.contentDocument;
     if (!d0 || !d0.body) return;
     setPdfBusy(true);
     const body = d0.body; const keep = { w: body.style.width, p: body.style.padding };
+    const blocks = Array.prototype.slice.call(d0.querySelectorAll('.pg'));
+    const zooms = blocks.map((b) => b.style.zoom);
     try {
       if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) await window.unicoLoadPdfLibs();
       const H = window.html2canvas, J = window.jspdf && window.jspdf.jsPDF;
       if (!H || !J) throw new Error('The PDF tools did not load.');
-      await rosApi.post('/api/rosters/print', { kind: 'pdf', target: dept, detail: R.MONTHS[month] + ' ' + year }).catch(() => null);
+      await rosApi.post('/api/rosters/print', { kind: 'pdf', target: dept, detail: R.MONTHS[month] + ' ' + year + (opt.separatePages ? ' · separate pages' : '') + (opt.fitA4 ? ' · fit to one page' : '') }).catch(() => null);
       const W = 1123;                                   // 297 mm at 96 dpi
       body.style.width = W + 'px'; body.style.padding = '0';
+      blocks.forEach((b) => { b.style.zoom = ''; });   // natural size; fitting is done on the image
       await new Promise((r) => setTimeout(r, 80));
       const scale = 2;
-      const top0 = body.getBoundingClientRect().top;
-      const marks = Array.prototype.map.call(d0.querySelectorAll('tr, .gt, .lgx, .foot'), (el) => (el.getBoundingClientRect().bottom - top0) * scale);
-      const last = d0.querySelector('.foot') || body.lastElementChild;
-      const contentH = Math.ceil((last ? last.getBoundingClientRect().bottom : body.scrollHeight) - top0 + 6);
-      const canvas = await H(body, { scale, backgroundColor: '#ffffff', useCORS: true, windowWidth: W, width: W, height: contentH });
-      // html2canvas runs in this window and leaves the preview iframe's <img>s (the letterhead
-      // logo) blank, so paint each picture onto the snapshot at its place on the page.
-      const left0 = body.getBoundingClientRect().left, cg = canvas.getContext('2d');
-      cg.setTransform(1, 0, 0, 1, 0, 0);   // html2canvas leaves its own scale() on the context
-      for (const img of Array.prototype.slice.call(d0.querySelectorAll('img'))) {
-        try {
-          const r = img.getBoundingClientRect(); if (!r.width || !r.height) continue;
-          const pic = new Image(); pic.src = img.src; await pic.decode();
-          cg.drawImage(pic, (r.left - left0) * scale, (r.top - top0) * scale, r.width * scale, r.height * scale);
-        } catch (e) { /* the PDF still downloads, just without that picture */ }
-      }
       const pdf = new J({ orientation: 'landscape', unit: 'mm', format: 'a4' });
       const M = 8, pw = 297 - 2 * M, ph = 210 - 2 * M;
-      const pxPerMm = canvas.width / pw, pageH = ph * pxPerMm;
-      let y = 0, first = true;
-      const endY = Math.min(canvas.height, contentH * scale);
-      while (y < endY - 2) {
-        let cut = Math.min(endY, y + pageH);
-        if (cut < endY) { const fits = marks.filter((m) => m > y + 20 && m <= y + pageH); if (fits.length) cut = Math.max.apply(null, fits); }
-        const h = Math.ceil(cut - y);
-        const slice = document.createElement('canvas'); slice.width = canvas.width; slice.height = h;
-        const g = slice.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, slice.width, h);
-        g.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
-        if (!first) pdf.addPage();
-        first = false;
-        pdf.addImage(slice.toDataURL('image/jpeg', 0.95), 'JPEG', M, M, pw, h / pxPerMm);
-        y = cut;
+      const PX_MM = 25.4 / 96;
+      let firstPage = true;
+      const newPage = () => { if (!firstPage) pdf.addPage(); firstPage = false; };
+      for (const blk of (blocks.length ? blocks : [body])) {
+        const r0 = blk.getBoundingClientRect();
+        const top0 = r0.top, left0 = r0.left;
+        const blkW = Math.ceil(r0.width);
+        const contentH = Math.ceil(r0.height + 4);
+        const canvas = await H(blk, { scale, backgroundColor: '#ffffff', useCORS: true, windowWidth: W, width: blkW, height: contentH });
+        // html2canvas runs in this window and leaves the preview iframe's <img>s (the letterhead
+        // logo) blank, so paint each picture onto the snapshot at its place in the block.
+        const cg = canvas.getContext('2d');
+        cg.setTransform(1, 0, 0, 1, 0, 0);   // html2canvas leaves its own scale() on the context
+        for (const img of Array.prototype.slice.call(blk.querySelectorAll('img'))) {
+          try {
+            const r = img.getBoundingClientRect(); if (!r.width || !r.height) continue;
+            const pic = new Image(); pic.src = img.src; await pic.decode();
+            cg.drawImage(pic, (r.left - left0) * scale, (r.top - top0) * scale, r.width * scale, r.height * scale);
+          } catch (e) { /* the PDF still downloads, just without that picture */ }
+        }
+        if (opt.fitA4) {
+          // the whole block on one page, scaled down only as much as it must be
+          const wmm = blkW * PX_MM, hmm = contentH * PX_MM;
+          const k = Math.min(1, pw / wmm, ph / hmm);
+          const w = wmm * k, h = hmm * k;
+          newPage();
+          pdf.addImage(canvas.toDataURL('image/jpeg', 0.95), 'JPEG', M + (pw - w) / 2, M, w, h);
+          continue;
+        }
+        const marks = Array.prototype.map.call(blk.querySelectorAll('tr, .gt, .lgx, .foot'), (el) => (el.getBoundingClientRect().bottom - top0) * scale);
+        const pxPerMm = canvas.width / pw, pageH = ph * pxPerMm;
+        let y = 0;
+        const endY = Math.min(canvas.height, contentH * scale);
+        while (y < endY - 2) {
+          let cut = Math.min(endY, y + pageH);
+          if (cut < endY) { const fits = marks.filter((m) => m > y + 20 && m <= y + pageH); if (fits.length) cut = Math.max.apply(null, fits); }
+          const h = Math.ceil(cut - y);
+          const slice = document.createElement('canvas'); slice.width = canvas.width; slice.height = h;
+          const g = slice.getContext('2d'); g.fillStyle = '#ffffff'; g.fillRect(0, 0, slice.width, h);
+          g.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+          newPage();
+          pdf.addImage(slice.toDataURL('image/jpeg', 0.95), 'JPEG', M, M, pw, h / pxPerMm);
+          y = cut;
+        }
       }
       const safe = (s) => String(s || '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '');
       pdf.save('Duty-Roster_' + safe(deptName) + '_' + R.MONTHS[month] + '-' + year + '.pdf');
@@ -3832,6 +3889,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
       rosToast((e && e.message ? e.message + ' ' : '') + 'Use Print and choose “Save as PDF” instead.', 'error');
     } finally {
       body.style.width = keep.w; body.style.padding = keep.p;
+      blocks.forEach((b, i) => { b.style.zoom = zooms[i]; });
       setPdfBusy(false);
     }
   };
@@ -3850,7 +3908,9 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
           <button className="btn" onClick={() => setRoute({ view: 'rosterGrid', dept, year, month })}>‹ Back to the grid</button>
           <div style={{ minWidth: 180 }}>
             <div style={{ fontWeight: 700, fontSize: 13.5, color: '#16202e' }}>Print roster — {deptName}, {R.MONTHS[month]} {year}</div>
-            <div className="sub" style={{ fontSize: 11 }}>A4 landscape · letterhead · only the shift codes this roster uses · signatures</div>
+            <div className="sub" style={{ fontSize: 11 }}>A4 landscape · letterhead · only the shift codes this roster uses · signatures
+              {opt.separatePages && view.rows.some((r) => r.pca) && view.rows.some((r) => !r.pca) ? ' · nurses and PCAs on separate pages' : ''}
+              {opt.fitA4 ? (opt.separatePages && view.rows.some((r) => r.pca) && view.rows.some((r) => !r.pca) ? ' · each fitted to one page' : ' · fitted to one page') : ''}</div>
           </div>
           <RosStatusChip st={doc ? doc.status : null} />
           <div style={{ flex: 1 }} />
@@ -3858,7 +3918,8 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
           {tog('cards', 'Summary cards')}
           {tog('summary', 'Daily cover rows')}
           {tog('legend', 'Shift legend')}
-          {view.rows.some((r) => r.pca) && tog('pcaNewPage', 'PCAs on a new page')}
+          {view.rows.some((r) => r.pca) && view.rows.some((r) => !r.pca) && tog('separatePages', 'Nurses and PCAs on separate pages')}
+          {tog('fitA4', 'Fit to one A4 page')}
           {mayPrint
             ? <React.Fragment>
                 <button className="btn" disabled={pdfBusy} onClick={downloadPdf} title="Download this roster as a PDF file">{pdfBusy ? 'Preparing PDF…' : 'Download PDF'}</button>
