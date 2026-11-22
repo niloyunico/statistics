@@ -358,7 +358,7 @@ async function ensureDraft(ym, source, opts) {
   if (await getDoc(REPORTS, id)) return { ok: true, skipped: 'exists', id };
   await ensureReady(now);
   const cfg = await getConfig();
-  const live = await computeReport(ym, ym, cfg, opts && opts.deps);
+  const live = await computeReport(ym, ym, cfg, Object.assign({}, opts && opts.deps, opts && opts.now ? { now: opts.now } : {}));
   const doc = Object.assign({ _id: id, from: ym, to: ym, state: 'draft' }, live, {
     commentary: {}, overall: '', signoff: {}, generatedAt: now, generatedBy: source || 'auto', generatedByName: 'Prepared automatically',
     updatedAt: stamp(now), history: [{ at: now, by: source || 'auto', action: 'draft prepared automatically' }],
@@ -374,7 +374,10 @@ async function ensureDraft(ym, source, opts) {
 function mount(app, opts) {
   const guard = (opts && opts.requireApi) || [];
   const now = (opts && opts.now) || (() => Date.now());
-  const deps = opts && opts.deps; // tests: fake quality / formulas / deptmap
+  // tests: fake quality / formulas / deptmap. The clock rides along, so the quality figures know
+  // which month is still running (server/kpi-link.js loadContext).
+  // Inherits from the given deps (not a copy), so a later change to them is still seen.
+  const deps = Object.create((opts && opts.deps) || null, { now: { value: now, enumerable: true } });
 
   const resolve = async (req, res, action) => {
     const a = req.access || await access.forRequest(req);

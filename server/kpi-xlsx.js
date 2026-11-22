@@ -94,7 +94,7 @@ async function build(report, opts) {
 
   /* How each figure was calculated: one row per KPI × month × unit, with who sent and approved it. */
   if (rows.some((r) => r.evidence)) {
-    const SRC = { approved: 'Approved submission', 'overlay-edit': 'Quality-console edit', audit: 'Hand hygiene audit', own: 'Unit’s own reading', covered: 'Covered by the audit', 'not-audited': 'Not audited', 'not-observed': 'Not observed', missing: 'MISSING', partial: 'NO DENOMINATOR', 'den-zero': 'DENOMINATOR 0', 'carried-den': 'Headcount carried forward', manual: 'Entered in the KPI module' };
+    const SRC = { approved: 'Approved submission', 'overlay-edit': 'Quality-console edit', audit: 'Hand hygiene audit', own: 'Unit’s own reading', covered: 'Covered by the audit', 'not-audited': 'Not audited', 'not-observed': 'Not observed', missing: 'MISSING', partial: 'NO DENOMINATOR', 'den-zero': 'DENOMINATOR 0', 'carried-den': 'Headcount carried forward', manual: 'Entered in the KPI module', pending: 'Not sent yet (month in progress)', 'counted-zero': 'No report — counted as 0', zero: '0 events', 'zero-assumed': 'No reports — counted as 0' };
     const ca = sheet(wb, 'Calculation', [
       { header: '#', key: 'code', width: 6 }, { header: 'KPI', key: 'name', width: 30 }, { header: 'Month', key: 'month', width: 10 }, { header: 'Unit', key: 'unit', width: 26 },
       { header: 'Expected', key: 'exp', width: 9 }, { header: 'Used', key: 'used', width: 7 }, { header: 'Numerator', key: 'num', width: 11 }, { header: 'Denominator', key: 'den', width: 12 },

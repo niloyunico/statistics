@@ -589,11 +589,47 @@ roster.mount(app, { requireApi: as, requireRead: as });
     const sw = await roster.signersWithDesig({ incharge: { username: 'rahima', name: 'Rahima Akter' }, manager: null });
     assert.equal(sw.incharge.name, 'Rahima Akter', 'a signer with no staff record is returned as it was');
 
+    // A signer with no linked staff record: the designation on their own account, never the box's role.
+    {
+      const ra = ACCOUNTS.find((u) => u.username === 'rahima');
+      ra.designation = 'Nurse Manager'; ra.workDepartment = 'homecare';
+      const sd = await roster.signersWithDesig({ incharge: { username: 'rahima', name: 'Rahima Akter' }, manager: { username: 'rahima', name: 'Rahima Akter' } });
+      assert.equal(sd.incharge.desig, 'Nurse Manager', 'account designation when no staff record');
+      assert.equal(sd.manager.desig, 'Nurse Manager', 'the same person in a second box gets the same designation');
+      assert.equal(sd.incharge.desigFrom, 'account');
+      delete ra.designation; delete ra.workDepartment;
+    }
+
+    // DRAFT SAFETY: the sheet as it stood before a save is kept (at most hourly) and listed under Versions.
+    {
+      const sh = { dept: 'MICU', year: 2027, month: 0 };
+      const sid = roster.rosterId('MICU', 2027, 0);
+      let r1 = await put({ ...sh, grid: { S1: { 1: 'M' } }, baseRevision: 0 }, 'admin');
+      assert.equal(r1.status, 200);
+      assert.equal(roster.__autos().filter((v) => v.rosterId === sid).length, 0, 'a brand-new sheet has nothing to keep');
+      r1 = await put({ ...sh, grid: { S1: { 1: 'E' } }, baseRevision: 1 }, 'admin');
+      const autos = roster.__autos().filter((v) => v.rosterId === sid);
+      assert.equal(autos.length, 1, 'the sheet before the save is kept');
+      assert.equal(autos[0].grid.S1[1], 'M', '...as it stood before');
+      await put({ ...sh, grid: { S1: { 1: 'N' } }, baseRevision: 2 }, 'admin');
+      assert.equal(roster.__autos().filter((v) => v.rosterId === sid).length, 1, 'at most one snapshot an hour');
+      const vl = (await call('GET', '/api/rosters/' + sid + '/versions', null, 'admin')).body;
+      assert.equal(vl.autosaves.length, 1, 'listed under Versions');
+      const one = (await call('GET', '/api/rosters/' + sid + '/versions/0?at=' + vl.autosaves[0].at, null, 'admin')).body;
+      assert.equal(one.ok, true); assert.equal(one.version.grid.S1[1], 'M', 'and can be opened');
+      // An administrator's delete copies the whole sheet aside first.
+      const del = (await call('DELETE', '/api/rosters/' + sid, null, 'admin')).body;
+      assert.equal(del.ok, true);
+      const kept = roster.__deleted().find((x) => x.id === sid);
+      assert.ok(kept && kept.grid.S1[1] === 'N' && kept.deletedAt, 'the deleted sheet is archived with its cells');
+    }
+
     // The print log.
     assert.equal((await call('POST', '/api/rosters/print', { kind: 'staff', target: 'Rahima', detail: 'May-Nov 2026' }, 'rahima')).body.ok, true);
     assert.ok(logged.some((l) => l.action === 'roster_print' && l.opts.target === 'Rahima'));
 
     console.log('DUTY_ROSTER_CHAIN_PASS: setup, roles, send/forward/approve/return/resume/reopen, versions, legacy rows, inbox + badge, staff history, compat route');
+    console.log('DUTY_ROSTER_SAFETY_PASS: hourly draft snapshot listed + openable, delete archived, account designation fallback');
     console.log('DUTY_ROSTER_TEST_PASS: approved lock, revision guard, kept note/status/names, no approve-by-save, per-unit roster assignment, in-charge build+submit without approve');
   } finally { server.close(); }
 })().catch((e) => { console.error(e); process.exitCode = 1; });

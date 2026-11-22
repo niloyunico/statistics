@@ -265,7 +265,8 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   assert.equal(r.status, 409);
   assert.equal(r.body.code, 'checks');
   const open = r.body.unresolved;
-  assert.ok(open.find((x) => x.kpiId === 'kpi-clabsi' && x.code === 'unit-missing' && x.unit === 'CCU'), 'CCU did not report CLABSI');
+  // CLABSI is lower-is-better: a unit with no figure in a FINISHED month counts as 0 (no error any more).
+  assert.ok(!open.find((x) => x.kpiId === 'kpi-clabsi' && x.code === 'unit-missing'), 'CCU with no CLABSI figure is counted as 0, not an error');
   assert.ok(open.find((x) => x.kpiId === 'kpi-clabsi' && x.code === 'dd-mismatch' && x.unit === 'MICU'), 'MICU 500 vs 480 device days');
   assert.ok(open.find((x) => x.kpiId === 'kpi-documentation' && x.code === 'no-data'), 'documentation not entered');
   // … an acknowledgement needs a real reason …
@@ -303,12 +304,12 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   assert.equal(unitOf('MICU').submission.reviewedBy, 'Admin Karim');
   assert.equal(unitOf('MICU').submission.how, 'approval');
   assert.deepEqual(unitOf('MICU').deviceDays && [unitOf('MICU').deviceDays.field, unitOf('MICU').deviceDays.approved], ['central', 480]);
-  assert.equal(unitOf('CCU').source, 'missing');
-  assert.equal(unitOf('CCU').expected, true);
+  assert.equal(unitOf('CCU').source, 'counted-zero', 'no report in a finished month: counted as 0');
+  assert.deepEqual([unitOf('CCU').num, unitOf('CCU').value, unitOf('CCU').expected], [0, 0, true]);
   const codes = (u) => ev.checks.filter((c) => c.unit === u).map((c) => c.code).sort();
   assert.deepEqual(codes('MICU'), ['dd-mismatch']);
   assert.deepEqual(codes('SICU'), ['pending-newer', 'sub-unmatched'], 'a newer figure waits; the approved one has no traceable submission');
-  assert.deepEqual(codes('CCU'), ['unit-missing']);
+  assert.deepEqual(codes('CCU'), [], 'counted as 0 — no error');
   assert.deepEqual([ev.totals.num, ev.totals.den, ev.totals.value], [2, 750, 2.67]);
   const steps = K.evidenceSteps(K.KPI || { formula: 'rate1000', numLabel: 'CLABSIs', denLabel: 'Central line-days' }, ev);
   assert.ok(steps.some((s) => s === '2 ÷ 750 × 1000 = 2.67.'), 'the calculation in words');
@@ -500,9 +501,10 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   r = await call('GET /api/kpi/evidence/:kpi/:month', viewer, { params: { kpi: 'kpi-clabsi', month: '2026-10' } });
   const qev = r.body.evidence;
   assert.equal(qev.period.label, 'Aug–Oct 2026');
-  assert.ok(qev.checks.some((x) => x.code === 'unit-missing' && x.unit === 'CCU' && /Aug–Oct 2026/.test(x.text)), 'a unit with nothing in the whole quarter');
+  assert.ok(!qev.checks.some((x) => x.code === 'unit-missing' && x.unit === 'CCU'), 'a lower-is-better KPI: a unit with nothing in the (finished) quarter counts as 0, not an error');
+  assert.equal(qev.units.find((u) => u.key === 'CCU').months.filter((m) => m.source === 'counted-zero').length, 3, 'each finished month counted as 0');
   assert.ok(qev.checks.some((x) => x.code === 'partial' && x.unit === 'SICU@2026-09'), 'month checks named by month');
-  assert.equal(qev.units.find((u) => u.key === 'MICU').monthsUsed, 2);
+  assert.equal(qev.units.find((u) => u.key === 'MICU').monthsUsed, 3, 'two months it reported + its unreported finished month counted as 0');
   r = await call('GET /api/kpi/evidence/:kpi/:month', viewer, { params: { kpi: 'kpi-clabsi', month: '2026-09' } });
   assert.deepEqual([r.body.evidence.notDue, r.body.evidence.checks.length], [true, 0], 'a month that is not due checks nothing');
   // documents
@@ -542,6 +544,37 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   assert.equal(r.status, 200, 'a period ending with the running month can be read');
   r = await call('POST /api/kpi/report/:id/finalize', manager, { params: { id: K.reportId('2026-11', '2026-11') } });
   assert.equal(r.status, 400); assert.equal(r.body.code, 'running');
+
+  /* ---- EMPTY COUNTS AS 0 / the running month owes nothing (2026-11-22) ---- */
+  {
+    // The running month (clock 5 Nov 2026): no unit has a figure yet → "not sent yet", no errors.
+    const nov = (await call('GET /api/kpi/evidence/:kpi/:month', viewer, { params: { kpi: 'kpi-turnover', month: '2026-11' } })).body.evidence;
+    assert.ok(!nov.checks.some((c) => ['unit-missing', 'partial', 'den-zero', 'no-data'].indexOf(c.code) >= 0), 'the running month raises no "owed" checks');
+    // the pooling rules, straight on poolMonth
+    const link = require('../kpi-link');
+    const low = { goalDirection: 'lower_is_better', formula: 'rate1000' }, high = { goalDirection: 'higher_is_better', formula: 'pct' };
+    const ind = (num, den) => ({ ind: { mNum: { 'Oct-26': num }, mDen: den == null ? {} : { 'Oct-26': den } }, area: { key: 'X' } });
+    const ctx0 = { monKeys: ['Oct-26'] };
+    const z = link.poolMonth(low, 'Oct-26', [ind(0, null)], ctx0, {});
+    assert.deepEqual([z.value, z.source], [0, 'zero'], '0 falls with no patient-days → a rate of 0');
+    assert.equal(link.poolMonth(low, 'Oct-26', [ind(2, null)], ctx0, {}).source, 'partial', '2 falls with no patient-days still needs the denominator');
+    assert.equal(link.poolMonth(high, 'Oct-26', [ind(0, null)], ctx0, {}).source, 'partial', 'higher-is-better: no zero rule');
+    const mix = link.poolMonth(low, 'Oct-26', [ind(0, null), ind(3, 1000)], ctx0, {});
+    assert.deepEqual([mix.num, mix.den, mix.value], [3, 1000, 3], 'a zero-event unit adds nothing to the pooled rate');
+    // a period of zero months is 0; zeros pool with real months as Σnum ÷ Σden
+    assert.equal(K.periodValue(low, [{ value: 0, zero: true }, { value: 0, zero: true }]).value, 0);
+    assert.equal(K.periodValue(low, [{ value: 0, zero: true }, { num: 2, den: 500, value: 4 }]).value, 4, 'pooled, not averaged');
+    // a finished month with no report at all: 0 for lower-is-better, only once the indicator was ever reported
+    const ctx1 = { areas: [{ key: 'U1', name: 'Unit 1', indicators: [{ id: 'i1', name: 'Falls', mNum: { 'Sep-26': 1 }, mDen: { 'Sep-26': 100 } }] }], monKeys: ['Sep-26', 'Oct-26', 'Nov-26'], months: ['2026-09', '2026-10', '2026-11'], closed: '2026-10' };
+    const defL = Object.assign({ source: { indId: 'i1' } }, low);
+    const outL = link.linkedMonthlyFrom(ctx1, defL, ['2026-10', '2026-11']);
+    assert.deepEqual([outL['2026-10'] && outL['2026-10'].value, outL['2026-10'] && outL['2026-10'].source], [0, 'zero-assumed'], 'finished October, nobody reported → 0');
+    assert.ok(!outL['2026-11'], 'the running month is never assumed');
+    const outH = link.linkedMonthlyFrom(ctx1, Object.assign({ source: { indId: 'i1' } }, high), ['2026-10']);
+    assert.ok(!outH['2026-10'], 'higher-is-better: no assumed 0');
+    const ctx2 = Object.assign({}, ctx1, { areas: [{ key: 'U1', name: 'Unit 1', indicators: [{ id: 'i1', name: 'Falls' }] }] });
+    assert.ok(!link.linkedMonthlyFrom(ctx2, defL, ['2026-10'])['2026-10'], 'an indicator nobody ever reported is not invented as zeros');
+  }
 
   /* ---- Delete this month (administrators): blank in Nursing KPI only ---- */
   const blank = (who, kpiId, month, note) => call('POST /api/kpi/values/:kpi/:month/blank', who, { params: { kpi: kpiId, month }, body: note == null ? {} : { note } });

@@ -46,6 +46,10 @@ function App(){
     }
     return r;
   },[]);
+  // The view on screen, published for screens that open differently depending on where the person
+  // came from (Duty Roster reopens the last roster only when entered from outside its section).
+  // Updated after render, so a screen mounting for a new view still reads the view it came from.
+  useEffect(()=>{ try{ window.__unicoCurView=route&&route.view; }catch(e){} },[route&&route.view]);
   const [collapsed,setCollapsed]=useState(()=> typeof window!=='undefined' && window.innerWidth<=820);
   const setRoute=React.useCallback((r)=>{
     setRouteRaw(typeof r==='function'?(prev=>fixRoute(r(prev))):fixRoute(r));

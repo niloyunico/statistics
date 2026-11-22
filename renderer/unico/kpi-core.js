@@ -272,8 +272,12 @@
     const list = (cells || []).filter((c) => c && has(c.value));
     if (!list.length) return { value: null, num: null, den: null, months: 0 };
     if (f === 'count') return { value: round(list.reduce((a, c) => a + Number(c.value), 0)), num: null, den: null, months: list.length };
-    if (f !== 'direct' && list.every((c) => has(c.num) && has(c.den) && Number(c.den) > 0)) {
-      const n = list.reduce((a, c) => a + Number(c.num), 0), d = list.reduce((a, c) => a + Number(c.den), 0);
+    // A zero month (0 events, or a finished month counted as 0 — server/kpi-link.js lowerBetter)
+    // adds 0 events and no denominator: it pools as nothing, and a period of only zeros is 0.
+    const isZero = (c) => !!c.zero && Number(c.value) === 0;
+    if (f !== 'direct' && list.every((c) => isZero(c) || (has(c.num) && has(c.den) && Number(c.den) > 0))) {
+      const n = list.reduce((a, c) => a + (isZero(c) ? 0 : Number(c.num)), 0), d = list.reduce((a, c) => a + (isZero(c) ? 0 : Number(c.den)), 0);
+      if (!(d > 0)) return { value: 0, num: 0, den: null, months: list.length };
       return { value: computeValue(f, n, d), num: round(n, 4), den: round(d, 4), months: list.length };
     }
     return { value: round(list.reduce((a, c) => a + Number(c.value), 0) / list.length), num: null, den: null, months: list.length };
@@ -449,7 +453,15 @@
     if (f !== 'count' && has(t.den)) out.push(dl + ': ' + round(t.den, 4) + (used.length > 1 ? ' (sum over ' + unitWord + ')' : '') + '.');
     if (f === 'count') out.push('Value = the count = ' + fmt(def, t.value) + '.');
     else if (has(t.num) && has(t.den) && Number(t.den) > 0) out.push(round(t.num, 4) + ' ÷ ' + round(t.den, 4) + (MULT[f] ? ' × ' + MULT[f] : '') + ' = ' + fmt(def, t.value) + '.');
-    else if (!has(t.value)) out.push('No value: ' + (has(t.num) ? 'the ' + dl + ' is missing.' : 'no figures for the month.'));
+    else if (has(t.value) && Number(t.value) === 0 && (t.source === 'zero' || t.source === 'zero-assumed')) {
+      out.push(t.source === 'zero-assumed' ? 'Value = 0: no unit reported, and an empty figure counts as 0 for this KPI (0 events).' : 'Value = 0: 0 events were reported, so the rate is 0.');
+    }
+    else if (!has(t.value)) {
+      const units = (ev && ev.units) || [];
+      out.push('No value: ' + (has(t.num) ? 'the ' + dl + ' is missing.' : units.length && units.every((u) => u.source === 'pending') ? 'the month is still running — no unit has sent its figure yet.' : 'no figures for the month.'));
+    }
+    const counted = ((ev && ev.units) || []).filter((u) => u.source === 'counted-zero').length;
+    if (counted) out.push(counted + (counted === 1 ? ' unit' : ' units') + ' with no report counted as 0 events.');
     if (used.length > 1 && f !== 'count') out.push('Pooled — the units’ numerators and denominators are added first and divided once; it is not an average of the units’ rates.');
     return out;
   }

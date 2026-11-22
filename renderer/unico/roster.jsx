@@ -181,6 +181,19 @@ function rosInjectCss() {
     '.ros-x:hover{background:rgba(125,145,180,.16)!important;color:#16202e!important}',
     '.ros-xred:hover{background:rgba(210,58,82,.12)!important;color:#a92c42!important}',
     '.ros-decl:hover{background:rgba(210,58,82,.1)!important}',
+    // The Save button: calm and green when everything is saved, a glowing pulse while not.
+    '@keyframes rosSavePulse{0%,100%{box-shadow:0 0 0 0 rgba(39,168,219,.55),0 6px 16px rgba(0,114,163,.35)}50%{box-shadow:0 0 0 9px rgba(39,168,219,0),0 8px 24px rgba(0,114,163,.5)}}',
+    '@keyframes rosSpin{to{transform:rotate(360deg)}}',
+    '.ros-save{display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(31,157,87,.35);background:rgba(31,157,87,.1);color:#157a43;padding:8px 15px;border-radius:10px;font-family:inherit;font-size:12px;font-weight:800;cursor:default;white-space:nowrap;transition:background .2s,color .2s}',
+    '.ros-save.on{border-color:#0072a3;color:#fff;background:linear-gradient(135deg,#27a8db,#0072a3);cursor:pointer;animation:rosSavePulse 1.8s ease-in-out infinite}',
+    '.ros-save.on:hover{filter:brightness(1.08)}',
+    '.ros-save-spin{width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;animation:rosSpin .8s linear infinite}',
+    // The floating Print button.
+    '.ros-fab{position:fixed;right:22px;bottom:84px;z-index:4350;display:inline-flex;align-items:center;gap:8px;border:0;border-radius:999px;padding:12px 19px;background:linear-gradient(135deg,#0d3a5c,#0072a3 60%,#27a8db);color:#fff;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 12px 28px rgba(0,58,92,.38),inset 0 1px 0 rgba(255,255,255,.25);transition:transform .15s,box-shadow .15s}',
+    '.ros-fab:hover{transform:translateY(-2px);box-shadow:0 16px 34px rgba(0,58,92,.45)}',
+    '@media (max-width:820px){.ros-fab{right:14px;bottom:70px;padding:12px}.ros-fab span{display:none}}',
+    '@media (prefers-reduced-motion:reduce){.ros-save.on{animation:none}}',
+    '@media print{.ros-fab,.ros-sticky{display:none!important}}',
   ].join('\n');
   document.head.appendChild(el);
 }
@@ -831,9 +844,9 @@ function RosSignOff({ signers, meta, dept }) {
   const chk = (fwd && m.checkedBy) || (sg.manager && sg.manager.name);
   const appr = (ok && m.approvedBy) || (sg.cns && sg.cns.name);
   const boxes = [
-    ['Prepared by', prep, rosSignerLine(prep, sg.incharge, 'In-charge · ' + dept), sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge', 'In-charge for this roster'],
-    ['Checked by', chk, rosSignerLine(chk, sg.manager, 'Manager · ' + dept), fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager', 'Checks this unit’s roster'],
-    ['Approved by', appr, rosSignerLine(appr, sg.cns, 'Chief of Nursing Services'), ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS', 'Approves every unit'],
+    ['Prepared by', prep, rosPersonLine(prep, sg, null, 'In-charge · ' + dept), sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge', 'In-charge for this roster'],
+    ['Checked by', chk, rosPersonLine(chk, sg, null, 'Manager · ' + dept), fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager', 'Checks this unit’s roster'],
+    ['Approved by', appr, rosPersonLine(appr, sg, null, 'Chief of Nursing Services'), ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS', 'Approves every unit'],
   ];
   const missing = boxes.filter((b) => b[5]).map((b) => b[6]);
   return (
@@ -871,17 +884,18 @@ function RosVersions({ sheetId, staff, dept, year, month, onClose }) {
   const [err, setErr] = useState('');
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions')
-      .then((r) => { if (r && r.ok) setList(r.versions || []); else { setErr((r && r.error) || 'Could not load the versions.'); setList([]); } })
+      // Hand-over versions, then the hourly draft snapshots (the sheet as it stood before a save), newest first.
+      .then((r) => { if (r && r.ok) setList((r.versions || []).concat(r.autosaves || []).sort((a, b) => (b.at || 0) - (a.at || 0))); else { setErr((r && r.error) || 'Could not load the versions.'); setList([]); } })
       .catch(() => { setErr('Could not reach the server.'); setList([]); });
   }, [sheetId]);
-  const show = (v) => rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions/' + v.revision)
+  const show = (v) => rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions/' + v.revision + (v.auto ? '?at=' + v.at : ''))
     .then((r) => { if (r && r.ok && r.version) setOpen({ v, snap: r.version }); else rosToast((r && r.error) || 'Could not open that version.', 'error'); })
     .catch(() => rosToast('Could not reach the server.', 'error'));
   const view = open ? rosRowsFrom(open.snap, staff, dept, false) : null;
   return (
     <RosDrawer wide={!!open} onClose={onClose}
-      title={open ? 'Version rev ' + open.v.revision : 'Versions'}
-      sub={open ? (ROS_HIST_LABEL[open.v.action] || open.v.action || 'Saved') + ' · ' + (open.v.byName || open.v.by || '—') + ' · ' + rosWhen(open.v.at) : 'The sheet as it stood each time it was sent, returned or approved'}>
+      title={open ? (open.v.auto ? 'Draft as it was · ' + rosWhen(open.v.at) : 'Version rev ' + open.v.revision) : 'Versions'}
+      sub={open ? (open.v.auto ? 'Kept automatically before a later save (rev ' + open.v.revision + ')' : (ROS_HIST_LABEL[open.v.action] || open.v.action || 'Saved')) + ' · ' + (open.v.byName || open.v.by || '—') + ' · ' + rosWhen(open.v.at) : 'Each time the sheet was sent, returned or approved — and, while it is a draft, how it stood about every hour'}>
       {open ? (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(106,82,212,.08)', border: '1px solid rgba(106,82,212,.25)', borderRadius: 10, padding: '8px 12px', marginBottom: 12 }}>
@@ -896,11 +910,11 @@ function RosVersions({ sheetId, staff, dept, year, month, onClose }) {
         : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {list.map((v) => (
-              <button key={v.revision} type="button" onClick={() => show(v)}
+              <button key={(v.auto ? 'a' + v.at : 'v' + v.revision)} type="button" onClick={() => show(v)}
                 style={{ textAlign: 'left', display: 'flex', alignItems: 'center', gap: 10, border: '1px solid rgba(125,145,180,.25)', background: '#fff', borderRadius: 10, padding: '9px 12px', cursor: 'pointer', fontFamily: 'inherit' }}>
                 <span style={{ fontFamily: ROS_MONO, fontWeight: 700, fontSize: 12, color: '#0072a3', minWidth: 52 }}>rev {v.revision}</span>
                 <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#16202e' }}>{ROS_HIST_LABEL[v.action] || v.action || 'Saved'}</span>
+                  <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#16202e' }}>{v.auto ? 'Draft, kept automatically' : (ROS_HIST_LABEL[v.action] || v.action || 'Saved')}</span>
                   <span style={{ display: 'block', fontSize: 10.5, color: '#8a97a8' }}>{(v.byName || v.by || '—') + ' · ' + rosWhen(v.at)}</span>
                 </span>
                 <RosStatusChip st={v.status} />
@@ -916,8 +930,9 @@ function RosVersions({ sheetId, staff, dept, year, month, onClose }) {
 function RosterHome({ index, staffStore, scope, setRoute }) {
   const rcfg = useRosterConfig();
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth());
+  // The month last worked on (remembered per browser), else this month.
+  const [year, setYear] = useState(() => { const lv = rosLastView(); return lv ? lv.year : now.getFullYear(); });
+  const [month, setMonth] = useState(() => { const lv = rosLastView(); return lv ? lv.month : now.getMonth(); });
   const sc = scope || { inScope: () => true, scope: 'all', loading: false, units: null };
   /* Two views. "My units" is the working one and stays the default for everyone,
      including an administrator — the oversight screen is for reviewing, not for the
@@ -1323,7 +1338,12 @@ function RosAddStaff({ dept, year, month, onClose, onAdd, onRoster }) {
 function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, initialView }) {
   rosInjectCss();
   const days = R.daysIn(year, month);
-  const [view, setView] = useState(initialView || 'month');
+  // The tab opens where this person left it (remembered per browser), unless a route asks for one.
+  const [view, setView] = useState(() => {
+    if (initialView) return initialView;
+    const lv = rosLastView();
+    return lv && lv.tab && ROS_VIEW_TABS.some((t) => t[0] === lv.tab) ? lv.tab : 'month';
+  });
   const [grid, setGrid] = useState({});
   const [order, setOrder] = useState([]);
   // true once someone arranged the rows by hand (drag / move); saved as rules.orderManual.
@@ -1346,6 +1366,18 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
   // Names stored with the sheet, for people no longer on this unit.
   const [storedNames, setStoredNames] = useState({});
   const [retryTick, setRetryTick] = useState(0);
+  /* Draft safety. editSeq counts edits: a save clears "unsaved" only when nothing changed while it
+     was on its way (an edit made during a save used to be marked saved and lost). inFlight = the
+     save on the wire (one at a time). revRef = the newest revision, for a save queued before the
+     screen re-rendered. baseRef = the sheet as the server last confirmed it (what my device
+     backup's changes are measured against). restore = a device backup that needs a decision. */
+  const editSeq = useRef(0);
+  const inFlight = useRef(null);
+  const revRef = useRef(0);
+  const baseRef = useRef({ grid: {}, oncall: {}, altLeave: {} });
+  const reapplyNext = useRef(false);
+  const [restore, setRestore] = useState(null);
+  const draftKey = rosDraftKey(dept, year, month);
 
   // editor state, named as the design names it
   const [brush, setBrush] = useState('');
@@ -1503,12 +1535,40 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
       setMovedOut(Array.isArray(r.movedOut) ? r.movedOut : []);
       setStatus((d && d.status) || 'draft');
       setRev((d && d.revision) || 0);
+      revRef.current = (d && d.revision) || 0;
       // New sheets store the design's shape; older ones stored the legacy keys.
       const ru = rosRulesOf(d && d.rules);
       setCfg(ru.cfg); setEn(ru.en); setCustom(ru.custom);
       applyMeta(r);
-      setLoading(false); setDirty(false);
       setQueue([]); history.current = [];
+      // The server's copy is the base my unsaved changes are measured against.
+      const srv = { grid: rosMigrateGrid(d && d.grid, staff), oncall: (d && d.oncall) || {}, altLeave: (d && d.altLeave) || {} };
+      baseRef.current = JSON.parse(JSON.stringify(srv));
+      /* Unsaved changes kept on this device (the page reloaded, the tab was closed, a save failed
+         or met a conflict)? Nothing changed on the server since: put them back and save them.
+         The server moved on: re-apply them cell by cell only when asked (the conflict screen's
+         "Reload and re-apply"), else ask. A sheet this person cannot edit now keeps the backup. */
+      const bk = rosDraftRead(rosDraftKey(dept, year, month));
+      const editableNow = !!(((d && d.can) || r.can || {}).edit);
+      let restored = false;
+      setRestore(null);
+      if (bk) {
+        const st = bk.state || {};
+        const differs = !rosSameJson(st.grid, srv.grid) || !rosSameJson(st.oncall, srv.oncall) || !rosSameJson(st.altLeave, srv.altLeave);
+        if (!differs) rosDraftClear(rosDraftKey(dept, year, month));
+        else if (editableNow && (bk.baseRevision === revRef.current || reapplyNext.current)) {
+          const same = bk.baseRevision === revRef.current;
+          const b = bk.base || {};
+          setGrid(same ? st.grid || {} : rosReapply(b.grid, st.grid, srv.grid));
+          setOncall(same ? st.oncall || {} : rosReapply(b.oncall, st.oncall, srv.oncall));
+          setAltLeave(same ? st.altLeave || {} : rosReapply(b.altLeave, st.altLeave, srv.altLeave));
+          if (same && Array.isArray(st.order)) { setOrder(st.order); setOrderManual(!!st.orderManual); }
+          restored = true;
+          rosToast((same ? 'Your unsaved changes from ' : 'Your changes from ') + rosWhen(bk.at) + (same ? ' were restored' : ' were re-applied to the latest copy') + ' and are being saved.');
+        } else setRestore(Object.assign({}, bk, { blocked: !editableNow }));
+      }
+      reapplyNext.current = false;
+      setLoading(false); setDirty(restored);
     }).catch(() => { setLoadError('Could not reach the server.'); setLoading(false); setDirty(false); });
   }, [dept, year, month, reloadKey]);
 
@@ -1719,12 +1779,17 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
      The design has no Save button, so the sheet saves itself: debounced after every
      edit, silently. Publish still chains an explicit save so approval never races. */
   const save = (nextStatus, quiet) => {
+    // One save on the wire at a time: a second one waits, then sends the newest sheet (a save
+    // fired meanwhile used to carry the old revision and come back as a false conflict).
+    if (inFlight.current) return inFlight.current.then(() => saveRef.current(nextStatus, quiet));
+    const seq = editSeq.current;
+    const sent = { grid, oncall, altLeave };
     setBusy(true);
-    return rosApi.put('/api/rosters', {
+    const p = rosApi.put('/api/rosters', {
       dept, deptName: dept, year, month, grid, order: rows.map((r) => r.empId), guests, guestsRemoved: guestsOff, oncall, altLeave,
       // Which revision these edits were made on: the server refuses the save if someone
       // saved since, instead of this whole grid erasing their cells.
-      baseRevision: rev,
+      baseRevision: revRef.current,
       rules: {
         cfg, off: en, custom, orderManual,
         // legacy mirror — roster-review.jsx and the print sheet read these keys
@@ -1741,44 +1806,76 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
     }).then((r) => {
       setBusy(false);
       if (r && r.ok) {
-        setRev((r.roster && r.roster.revision) || rev + 1);
+        const nr = (r.roster && r.roster.revision) || revRef.current + 1;
+        revRef.current = nr;
+        setRev(nr);
+        baseRef.current = JSON.parse(JSON.stringify(sent));
         if (r.roster) {
           setStatus(r.roster.status || status);
           setMeta((m) => ({ ...m, ...r.roster, grid: undefined }));
           if (r.roster.can) setSheetCan(r.roster.can);
         }
-        setDirty(false);
+        if (editSeq.current === seq) {
+          // Everything on screen is on the server: the device backup has done its job.
+          setDirty(false);
+          rosDraftClear(draftKey);
+        } else {
+          // Edited while this save was on its way: still unsaved — save those too.
+          setRetryTick((n) => n + 1);
+        }
         if (!quiet) rosToast('Roster saved.');
         if (onSaved) onSaved();
         return true;
       }
       // Refused for a reason retrying cannot fix: stop editing (which also stops the
       // autosave) and say why, instead of re-sending the same refused grid forever.
+      // The device backup is kept: a conflict offers to re-apply it, a reload restores it.
       if (r && r.conflict) setConflict(r.error || 'Someone else saved this roster.');
       if (r && r.locked) refreshMeta();
       rosToast((r && r.error) || 'Could not save.', 'error');
       return false;
     }).catch(() => {
       setBusy(false);
-      rosToast('Could not reach the server — your changes are kept on this screen and will be retried.', 'error');
+      rosToast('Could not reach the server — your changes are kept on this device and will be retried.', 'error');
       if (quiet) setTimeout(() => setRetryTick((n) => n + 1), 5000);   // network failure: try again
       return false;
     });
+    inFlight.current = p;
+    p.then(() => { if (inFlight.current === p) inFlight.current = null; });
+    return p;
   };
+  const saveRef = useRef(null); saveRef.current = save;
+  revRef.current = Math.max(revRef.current, rev);
 
-  // The debounced autosave. Guarded on canEdit so a read-only viewer never writes.
+  // Every change while unsaved: count it, and keep a copy on this device (debounced) until the
+  // server confirms it. Only for a sheet this person may edit.
+  useEffect(() => {
+    if (!dirty || loading || !canEdit) return;
+    editSeq.current += 1;
+    const t = setTimeout(() => rosDraftWrite(draftKey, {
+      at: Date.now(), baseRevision: revRef.current, base: baseRef.current,
+      state: { grid, oncall, altLeave, order, orderManual },
+    }), 400);
+    return () => clearTimeout(t);
+  }, [grid, oncall, altLeave, cfg, en, custom, order, orderManual, guests, guestsOff, dirty]);   // eslint-disable-line
+
+  // The debounced autosave. Guarded on canEdit so a read-only viewer never writes. It calls the
+  // NEWEST save (saveRef), so a timer set before a re-render never sends a stale sheet.
   useEffect(() => {
     if (!dirty || loading || !canEdit) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(() => { saveTimer.current = null; save(null, true); }, 1600);
+    saveTimer.current = setTimeout(() => { saveTimer.current = null; saveRef.current(null, true); }, 1600);
     return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
   }, [grid, oncall, altLeave, cfg, en, custom, order, orderManual, dirty, retryTick]);   // eslint-disable-line
 
+  // Remember where this person is (unit, month, tab), to reopen it next time.
+  useEffect(() => { rosRememberView({ dept, year, month, tab: view }); }, [dept, year, month, view]);
+
   // Leaving the sheet — another month or unit remounts it, or the person opens another
   // module — must not drop edits still waiting for the 1.6 s autosave. The refs carry
-  // the latest state into the unmount; closing the tab with unsaved edits asks first.
-  const saveRef = useRef(null); saveRef.current = save;
-  const pendingRef = useRef(false); pendingRef.current = dirty && !loading && canEdit;
+  // the latest state into the unmount; closing the tab with unsaved edits (or a save still
+  // on its way) asks first. Whatever happens, the device backup still holds them.
+  const pendingRef = useRef(false); pendingRef.current = (dirty || !!inFlight.current) && !loading && canEdit;
   useEffect(() => {
     const warn = (e) => { if (pendingRef.current) { e.preventDefault(); e.returnValue = ''; } };
     window.addEventListener('beforeunload', warn);
@@ -1923,19 +2020,29 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
 
   if (loading) return <div style={{ display: 'grid', placeItems: 'center', height: '40vh', color: '#6c7a8c' }}>Loading the roster…</div>;
   // A failed load shows NO grid: an empty one could be edited and saved over the real month.
-  const retryBox = (title, detail, label, onClick) => (
+  const retryBox = (title, detail, label, onClick, extra) => (
     <div style={{ display: 'grid', placeItems: 'center', height: '40vh', color: '#6c7a8c', textAlign: 'center', padding: 16 }}>
       <div>
         <div style={{ fontWeight: 700, color: '#b4232f', marginBottom: 6 }}>{title}</div>
-        <div style={{ fontSize: 12.5, marginBottom: 12, maxWidth: 520 }}>{detail}</div>
-        <button className="btn pri sm" onClick={onClick}>{label}</button>
+        <div style={{ fontSize: 12.5, marginBottom: 12, maxWidth: 560 }}>{detail}</div>
+        <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+          {extra}
+          <button className={extra ? 'btn sm' : 'btn pri sm'} onClick={onClick}>{label}</button>
+        </div>
       </div>
     </div>
   );
   if (loadError) return retryBox('The roster for ' + R.MONTHS[month] + ' ' + year + ' did not load.',
     loadError + ' Nothing is shown, so nothing can be saved over the stored roster.', 'Try again', () => setReloadKey((k) => k + 1));
-  if (conflict) return retryBox('Someone else saved this roster while you were editing.',
-    conflict + ' Your last changes were not saved. Reload to see the current roster, then make them again.', 'Reload the month', () => setReloadKey((k) => k + 1));
+  // The device backup still holds my changes: re-apply them, cell by cell, to the newer copy.
+  if (conflict) {
+    const kept = !!rosDraftRead(draftKey);
+    return retryBox('Someone else saved this roster while you were editing.',
+      conflict + (kept ? ' Your changes are kept on this device: re-apply them to the latest copy (only the cells you changed), or reload without them.' : ' Reload to see the current roster.'),
+      kept ? 'Reload without my changes' : 'Reload the month',
+      () => { if (kept) rosDraftClear(draftKey); setReloadKey((k) => k + 1); },
+      kept ? <button className="btn pri sm" onClick={() => { reapplyNext.current = true; setReloadKey((k) => k + 1); }}>Reload and re-apply my changes</button> : null);
+  }
   // Being prepared by the unit's own roster preparers: not shown to anyone else until it is sent.
   if (hiddenDraft) {
     const hd = hiddenDraft;
@@ -1951,19 +2058,53 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
               {(rosStatusNorm(hd.status) === 'returned' ? 'It was returned for correction and is with ' : 'The draft is with ') + (hd.preparedBy || "the unit's in-charge")}
               {hd.updatedAt ? ' (last saved ' + rosWhen(hd.updatedAt) + ')' : ''}. A draft is shown only to the people who prepare this unit's roster and to administrators — you will see it here once it is sent for review.
             </div>
-            {depts.length > 1 && (
-              <div style={{ marginTop: 12 }}>
-                <select value={dept} onChange={(e) => setRoute({ view: 'rosterGrid', dept: e.target.value, year, month })}
+            <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {depts.length > 1 && (
+                <select aria-label="Unit" value={dept} onChange={(e) => setRoute({ view: 'rosterGrid', dept: e.target.value, year, month })}
                   style={{ padding: '7px 10px', borderRadius: 9, border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12 }}>
                   {depts.map((d) => <option key={d} value={d}>{d}</option>)}
                 </select>
-              </div>
-            )}
+              )}
+              <select aria-label="Month" value={month} onChange={(e) => setRoute({ view: 'rosterGrid', dept, year, month: Number(e.target.value) })}
+                style={{ padding: '7px 10px', borderRadius: 9, border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12 }}>
+                {R.MONTHS.map((mn, i) => <option key={mn} value={i}>{mn}</option>)}
+              </select>
+              <select aria-label="Year" value={year} onChange={(e) => setRoute({ view: 'rosterGrid', dept, year: Number(e.target.value), month })}
+                style={{ padding: '7px 10px', borderRadius: 9, border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12 }}>
+                {[...new Set([year - 1, year, year + 1, new Date().getFullYear()])].sort((a, b) => a - b).map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
           </div>
         </div>
       </div>
     );
   }
+
+  /* Going elsewhere (another month or unit, or the print page): save first, so the print shows
+     the latest sheet and nothing waits on the unmount. A failed save keeps the changes on this
+     device (they come back when the month is opened again) — say so before leaving. */
+  const flushThen = async (go, what) => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    if (canEdit && (dirty || inFlight.current)) {
+      const ok = await saveRef.current(null, true);
+      if (ok === false) {
+        const msg = 'Your latest changes could not be saved yet. They are kept on this device and come back when you open ' + dept + ' · ' + monthLabel + ' again.' + (what ? ' ' + what : '');
+        const yes = window.UI && window.UI.confirm ? await window.UI.confirm({ title: 'Not saved yet', message: msg, confirmLabel: 'Continue', cancelLabel: 'Stay here' }) : window.confirm(msg);
+        if (!yes) return;
+      }
+    }
+    go();
+  };
+  const goPeriod = (y, m) => { if (y === year && m === month) return; flushThen(() => setRoute({ view: 'rosterGrid', dept, year: y, month: m })); };
+  const stepMonth = (n) => { const t = new Date(year, month + n, 1); goPeriod(t.getFullYear(), t.getMonth()); };
+  const goDept = (d) => { if (d === dept) return; flushThen(() => setRoute({ view: 'rosterGrid', dept: d, year, month })); };
+  const printNow = () => flushThen(() => setRoute({ view: 'rosterPrint', dept, year, month }), 'The print will show the last saved sheet.');
+  const saveNow = () => { if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; } saveRef.current(null, false); };
+  const nowD = new Date();
+  const yearOpts = [...new Set([nowD.getFullYear() - 2, nowD.getFullYear() - 1, nowD.getFullYear(), nowD.getFullYear() + 1, year])].sort((a, b) => a - b);
+  const isThisMonth = nowD.getFullYear() === year && nowD.getMonth() === month;
+  const selStyle = { boxSizing: 'border-box', padding: '7px 9px', borderRadius: 9, border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.9)', fontFamily: 'inherit', fontSize: 12.5, fontWeight: 700, color: '#16202e', outline: 'none', cursor: 'pointer' };
+  const navBtn = { display: 'inline-grid', placeItems: 'center', width: 32, height: 32, borderRadius: 9, border: '1px solid rgba(125,145,180,.3)', background: 'rgba(255,255,255,.85)', color: '#0072a3', fontSize: 17, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit', lineHeight: 1 };
 
   const showGrid = view === 'month' || view === 'swap';
   const showFooter = view === 'month' || view === 'rules';
@@ -1988,13 +2129,25 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
         <span style={{ position: 'relative', display: 'inline-grid', placeItems: 'center', width: 44, height: 44, borderRadius: 13, background: 'rgba(0,144,202,.16)', color: '#0072a3', flexShrink: 0, boxShadow: '0 0 20px rgba(0,144,202,.28)' }}>
           <Ic d="M3 5h18v16H3zM3 9h18M8 3v4M16 3v4M8 13h3M13 13h3M8 17h3M13 17h3" s={21} sw={1.9} />
         </span>
-        <div style={{ position: 'relative', minWidth: 210 }}>
+        <div style={{ position: 'relative', minWidth: 210, flex: '1 1 260px' }}>
           <div style={{ fontSize: 17, fontWeight: 800, color: '#16202e', letterSpacing: -.2 }}>Duty roster — {dept}</div>
           <div style={{ fontSize: 12, color: '#6c7a8c', marginTop: 2 }}>{monthLabel} · {days} days · {rows.length} staff · prepared by the in-charge, checked by the Manager, approved by the CNS</div>
         </div>
-        <div style={{ flex: 1 }} />
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
-          <select value={dept} onChange={(e) => setRoute({ view: 'rosterGrid', dept: e.target.value, year, month })}
+        {/* The month and year this sheet is for — switch without going back to the unit list. */}
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 6, padding: '5px 6px', borderRadius: 12, background: 'rgba(255,255,255,.7)', border: '1px solid rgba(255,255,255,.95)', boxShadow: '0 4px 14px rgba(31,59,90,.08)' }}>
+          <button type="button" style={navBtn} title="Previous month" aria-label="Previous month" onClick={() => stepMonth(-1)}>‹</button>
+          <select aria-label="Month" value={month} onChange={(e) => goPeriod(year, Number(e.target.value))} style={selStyle}>
+            {R.MONTHS.map((mn, i) => <option key={mn} value={i}>{mn}</option>)}
+          </select>
+          <select aria-label="Year" value={year} onChange={(e) => goPeriod(Number(e.target.value), month)} style={selStyle}>
+            {yearOpts.map((y) => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <button type="button" style={navBtn} title="Next month" aria-label="Next month" onClick={() => stepMonth(1)}>›</button>
+          {!isThisMonth && <button type="button" onClick={() => goPeriod(nowD.getFullYear(), nowD.getMonth())} title="Open this month's roster"
+            style={{ border: 0, background: 'transparent', color: '#0072a3', fontSize: 11.5, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', padding: '0 6px' }}>This month</button>}
+        </div>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', flex: '1 1 260px', justifyContent: 'flex-end' }}>
+          <select aria-label="Unit" value={dept} onChange={(e) => goDept(e.target.value)}
             style={{ boxSizing: 'border-box', padding: '8px 11px', borderRadius: 9, border: '1px solid rgba(125,145,180,.35)', background: 'rgba(255,255,255,.8)', fontFamily: 'inherit', fontSize: 12, color: '#16202e', outline: 'none' }}>
             {depts.map((d) => <option key={d} value={d}>{d}</option>)}
           </select>
@@ -2017,18 +2170,26 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
           : 'Draft with the in-charge — send it to the Manager (or straight to the CNS) when it is ready';
         const histN = (meta.history || []).length;
         return (
-          <div style={{ background: 'rgba(255,255,255,.84)', border: '1px solid rgba(255,255,255,.95)', borderLeft: '4px solid ' + s.color, borderRadius: 14, boxShadow: '0 10px 28px rgba(31,59,90,.1)', padding: '11px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+          // Sticky: it stays at the top of the screen while the grid scrolls, so Save is always in reach.
+          <div className="ros-sticky" style={{ position: 'sticky', top: -22, zIndex: 40, background: 'rgba(255,255,255,.94)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)', border: '1px solid rgba(255,255,255,.95)', borderLeft: '4px solid ' + s.color, borderRadius: 14, boxShadow: '0 10px 28px rgba(31,59,90,.14)', padding: '11px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
             <div style={{ minWidth: 220, flex: 1 }}>
               <div style={{ fontSize: 12.8, fontWeight: 700, color: '#16202e' }}>{line}</div>
               <div style={{ fontSize: 11, color: '#6c7a8c', marginTop: 2 }}>
                 {rev ? 'Saved · rev ' + rev + (meta.updatedBy ? ' · by ' + meta.updatedBy : '') + (meta.updatedAt ? ' · ' + rosWhen(meta.updatedAt) : '') : 'Not saved yet'}
-                {dirty ? ' · saving…' : ''}
+                {busy ? ' · saving…' : dirty ? ' · unsaved changes (kept safe on this device)' : ''}
               </div>
             </div>
             <button className="btn sm" type="button" onClick={() => setPanel('history')}>History{histN ? ' · ' + histN : ''}</button>
             <button className="btn sm" type="button" disabled={!rev} onClick={() => setPanel('versions')}>Versions</button>
-            <button className="btn sm" type="button" onClick={() => setRoute({ view: 'rosterPrint', dept, year, month })}>Print</button>
-            {canEdit && <button className="btn sm" type="button" disabled={busy || !dirty} onClick={() => { if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; } save(null, false); }}>Save draft</button>}
+            <button className="btn sm" type="button" onClick={printNow}>Print</button>
+            {canEdit && (
+              <button type="button" className={'ros-save' + (dirty || busy ? ' on' : '')} disabled={busy || !dirty} onClick={saveNow}
+                title={dirty ? 'Save the draft now (it also saves by itself a moment after each change)' : 'Everything on screen is saved'}>
+                {busy ? <React.Fragment><span className="ros-save-spin" />Saving…</React.Fragment>
+                  : dirty ? <React.Fragment><Ic d="M5 3h11l3 3v15H5zM8 3v6h8V3M8 21v-7h8v7" s={14} sw={2} />Save draft</React.Fragment>
+                  : <React.Fragment><Ic d="M5 12l5 5L20 7" s={14} sw={2.4} />All changes saved</React.Fragment>}
+              </button>
+            )}
             {sheetCan && sheetCan.send && totalViol > 0 && (
               <span onClick={goRules} title="Sending is still allowed — the reviewer sees the same warnings" style={{ fontSize: 11, fontWeight: 700, color: '#a92c42', cursor: 'pointer' }}>{totalViol} rule warning{totalViol === 1 ? '' : 's'}</span>
             )}
@@ -2037,6 +2198,34 @@ function RosterGrid({ staffStore, scope, dept, year, month, setRoute, onSaved, i
           </div>
         );
       })()}
+      {/* Unsaved changes found on this device that could not be put back by themselves. */}
+      {restore && (
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap', background: 'linear-gradient(90deg,rgba(224,138,30,.14),rgba(255,255,255,.8))', border: '1px solid rgba(224,138,30,.45)', borderLeft: '4px solid #e08a1e', borderRadius: 12, padding: '10px 14px', marginBottom: 14 }}>
+          <Ic d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z" s={17} sw={2} />
+          <div style={{ flex: 1, minWidth: 240, fontSize: 12.5, color: '#3c2a07' }}>
+            <b>Unsaved changes from {rosWhen(restore.at)} are kept on this device.</b>{' '}
+            {restore.blocked ? 'They cannot be applied while the sheet is not with you for editing.' : 'The roster was saved by someone else since. Re-apply puts only the cells you changed onto the latest copy.'}
+          </div>
+          {!restore.blocked && <button type="button" className="btn pri sm" onClick={() => {
+            const b = restore.base || {}, st = restore.state || {};
+            setGrid((g) => rosReapply(b.grid, st.grid, g));
+            setOncall((o) => rosReapply(b.oncall, st.oncall, o));
+            setAltLeave((a) => rosReapply(b.altLeave, st.altLeave, a));
+            setRestore(null); setDirty(true);
+            rosToast('Your changes were re-applied and are being saved.');
+          }}>Re-apply my changes</button>}
+          <button type="button" className="btn sm" onClick={async () => {
+            const yes = window.UI && window.UI.confirm ? await window.UI.confirm({ title: 'Discard these changes?', message: 'The unsaved changes kept on this device for ' + dept + ' · ' + monthLabel + ' will be removed. The saved roster is not touched.', confirmLabel: 'Discard', danger: true }) : window.confirm('Discard these changes?');
+            if (!yes) return;
+            rosDraftClear(draftKey); setRestore(null);
+          }}>Discard</button>
+        </div>
+      )}
+      {/* Print, always in reach — bottom-right, above the "saved" toast. */}
+      <button type="button" className="ros-fab" onClick={printNow} title={'Print ' + dept + ' · ' + monthLabel}>
+        <Ic d="M6 9V3h12v6M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v7H6z" s={18} sw={2} />
+        <span>Print</span>
+      </button>
       {stNorm === 'returned' && <RosReturnedBanner meta={meta} />}
       <RosMarkList marks={marks} rows={rows} year={year} month={month} canDone={canEdit} onDone={markDone} />
       {!canEdit && !loadError && !conflict && ROS_EDITABLE.indexOf(stNorm) >= 0 && (
@@ -3422,7 +3611,7 @@ function rosSignNames(doc, signers) {
    fitA4: each page block is scaled down, if it has to be, so it prints on ONE A4 landscape
    page (with separatePages: one page for nurses, one for PCAs). Both default to off, so every
    other caller (the review screen) prints exactly as before. */
-function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, signPeople, colourDesign, summary, cards, legend, pcaNewPage, separatePages, fitA4, printedBy }) {
+function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, signPeople, colourDesign, summary, cards, legend, pcaNewPage, separatePages, fitA4, watermark, printedBy }) {
   const official = !colourDesign;
   const apart = !!(separatePages || pcaNewPage);
   const days = R.daysIn(year, month);
@@ -3651,13 +3840,12 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
     + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:10px;page-break-inside:avoid;break-inside:avoid}.signs>div{padding:0 2px}.signs .sp{height:30px}'
     + '.signs .ln{border-top:1pt solid #000;padding-top:3px}.signs span{display:block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase}.signs b{display:block;font-size:9pt}.signs em{display:block;font-style:normal;font-size:7.5pt;color:#333}.signs .dt{margin-top:5px;font-size:7.5pt}'
     + '.end{margin-top:6px;padding-top:3px;border-top:.75pt solid #000;display:flex;justify-content:space-between;font-size:7pt}';
-  const stLabel = (ROS_STATUS[rosStatusNorm(doc ? doc.status : null)] || {}).label || 'Draft';
   // `group`: which staff a separate page holds ('' = the whole unit on one sheet).
   const headFor = (group) => (official
     ? '<header class="lh"><div><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></div>'
       + '<div class="lhm"><div class="org">UNICO Hospitals PLC</div><div class="dv">Nursing Services</div><h1>DUTY ROSTER</h1>' + (group ? '<div class="grpn">' + rosEsc(group) + '</div>' : '') + '</div>'
       + '<div class="lhr"><table class="meta"><tr><th>Department</th><td>' + rosEsc(dn) + '</td></tr><tr><th>Month</th><td>' + rosEsc(R.MONTHS[month] + ' ' + year) + '</td></tr>'
-      + '<tr><th>Period</th><td>' + rosEsc(period) + '</td></tr><tr><th>Status</th><td>' + rosEsc(stLabel + (doc && doc.revision ? ' · Rev ' + doc.revision : '')) + '</td></tr></table></div></header><div class="rule"></div>'
+      + '<tr><th>Period</th><td>' + rosEsc(period) + '</td></tr></table></div></header><div class="rule"></div>'
     : '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>'
       + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>'
       + '<div class="rtx"><div class="kind">' + rosEsc(group ? 'Nursing Services · ' + group : 'Nursing Services') + '</div><div class="dp">' + rosEsc(dn) + '</div></div></header>');
@@ -3673,7 +3861,22 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
      each with its own header, table, alternative leave, legend (its own codes), notes and
      signatures — the second starting on a new page. The summary cards describe the whole unit,
      so they print once, on the first page. */
-  const pageOf = (inner, cls) => '<section class="pg' + (cls ? ' ' + cls : '') + '">' + inner + '</section>';
+  /* Department watermark (opt-in per browser, on by default on the print page): the unit's name in
+     large letters, a faint gradient behind the top of every page, so a pinned or filed sheet is
+     known at a glance. An inline SVG gradient — it prints and survives the PDF (html2canvas),
+     where CSS gradient text does not — absolutely placed, so it adds no height (Fit to A4). */
+  let wmN = 0;
+  const wmHtml = () => {
+    if (!watermark) return '';
+    const name = String(dn || '').toUpperCase();
+    const id = 'wmg' + (++wmN);
+    const fs = Math.max(40, Math.min(112, Math.floor(1900 / Math.max(6, name.length))));
+    const stops = official ? '<stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#8a8a8a"/>' : '<stop offset="0" stop-color="#0072a3"/><stop offset=".6" stop-color="#1795c6"/><stop offset="1" stop-color="#3ab5a7"/>';
+    return '<div class="wm" aria-hidden="true"><svg viewBox="0 0 1000 130" preserveAspectRatio="xMidYMid meet" width="100%" height="100%"><defs><linearGradient id="' + id + '" x1="0" y1="0" x2="1" y2="0">' + stops + '</linearGradient></defs>'
+      + '<text x="500" y="' + Math.round(65 + fs * 0.36) + '" text-anchor="middle" font-family="Arial Black,Arial,Helvetica,sans-serif" font-weight="900" font-size="' + fs + '" letter-spacing="' + (name.length > 14 ? 2 : 8) + '" fill="url(#' + id + ')" fill-opacity="' + (official ? '0.075' : '0.11') + '"'
+      + (name.length > 16 ? ' textLength="960" lengthAdjust="spacingAndGlyphs"' : '') + '>' + rosEsc(name) + '</text></svg></div>';
+  };
+  const pageOf = (inner, cls) => '<section class="pg' + (cls ? ' ' + cls : '') + '">' + wmHtml() + inner + '</section>';
   const html = split
     ? pageOf(headFor('Nursing staff') + cardsHtml + tableFor(nurses, 'Nursing staff · ' + nurses.length, 'gn') + alFor(nurses) + footFor(nurses))
       + pageOf(headFor('Patient care assistants') + '<div style="height:7px"></div>' + tableFor(pcas, 'Patient care assistants · ' + pcas.length, 'gp') + alFor(pcas) + footFor(pcas), 'np')
@@ -3682,7 +3885,7 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
      the 8 mm margins = 281 mm) and, if it is taller than the printable height (210 − 16 = 194 mm,
      less 2 mm to spare), zoomed down until it fits — on screen and in print alike. Re-run before
      printing, after the fonts have loaded. The PDF download does the same by scaling its image. */
-  const pageCss = '.pg.np{break-before:page;page-break-before:always}.grpn{margin-top:2px;font-size:9pt;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}'
+  const pageCss = '.pg{position:relative;z-index:0}.wm{position:absolute;left:0;right:0;top:-2px;height:36mm;z-index:-1;pointer-events:none}.wm svg{display:block}.pg.np{break-before:page;page-break-before:always}.grpn{margin-top:2px;font-size:9pt;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}'
     + (fitA4 ? '.pg{break-inside:avoid;page-break-inside:avoid;margin:0 auto}' : '');
   const fitJs = !fitA4 ? '' : '<script>(function(){var MM=96/25.4,W=Math.floor(281*MM),H=Math.floor(192*MM);'
     + 'function fit(){var ps=document.querySelectorAll(".pg");for(var i=0;i<ps.length;i++){var p=ps[i];p.style.zoom="";p.style.width=W+"px";'
@@ -3698,6 +3901,68 @@ function rosPrintHtml({ dept, deptName, year, month, doc, rows, grid, signers, s
 const ROS_PRINT_OPT_KEY = 'unicoRosterPrintOpts.v2';
 // Monthly grid "Fit month to screen" (this browser only; deliberately not an `unico_` key).
 const ROS_FIT_KEY = 'unicoRosterFitMonth.v1';
+
+/* ---- DRAFT SAFETY on this device (2026-11-22) -------------------------------------------
+   Every unsaved change to a sheet is also kept in this browser until the server confirms the
+   save, so a reload (a new version of the app goes live and the page reloads), a closed tab,
+   a dropped connection or a save conflict never loses it. Per person and per sheet; never an
+   `unico_` key (those are synced, shared and swept on load). */
+const rosUserKey = () => String((window.__UNICO_USER__ && window.__UNICO_USER__.username) || 'local').toLowerCase();
+const rosDraftKey = (dept, y, m) => 'unicoRosterDraft.v1|' + rosUserKey() + '|' + dept + '|' + y + '|' + m;
+function rosDraftRead(k) { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v && typeof v === 'object' && v.state ? v : null; } catch (e) { return null; } }
+function rosDraftWrite(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
+function rosDraftClear(k) { try { localStorage.removeItem(k); } catch (e) { /* private window */ } }
+/* Put MY changes onto a newer copy, cell by cell: every person/day where my sheet differs from
+   the copy I started from is written over the fresh server copy; everything else is theirs. */
+function rosReapply(base, mine, server) {
+  const out = JSON.parse(JSON.stringify(server || {}));
+  const b0 = base || {}, m0 = mine || {};
+  new Set(Object.keys(b0).concat(Object.keys(m0))).forEach((id) => {
+    const b = b0[id] || {}, m = m0[id] || {};
+    new Set(Object.keys(b).concat(Object.keys(m))).forEach((d) => {
+      if (JSON.stringify(b[d]) === JSON.stringify(m[d])) return;
+      const row = Object.assign({}, out[id] || {});
+      if (m[d] == null || m[d] === '') delete row[d]; else row[d] = m[d];
+      out[id] = row;
+    });
+  });
+  return out;
+}
+const rosSameJson = (a, b) => JSON.stringify(a || {}) === JSON.stringify(b || {});
+
+/* ---- the last roster this person had open (unit, month, tab), to reopen it ---- */
+const rosLastKey = () => 'unicoRosterLastView.v1|' + rosUserKey();
+function rosLastView() {
+  try {
+    const v = JSON.parse(localStorage.getItem(rosLastKey()) || 'null');
+    if (!v || !v.dept || !Number.isInteger(v.year) || !Number.isInteger(v.month) || v.month < 0 || v.month > 11) return null;
+    return v;
+  } catch (e) { return null; }
+}
+function rosRememberView(v) { try { localStorage.setItem(rosLastKey(), JSON.stringify(Object.assign({}, v, { at: Date.now() }))); } catch (e) { /* private window */ } }
+
+/* ---- the line under a signer's name: the PERSON's own designation, the same in every box ----
+   One person can sign two boxes (In-charge and Manager of the same unit). The line follows the
+   person, not the box: their staff record (this browser's register), else what the server read
+   for any Setup signer of that name (staff record, or the account's own designation), and only
+   when nothing is known, the box's role. */
+function rosPersonLine(name, signers, people, fallback) {
+  const N = window.UNICO_NAME;
+  const norm = (v) => (N && N.normName ? N.normName(v) : String(v || '').trim().toLowerCase());
+  const k = norm(name);
+  if (!k) return { text: fallback, own: false };
+  const live = (people || []).filter((e) => e && !e.former && e.is_active !== false && e.name);
+  let e = live.find((x) => norm(x.name) === k);
+  if (!e && N && N.nameScore) {
+    const near = live.filter((x) => N.nameScore(x.name, name) >= (N.SAME_NAME || 0.9));
+    if (near.length === 1) e = near[0];
+  }
+  if (e && e.designation) return { text: rosSignLine(e) || fallback, own: true };
+  const sg = signers || {};
+  const s = [sg.incharge, sg.manager, sg.cns].find((x) => x && x.desig && norm(x.name) === k);
+  if (s) return rosSignerLine(s.name, s, fallback);
+  return { text: fallback, own: false };
+}
 const ROS_PRINT_OPT_OLD = 'unico_roster_print_opts_v1';
 // The sheet's added staff: its own plus those carried from earlier months (month GET).
 const rosSheetGuests = (r) => ({ ...((r && r.guestsCarried) || {}), ...((r && r.roster && r.roster.guests) || {}) });
@@ -3745,7 +4010,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const [can, setCan] = useState(null);
   const [loading, setLoading] = useState(true);
   const [opt, setOpt] = useState(() => {
-    const d = { colourDesign: false, summary: true, cards: false, legend: true, separatePages: false, fitA4: false };
+    const d = { colourDesign: false, summary: true, cards: false, legend: true, separatePages: false, fitA4: false, watermark: true };
     // The old "PCAs on a new page" tick becomes "Nurses and PCAs on separate pages".
     const norm = (o) => { const x = { ...d, ...o }; if (x.pcaNewPage) x.separatePages = true; delete x.pcaNewPage; return x; };
     try {
@@ -3779,17 +4044,15 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
   const signPeople = useMemo(() => {
     const def = rosSignNames(doc, signers);
     const people = staffStore.staff || [];
-    const byName = (nm) => { const k = String(nm || '').trim().toLowerCase(); return k ? people.find((e) => e && !e.former && e.is_active !== false && String(e.name || '').trim().toLowerCase() === k) : null; };
     const role = { prepared: 'In-charge, ' + deptName, checked: 'Nurse Manager', approved: 'Chief of Nursing Services' };
     const out = {};
-    const setupOf = { prepared: signers.incharge, checked: signers.manager, approved: signers.cns };
     ['prepared', 'checked', 'approved'].forEach((k) => {
-      const e = picks[k] || byName(def[k]);
+      // Picked here from the register: that person's own line.
+      const e = picks[k];
       if (e) { out[k] = { name: e.name || '', line: rosSignLine(e) || role[k] }; return; }
-      // Not found by name in this browser's register (e.g. no staff access): the designation the
-      // server read from the person's own record — the same line as the on-screen sign-off.
-      const own = rosSignerLine(def[k], setupOf[k], role[k]);
-      out[k] = { name: def[k], line: own.text };
+      // Otherwise the person's OWN designation, found the same way in every box (rosPersonLine) —
+      // one person signing as In-charge and as Manager prints one line, twice, not two roles.
+      out[k] = { name: def[k], line: rosPersonLine(def[k], signers, people, role[k]).text };
     });
     return out;
   }, [doc, signers, picks, staffStore.staff, deptName]);
@@ -3920,6 +4183,7 @@ function RosterPrint({ staffStore, dept, year, month, setRoute }) {
           {tog('legend', 'Shift legend')}
           {view.rows.some((r) => r.pca) && view.rows.some((r) => !r.pca) && tog('separatePages', 'Nurses and PCAs on separate pages')}
           {tog('fitA4', 'Fit to one A4 page')}
+          {tog('watermark', 'Department watermark')}
           {mayPrint
             ? <React.Fragment>
                 <button className="btn" disabled={pdfBusy} onClick={downloadPdf} title="Download this roster as a PDF file">{pdfBusy ? 'Preparing PDF…' : 'Download PDF'}</button>
@@ -3956,11 +4220,22 @@ function RosterView({ view, dept, year, month, setRoute }) {
   const now = new Date();
   const y = Number(year) || now.getFullYear();
   const m = Number.isInteger(Number(month)) ? Number(month) : now.getMonth();
+  /* Entering Duty Roster from elsewhere (the sidebar, Home, a fresh page) reopens the roster this
+     person last had open — the same unit, month and tab. Inside the section (the Rosters tab,
+     "Back to my units") the unit list stays, so nobody is trapped on a sheet. Decided once, when
+     this screen mounts, from the view the person came from. */
+  const [resume] = useState(() => {
+    if (view !== 'rosterHome' || dept) return null;
+    const prev = String(window.__unicoCurView || '');
+    if (prev.indexOf('roster') === 0 || prev === 'manpower') return null;
+    return rosLastView();
+  });
 
   const inner = (() => {
     // The unit map (scope.canon) decides who is on which unit: draw nothing before it is known,
     // or a "Neonatal ICU" nurse would flash on a unit of her own and off NICU.
     if (scope.loading) return <div style={{ display: 'grid', placeItems: 'center', height: '30vh', color: '#6c7a8c', fontSize: 13 }}>Loading the duty roster…</div>;
+    if (resume && (scope.inScope(resume.dept) || (scope.can && scope.can.review))) return <RosResume to={resume} setRoute={setRoute} />;
     if (view !== 'rosterHome' && !dept) return <RosterHome index={index} staffStore={staffStore} scope={scope} setRoute={setRoute} />;
     // A unit outside the assignment. The server refuses it anyway (403 on every roster
     // route), but a bookmark or a stale link would otherwise land on an editor that
@@ -3995,6 +4270,12 @@ function RosterNoAccess({ dept, setRoute }) {
   );
 }
 
+// Opens the remembered roster (RosterView's `resume`) — a route change, so Back works as usual.
+function RosResume({ to, setRoute }) {
+  useEffect(() => { setRoute({ view: 'rosterGrid', dept: to.dept, year: to.year, month: to.month }); }, []);   // eslint-disable-line
+  return <div style={{ display: 'grid', placeItems: 'center', height: '30vh', color: '#6c7a8c', fontSize: 13 }}>Opening {to.dept} · {R.MONTHS[to.month]} {to.year}…</div>;
+}
+
 window.RosterView = RosterView;
 
 /* The roster's shared pieces, for the other screens of the module (review inbox, staff
@@ -4007,7 +4288,7 @@ window.UNICO_ROSTER_KIT = {
   ROS_STATUS, ROS_ACTIONS, ROS_HIST_LABEL, ROS_EDITABLE, statusNorm: rosStatusNorm,
   RosStatusChip, RosDecisionButtons, RosHistoryTimeline, RosReturnedBanner, RosDrawer, RosSheetTable, RosSignOff, RosVersions,
   rulesOf: rosRulesOf, findingsOf: rosFindingsOf, rowsFrom: rosRowsFrom, sheetGuests: rosSheetGuests, printHtml: rosPrintHtml,
-  deptName: rosDeptName, signNames: rosSignNames, signLine: rosSignLine, signerLine: rosSignerLine, RosMarkList,
+  deptName: rosDeptName, signNames: rosSignNames, signLine: rosSignLine, signerLine: rosSignerLine, personLine: rosPersonLine, RosMarkList,
   OC_BADGE: ROS_OC_BADGE, AL_DOT: ROS_AL_DOT, MARK_CORNER: ROS_MARK_CORNER, date: rosDate,
   bColor: rosBColor, MONO: ROS_MONO,
 };

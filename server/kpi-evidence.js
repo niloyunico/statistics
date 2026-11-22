@@ -195,6 +195,9 @@ const isPatientDays = (def) => /patient[\s-]*days?/i.test(String((def && def.den
 /* A KPI measured every N months: the due month's evidence is its whole period — each month's
    evidence (the same evidenceFor, month by month), pooled per unit. A unit "did not report" when
    it has no figure anywhere in the period. Months that are not due owe nothing and check nothing. */
+// Checks that mean "a figure is owed" — never raised for the month still running.
+const RUNNING_QUIET = ['unit-missing', 'partial', 'den-zero', 'no-data'];
+
 function periodEvidence(ctx, def, ym, saved, cfg, o) {
   const p = K.periodOf(def, ym, cfg);
   const linked = !!(def.source && def.source.indId);
@@ -240,7 +243,8 @@ function periodEvidence(ctx, def, ym, saved, cfg, o) {
 
   const checks = [];
   const unitSubject = (u) => ({ key: u.key, num: r4(u.num), den: r4(u.den), value: r4(u.value), source: u.source });
-  const add = (code, text, u, subject) => checks.push({ code, level: K.checkLevel(code), text, unit: u ? u.key : '', unitName: u ? u.name : '',
+  const runningP = !!(ctx.closed && p.to > ctx.closed);
+  const add = (code, text, u, subject) => (runningP && RUNNING_QUIET.indexOf(code) >= 0) ? null : checks.push({ code, level: K.checkLevel(code), text, unit: u ? u.key : '', unitName: u ? u.name : '',
     fingerprint: fingerprint({ code, kpiId: def.id, ym, s: subject || (u ? unitSubject(u) : totals) }) });
   if (linked && autoFill && !live) {
     // each month's own unit checks, named by month (an acknowledgement belongs to that month)
@@ -279,6 +283,12 @@ function evidenceFor(ctx, def, ym, saved, cfg, opts) {
   const live = saved && !saved.removedAt ? saved : null;
   const units = [];
   let system = null, sourceRecord = null;
+  /* The month still running owes nothing yet: a unit without a figure is "not sent yet", never an
+     error. A FINISHED month of a lower-is-better KPI counts a unit with no figure as 0 (server/
+     kpi-link.js lowerBetter) — shown, not flagged. Higher-is-better KPIs keep the strict rule. */
+  const running = !!(ctx.closed && ym > ctx.closed);
+  const zeroRule = linked && link.lowerBetter(def) && rule !== 'hh' && rule !== 'docaudit';
+  const noFigure = () => (running ? 'pending' : zeroRule && system ? 'counted-zero' : 'missing');
 
   if (linked) {
     system = (link.linkedMonthlyFrom(ctx, def, [ym]) || {})[ym] || null;
@@ -323,14 +333,15 @@ function evidenceFor(ctx, def, ym, saved, cfg, opts) {
         const overlay = !!(meta.overlay.mNum[mk] || meta.overlay.mDen[mk] || meta.overlay.months[mk]);
         let source = 'approved';
         if (notObs) source = 'not-observed';
-        else if (!cell) source = 'missing';
+        else if (!cell) source = noFigure();
+        else if (cell.source === 'zero') source = 'zero';
         else if (cell.source === 'partial') source = has(rawDen) && Number(rawDen) === 0 ? 'den-zero' : 'partial';
         else if (overlay) source = 'overlay-edit';
         else if (cell.carriedFrom) source = 'carried-den';
-        const usable = !!cell && cell.source !== 'partial' && has(cell.value);
+        const usable = (!!cell && cell.source !== 'partial' && has(cell.value)) || source === 'counted-zero';
         const row = {
           key: String(area.key), name: area.name, deptId: area.deptId || null, indicator: ind.canonicalName || ind.name,
-          num: cell ? cell.num : (has(rawNum) ? Number(rawNum) : null), den: cell ? cell.den : (has(rawDen) ? Number(rawDen) : null), value: cell ? cell.value : null,
+          num: cell ? cell.num : source === 'counted-zero' ? 0 : (has(rawNum) ? Number(rawNum) : null), den: cell ? cell.den : (has(rawDen) ? Number(rawDen) : null), value: cell ? cell.value : source === 'counted-zero' ? 0 : null,
           source, used: usable && (rule === 'hospital' || !HH.isHospital(area) || (system && system.source === 'hospital')),
           approvedAt: meta.approvedAt[mk] || null,
           submission: usable && !overlay ? matchSubmission(subs, meta.approvedAt[mk], rawNum, rawDen) : null,
@@ -356,12 +367,17 @@ function evidenceFor(ctx, def, ym, saved, cfg, opts) {
   const expected = linked && started ? expectedUnits(ctx, def, ym) : [];
   const expKeys = new Set(expected.map((u) => u.key));
   units.forEach((u) => { u.expected = expKeys.has(u.key); });
-  expected.forEach((e) => { if (!units.some((u) => u.key === e.key)) units.push({ key: e.key, name: e.name, deptId: e.deptId, num: null, den: null, value: null, source: 'missing', used: false, expected: true }); });
+  expected.forEach((e) => {
+    if (units.some((u) => u.key === e.key)) return;
+    const src = noFigure();
+    units.push({ key: e.key, name: e.name, deptId: e.deptId, num: src === 'counted-zero' ? 0 : null, den: null, value: src === 'counted-zero' ? 0 : null, source: src, used: src === 'counted-zero' && autoFill && !live, expected: true });
+  });
 
   /* ---- checks ---- */
   const checks = [];
   const unitSubject = (u) => ({ key: u.key, num: r4(u.num), den: r4(u.den), value: r4(u.value), source: u.source });
   const add = (code, text, u, subject) => {
+    if (running && RUNNING_QUIET.indexOf(code) >= 0) return;   // the month is not over: nothing is owed yet
     const level = K.checkLevel(code);
     checks.push({ code, level, text, unit: u ? u.key : '', unitName: u ? u.name : '', fingerprint: fingerprint({ code, kpiId: def.id, ym, s: subject || (u ? unitSubject(u) : totals) }) });
   };

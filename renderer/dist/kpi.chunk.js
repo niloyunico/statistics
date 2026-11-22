@@ -1202,7 +1202,11 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     'den-zero': ['Denominator 0', '#a3172f', '#fde4e8'],
     'carried-den': ['Headcount carried', '#8a5a00', '#fff1d6'],
     manual: ['Entered', '#4b3fb0', '#efebfd'],
-    'doc-audit': ['Audits', '#1f4f8a', '#e6eefb']
+    'doc-audit': ['Audits', '#1f4f8a', '#e6eefb'],
+    pending: ['Not sent yet', '#5b6878', '#eef2f6'],
+    'counted-zero': ['No report · counted 0', '#5b6878', '#eef2f6'],
+    zero: ['0 events', '#14713f', '#e7f6ed'],
+    'zero-assumed': ['No reports · counted 0', '#5b6878', '#eef2f6']
   };
   const EvSrc = ({
     s
@@ -1296,7 +1300,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         style: {
           color: bad ? '#a3172f' : 'var(--ink)'
         }
-      }, u.name), u.expected ? React.createElement("small", null, "expected to report") : !u.used ? React.createElement("small", null, "not counted") : null), React.createElement("td", {
+      }, u.name), u.source === 'pending' ? React.createElement("small", null, "month in progress") : u.source === 'counted-zero' ? React.createElement("small", null, "no report \u2014 counted as 0") : u.expected ? React.createElement("small", null, "expected to report") : !u.used ? React.createElement("small", null, "not counted") : null), React.createElement("td", {
         className: "n"
       }, K.has(u.num) ? u.num : '—'), def.formula !== 'count' && def.formula !== 'direct' && React.createElement("td", {
         className: "n"

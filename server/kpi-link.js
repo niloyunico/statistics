@@ -112,7 +112,32 @@ async function loadContext(yms, deps) {
     const nm = map && q.deptId && map.byId && map.byId[q.deptId] && map.byId[q.deptId].name;
     return { key: q.key, name: nm || q.name || q.key, qualityName: nm && nm !== q.name ? q.name : undefined, deptId: q.deptId, indicators: inds };
   });
-  return { areas, byName, months, wide, monKeys, docAudit: docAudit || {} };
+  // The clock (tests pass deps.now): the running month owes nothing yet, a finished one does.
+  const nowMs = typeof d.now === 'function' ? d.now() : Date.now();
+  return { areas, byName, months, wide, monKeys, docAudit: docAudit || {}, now: nowMs, closed: K.lastClosedMonth(nowMs) };
+}
+
+/* EMPTY COUNTS AS 0 (2026-11-22, the KPI team's decision) — for LOWER-is-better KPIs only (falls,
+   pressure ulcers, VAP, CAUTI, CLABSI, SSI, needle-stick, complaints, turnover), where 0 means
+   "nothing happened":
+     - a unit that reports 0 events but no denominator is a ZERO-EVENT unit: its rate is 0, not
+       "denominator missing" (a unit WITH events still needs the denominator);
+     - in a FINISHED month, a unit with no figure at all counts as 0 events; if no unit reported,
+       the month's figure is 0 ('zero-assumed') — but only from the month the indicator was first
+       ever reported by any unit, so an indicator nobody collects is never invented as zeros.
+   Higher-is-better KPIs (compliance %, training, satisfaction) are untouched: 0 there would read
+   as a failure, not as "nothing happened". */
+const lowerBetter = (def) => !!def && def.goalDirection === 'lower_is_better';
+function firstSeenYm(list) {
+  let first = null;
+  (list || []).forEach(({ ind }) => {
+    [ind.mNum, ind.months].forEach((m) => Object.keys(m || {}).forEach((mk) => {
+      if (!has(m[mk])) return;
+      const ym = K.toYm(mk);
+      if (K.isMonth(ym) && (!first || ym < first)) first = ym;
+    }));
+  });
+  return first;
 }
 
 const isOpd = (area, ind) => norm(area.key) === 'opd' || area.deptId === 'opd' || /^out[\s-]*patient/i.test((ind && ind.name) || '');
@@ -142,7 +167,8 @@ function carriedDen(ind, mk, ctx) {
 
 /* One month across the given areas. Returns {num, den, value, source, areas, incomplete} or null. */
 function poolMonth(def, mk, list, ctx, opts) {
-  let n = 0, d = 0, used = 0, partial = 0, f = null, carried = null;
+  let n = 0, d = 0, used = 0, partial = 0, zeros = 0, f = null, carried = null;
+  const zeroOk = lowerBetter(def);
   const vals = [];
   list.forEach(({ area, ind }) => {
     if (ind.mNotObserved && ind.mNotObserved[mk]) return;
@@ -155,6 +181,7 @@ function poolMonth(def, mk, list, ctx, opts) {
       return;
     }
     if (has(nn) && Number(dd) > 0) { n += Number(nn); d += Number(dd); used++; }
+    else if (has(nn) && zeroOk && Number(nn) === 0) zeros++;   // 0 events, no denominator: a rate of 0
     else if (has(nn)) partial++;
     else if (has(v)) vals.push(Number(v));
   });
@@ -163,6 +190,7 @@ function poolMonth(def, mk, list, ctx, opts) {
   if (f === 'count' || f === 'direct') return used ? { num: n, den: null, value: n, source: src, areas: used } : null;
   if (d > 0) return { num: K.round(n, 4), den: K.round(d, 4), value: K.computeValue(f, n, d), source: src, areas: used, incomplete: partial > 0 || undefined, carriedFrom: carried || undefined };
   if (partial) return { num: n, den: null, value: null, source: 'partial', areas: partial };
+  if (zeros) return { num: 0, den: null, value: 0, source: 'zero', areas: zeros, zero: true };
   if (vals.length) return { num: null, den: null, value: K.round(vals.reduce((a, x) => a + x, 0) / vals.length), source: src, areas: vals.length, valueOnly: true };
   return null;
 }
@@ -197,6 +225,7 @@ function linkedMonthlyFrom(ctx, def, yms) {
   const pairs = (areas) => areas.map((area) => ({ area, ind: findInd(area, def, ctx) }))
     .filter((p) => p.ind && !(rule === 'fall' && isOpd(p.area, p.ind)));
   const hosp = pairs(hospital), unitPairs = rule === 'hospital' ? [] : pairs(units);
+  const seenFrom = lowerBetter(def) ? firstSeenYm(rule === 'hospital' ? hosp : unitPairs.concat(hosp)) : null;
   months.forEach((ym) => {
     const mk = K.toMonKey(ym);
     let cell = null;
@@ -206,6 +235,8 @@ function linkedMonthlyFrom(ctx, def, yms) {
       // No unit reported it: a hospital-level reading (if one exists) stands in.
       if (!cell) cell = poolMonth(def, mk, hosp, ctx, { carry: true, source: 'hospital' });
     }
+    // A finished month nobody reported, for a lower-is-better KPI: counted as 0 (see lowerBetter).
+    if (!cell && seenFrom && ym >= seenFrom && ctx.closed && ym <= ctx.closed) cell = { num: 0, den: null, value: 0, source: 'zero-assumed', areas: 0, zero: true };
     if (cell) out[ym] = cell;
   });
   return out;
@@ -250,4 +281,4 @@ function indicatorCatalog(ctx) {
 const areaList = (ctx) => ctx.areas.map((a) => ({ key: a.key, name: a.name, deptId: a.deptId || null, hospital: HH.isHospital(a) }))
   .sort((x, y) => (x.hospital - y.hospital) || String(x.name).localeCompare(String(y.name)));
 
-module.exports = { DOC_AUDIT_IND, loadContext, linkedMonthlyFrom, periodSystem, linkedMonthly, linkedMonthlyAll, indicatorCatalog, areaList, ruleOf, RULES, mergeInd, findInd, isOpd, poolMonth, carriedDen, formulaOf, norm };
+module.exports = { lowerBetter, firstSeenYm, DOC_AUDIT_IND, loadContext, linkedMonthlyFrom, periodSystem, linkedMonthly, linkedMonthlyAll, indicatorCatalog, areaList, ruleOf, RULES, mergeInd, findInd, isOpd, poolMonth, carriedDen, formulaOf, norm };

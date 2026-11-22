@@ -237,7 +237,7 @@ function rosInjectCss() {
   if (typeof document === 'undefined' || document.getElementById('ros-style')) return;
   const el = document.createElement('style');
   el.id = 'ros-style';
-  el.textContent = ['@keyframes rosPop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}', '@keyframes rosOrbFloat{from{transform:translate(0,0) scale(1)}to{transform:translate(160px,110px) scale(1.18)}}', '@keyframes rosGrowW{from{width:0}}', '@keyframes rosSlideIn{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}', '@keyframes rosSlideInY{from{opacity:0;transform:translate(26px,-50%)}to{opacity:1;transform:translate(0,-50%)}}', '@keyframes rosPopCard{0%{opacity:0;transform:scale(.9) translateY(10px)}100%{opacity:1;transform:none}}', '.ros-kpi:hover{transform:translateY(-3px)!important;box-shadow:0 20px 46px rgba(31,59,90,.18)!important}', '.ros-trow:hover{background:rgba(39,168,219,.07)!important}', '.ros-vio:hover{background:rgba(210,58,82,.2)!important}', '.ros-auto:hover{background:rgba(106,82,212,.18)!important}', '.ros-treerow:hover{background:rgba(0,144,202,.08)!important}', '.ros-navbtn:hover{background:#fff!important}', '.ros-goday:hover{background:rgba(0,144,202,.18)!important}', '.ros-lift:hover{transform:translateY(-1px)}', '.ros-x:hover{background:rgba(125,145,180,.16)!important;color:#16202e!important}', '.ros-xred:hover{background:rgba(210,58,82,.12)!important;color:#a92c42!important}', '.ros-decl:hover{background:rgba(210,58,82,.1)!important}'].join('\n');
+  el.textContent = ['@keyframes rosPop{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}', '@keyframes rosOrbFloat{from{transform:translate(0,0) scale(1)}to{transform:translate(160px,110px) scale(1.18)}}', '@keyframes rosGrowW{from{width:0}}', '@keyframes rosSlideIn{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}', '@keyframes rosSlideInY{from{opacity:0;transform:translate(26px,-50%)}to{opacity:1;transform:translate(0,-50%)}}', '@keyframes rosPopCard{0%{opacity:0;transform:scale(.9) translateY(10px)}100%{opacity:1;transform:none}}', '.ros-kpi:hover{transform:translateY(-3px)!important;box-shadow:0 20px 46px rgba(31,59,90,.18)!important}', '.ros-trow:hover{background:rgba(39,168,219,.07)!important}', '.ros-vio:hover{background:rgba(210,58,82,.2)!important}', '.ros-auto:hover{background:rgba(106,82,212,.18)!important}', '.ros-treerow:hover{background:rgba(0,144,202,.08)!important}', '.ros-navbtn:hover{background:#fff!important}', '.ros-goday:hover{background:rgba(0,144,202,.18)!important}', '.ros-lift:hover{transform:translateY(-1px)}', '.ros-x:hover{background:rgba(125,145,180,.16)!important;color:#16202e!important}', '.ros-xred:hover{background:rgba(210,58,82,.12)!important;color:#a92c42!important}', '.ros-decl:hover{background:rgba(210,58,82,.1)!important}', '@keyframes rosSavePulse{0%,100%{box-shadow:0 0 0 0 rgba(39,168,219,.55),0 6px 16px rgba(0,114,163,.35)}50%{box-shadow:0 0 0 9px rgba(39,168,219,0),0 8px 24px rgba(0,114,163,.5)}}', '@keyframes rosSpin{to{transform:rotate(360deg)}}', '.ros-save{display:inline-flex;align-items:center;gap:7px;border:1px solid rgba(31,157,87,.35);background:rgba(31,157,87,.1);color:#157a43;padding:8px 15px;border-radius:10px;font-family:inherit;font-size:12px;font-weight:800;cursor:default;white-space:nowrap;transition:background .2s,color .2s}', '.ros-save.on{border-color:#0072a3;color:#fff;background:linear-gradient(135deg,#27a8db,#0072a3);cursor:pointer;animation:rosSavePulse 1.8s ease-in-out infinite}', '.ros-save.on:hover{filter:brightness(1.08)}', '.ros-save-spin{width:12px;height:12px;border-radius:50%;border:2px solid rgba(255,255,255,.45);border-top-color:#fff;animation:rosSpin .8s linear infinite}', '.ros-fab{position:fixed;right:22px;bottom:84px;z-index:4350;display:inline-flex;align-items:center;gap:8px;border:0;border-radius:999px;padding:12px 19px;background:linear-gradient(135deg,#0d3a5c,#0072a3 60%,#27a8db);color:#fff;font-family:inherit;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 12px 28px rgba(0,58,92,.38),inset 0 1px 0 rgba(255,255,255,.25);transition:transform .15s,box-shadow .15s}', '.ros-fab:hover{transform:translateY(-2px);box-shadow:0 16px 34px rgba(0,58,92,.45)}', '@media (max-width:820px){.ros-fab{right:14px;bottom:70px;padding:12px}.ros-fab span{display:none}}', '@media (prefers-reduced-motion:reduce){.ros-save.on{animation:none}}', '@media print{.ros-fab,.ros-sticky{display:none!important}}'].join('\n');
   document.head.appendChild(el);
 }
 function rosEval(grid, rows, days, year, month, cfg, en, custom) {
@@ -1759,7 +1759,7 @@ function RosSignOff({
   const prep = sent && m.preparedBy || sg.incharge && sg.incharge.name;
   const chk = fwd && m.checkedBy || sg.manager && sg.manager.name;
   const appr = ok && m.approvedBy || sg.cns && sg.cns.name;
-  const boxes = [['Prepared by', prep, rosSignerLine(prep, sg.incharge, 'In-charge · ' + dept), sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge', 'In-charge for this roster'], ['Checked by', chk, rosSignerLine(chk, sg.manager, 'Manager · ' + dept), fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager', 'Checks this unit’s roster'], ['Approved by', appr, rosSignerLine(appr, sg.cns, 'Chief of Nursing Services'), ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS', 'Approves every unit']];
+  const boxes = [['Prepared by', prep, rosPersonLine(prep, sg, null, 'In-charge · ' + dept), sent ? 'sent ' + rosWhen(sent.e.at) : 'not sent yet', !!sent, !sg.incharge, 'In-charge', 'In-charge for this roster'], ['Checked by', chk, rosPersonLine(chk, sg, null, 'Manager · ' + dept), fwd ? 'forwarded ' + rosWhen(fwd.e.at) : skipped ? 'skipped — sent straight to the CNS' : 'not checked yet', !!fwd, !sg.manager, 'Manager', 'Checks this unit’s roster'], ['Approved by', appr, rosPersonLine(appr, sg, null, 'Chief of Nursing Services'), ok ? 'approved ' + rosWhen(ok.e.at) : 'not approved yet', !!ok, !sg.cns, 'CNS', 'Approves every unit']];
   const missing = boxes.filter(b => b[5]).map(b => b[6]);
   return React.createElement("div", {
     style: {
@@ -1868,7 +1868,7 @@ function RosVersions({
   const [err, setErr] = useState('');
   useEffect(() => {
     rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions').then(r => {
-      if (r && r.ok) setList(r.versions || []);else {
+      if (r && r.ok) setList((r.versions || []).concat(r.autosaves || []).sort((a, b) => (b.at || 0) - (a.at || 0)));else {
         setErr(r && r.error || 'Could not load the versions.');
         setList([]);
       }
@@ -1877,7 +1877,7 @@ function RosVersions({
       setList([]);
     });
   }, [sheetId]);
-  const show = v => rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions/' + v.revision).then(r => {
+  const show = v => rosApi.get('/api/rosters/' + encodeURIComponent(sheetId) + '/versions/' + v.revision + (v.auto ? '?at=' + v.at : '')).then(r => {
     if (r && r.ok && r.version) setOpen({
       v,
       snap: r.version
@@ -1887,8 +1887,8 @@ function RosVersions({
   return React.createElement(RosDrawer, {
     wide: !!open,
     onClose: onClose,
-    title: open ? 'Version rev ' + open.v.revision : 'Versions',
-    sub: open ? (ROS_HIST_LABEL[open.v.action] || open.v.action || 'Saved') + ' · ' + (open.v.byName || open.v.by || '—') + ' · ' + rosWhen(open.v.at) : 'The sheet as it stood each time it was sent, returned or approved'
+    title: open ? open.v.auto ? 'Draft as it was · ' + rosWhen(open.v.at) : 'Version rev ' + open.v.revision : 'Versions',
+    sub: open ? (open.v.auto ? 'Kept automatically before a later save (rev ' + open.v.revision + ')' : ROS_HIST_LABEL[open.v.action] || open.v.action || 'Saved') + ' · ' + (open.v.byName || open.v.by || '—') + ' · ' + rosWhen(open.v.at) : 'Each time the sheet was sent, returned or approved — and, while it is a draft, how it stood about every hour'
   }, open ? React.createElement("div", null, React.createElement("div", {
     style: {
       display: 'flex',
@@ -1941,7 +1941,7 @@ function RosVersions({
       gap: 8
     }
   }, list.map(v => React.createElement("button", {
-    key: v.revision,
+    key: v.auto ? 'a' + v.at : 'v' + v.revision,
     type: "button",
     onClick: () => show(v),
     style: {
@@ -1976,7 +1976,7 @@ function RosVersions({
       fontWeight: 700,
       color: '#16202e'
     }
-  }, ROS_HIST_LABEL[v.action] || v.action || 'Saved'), React.createElement("span", {
+  }, v.auto ? 'Draft, kept automatically' : ROS_HIST_LABEL[v.action] || v.action || 'Saved'), React.createElement("span", {
     style: {
       display: 'block',
       fontSize: 10.5,
@@ -1994,8 +1994,14 @@ function RosterHome({
 }) {
   const rcfg = useRosterConfig();
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth());
+  const [year, setYear] = useState(() => {
+    const lv = rosLastView();
+    return lv ? lv.year : now.getFullYear();
+  });
+  const [month, setMonth] = useState(() => {
+    const lv = rosLastView();
+    return lv ? lv.month : now.getMonth();
+  });
   const sc = scope || {
     inScope: () => true,
     scope: 'all',
@@ -2957,7 +2963,11 @@ function RosterGrid({
 }) {
   rosInjectCss();
   const days = R.daysIn(year, month);
-  const [view, setView] = useState(initialView || 'month');
+  const [view, setView] = useState(() => {
+    if (initialView) return initialView;
+    const lv = rosLastView();
+    return lv && lv.tab && ROS_VIEW_TABS.some(t => t[0] === lv.tab) ? lv.tab : 'month';
+  });
   const [grid, setGrid] = useState({});
   const [order, setOrder] = useState([]);
   const [orderManual, setOrderManual] = useState(false);
@@ -2973,6 +2983,17 @@ function RosterGrid({
   const [conflict, setConflict] = useState('');
   const [storedNames, setStoredNames] = useState({});
   const [retryTick, setRetryTick] = useState(0);
+  const editSeq = useRef(0);
+  const inFlight = useRef(null);
+  const revRef = useRef(0);
+  const baseRef = useRef({
+    grid: {},
+    oncall: {},
+    altLeave: {}
+  });
+  const reapplyNext = useRef(false);
+  const [restore, setRestore] = useState(null);
+  const draftKey = rosDraftKey(dept, year, month);
   const [brush, setBrush] = useState('');
   const [brushAll, setBrushAll] = useState(false);
   const [painting, setPainting] = useState(false);
@@ -3140,15 +3161,46 @@ function RosterGrid({
       setMovedOut(Array.isArray(r.movedOut) ? r.movedOut : []);
       setStatus(d && d.status || 'draft');
       setRev(d && d.revision || 0);
+      revRef.current = d && d.revision || 0;
       const ru = rosRulesOf(d && d.rules);
       setCfg(ru.cfg);
       setEn(ru.en);
       setCustom(ru.custom);
       applyMeta(r);
-      setLoading(false);
-      setDirty(false);
       setQueue([]);
       history.current = [];
+      const srv = {
+        grid: rosMigrateGrid(d && d.grid, staff),
+        oncall: d && d.oncall || {},
+        altLeave: d && d.altLeave || {}
+      };
+      baseRef.current = JSON.parse(JSON.stringify(srv));
+      const bk = rosDraftRead(rosDraftKey(dept, year, month));
+      const editableNow = !!(d && d.can || r.can || {}).edit;
+      let restored = false;
+      setRestore(null);
+      if (bk) {
+        const st = bk.state || {};
+        const differs = !rosSameJson(st.grid, srv.grid) || !rosSameJson(st.oncall, srv.oncall) || !rosSameJson(st.altLeave, srv.altLeave);
+        if (!differs) rosDraftClear(rosDraftKey(dept, year, month));else if (editableNow && (bk.baseRevision === revRef.current || reapplyNext.current)) {
+          const same = bk.baseRevision === revRef.current;
+          const b = bk.base || {};
+          setGrid(same ? st.grid || {} : rosReapply(b.grid, st.grid, srv.grid));
+          setOncall(same ? st.oncall || {} : rosReapply(b.oncall, st.oncall, srv.oncall));
+          setAltLeave(same ? st.altLeave || {} : rosReapply(b.altLeave, st.altLeave, srv.altLeave));
+          if (same && Array.isArray(st.order)) {
+            setOrder(st.order);
+            setOrderManual(!!st.orderManual);
+          }
+          restored = true;
+          rosToast((same ? 'Your unsaved changes from ' : 'Your changes from ') + rosWhen(bk.at) + (same ? ' were restored' : ' were re-applied to the latest copy') + ' and are being saved.');
+        } else setRestore(Object.assign({}, bk, {
+          blocked: !editableNow
+        }));
+      }
+      reapplyNext.current = false;
+      setLoading(false);
+      setDirty(restored);
     }).catch(() => {
       setLoadError('Could not reach the server.');
       setLoading(false);
@@ -3424,8 +3476,15 @@ function RosterGrid({
     toastTimer.current = setTimeout(() => setSavedBatch(null), 4200);
   };
   const save = (nextStatus, quiet) => {
+    if (inFlight.current) return inFlight.current.then(() => saveRef.current(nextStatus, quiet));
+    const seq = editSeq.current;
+    const sent = {
+      grid,
+      oncall,
+      altLeave
+    };
     setBusy(true);
-    return rosApi.put('/api/rosters', {
+    const p = rosApi.put('/api/rosters', {
       dept,
       deptName: dept,
       year,
@@ -3436,7 +3495,7 @@ function RosterGrid({
       guestsRemoved: guestsOff,
       oncall,
       altLeave,
-      baseRevision: rev,
+      baseRevision: revRef.current,
       rules: {
         cfg,
         off: en,
@@ -3480,7 +3539,10 @@ function RosterGrid({
     }).then(r => {
       setBusy(false);
       if (r && r.ok) {
-        setRev(r.roster && r.roster.revision || rev + 1);
+        const nr = r.roster && r.roster.revision || revRef.current + 1;
+        revRef.current = nr;
+        setRev(nr);
+        baseRef.current = JSON.parse(JSON.stringify(sent));
         if (r.roster) {
           setStatus(r.roster.status || status);
           setMeta(m => ({
@@ -3490,7 +3552,12 @@ function RosterGrid({
           }));
           if (r.roster.can) setSheetCan(r.roster.can);
         }
-        setDirty(false);
+        if (editSeq.current === seq) {
+          setDirty(false);
+          rosDraftClear(draftKey);
+        } else {
+          setRetryTick(n => n + 1);
+        }
         if (!quiet) rosToast('Roster saved.');
         if (onSaved) onSaved();
         return true;
@@ -3501,26 +3568,57 @@ function RosterGrid({
       return false;
     }).catch(() => {
       setBusy(false);
-      rosToast('Could not reach the server — your changes are kept on this screen and will be retried.', 'error');
+      rosToast('Could not reach the server — your changes are kept on this device and will be retried.', 'error');
       if (quiet) setTimeout(() => setRetryTick(n => n + 1), 5000);
       return false;
     });
+    inFlight.current = p;
+    p.then(() => {
+      if (inFlight.current === p) inFlight.current = null;
+    });
+    return p;
   };
+  const saveRef = useRef(null);
+  saveRef.current = save;
+  revRef.current = Math.max(revRef.current, rev);
+  useEffect(() => {
+    if (!dirty || loading || !canEdit) return;
+    editSeq.current += 1;
+    const t = setTimeout(() => rosDraftWrite(draftKey, {
+      at: Date.now(),
+      baseRevision: revRef.current,
+      base: baseRef.current,
+      state: {
+        grid,
+        oncall,
+        altLeave,
+        order,
+        orderManual
+      }
+    }), 400);
+    return () => clearTimeout(t);
+  }, [grid, oncall, altLeave, cfg, en, custom, order, orderManual, guests, guestsOff, dirty]);
   useEffect(() => {
     if (!dirty || loading || !canEdit) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       saveTimer.current = null;
-      save(null, true);
+      saveRef.current(null, true);
     }, 1600);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
   }, [grid, oncall, altLeave, cfg, en, custom, order, orderManual, dirty, retryTick]);
-  const saveRef = useRef(null);
-  saveRef.current = save;
+  useEffect(() => {
+    rosRememberView({
+      dept,
+      year,
+      month,
+      tab: view
+    });
+  }, [dept, year, month, view]);
   const pendingRef = useRef(false);
-  pendingRef.current = dirty && !loading && canEdit;
+  pendingRef.current = (dirty || !!inFlight.current) && !loading && canEdit;
   useEffect(() => {
     const warn = e => {
       if (pendingRef.current) {
@@ -3776,7 +3874,7 @@ function RosterGrid({
       color: '#6c7a8c'
     }
   }, "Loading the roster\u2026");
-  const retryBox = (title, detail, label, onClick) => React.createElement("div", {
+  const retryBox = (title, detail, label, onClick, extra) => React.createElement("div", {
     style: {
       display: 'grid',
       placeItems: 'center',
@@ -3795,14 +3893,33 @@ function RosterGrid({
     style: {
       fontSize: 12.5,
       marginBottom: 12,
-      maxWidth: 520
+      maxWidth: 560
     }
-  }, detail), React.createElement("button", {
-    className: "btn pri sm",
+  }, detail), React.createElement("div", {
+    style: {
+      display: 'inline-flex',
+      gap: 8,
+      flexWrap: 'wrap',
+      justifyContent: 'center'
+    }
+  }, extra, React.createElement("button", {
+    className: extra ? 'btn sm' : 'btn pri sm',
     onClick: onClick
-  }, label)));
+  }, label))));
   if (loadError) return retryBox('The roster for ' + R.MONTHS[month] + ' ' + year + ' did not load.', loadError + ' Nothing is shown, so nothing can be saved over the stored roster.', 'Try again', () => setReloadKey(k => k + 1));
-  if (conflict) return retryBox('Someone else saved this roster while you were editing.', conflict + ' Your last changes were not saved. Reload to see the current roster, then make them again.', 'Reload the month', () => setReloadKey(k => k + 1));
+  if (conflict) {
+    const kept = !!rosDraftRead(draftKey);
+    return retryBox('Someone else saved this roster while you were editing.', conflict + (kept ? ' Your changes are kept on this device: re-apply them to the latest copy (only the cells you changed), or reload without them.' : ' Reload to see the current roster.'), kept ? 'Reload without my changes' : 'Reload the month', () => {
+      if (kept) rosDraftClear(draftKey);
+      setReloadKey(k => k + 1);
+    }, kept ? React.createElement("button", {
+      className: "btn pri sm",
+      onClick: () => {
+        reapplyNext.current = true;
+        setReloadKey(k => k + 1);
+      }
+    }, "Reload and re-apply my changes") : null);
+  }
   if (hiddenDraft) {
     const hd = hiddenDraft;
     return React.createElement("div", {
@@ -3855,11 +3972,15 @@ function RosterGrid({
         marginTop: 6,
         lineHeight: 1.55
       }
-    }, (rosStatusNorm(hd.status) === 'returned' ? 'It was returned for correction and is with ' : 'The draft is with ') + (hd.preparedBy || "the unit's in-charge"), hd.updatedAt ? ' (last saved ' + rosWhen(hd.updatedAt) + ')' : '', ". A draft is shown only to the people who prepare this unit's roster and to administrators \u2014 you will see it here once it is sent for review."), depts.length > 1 && React.createElement("div", {
+    }, (rosStatusNorm(hd.status) === 'returned' ? 'It was returned for correction and is with ' : 'The draft is with ') + (hd.preparedBy || "the unit's in-charge"), hd.updatedAt ? ' (last saved ' + rosWhen(hd.updatedAt) + ')' : '', ". A draft is shown only to the people who prepare this unit's roster and to administrators \u2014 you will see it here once it is sent for review."), React.createElement("div", {
       style: {
-        marginTop: 12
+        marginTop: 12,
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap'
       }
-    }, React.createElement("select", {
+    }, depts.length > 1 && React.createElement("select", {
+      "aria-label": "Unit",
       value: dept,
       onChange: e => setRoute({
         view: 'rosterGrid',
@@ -3878,8 +3999,134 @@ function RosterGrid({
     }, depts.map(d => React.createElement("option", {
       key: d,
       value: d
-    }, d)))))));
+    }, d))), React.createElement("select", {
+      "aria-label": "Month",
+      value: month,
+      onChange: e => setRoute({
+        view: 'rosterGrid',
+        dept,
+        year,
+        month: Number(e.target.value)
+      }),
+      style: {
+        padding: '7px 10px',
+        borderRadius: 9,
+        border: '1px solid rgba(125,145,180,.35)',
+        background: 'rgba(255,255,255,.8)',
+        fontFamily: 'inherit',
+        fontSize: 12
+      }
+    }, R.MONTHS.map((mn, i) => React.createElement("option", {
+      key: mn,
+      value: i
+    }, mn))), React.createElement("select", {
+      "aria-label": "Year",
+      value: year,
+      onChange: e => setRoute({
+        view: 'rosterGrid',
+        dept,
+        year: Number(e.target.value),
+        month
+      }),
+      style: {
+        padding: '7px 10px',
+        borderRadius: 9,
+        border: '1px solid rgba(125,145,180,.35)',
+        background: 'rgba(255,255,255,.8)',
+        fontFamily: 'inherit',
+        fontSize: 12
+      }
+    }, [...new Set([year - 1, year, year + 1, new Date().getFullYear()])].sort((a, b) => a - b).map(y => React.createElement("option", {
+      key: y,
+      value: y
+    }, y)))))));
   }
+  const flushThen = async (go, what) => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    if (canEdit && (dirty || inFlight.current)) {
+      const ok = await saveRef.current(null, true);
+      if (ok === false) {
+        const msg = 'Your latest changes could not be saved yet. They are kept on this device and come back when you open ' + dept + ' · ' + monthLabel + ' again.' + (what ? ' ' + what : '');
+        const yes = window.UI && window.UI.confirm ? await window.UI.confirm({
+          title: 'Not saved yet',
+          message: msg,
+          confirmLabel: 'Continue',
+          cancelLabel: 'Stay here'
+        }) : window.confirm(msg);
+        if (!yes) return;
+      }
+    }
+    go();
+  };
+  const goPeriod = (y, m) => {
+    if (y === year && m === month) return;
+    flushThen(() => setRoute({
+      view: 'rosterGrid',
+      dept,
+      year: y,
+      month: m
+    }));
+  };
+  const stepMonth = n => {
+    const t = new Date(year, month + n, 1);
+    goPeriod(t.getFullYear(), t.getMonth());
+  };
+  const goDept = d => {
+    if (d === dept) return;
+    flushThen(() => setRoute({
+      view: 'rosterGrid',
+      dept: d,
+      year,
+      month
+    }));
+  };
+  const printNow = () => flushThen(() => setRoute({
+    view: 'rosterPrint',
+    dept,
+    year,
+    month
+  }), 'The print will show the last saved sheet.');
+  const saveNow = () => {
+    if (saveTimer.current) {
+      clearTimeout(saveTimer.current);
+      saveTimer.current = null;
+    }
+    saveRef.current(null, false);
+  };
+  const nowD = new Date();
+  const yearOpts = [...new Set([nowD.getFullYear() - 2, nowD.getFullYear() - 1, nowD.getFullYear(), nowD.getFullYear() + 1, year])].sort((a, b) => a - b);
+  const isThisMonth = nowD.getFullYear() === year && nowD.getMonth() === month;
+  const selStyle = {
+    boxSizing: 'border-box',
+    padding: '7px 9px',
+    borderRadius: 9,
+    border: '1px solid rgba(125,145,180,.35)',
+    background: 'rgba(255,255,255,.9)',
+    fontFamily: 'inherit',
+    fontSize: 12.5,
+    fontWeight: 700,
+    color: '#16202e',
+    outline: 'none',
+    cursor: 'pointer'
+  };
+  const navBtn = {
+    display: 'inline-grid',
+    placeItems: 'center',
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    border: '1px solid rgba(125,145,180,.3)',
+    background: 'rgba(255,255,255,.85)',
+    color: '#0072a3',
+    fontSize: 17,
+    fontWeight: 800,
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+    lineHeight: 1
+  };
   const showGrid = view === 'month' || view === 'swap';
   const showFooter = view === 'month' || view === 'rules';
   const toolBtnStyle = {
@@ -3983,7 +4230,8 @@ function RosterGrid({
   })), React.createElement("div", {
     style: {
       position: 'relative',
-      minWidth: 210
+      minWidth: 210,
+      flex: '1 1 260px'
     }
   }, React.createElement("div", {
     style: {
@@ -4000,24 +4248,72 @@ function RosterGrid({
     }
   }, monthLabel, " \xB7 ", days, " days \xB7 ", rows.length, " staff \xB7 prepared by the in-charge, checked by the Manager, approved by the CNS")), React.createElement("div", {
     style: {
-      flex: 1
+      position: 'relative',
+      display: 'flex',
+      alignItems: 'center',
+      gap: 6,
+      padding: '5px 6px',
+      borderRadius: 12,
+      background: 'rgba(255,255,255,.7)',
+      border: '1px solid rgba(255,255,255,.95)',
+      boxShadow: '0 4px 14px rgba(31,59,90,.08)'
     }
-  }), React.createElement("div", {
+  }, React.createElement("button", {
+    type: "button",
+    style: navBtn,
+    title: "Previous month",
+    "aria-label": "Previous month",
+    onClick: () => stepMonth(-1)
+  }, "\u2039"), React.createElement("select", {
+    "aria-label": "Month",
+    value: month,
+    onChange: e => goPeriod(year, Number(e.target.value)),
+    style: selStyle
+  }, R.MONTHS.map((mn, i) => React.createElement("option", {
+    key: mn,
+    value: i
+  }, mn))), React.createElement("select", {
+    "aria-label": "Year",
+    value: year,
+    onChange: e => goPeriod(Number(e.target.value), month),
+    style: selStyle
+  }, yearOpts.map(y => React.createElement("option", {
+    key: y,
+    value: y
+  }, y))), React.createElement("button", {
+    type: "button",
+    style: navBtn,
+    title: "Next month",
+    "aria-label": "Next month",
+    onClick: () => stepMonth(1)
+  }, "\u203A"), !isThisMonth && React.createElement("button", {
+    type: "button",
+    onClick: () => goPeriod(nowD.getFullYear(), nowD.getMonth()),
+    title: "Open this month's roster",
+    style: {
+      border: 0,
+      background: 'transparent',
+      color: '#0072a3',
+      fontSize: 11.5,
+      fontWeight: 700,
+      cursor: 'pointer',
+      fontFamily: 'inherit',
+      padding: '0 6px'
+    }
+  }, "This month")), React.createElement("div", {
     style: {
       position: 'relative',
       display: 'flex',
       alignItems: 'center',
       gap: 9,
-      flexWrap: 'wrap'
+      flexWrap: 'wrap',
+      flex: '1 1 260px',
+      justifyContent: 'flex-end'
     }
   }, React.createElement("select", {
+    "aria-label": "Unit",
     value: dept,
-    onChange: e => setRoute({
-      view: 'rosterGrid',
-      dept: e.target.value,
-      year,
-      month
-    }),
+    onChange: e => goDept(e.target.value),
     style: {
       boxSizing: 'border-box',
       padding: '8px 11px',
@@ -4063,84 +4359,151 @@ function RosterGrid({
     const sent = meta.sentAt ? ' · sent ' + rosWhen(meta.sentAt) + (sentBy ? ' by ' + sentBy : '') : '';
     const line = stNorm === 'pending_manager' ? 'With ' + (signers.manager && signers.manager.name || 'the Manager') + ' for checking' + sent : stNorm === 'pending_cns' ? 'With ' + (signers.cns && signers.cns.name || 'the CNS') + ' for approval' + sent : stNorm === 'approved' ? 'Approved by ' + (meta.approvedBy || '—') + (meta.approvedAt ? ' · ' + rosWhen(meta.approvedAt) : '') + ' — published and locked' : stNorm === 'returned' ? 'Returned to the in-charge — fix the sheet and send it again' : 'Draft with the in-charge — send it to the Manager (or straight to the CNS) when it is ready';
     const histN = (meta.history || []).length;
-    return React.createElement("div", {
-      style: {
-        background: 'rgba(255,255,255,.84)',
-        border: '1px solid rgba(255,255,255,.95)',
-        borderLeft: '4px solid ' + s.color,
-        borderRadius: 14,
-        boxShadow: '0 10px 28px rgba(31,59,90,.1)',
-        padding: '11px 16px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        flexWrap: 'wrap',
-        marginBottom: 14
-      }
-    }, React.createElement("div", {
-      style: {
-        minWidth: 220,
-        flex: 1
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 12.8,
-        fontWeight: 700,
-        color: '#16202e'
-      }
-    }, line), React.createElement("div", {
-      style: {
-        fontSize: 11,
-        color: '#6c7a8c',
-        marginTop: 2
-      }
-    }, rev ? 'Saved · rev ' + rev + (meta.updatedBy ? ' · by ' + meta.updatedBy : '') + (meta.updatedAt ? ' · ' + rosWhen(meta.updatedAt) : '') : 'Not saved yet', dirty ? ' · saving…' : '')), React.createElement("button", {
-      className: "btn sm",
-      type: "button",
-      onClick: () => setPanel('history')
-    }, "History", histN ? ' · ' + histN : ''), React.createElement("button", {
-      className: "btn sm",
-      type: "button",
-      disabled: !rev,
-      onClick: () => setPanel('versions')
-    }, "Versions"), React.createElement("button", {
-      className: "btn sm",
-      type: "button",
-      onClick: () => setRoute({
-        view: 'rosterPrint',
-        dept,
-        year,
-        month
-      })
-    }, "Print"), canEdit && React.createElement("button", {
-      className: "btn sm",
-      type: "button",
-      disabled: busy || !dirty,
-      onClick: () => {
-        if (saveTimer.current) {
-          clearTimeout(saveTimer.current);
-          saveTimer.current = null;
+    return (React.createElement("div", {
+        className: "ros-sticky",
+        style: {
+          position: 'sticky',
+          top: -22,
+          zIndex: 40,
+          background: 'rgba(255,255,255,.94)',
+          backdropFilter: 'blur(14px)',
+          WebkitBackdropFilter: 'blur(14px)',
+          border: '1px solid rgba(255,255,255,.95)',
+          borderLeft: '4px solid ' + s.color,
+          borderRadius: 14,
+          boxShadow: '0 10px 28px rgba(31,59,90,.14)',
+          padding: '11px 16px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
+          marginBottom: 14
         }
-        save(null, false);
-      }
-    }, "Save draft"), sheetCan && sheetCan.send && totalViol > 0 && React.createElement("span", {
-      onClick: goRules,
-      title: "Sending is still allowed \u2014 the reviewer sees the same warnings",
-      style: {
-        fontSize: 11,
-        fontWeight: 700,
-        color: '#a92c42',
-        cursor: 'pointer'
-      }
-    }, totalViol, " rule warning", totalViol === 1 ? '' : 's'), React.createElement(RosDecisionButtons, {
-      status: status,
-      can: sheetCan,
-      onAction: act,
-      busy: busy || decider.busy,
-      hasManager: !!signers.manager,
-      selfManager: !!(signers.manager && window.__UNICO_USER__ && String(window.__UNICO_USER__.username || '').toLowerCase() === String(signers.manager.username || '').toLowerCase())
-    }));
-  })(), stNorm === 'returned' && React.createElement(RosReturnedBanner, {
+      }, React.createElement("div", {
+        style: {
+          minWidth: 220,
+          flex: 1
+        }
+      }, React.createElement("div", {
+        style: {
+          fontSize: 12.8,
+          fontWeight: 700,
+          color: '#16202e'
+        }
+      }, line), React.createElement("div", {
+        style: {
+          fontSize: 11,
+          color: '#6c7a8c',
+          marginTop: 2
+        }
+      }, rev ? 'Saved · rev ' + rev + (meta.updatedBy ? ' · by ' + meta.updatedBy : '') + (meta.updatedAt ? ' · ' + rosWhen(meta.updatedAt) : '') : 'Not saved yet', busy ? ' · saving…' : dirty ? ' · unsaved changes (kept safe on this device)' : '')), React.createElement("button", {
+        className: "btn sm",
+        type: "button",
+        onClick: () => setPanel('history')
+      }, "History", histN ? ' · ' + histN : ''), React.createElement("button", {
+        className: "btn sm",
+        type: "button",
+        disabled: !rev,
+        onClick: () => setPanel('versions')
+      }, "Versions"), React.createElement("button", {
+        className: "btn sm",
+        type: "button",
+        onClick: printNow
+      }, "Print"), canEdit && React.createElement("button", {
+        type: "button",
+        className: 'ros-save' + (dirty || busy ? ' on' : ''),
+        disabled: busy || !dirty,
+        onClick: saveNow,
+        title: dirty ? 'Save the draft now (it also saves by itself a moment after each change)' : 'Everything on screen is saved'
+      }, busy ? React.createElement(React.Fragment, null, React.createElement("span", {
+        className: "ros-save-spin"
+      }), "Saving\u2026") : dirty ? React.createElement(React.Fragment, null, React.createElement(Ic, {
+        d: "M5 3h11l3 3v15H5zM8 3v6h8V3M8 21v-7h8v7",
+        s: 14,
+        sw: 2
+      }), "Save draft") : React.createElement(React.Fragment, null, React.createElement(Ic, {
+        d: "M5 12l5 5L20 7",
+        s: 14,
+        sw: 2.4
+      }), "All changes saved")), sheetCan && sheetCan.send && totalViol > 0 && React.createElement("span", {
+        onClick: goRules,
+        title: "Sending is still allowed \u2014 the reviewer sees the same warnings",
+        style: {
+          fontSize: 11,
+          fontWeight: 700,
+          color: '#a92c42',
+          cursor: 'pointer'
+        }
+      }, totalViol, " rule warning", totalViol === 1 ? '' : 's'), React.createElement(RosDecisionButtons, {
+        status: status,
+        can: sheetCan,
+        onAction: act,
+        busy: busy || decider.busy,
+        hasManager: !!signers.manager,
+        selfManager: !!(signers.manager && window.__UNICO_USER__ && String(window.__UNICO_USER__.username || '').toLowerCase() === String(signers.manager.username || '').toLowerCase())
+      }))
+    );
+  })(), restore && React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: 12,
+      alignItems: 'center',
+      flexWrap: 'wrap',
+      background: 'linear-gradient(90deg,rgba(224,138,30,.14),rgba(255,255,255,.8))',
+      border: '1px solid rgba(224,138,30,.45)',
+      borderLeft: '4px solid #e08a1e',
+      borderRadius: 12,
+      padding: '10px 14px',
+      marginBottom: 14
+    }
+  }, React.createElement(Ic, {
+    d: "M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z",
+    s: 17,
+    sw: 2
+  }), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 240,
+      fontSize: 12.5,
+      color: '#3c2a07'
+    }
+  }, React.createElement("b", null, "Unsaved changes from ", rosWhen(restore.at), " are kept on this device."), ' ', restore.blocked ? 'They cannot be applied while the sheet is not with you for editing.' : 'The roster was saved by someone else since. Re-apply puts only the cells you changed onto the latest copy.'), !restore.blocked && React.createElement("button", {
+    type: "button",
+    className: "btn pri sm",
+    onClick: () => {
+      const b = restore.base || {},
+        st = restore.state || {};
+      setGrid(g => rosReapply(b.grid, st.grid, g));
+      setOncall(o => rosReapply(b.oncall, st.oncall, o));
+      setAltLeave(a => rosReapply(b.altLeave, st.altLeave, a));
+      setRestore(null);
+      setDirty(true);
+      rosToast('Your changes were re-applied and are being saved.');
+    }
+  }, "Re-apply my changes"), React.createElement("button", {
+    type: "button",
+    className: "btn sm",
+    onClick: async () => {
+      const yes = window.UI && window.UI.confirm ? await window.UI.confirm({
+        title: 'Discard these changes?',
+        message: 'The unsaved changes kept on this device for ' + dept + ' · ' + monthLabel + ' will be removed. The saved roster is not touched.',
+        confirmLabel: 'Discard',
+        danger: true
+      }) : window.confirm('Discard these changes?');
+      if (!yes) return;
+      rosDraftClear(draftKey);
+      setRestore(null);
+    }
+  }, "Discard")), React.createElement("button", {
+    type: "button",
+    className: "ros-fab",
+    onClick: printNow,
+    title: 'Print ' + dept + ' · ' + monthLabel
+  }, React.createElement(Ic, {
+    d: "M6 9V3h12v6M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v7H6z",
+    s: 18,
+    sw: 2
+  }), React.createElement("span", null, "Print")), stNorm === 'returned' && React.createElement(RosReturnedBanner, {
     meta: meta
   }), React.createElement(RosMarkList, {
     marks: marks,
@@ -9071,6 +9434,7 @@ function rosPrintHtml({
   pcaNewPage,
   separatePages,
   fitA4,
+  watermark,
   printedBy
 }) {
   const official = !colourDesign;
@@ -9224,18 +9588,109 @@ function rosPrintHtml({
   const css = '@page{size:A4 landscape;margin:7mm 8mm 9mm;@bottom-right{content:"Page " counter(page) " of " counter(pages);font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}@bottom-left{content:"Duty Roster · ' + String(dn).replace(/["\\]/g, '') + ' · ' + R.MONTHS[month] + ' ' + year + '";font:7pt "Segoe UI",Arial,sans-serif;color:#7b8796}}' + '*{box-sizing:border-box}html{-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:8pt/1.3 "Segoe UI",Arial,sans-serif;color:#16202e;margin:0;padding:12px;background:#fff}@media print{body{padding:0}}' + '.band{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:14px;padding:5px 14px;border-radius:10px;color:#fff;' + 'background:linear-gradient(118deg,#0d3a5c 0%,#0b5f8f 48%,#1795c6 78%,#3ab5a7 100%);position:relative;overflow:hidden}' + '.band:after{content:"";position:absolute;right:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.07)}' + '.band .lg0{display:inline-flex;align-items:center;background:#fff;border-radius:8px;padding:4px 9px;box-shadow:0 2px 6px rgba(0,0,0,.15)}.band img{height:25px;display:block}' + '.band .mid{text-align:center;position:relative;z-index:1}.band h1{margin:0;font-size:14pt;font-weight:800;letter-spacing:6px;line-height:1.15}' + '.band .mo{display:inline-block;margin-top:1px;font-size:8.8pt;font-weight:700;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.35);border-radius:12px;padding:0 12px}' + '.band .pd{font-size:7pt;opacity:.85;letter-spacing:.5px;margin-top:1px}' + '.band .rtx{text-align:right;position:relative;z-index:1}.band .kind{font-size:6.6pt;font-weight:700;letter-spacing:1.8px;text-transform:uppercase;opacity:.8}.band .dp{font-size:15pt;font-weight:800;line-height:1.15}' + '.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin:6px 0 8px;position:relative;z-index:0}' + '.tile{border-radius:8px;padding:2px 10px 3px;border:1px solid #e3e9f0;border-left:4px solid var(--c);background:linear-gradient(90deg,var(--bg),#fff 85%)}' + '.tile span{display:block;font-size:6pt;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;color:#6b7a8d}.tile b{font-size:11pt;font-weight:800;color:var(--c);line-height:1.15}.tile i{font-style:normal;font-size:6.6pt;color:#7b8796;margin-left:6px}' + '.tile.b{--c:#0072a3;--bg:#e8f4fb}.tile.t{--c:#0f8a7e;--bg:#e6f6f3}.tile.g{--c:#1f6f43;--bg:#eaf6ee}.tile.v{--c:#5b45c4;--bg:#efecfb}.tile.a{--c:#b5670a;--bg:#fdf3e4}.tile.sl{--c:#334e68;--bg:#eef2f6}' + '.gt{display:flex;align-items:center;gap:8px;margin:5px 0 3px}.gt span{display:inline-block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:#fff;background:linear-gradient(90deg,#0072a3,#1795c6);border-radius:10px;padding:2px 11px}' + '.gt:after{content:"";flex:1;height:1px;background:linear-gradient(90deg,#c9d9e8,transparent)}.gp .gt span{background:linear-gradient(90deg,#5b45c4,#7e6be0)}.grp.np{page-break-before:always}' + 'table{border-collapse:separate;border-spacing:0;width:100%;table-layout:fixed;border:1px solid #c9d6e3;border-radius:8px;overflow:hidden}thead{display:table-header-group}tr{page-break-inside:avoid}' + 'th{background:' + NAVY + ';color:#fff;font-weight:700;padding:3px 0;font-size:7pt;border-right:1px solid rgba(255,255,255,.1)}th.w{font-weight:500;font-size:6.2pt;background:#1d5c87;padding:1px 0 2px}th.fr{background:#b5670a}th.w.fr{background:#cf7d17}' + '.gp th{background:#3b2f7a}.gp th.w{background:#4d3f94}.gp th.fr{background:#b5670a}.gp th.w.fr{background:#cf7d17}' + 'td{border-right:1px solid #e6ecf2;border-bottom:1px solid #e6ecf2;text-align:center;padding:0;height:13px}tr.r:nth-child(even) td{background:#f6f9fc}' + 'td.c{padding:1px}td.fr{background:#fdf5ea!important}' + '.k{display:inline-block;min-width:88%;border-radius:4px;padding:0;font-size:6.7pt;font-weight:800;letter-spacing:.1px}.k.ko{color:#6b7a8d}' + 'td.n{color:#7b8796;font-size:6.8pt}td.e{font-size:6.6pt;color:#5b6878}td.nm{text-align:left;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{font-size:7.5pt;color:#0d1b2e}td.nm span{font-size:6.2pt;color:#7b8796}' + 'td.t{font-size:7pt;background:#f1f5f9!important;color:#3c4858}td.h{font-weight:800;color:#0d1b2e;background:#e4eef7!important}col.n{width:6mm}col.e{width:12mm}col.nm{width:52mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}' + 'tr.sum td{background:#eaf3fa!important;font-size:6.6pt;font-weight:700;color:' + NAVY + ';height:12px}tr.sum:first-of-type td{border-top:1.5px solid #9cc3de}tr.sum td.sl{text-align:right;padding-right:6px;font-weight:600;color:#3c5a74}.gp tr.sum td{background:#f0edfa!important;color:#3b2f7a}' + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lnr .notes{margin-top:0}.lgx{border:1px solid #d9e4ee;border-radius:8px;padding:4px 9px 5px;page-break-inside:avoid;background:#fbfdff}.lgh{font-size:6.4pt;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;color:#0072a3;margin-bottom:2px}.lgn{font-size:7pt;color:#7b8796}' + '.lg{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:2px 16px;font-size:6.6pt;color:#3c4858}.lgb b{display:block;font-size:6.8pt;margin-bottom:1px;text-transform:uppercase;letter-spacing:.6px}.lgb span{display:inline-block;margin-right:8px;white-space:nowrap}' + '.lgb i{font-style:normal;font-weight:800;color:#0d1b2e;display:inline-block;min-width:18px;text-align:center;border-radius:4px;padding:0 3px;background:var(--lc,#eef2f6)}' + '.foot{page-break-inside:avoid;break-inside:avoid}.ocm{font-weight:900;margin-left:1px}' + '.alx{margin-top:7px;border:1px solid #d9e4ee;border-radius:8px;padding:4px 9px 5px;background:#fbfdff;break-inside:avoid;page-break-inside:avoid}.alt{width:100%;border-collapse:collapse;font-size:7pt}.alt th{background:#0d3a5c;color:#fff;text-align:left;padding:2px 6px;font-weight:700}.alt td{border-bottom:1px solid #e6ecf2;padding:2px 6px;color:#16202e}' + '.notes{margin-top:6px;border-radius:8px;background:#fffaf2;border:1px solid #f1dfc2;padding:4px 9px}.nb{font-size:7pt;color:#5a4a33}.nb b{color:#b5670a}.rm{margin-top:3px;font-size:7.4pt;color:#3c4858;border-bottom:1px dotted #c9b48f;height:14px}' + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px;font-size:8pt;page-break-inside:avoid}' + '.signs>div{border:1px solid #e3e9f0;border-top:3px solid var(--sc);border-radius:9px;padding:0 11px 6px;background:linear-gradient(180deg,var(--sb),#fff 45%)}.signs>div:nth-child(1){--sc:#0072a3;--sb:#f1f8fd}.signs>div:nth-child(2){--sc:#5b45c4;--sb:#f5f3fd}.signs>div:nth-child(3){--sc:#1f6f43;--sb:#f0f8f3}' + '.signs .sp{height:28px}.signs .ln{border-top:1px solid #16202e;padding-top:4px}.signs .dt{margin-top:6px;font-size:7.4pt;color:#3c4858}' + '.signs span{display:block;font-size:6.4pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--sc)}.signs b{display:block;font-size:9pt;color:#0d1b2e}.signs em{display:block;font-style:normal;color:#5b6878;font-size:7pt}' + '.end{margin-top:6px;padding-top:3px;border-top:1px solid #e3e9f0;display:flex;justify-content:space-between;font-size:6.8pt;color:#7b8796}';
   const HATCH = 'repeating-linear-gradient(135deg,transparent 0,transparent 2.5px,rgba(0,0,0,.28) 2.5px,rgba(0,0,0,.28) 3.3px),#e0e0e0';
   const officialCss = '@page{size:A4 landscape;margin:8mm;@bottom-right{content:"Page " counter(page) " of " counter(pages);font:7pt Arial,sans-serif;color:#000}@bottom-left{content:"Duty Roster · ' + String(dn).replace(/["\\]/g, '') + ' · ' + R.MONTHS[month] + ' ' + year + '";font:7pt Arial,sans-serif;color:#000}}' + '*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}' + 'body{font:8pt/1.3 Arial,"Segoe UI",sans-serif;color:#000;margin:0;padding:12px;background:#fff}@media print{body{padding:0}}' + '.lh{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;padding-bottom:3px}.lh img{height:32px;display:block}' + '.lhm{text-align:center}.lhm .org{font-size:11.5pt;font-weight:700;letter-spacing:.4px}.lhm .dv{font-size:7.5pt;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:#333}.lhm h1{margin:2px 0 0;font-size:15pt;font-weight:800;letter-spacing:5px}' + 'table.rt,.meta,.sch,.alt{border-collapse:separate;border-spacing:0;border-top:.75pt solid #000;border-left:.75pt solid #000}' + '.rt th,.rt td,.meta th,.meta td,.sch th,.sch td,.alt th,.alt td{border:0;border-right:.75pt solid #000;border-bottom:.75pt solid #000}' + '.ocm{font-weight:900;margin-left:1px}.alx{margin-top:7px;border:1.25pt solid #000;padding:4px 8px 5px;break-inside:avoid;page-break-inside:avoid}' + '.alt{width:100%;font-size:7.5pt}.alt th{background:#d0d0d0;text-align:left;padding:1px 6px;font-weight:700}.alt td{padding:1px 6px}' + '.lhr{justify-self:end}.meta{font-size:7.5pt}.meta th{text-align:left;font-weight:700;padding:1px 6px;background:#e0e0e0}.meta td{padding:1px 8px;font-weight:700;min-width:40mm}' + '.rule{border-top:2pt solid #000;border-bottom:.6pt solid #000;height:3.5px;margin:1px 0 6px}' + '.tiles{display:grid;grid-template-columns:repeat(5,1fr);border:1.25pt solid #000;margin:0 0 6px}.tile{padding:2px 7px 3px;border-left:.75pt solid #000}.tile:first-child{border-left:0}' + '.tile span{display:block;font-size:6.6pt;font-weight:800;letter-spacing:1px;text-transform:uppercase}.tile b{font-size:11pt;font-weight:800;margin-right:5px}.tile i{font-style:normal;font-size:7pt;color:#333}' + '.gt{margin:6px 0 3px}.gt span{font-size:8pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;border-bottom:1.25pt solid #000;padding-bottom:1px}.grp.np{page-break-before:always}' + 'table.rt{width:100%;table-layout:fixed;outline:.6pt solid #000}thead{display:table-header-group}tr{page-break-inside:avoid;break-inside:avoid}' + '.rt th{background:#d0d0d0;color:#000;font-weight:700;font-size:7pt;padding:2px 0}.rt th.w{font-weight:700;font-size:6.6pt;background:#e8e8e8;padding:1px 0}' + '.rt th.fr{background:#000;color:#fff;font-weight:800}' + '.rt td{text-align:center;padding:0;height:14px;color:#000}.rt td.c{font-size:7.5pt;font-weight:700;letter-spacing:-.1px}' + '.rt td.xo{background:#b3b3b3;font-weight:800}.rt td.xl{background:' + HATCH + ';font-style:italic;font-weight:800}' + 'td.n,td.e{font-size:7pt}td.nm{text-align:left;padding:1px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}td.nm b{font-size:8pt}td.nm span{font-size:7pt;color:#333}' + 'td.t{font-size:7.5pt;font-weight:600}td.h{font-weight:800}' + 'col.n{width:6mm}col.e{width:12mm}col.nm{width:46mm}col.d{width:auto}col.t{width:6mm}col.h{width:8mm}' + 'tr.sum td{font-size:7pt;font-weight:700;height:12px}tr.sum:first-of-type td{border-top:.75pt solid #000}tr.sum td.sl{text-align:right;padding-right:6px}' + '.lnr{display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:7px;align-items:stretch}.lgx{border:1.25pt solid #000;padding:4px 8px 5px;break-inside:avoid;page-break-inside:avoid}' + '.lgh{font-size:7.5pt;font-weight:800;letter-spacing:1px;text-transform:uppercase;margin-bottom:3px}.lgn{font-size:7.5pt}' + '.schs{display:flex;gap:8px;align-items:flex-start}.sch{font-size:7pt;flex:1 1 0;min-width:0}.sch th{background:#d0d0d0;padding:1px 4px;text-align:left;font-weight:700}' + '.sch td{padding:1px 4px}.sch td.cd{font-weight:800;text-align:center;width:9mm}.sch td.hr{text-align:center;width:8mm}.sch td.xo{background:#b3b3b3}.sch td.xl{background:' + HATCH + ';font-style:italic}' + '.key{margin-top:4px;font-size:7pt;font-weight:700;display:flex;gap:16px;align-items:center}.sw{display:inline-block;width:15px;height:9px;border:.75pt solid #000;vertical-align:-1px;margin-right:4px;background:#fff}.sw.xo{background:#b3b3b3}.sw.xl{background:' + HATCH + '}' + '.notes{border:1.25pt solid #000;padding:4px 8px}.nb{font-size:7.5pt}.rm{margin-top:4px;font-size:7.5pt;border-bottom:.75pt dotted #000;height:15px}' + '.foot{page-break-inside:avoid;break-inside:avoid}' + '.signs{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:10px;page-break-inside:avoid;break-inside:avoid}.signs>div{padding:0 2px}.signs .sp{height:30px}' + '.signs .ln{border-top:1pt solid #000;padding-top:3px}.signs span{display:block;font-size:7pt;font-weight:800;letter-spacing:1px;text-transform:uppercase}.signs b{display:block;font-size:9pt}.signs em{display:block;font-style:normal;font-size:7.5pt;color:#333}.signs .dt{margin-top:5px;font-size:7.5pt}' + '.end{margin-top:6px;padding-top:3px;border-top:.75pt solid #000;display:flex;justify-content:space-between;font-size:7pt}';
-  const stLabel = (ROS_STATUS[rosStatusNorm(doc ? doc.status : null)] || {}).label || 'Draft';
-  const headFor = group => official ? '<header class="lh"><div><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></div>' + '<div class="lhm"><div class="org">UNICO Hospitals PLC</div><div class="dv">Nursing Services</div><h1>DUTY ROSTER</h1>' + (group ? '<div class="grpn">' + rosEsc(group) + '</div>' : '') + '</div>' + '<div class="lhr"><table class="meta"><tr><th>Department</th><td>' + rosEsc(dn) + '</td></tr><tr><th>Month</th><td>' + rosEsc(R.MONTHS[month] + ' ' + year) + '</td></tr>' + '<tr><th>Period</th><td>' + rosEsc(period) + '</td></tr><tr><th>Status</th><td>' + rosEsc(stLabel + (doc && doc.revision ? ' · Rev ' + doc.revision : '')) + '</td></tr></table></div></header><div class="rule"></div>' : '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>' + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>' + '<div class="rtx"><div class="kind">' + rosEsc(group ? 'Nursing Services · ' + group : 'Nursing Services') + '</div><div class="dp">' + rosEsc(dn) + '</div></div></header>';
+  const headFor = group => official ? '<header class="lh"><div><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></div>' + '<div class="lhm"><div class="org">UNICO Hospitals PLC</div><div class="dv">Nursing Services</div><h1>DUTY ROSTER</h1>' + (group ? '<div class="grpn">' + rosEsc(group) + '</div>' : '') + '</div>' + '<div class="lhr"><table class="meta"><tr><th>Department</th><td>' + rosEsc(dn) + '</td></tr><tr><th>Month</th><td>' + rosEsc(R.MONTHS[month] + ' ' + year) + '</td></tr>' + '<tr><th>Period</th><td>' + rosEsc(period) + '</td></tr></table></div></header><div class="rule"></div>' : '<header class="band"><div><span class="lg0"><img src="' + rosEsc(location.origin + '/unico/logo.svg') + '" alt="UNICO Hospitals"></span></div>' + '<div class="mid"><h1>DUTY ROSTER</h1><div class="mo">' + rosEsc(R.MONTHS[month] + ' ' + year) + '</div><div class="pd">' + rosEsc(period) + '</div></div>' + '<div class="rtx"><div class="kind">' + rosEsc(group ? 'Nursing Services · ' + group : 'Nursing Services') + '</div><div class="dp">' + rosEsc(dn) + '</div></div></header>';
   const cardsHtml = cards !== false ? '<div class="tiles">' + tiles.map(([l, v, sub, k]) => '<div class="tile ' + k + '"><span>' + rosEsc(l) + '</span><b>' + rosEsc(v) + '</b><i>' + rosEsc(sub) + '</i></div>').join('') + '</div>' : '<div style="height:7px"></div>';
   const footFor = list => '<div class="foot"><div class="lnr">' + (legendFor(list) || '<div></div>') + '<div class="notes"><div class="nb"><b>NB:</b> No change to this roster without permission from the authorised person. Swaps must be approved by the in-charge and recorded.</div>' + '<div class="rm">Remarks:</div><div class="rm"></div></div></div>' + '<div class="signs">' + signs.map(([l, n, role, when]) => '<div><div class="sp"></div><div class="ln"><span>' + rosEsc(l) + '</span><b>' + rosEsc(n || ' ') + '</b><em>' + rosEsc(role) + '</em>' + '<div class="dt">Date: ' + (when ? '<b style="display:inline;font-size:7.4pt">' + rosEsc(when) + '</b>' : '______________________') + '</div></div></div>').join('') + '</div>' + '<div class="end"><span>Printed by ' + rosEsc(printedBy || '—') + ' on ' + rosEsc(at) + ' from UNICO.</span><span>' + (ok ? 'Approved on ' + rosEsc(rosDate(ok.at)) + '.' : '') + '</span></div>' + '</div>';
-  const pageOf = (inner, cls) => '<section class="pg' + (cls ? ' ' + cls : '') + '">' + inner + '</section>';
+  let wmN = 0;
+  const wmHtml = () => {
+    if (!watermark) return '';
+    const name = String(dn || '').toUpperCase();
+    const id = 'wmg' + ++wmN;
+    const fs = Math.max(40, Math.min(112, Math.floor(1900 / Math.max(6, name.length))));
+    const stops = official ? '<stop offset="0" stop-color="#000"/><stop offset="1" stop-color="#8a8a8a"/>' : '<stop offset="0" stop-color="#0072a3"/><stop offset=".6" stop-color="#1795c6"/><stop offset="1" stop-color="#3ab5a7"/>';
+    return '<div class="wm" aria-hidden="true"><svg viewBox="0 0 1000 130" preserveAspectRatio="xMidYMid meet" width="100%" height="100%"><defs><linearGradient id="' + id + '" x1="0" y1="0" x2="1" y2="0">' + stops + '</linearGradient></defs>' + '<text x="500" y="' + Math.round(65 + fs * 0.36) + '" text-anchor="middle" font-family="Arial Black,Arial,Helvetica,sans-serif" font-weight="900" font-size="' + fs + '" letter-spacing="' + (name.length > 14 ? 2 : 8) + '" fill="url(#' + id + ')" fill-opacity="' + (official ? '0.075' : '0.11') + '"' + (name.length > 16 ? ' textLength="960" lengthAdjust="spacingAndGlyphs"' : '') + '>' + rosEsc(name) + '</text></svg></div>';
+  };
+  const pageOf = (inner, cls) => '<section class="pg' + (cls ? ' ' + cls : '') + '">' + wmHtml() + inner + '</section>';
   const html = split ? pageOf(headFor('Nursing staff') + cardsHtml + tableFor(nurses, 'Nursing staff · ' + nurses.length, 'gn') + alFor(nurses) + footFor(nurses)) + pageOf(headFor('Patient care assistants') + '<div style="height:7px"></div>' + tableFor(pcas, 'Patient care assistants · ' + pcas.length, 'gp') + alFor(pcas) + footFor(pcas), 'np') : pageOf(headFor('') + cardsHtml + tables + alFor(rows) + footFor(rows));
-  const pageCss = '.pg.np{break-before:page;page-break-before:always}.grpn{margin-top:2px;font-size:9pt;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}' + (fitA4 ? '.pg{break-inside:avoid;page-break-inside:avoid;margin:0 auto}' : '');
+  const pageCss = '.pg{position:relative;z-index:0}.wm{position:absolute;left:0;right:0;top:-2px;height:36mm;z-index:-1;pointer-events:none}.wm svg{display:block}.pg.np{break-before:page;page-break-before:always}.grpn{margin-top:2px;font-size:9pt;font-weight:800;letter-spacing:1.5px;text-transform:uppercase}' + (fitA4 ? '.pg{break-inside:avoid;page-break-inside:avoid;margin:0 auto}' : '');
   const fitJs = !fitA4 ? '' : '<script>(function(){var MM=96/25.4,W=Math.floor(281*MM),H=Math.floor(192*MM);' + 'function fit(){var ps=document.querySelectorAll(".pg");for(var i=0;i<ps.length;i++){var p=ps[i];p.style.zoom="";p.style.width=W+"px";' + 'var z=Math.min(1,H/Math.max(1,p.scrollHeight),W/Math.max(1,p.scrollWidth));p.style.zoom=String(Math.floor(z*1000)/1000);p.setAttribute("data-fit",String(z));}}' + 'window.__rosFit=fit;if(document.readyState==="complete")fit();else window.addEventListener("load",fit);window.addEventListener("beforeprint",fit);' + 'if(document.fonts&&document.fonts.ready)document.fonts.ready.then(fit);})();</script>';
   return '<!doctype html><html><head><meta charset="utf-8"><title>' + rosEsc('Duty Roster — ' + dn + ' — ' + R.MONTHS[month] + ' ' + year) + '</title><style>' + (official ? officialCss : css) + pageCss + '</style></head><body>' + html + fitJs + '</body></html>';
 }
 const ROS_PRINT_OPT_KEY = 'unicoRosterPrintOpts.v2';
 const ROS_FIT_KEY = 'unicoRosterFitMonth.v1';
+const rosUserKey = () => String(window.__UNICO_USER__ && window.__UNICO_USER__.username || 'local').toLowerCase();
+const rosDraftKey = (dept, y, m) => 'unicoRosterDraft.v1|' + rosUserKey() + '|' + dept + '|' + y + '|' + m;
+function rosDraftRead(k) {
+  try {
+    const v = JSON.parse(localStorage.getItem(k) || 'null');
+    return v && typeof v === 'object' && v.state ? v : null;
+  } catch (e) {
+    return null;
+  }
+}
+function rosDraftWrite(k, v) {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+function rosDraftClear(k) {
+  try {
+    localStorage.removeItem(k);
+  } catch (e) {}
+}
+function rosReapply(base, mine, server) {
+  const out = JSON.parse(JSON.stringify(server || {}));
+  const b0 = base || {},
+    m0 = mine || {};
+  new Set(Object.keys(b0).concat(Object.keys(m0))).forEach(id => {
+    const b = b0[id] || {},
+      m = m0[id] || {};
+    new Set(Object.keys(b).concat(Object.keys(m))).forEach(d => {
+      if (JSON.stringify(b[d]) === JSON.stringify(m[d])) return;
+      const row = Object.assign({}, out[id] || {});
+      if (m[d] == null || m[d] === '') delete row[d];else row[d] = m[d];
+      out[id] = row;
+    });
+  });
+  return out;
+}
+const rosSameJson = (a, b) => JSON.stringify(a || {}) === JSON.stringify(b || {});
+const rosLastKey = () => 'unicoRosterLastView.v1|' + rosUserKey();
+function rosLastView() {
+  try {
+    const v = JSON.parse(localStorage.getItem(rosLastKey()) || 'null');
+    if (!v || !v.dept || !Number.isInteger(v.year) || !Number.isInteger(v.month) || v.month < 0 || v.month > 11) return null;
+    return v;
+  } catch (e) {
+    return null;
+  }
+}
+function rosRememberView(v) {
+  try {
+    localStorage.setItem(rosLastKey(), JSON.stringify(Object.assign({}, v, {
+      at: Date.now()
+    })));
+  } catch (e) {}
+}
+function rosPersonLine(name, signers, people, fallback) {
+  const N = window.UNICO_NAME;
+  const norm = v => N && N.normName ? N.normName(v) : String(v || '').trim().toLowerCase();
+  const k = norm(name);
+  if (!k) return {
+    text: fallback,
+    own: false
+  };
+  const live = (people || []).filter(e => e && !e.former && e.is_active !== false && e.name);
+  let e = live.find(x => norm(x.name) === k);
+  if (!e && N && N.nameScore) {
+    const near = live.filter(x => N.nameScore(x.name, name) >= (N.SAME_NAME || 0.9));
+    if (near.length === 1) e = near[0];
+  }
+  if (e && e.designation) return {
+    text: rosSignLine(e) || fallback,
+    own: true
+  };
+  const sg = signers || {};
+  const s = [sg.incharge, sg.manager, sg.cns].find(x => x && x.desig && norm(x.name) === k);
+  if (s) return rosSignerLine(s.name, s, fallback);
+  return {
+    text: fallback,
+    own: false
+  };
+}
 const ROS_PRINT_OPT_OLD = 'unico_roster_print_opts_v1';
 const rosSheetGuests = r => ({
   ...(r && r.guestsCarried || {}),
@@ -9371,7 +9826,8 @@ function RosterPrint({
       cards: false,
       legend: true,
       separatePages: false,
-      fitA4: false
+      fitA4: false,
+      watermark: true
     };
     const norm = o => {
       const x = {
@@ -9425,23 +9881,14 @@ function RosterPrint({
   const signPeople = useMemo(() => {
     const def = rosSignNames(doc, signers);
     const people = staffStore.staff || [];
-    const byName = nm => {
-      const k = String(nm || '').trim().toLowerCase();
-      return k ? people.find(e => e && !e.former && e.is_active !== false && String(e.name || '').trim().toLowerCase() === k) : null;
-    };
     const role = {
       prepared: 'In-charge, ' + deptName,
       checked: 'Nurse Manager',
       approved: 'Chief of Nursing Services'
     };
     const out = {};
-    const setupOf = {
-      prepared: signers.incharge,
-      checked: signers.manager,
-      approved: signers.cns
-    };
     ['prepared', 'checked', 'approved'].forEach(k => {
-      const e = picks[k] || byName(def[k]);
+      const e = picks[k];
       if (e) {
         out[k] = {
           name: e.name || '',
@@ -9449,10 +9896,9 @@ function RosterPrint({
         };
         return;
       }
-      const own = rosSignerLine(def[k], setupOf[k], role[k]);
       out[k] = {
         name: def[k],
-        line: own.text
+        line: rosPersonLine(def[k], signers, people, role[k]).text
       };
     });
     return out;
@@ -9680,7 +10126,7 @@ function RosterPrint({
     style: {
       flex: 1
     }
-  }), tog('colourDesign', 'Colour version'), tog('cards', 'Summary cards'), tog('summary', 'Daily cover rows'), tog('legend', 'Shift legend'), view.rows.some(r => r.pca) && view.rows.some(r => !r.pca) && tog('separatePages', 'Nurses and PCAs on separate pages'), tog('fitA4', 'Fit to one A4 page'), mayPrint ? React.createElement(React.Fragment, null, React.createElement("button", {
+  }), tog('colourDesign', 'Colour version'), tog('cards', 'Summary cards'), tog('summary', 'Daily cover rows'), tog('legend', 'Shift legend'), view.rows.some(r => r.pca) && view.rows.some(r => !r.pca) && tog('separatePages', 'Nurses and PCAs on separate pages'), tog('fitA4', 'Fit to one A4 page'), tog('watermark', 'Department watermark'), mayPrint ? React.createElement(React.Fragment, null, React.createElement("button", {
     className: "btn",
     disabled: pdfBusy,
     onClick: downloadPdf,
@@ -9775,6 +10221,12 @@ function RosterView({
   const now = new Date();
   const y = Number(year) || now.getFullYear();
   const m = Number.isInteger(Number(month)) ? Number(month) : now.getMonth();
+  const [resume] = useState(() => {
+    if (view !== 'rosterHome' || dept) return null;
+    const prev = String(window.__unicoCurView || '');
+    if (prev.indexOf('roster') === 0 || prev === 'manpower') return null;
+    return rosLastView();
+  });
   const inner = (() => {
     if (scope.loading) return React.createElement("div", {
       style: {
@@ -9785,6 +10237,10 @@ function RosterView({
         fontSize: 13
       }
     }, "Loading the duty roster\u2026");
+    if (resume && (scope.inScope(resume.dept) || scope.can && scope.can.review)) return React.createElement(RosResume, {
+      to: resume,
+      setRoute: setRoute
+    });
     if (view !== 'rosterHome' && !dept) return React.createElement(RosterHome, {
       index: index,
       staffStore: staffStore,
@@ -9882,6 +10338,28 @@ function RosterNoAccess({
     })
   }, "Back to my units")));
 }
+function RosResume({
+  to,
+  setRoute
+}) {
+  useEffect(() => {
+    setRoute({
+      view: 'rosterGrid',
+      dept: to.dept,
+      year: to.year,
+      month: to.month
+    });
+  }, []);
+  return React.createElement("div", {
+    style: {
+      display: 'grid',
+      placeItems: 'center',
+      height: '30vh',
+      color: '#6c7a8c',
+      fontSize: 13
+    }
+  }, "Opening ", to.dept, " \xB7 ", R.MONTHS[to.month], " ", to.year, "\u2026");
+}
 window.RosterView = RosterView;
 window.UNICO_ROSTER_KIT = {
   api: rosApi,
@@ -9920,6 +10398,7 @@ window.UNICO_ROSTER_KIT = {
   signNames: rosSignNames,
   signLine: rosSignLine,
   signerLine: rosSignerLine,
+  personLine: rosPersonLine,
   RosMarkList,
   OC_BADGE: ROS_OC_BADGE,
   AL_DOT: ROS_AL_DOT,

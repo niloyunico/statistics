@@ -532,6 +532,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     'not-observed': ['Not observed', '#5b6878', '#eef2f6'], missing: ['Missing', '#a3172f', '#fde4e8'], partial: ['No denominator', '#a3172f', '#fde4e8'],
     'den-zero': ['Denominator 0', '#a3172f', '#fde4e8'], 'carried-den': ['Headcount carried', '#8a5a00', '#fff1d6'], manual: ['Entered', '#4b3fb0', '#efebfd'],
     'doc-audit': ['Audits', '#1f4f8a', '#e6eefb'],
+    // The month still running (nothing owed yet) and "empty counts as 0" (lower-is-better KPIs).
+    pending: ['Not sent yet', '#5b6878', '#eef2f6'], 'counted-zero': ['No report · counted 0', '#5b6878', '#eef2f6'],
+    zero: ['0 events', '#14713f', '#e7f6ed'], 'zero-assumed': ['No reports · counted 0', '#5b6878', '#eef2f6'],
   };
   const EvSrc = ({ s }) => { const x = EV_SRC[s] || [s, '#5b6878', '#eef2f6']; return <span className="kp-src" style={{ color: x[1], background: x[2] }}>{x[0]}</span>; };
   const dayOf = (t) => (t ? new Date(t).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'short', year: 'numeric' }) : '');
@@ -573,7 +576,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               const s = u.submission;
               return (
                 <tr key={u.key} className={bad ? 'bad' : u.used ? '' : 'off'}>
-                  <td><b style={{ color: bad ? '#a3172f' : 'var(--ink)' }}>{u.name}</b>{u.expected ? <small>expected to report</small> : !u.used ? <small>not counted</small> : null}</td>
+                  <td><b style={{ color: bad ? '#a3172f' : 'var(--ink)' }}>{u.name}</b>{u.source === 'pending' ? <small>month in progress</small> : u.source === 'counted-zero' ? <small>no report — counted as 0</small> : u.expected ? <small>expected to report</small> : !u.used ? <small>not counted</small> : null}</td>
                   <td className="n">{K.has(u.num) ? u.num : '—'}</td>
                   {def.formula !== 'count' && def.formula !== 'direct' && <td className="n">{K.has(u.den) ? u.den : '—'}{u.carriedFrom ? <small>from {u.carriedFrom}</small> : null}</td>}
                   <td className="n"><b>{K.has(u.value) ? K.fmt(def, u.value) : '—'}</b></td>

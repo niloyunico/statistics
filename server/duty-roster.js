@@ -32,6 +32,14 @@ const W = require('./roster-workflow');
 const COLL = 'dutyRosters';
 const VER_COLL = 'rosterVersions';
 const CFG_COLL = 'rosterConfig';
+// DRAFT SAFETY (2026-11-22). Autosaves overwrite the sheet every few seconds and versions are
+// only kept at hand-overs, so a draft once had no history at all. Now, at most once an hour per
+// sheet, the sheet as it stood BEFORE a save is kept here (newest AUTO_CAP per sheet), and
+// listed under Versions. An administrator's delete first copies the sheet to DEL_COLL.
+const AUTO_COLL = 'rosterAutosaves';
+const DEL_COLL = 'rostersDeleted';
+const AUTO_EVERY_MS = 60 * 60 * 1000;
+const AUTO_CAP = 72;
 // Every status the store may hold, legacy spelling included (the old STATUSES export).
 const STATUSES = W.STATUSES.concat(Object.keys(W.LEGACY));
 
@@ -50,10 +58,13 @@ async function col() {
   return c;
 }
 async function verCol() { const db = await getDbHandle(); return db ? db.collection(VER_COLL) : null; }
+async function autoCol() { const db = await getDbHandle(); return db ? db.collection(AUTO_COLL) : null; }
 async function cfgCol() { const db = await getDbHandle(); return db ? db.collection(CFG_COLL) : null; }
 // In-memory fallback when there is no database (the local seed preview and the tests).
 const mem = [];
 const memVersions = [];
+const memAutos = [];
+const memDeleted = [];
 let memCfg = { _id: 'config', cns: null, depts: {} };
 
 const s = (v, max) => String(v == null ? '' : v).slice(0, max || 200);
@@ -426,7 +437,10 @@ async function signersWithDesig(signers) {
       const sg = out[k];
       const u = users && typeof users.findOne === 'function' ? await users.findOne({ username: sg.username }) : null;
       const p = staffOfAccount(u || { name: sg.name }, staffAll);
-      if (p) out[k] = Object.assign({}, sg, { desig: p.designation || '', dept: p.current_department || '' });
+      if (p) out[k] = Object.assign({}, sg, { desig: p.designation || '', dept: p.current_department || '', desigFrom: 'staff' });
+      // No staff record linked to the account: the designation the person set on their own
+      // account (My Profile), or the account's title — never the box's role label.
+      else if (u && (u.designation || u.title)) out[k] = Object.assign({}, sg, { desig: String(u.designation || u.title), dept: u.workDepartment || '', desigFrom: 'account' });
     } catch (e) { /* this signer stays as it was */ }
   }
   return out;
@@ -533,6 +547,35 @@ async function snapshot(doc, r) {
     const mine = memVersions.filter((x) => x.rosterId === v.rosterId).sort((a, b) => a.revision - b.revision);
     while (mine.length > W.VERSION_CAP) { const drop = mine.shift(); memVersions.splice(memVersions.indexOf(drop), 1); }
   }
+}
+
+/* The sheet as it stood before a draft save, kept at most once per AUTO_EVERY_MS per sheet.
+   Best effort: a failure here never blocks the save itself. */
+async function autosaveSnapshot(existing, byWho) {
+  try {
+    if (!existing || !existing.id || !existing.grid || !Object.keys(existing.grid).length) return;
+    const now = Date.now();
+    const v = { rosterId: existing.id, revision: existing.revision || 0, status: existing.status || 'draft', action: 'autosave', at: now, by: byWho || '', byName: '',
+      basedOnUpdate: existing.updatedAt || null, grid: existing.grid || {}, order: existing.order || [], names: existing.names || {}, rules: existing.rules || {},
+      oncall: existing.oncall || {}, altLeave: existing.altLeave || {} };
+    const c = await autoCol();
+    if (c) {
+      const last = await c.find({ rosterId: v.rosterId }, { projection: { at: 1 } }).sort({ at: -1 }).limit(1).toArray();
+      if (last.length && now - (last[0].at || 0) < AUTO_EVERY_MS) return;
+      await c.insertOne(Object.assign({ _id: v.rosterId + '#auto@' + now }, v));
+      const n = await c.countDocuments({ rosterId: v.rosterId });
+      if (n > AUTO_CAP) {
+        const old = await c.find({ rosterId: v.rosterId }, { projection: { _id: 1 } }).sort({ at: 1 }).limit(n - AUTO_CAP).toArray();
+        if (old.length) await c.deleteMany({ _id: { $in: old.map((x) => x._id) } });
+      }
+    } else {
+      const mine = memAutos.filter((x) => x.rosterId === v.rosterId);
+      if (mine.length && now - Math.max(...mine.map((x) => x.at || 0)) < AUTO_EVERY_MS) return;
+      memAutos.push(v);
+      const all = memAutos.filter((x) => x.rosterId === v.rosterId).sort((a, b) => a.at - b.at);
+      while (all.length > AUTO_CAP) { const drop = all.shift(); memAutos.splice(memAutos.indexOf(drop), 1); }
+    }
+  } catch (e) { /* the save goes ahead */ }
 }
 
 /* The one way a sheet changes status. Resolves the config and the actor, asks the
@@ -1127,7 +1170,13 @@ function mount(app, opts) {
       const c = await verCol();
       const list = c ? await c.find({ rosterId: id }, { projection: { grid: 0, order: 0, names: 0, rules: 0 } }).sort({ revision: -1 }).toArray()
         : memVersions.filter((v) => v.rosterId === id).sort((a, b) => b.revision - a.revision);
-      res.json({ ok: true, versions: list.map((v) => ({ revision: v.revision, status: v.status, action: v.action, at: v.at, by: v.by, byName: v.byName, note: v.note || '' })) });
+      const ac = await autoCol();
+      const autos = ac ? await ac.find({ rosterId: id }, { projection: { grid: 0, order: 0, names: 0, rules: 0, oncall: 0, altLeave: 0 } }).sort({ at: -1 }).toArray()
+        : memAutos.filter((v) => v.rosterId === id).sort((a, b) => b.at - a.at);
+      res.json({ ok: true,
+        versions: list.map((v) => ({ revision: v.revision, status: v.status, action: v.action, at: v.at, by: v.by, byName: v.byName, note: v.note || '' })),
+        // Draft states kept by the hourly autosave snapshot (the sheet BEFORE a save).
+        autosaves: autos.map((v) => ({ revision: v.revision, status: v.status, action: 'autosave', at: v.at, by: v.by, auto: true })) });
     } catch (e) { res.status(500).json({ ok: false, error: 'Could not load the roster versions.' }); }
   });
   app.get('/api/rosters/:id/versions/:revision', readGuard, async (req, res) => {
@@ -1135,7 +1184,11 @@ function mount(app, opts) {
       const id = s(req.params.id, 80); const rev = parseInt(req.params.revision, 10);
       if (!(await sheetVisible(req, await getOne(id)))) return res.status(403).json({ ok: false, error: 'This roster is outside your departments.' });
       const c = await verCol();
-      const v = c ? await c.findOne({ rosterId: id, revision: rev }) : memVersions.find((x) => x.rosterId === id && x.revision === rev);
+      // ?at=<ms> = one of the hourly draft autosaves rather than a hand-over version.
+      const at = parseInt(req.query && req.query.at, 10);
+      let v;
+      if (at) { const ac = await autoCol(); v = ac ? await ac.findOne({ rosterId: id, at }) : memAutos.find((x) => x.rosterId === id && x.at === at); }
+      else v = c ? await c.findOne({ rosterId: id, revision: rev }) : memVersions.find((x) => x.rosterId === id && x.revision === rev);
       if (!v) return res.status(404).json({ ok: false, error: 'That version is no longer kept.' });
       const { _id, ...rest } = v;
       res.json({ ok: true, version: rest });
@@ -1384,6 +1437,8 @@ function mount(app, opts) {
       // Editing a returned sheet: the correction has started, it is a draft again.
       let push = null;
       if (eff === 'returned') { const rs = W.resumeOnEdit(existing, await actorOf(req, existing), doc.updatedAt); Object.assign(doc, rs.set); push = rs.entry; }
+      // The draft as it stood before this save (hourly), recoverable under Versions.
+      if (existing) await autosaveSnapshot(existing, who(req));
       const raced = () => res.status(409).json({ ok: false, conflict: true,
         error: 'Someone else saved this roster at the same moment. Reload the month and try again.' });
       if (c) {
@@ -1426,6 +1481,14 @@ function mount(app, opts) {
     try {
       const id = s(req.params.id, 80);
       const c = await col();
+      // Never gone for good: the whole sheet is copied aside first, with who deleted it and when.
+      const doomed = await getOne(id);
+      if (doomed) {
+        const copy = Object.assign({}, doomed, { deletedAt: Date.now(), deletedBy: who(req) });
+        const db = c ? await getDbHandle() : null;
+        if (db) await db.collection(DEL_COLL).insertOne(Object.assign({ _id: id + '#deleted@' + copy.deletedAt }, copy));
+        else memDeleted.push(copy);
+      }
       if (c) { const r = await c.deleteOne({ _id: id }); return res.json({ ok: r.deletedCount > 0 }); }
       const n = mem.length;
       const idx = mem.findIndex((x) => x.id === id);
@@ -1436,11 +1499,13 @@ function mount(app, opts) {
 }
 
 module.exports = {
-  mount, COLL, VER_COLL, CFG_COLL, STATUSES, rosterId, normGrid,
+  mount, COLL, VER_COLL, CFG_COLL, AUTO_COLL, DEL_COLL, AUTO_EVERY_MS, STATUSES, rosterId, normGrid,
   effStatus: W.effStatus, rawStatuses: W.rawStatuses, resumeOnEdit: W.resumeOnEdit, PENDING: W.PENDING, EDITABLE: W.EDITABLE, HISTORY_CAP: W.HISTORY_CAP,
   applyTransition, getConfig, deptIndex, deptKeyOf, getOne, decorate, actorOf, isUnitIncharge,
   TRAINEE_UNIT, TRAINEE_ID, MANAGER_UNIT, SUPERVISOR_UNIT, isTraineeNurse, isNurseManager, rosterUnitOf, movedOutOf, normGuests, carriedGuests, normGuestKeys,
   unitCanon, buildCanon, staffOfAccount, signersWithDesig, __resetCanon: () => { _canon = null; _canonTs = 0; },
+  // tests: the in-memory delete archive and autosave snapshots (no database)
+  __deleted: () => memDeleted.slice(), __autos: () => memAutos.slice(),
   // The in-memory store, for the tests to plant a legacy row in.
   __mem: () => mem,
 };

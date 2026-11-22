@@ -25,7 +25,7 @@ const resultOf = (r) => (r.latest ? 'latest: ' + r.latest.label : r.freqMonths >
 // A month cell: '·' when the KPI owes nothing that month (measured less often).
 const monthTxt = (r, m, fv) => { const c = (r.cells || {})[m] || {}; return c.source === 'not-due' ? '·' : fv(r, c.value); };
 const LVL = { error: 'D23A52', warn: 'E0A21E', info: '7B8796' };
-const SRC_LABEL = { 'doc-audit': 'Documentation audits', approved: 'Approved', 'overlay-edit': 'Console edit', audit: 'Audit', own: 'Own reading', covered: 'Covered by audit', 'not-audited': 'Not audited', 'not-observed': 'Not observed', missing: 'MISSING', partial: 'No denominator', 'den-zero': 'Denominator 0', 'carried-den': 'Headcount carried', manual: 'Entered' };
+const SRC_LABEL = { 'doc-audit': 'Documentation audits', approved: 'Approved', 'overlay-edit': 'Console edit', audit: 'Audit', own: 'Own reading', covered: 'Covered by audit', 'not-audited': 'Not audited', 'not-observed': 'Not observed', missing: 'MISSING', partial: 'No denominator', 'den-zero': 'Denominator 0', 'carried-den': 'Headcount carried', manual: 'Entered', pending: 'Not sent yet', 'counted-zero': 'No report · counted 0', zero: '0 events', 'zero-assumed': 'No reports · counted 0' };
 const who = (x) => [x && x.reviewedBy, x && x.by].filter(Boolean)[0] || '';
 const shortDate = (t) => (t ? new Date(t).toLocaleDateString('en-GB', { timeZone: 'Asia/Dhaka', day: 'numeric', month: 'short' }) : '');
 
