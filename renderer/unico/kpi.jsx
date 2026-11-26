@@ -65,6 +65,70 @@
       w.document.close();
     } catch (e) { if (w) w.close(); setCapturing(false); throw e; }
   }
+  /* The same sheets as a PowerPoint — an EXACT copy of the report on screen: every sheet captured
+     like the PDF and placed as one A4-landscape slide, with the deck's Morph transition (0.5 s,
+     smooth fade between pages; plain fade where Morph is not supported). Built in the browser:
+     the page images are too large to send to the server. pptxgenjs's browser bundle carries JSZip. */
+  let pptxLibs = null;
+  function loadPptxLibs() {
+    if (window.PptxGenJS && window.JSZip) return Promise.resolve();
+    if (!pptxLibs) pptxLibs = new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'vendor/pptxgen.bundle.js'; s.async = true;
+      s.onload = () => (window.PptxGenJS ? res() : rej(new Error('PowerPoint tools did not start.')));
+      s.onerror = () => rej(new Error('Could not load the PowerPoint tools.'));
+      document.head.appendChild(s);
+    }).catch((e) => { pptxLibs = null; throw e; });
+    return pptxLibs;
+  }
+  const MORPH_XML = '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">'
+    + '<mc:Choice xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" Requires="p159">'
+    + '<p:transition spd="fast" p14:dur="500"><p159:morph option="byObject"/></p:transition></mc:Choice>'
+    + '<mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent>';
+  async function withMorph(buf) {
+    try {
+      const zip = await window.JSZip.loadAsync(buf);
+      const names = Object.keys(zip.files).filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n));
+      for (const n of names) {
+        let xml = await zip.file(n).async('string');
+        if (xml.indexOf('<p:transition') >= 0 || xml.indexOf('</p:sld>') < 0) continue;
+        xml = xml.indexOf('<p:timing') >= 0 ? xml.replace('<p:timing', MORPH_XML + '<p:timing') : xml.replace('</p:sld>', MORPH_XML + '</p:sld>');
+        zip.file(n, xml);
+      }
+      return await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', compression: 'DEFLATE' });
+    } catch (e) { return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' }); }
+  }
+  async function pptxSheets(getRoot, title, fileName, log, setCapturing) {
+    await log();
+    if (window.unicoLoadPdfLibs && !window.html2canvas) await window.unicoLoadPdfLibs();
+    await loadPptxLibs();
+    const H = window.html2canvas;
+    if (!H) throw new Error('The capture tool could not load. Please try again.');
+    setCapturing(true);
+    try {
+      await new Promise((r) => setTimeout(r, 120));
+      const sheets = [...getRoot().querySelectorAll('.kp-sheet')];
+      const pptx = new window.PptxGenJS();
+      pptx.defineLayout({ name: 'A4L', width: 11.69, height: 8.27 });
+      pptx.layout = 'A4L';
+      pptx.title = title; pptx.author = me() || 'UNICO'; pptx.company = 'UNICO Hospitals'; pptx.subject = 'Nursing KPI report';
+      for (let i = 0; i < sheets.length; i++) {
+        const c = await H(sheets[i], { scale: 1.6, backgroundColor: '#ffffff', useCORS: true, logging: false, windowWidth: 1200 });
+        const sl = pptx.addSlide();
+        sl.background = { color: 'FFFFFF' };
+        sl.addImage({ data: c.toDataURL('image/jpeg', 0.88), x: 0, y: 0, w: 11.69, h: 8.27, objectName: '!!page' });
+        const h = sheets[i].querySelector('h1,h2,h3');
+        if (h && h.textContent) sl.addNotes(h.textContent.trim());
+      }
+      const buf = await pptx.write({ outputType: 'arraybuffer' });
+      const blob = await withMorph(buf);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = fileName + '.pptx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast('PowerPoint downloaded — same as the report.', 'success');
+    } finally { setCapturing(false); }
+  }
   // The same sheets as a PDF (one A4 landscape page per sheet), logged first.
   async function pdfSheets(getRoot, title, fileName, log, setCapturing) {
     await log();
@@ -246,6 +310,28 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
 .kp-stbl td{padding:6px 8px;border:1px solid #d9e2ec;text-align:center;font-variant-numeric:tabular-nums}
 .kp-stbl td.l{text-align:left}
 .kp-stbl tr:nth-child(even) td{background:#f4f7fa}
+.kp-stbl.dense{font-size:10px}.kp-stbl.dense th{padding:6px 4px;font-size:9px;letter-spacing:0}.kp-stbl.dense td{padding:5px 4px}
+.kp-mcell{display:inline-block;min-width:34px;padding:2px 5px;border-radius:6px;font-weight:700}
+.kp-rmk{width:100%;min-width:0;box-sizing:border-box;display:block;min-height:34px;border:1px dashed #b9d6e6;border-radius:6px;background:#f8fcfe;font:inherit;font-size:11px;padding:4px 6px;resize:vertical;outline:0}
+.kp-rmk:focus{border-style:solid;border-color:#008FCB;background:#fff}
+.kp-cnt{display:block;font-size:9.5px;color:#7b8796;font-weight:500;margin-top:2px;white-space:nowrap}
+.kp-xitem{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 11px;cursor:pointer;font:inherit;font-size:13px;color:var(--ink)}
+.kp-xitem:hover{background:#eaf6fb;border-color:#9cc9e0}.kp-xitem span{font-size:11px;color:var(--muted)}.kp-xitem:disabled{opacity:.5;cursor:default}
+.kp-pop{position:fixed;z-index:9999;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 16px 40px rgba(13,27,46,.18);padding:12px 14px}
+.kp-tile{border-radius:12px;padding:12px 14px;border-left:5px solid}
+.kp-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.kp-stat{position:relative;border-radius:14px;padding:12px 14px 11px;border:1px solid #e3e9f0;box-shadow:0 4px 14px rgba(13,27,46,.06);overflow:hidden;min-height:96px}
+.kp-stat:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--acc)}
+.kp-stat-h{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;color:#5b6878;text-transform:uppercase;letter-spacing:.4px}
+.kp-stat-h i{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;color:#fff;font-style:normal;font-size:10px}
+.kp-stat-v{font-size:26px;font-weight:800;line-height:1.1;margin-top:8px;font-variant-numeric:tabular-nums}
+.kp-stat-v small{font-size:11px;font-weight:600;color:#7b8796;margin-left:6px}
+.kp-stat-f{font-size:11px;color:#7b8796;margin-top:5px}
+.kp-stat-bar{position:relative;display:block;height:6px;border-radius:99px;background:#e3e9f0;margin:2px 0 5px;overflow:visible}
+.kp-stat-bar b{position:absolute;left:0;top:0;bottom:0;border-radius:99px}
+.kp-stat-bar em{position:absolute;top:-3px;width:2px;height:12px;background:#00293A;border-radius:1px}
+.kp-tile b{display:block;font-size:22px;font-weight:800;line-height:1.1}
+.kp-tile span{display:block;font-size:10.5px;color:#7b8796;margin-top:4px;text-transform:uppercase;letter-spacing:.3px;font-weight:700}
 .kp-comment{border:1px dashed #9cc9e0;border-radius:10px;background:#f6fbfe;padding:8px 10px;font-size:12px;line-height:1.45;min-height:46px;white-space:pre-wrap}
 .kp-comment textarea{border:0;background:transparent;width:100%;font:inherit;resize:vertical;min-height:44px;outline:0}
 .kp-signs{display:grid;grid-template-columns:repeat(4,1fr);gap:28px;margin-top:20px}
@@ -415,22 +501,115 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     );
   }
   // A small 12-month sparkline with the target as a dashed line; nulls are gaps.
+  /* Small trend graph for the report's Trend column: the last few measured values (the
+     direction itself is K's rule — last two measured points), coloured by that direction. */
+  /* A smooth curve through points [[x, y], …] (Catmull-Rom as cubic Béziers); two points = a line. */
+  function smoothPath(p) {
+    if (!p.length) return '';
+    const f = (v) => v.toFixed(1);
+    let d = 'M' + f(p[0][0]) + ' ' + f(p[0][1]);
+    if (p.length === 2) return d + ' L' + f(p[1][0]) + ' ' + f(p[1][1]);
+    for (let i = 0; i < p.length - 1; i++) {
+      const p0 = p[i - 1] || p[i], p1 = p[i], p2 = p[i + 1], p3 = p[i + 2] || p2;
+      const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6], c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+      d += ' C' + f(c1[0]) + ' ' + f(c1[1]) + ' ' + f(c2[0]) + ' ' + f(c2[1]) + ' ' + f(p2[0]) + ' ' + f(p2[1]);
+    }
+    return d;
+  }
+  /* Small smooth trend graph for the report's Trend column: the last few measured values (the
+     direction itself is K's rule — last two measured points), coloured by that direction. */
+  function TrendGraph({ row }) {
+    const d = row.trendDir;
+    const vals = (row.trend || []).map((p) => p.v).filter((v) => v != null).map(Number).slice(-6);
+    if (!d || vals.length < 2) return <span className="kp-muted">—</span>;
+    const W = 64, Hh = 24, col = TREND[d][1];
+    const mx = Math.max(...vals), mn = Math.min(...vals);
+    const sx = (i) => 4 + (i / (vals.length - 1)) * (W - 8), sy = (v) => (mx === mn ? Hh / 2 : Hh - 4 - ((v - mn) / (mx - mn)) * (Hh - 8));
+    const pts = vals.map((v, i) => [sx(i), sy(v)]);
+    const line = smoothPath(pts);
+    const area = line + ' L' + pts[pts.length - 1][0].toFixed(1) + ' ' + Hh + ' L' + pts[0][0].toFixed(1) + ' ' + Hh + ' Z';
+    const n = vals.length - 1;
+    return (
+      <svg width={W} height={Hh} style={{ display: 'block', margin: '0 auto' }} role="img" aria-label={TREND[d][0].slice(2)}><title>{TREND[d][0].slice(2)}</title>
+        <path d={area} fill={col} fillOpacity="0.13" stroke="none" />
+        <path d={line} fill="none" stroke={col} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        <circle cx={pts[n][0]} cy={pts[n][1]} r="3" fill="#fff" stroke={col} strokeWidth="2" />
+      </svg>
+    );
+  }
+  /* The KPI page chart: a bar per month (coloured by that month's status against its target, the
+     value on top), a smooth curved line through the results, and the target as a dashed line.
+     Starts at the first month with a figure. Plain SVG, so print / PDF capture it as drawn. */
+  // a round top for the axis, a little above the highest bar (finer steps, so 85% gets 100, not 200)
+  const niceMax = (v) => { const x = v * 1.12; const p = Math.pow(10, Math.floor(Math.log10(x))); const n = x / p; const step = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((k) => n <= k) || 10; return step * p; };
+  function ComboChart({ row, cfg, height }) {
+    const all = row.trend || [];
+    const first = all.findIndex((p) => p.v != null);
+    if (first < 0) return <div className="kp-empty">No monthly figures yet for this KPI.</div>;
+    const pts = all.slice(first);
+    const W = 540, H = height || 230, L = 44, R = 58, T = 24, B = 34;
+    const vals = pts.map((p) => p.v).filter((v) => v != null).map(Number);
+    const tgs = pts.map((p) => p.t).filter((v) => v != null).map(Number);
+    const hi = Math.max(0.0001, ...vals, ...tgs);
+    const top = K.unitKind(row) === 'pct' && hi <= 100 ? Math.min(100, niceMax(hi)) : niceMax(hi);
+    const n = pts.length, slot = (W - L - R) / n, bw = Math.min(44, slot * 0.56);
+    const x = (i) => L + slot * (i + 0.5), y = (v) => T + (H - T - B) * (1 - Number(v) / top);
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map((k) => k * top);
+    const colOf = (p) => { const st = K.statusOf(row, p.v, p.t, cfg); return (ST[st] && (st === 'met' || st === 'near' || st === 'off')) ? ST[st].color : '#008FCB'; };
+    const runs = []; let cur = [];
+    pts.forEach((p, i) => { if (p.v == null) { if (cur.length) runs.push(cur); cur = []; return; } cur.push([x(i), y(p.v)]); });
+    if (cur.length) runs.push(cur);
+    const tPts = pts.map((p, i) => (p.t != null ? [x(i), y(p.t)] : null)).filter(Boolean);
+    const lastT = [...pts].reverse().find((p) => p.t != null);
+    const short = (v) => K.fmt(row, v, { bare: K.unitKind(row) !== 'pct' });
+    const tick = (v) => (top >= 10 ? Math.round(v) : Math.round(v * 100) / 100).toLocaleString('en-US');
+    const uid = 'cc' + String(row.kpiId).replace(/[^a-z0-9]/gi, '');
+    return (
+      <svg viewBox={'0 0 ' + W + ' ' + H} width="100%" style={{ display: 'block', maxHeight: H + 10 }} role="img" aria-label={'Monthly results of ' + row.name}>
+        <defs>
+          <linearGradient id={uid} x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#fff" stopOpacity="0.35" /><stop offset="1" stopColor="#fff" stopOpacity="0" /></linearGradient>
+        </defs>
+        <rect x={L} y={T} width={W - L - R} height={H - T - B} fill="#fafcfe" rx="6" />
+        {ticks.map((v, i) => <g key={i}><line x1={L} x2={W - R} y1={y(v)} y2={y(v)} stroke="#e3e9f0" strokeDasharray={i ? '3 4' : ''} /><text x={L - 6} y={y(v) + 3.5} textAnchor="end" fontSize="10" fill="#7b8796">{tick(v)}</text></g>)}
+        {pts.map((p, i) => {
+          if (p.v == null) return <text key={i} x={x(i)} y={H - B - 6} textAnchor="middle" fontSize="11" fill="#b9c2cd">—</text>;
+          const yy = y(p.v), hh = Math.max(2, H - B - yy), c = colOf(p);
+          return (<g key={i}>
+            <rect x={x(i) - bw / 2} y={H - B - hh} width={bw} height={hh} rx="5" fill={c} fillOpacity="0.88" />
+            <rect x={x(i) - bw / 2} y={H - B - hh} width={bw} height={hh} rx="5" fill={'url(#' + uid + ')'} />
+            {hh > 40 ? <text x={x(i)} y={H - B - hh / 2 + 8} textAnchor="middle" fontSize="11.5" fontWeight="800" fill="#fff">{short(p.v)}</text> : <text x={x(i)} y={H - B - hh - 11} textAnchor="middle" fontSize="11" fontWeight="800" fill={c}>{short(p.v)}</text>}
+          </g>);
+        })}
+        {tPts.length > 1 && <polyline points={[[L, tPts[0][1]]].concat(tPts, [[W - R, tPts[tPts.length - 1][1]]]).map((q) => q[0].toFixed(1) + ',' + q[1].toFixed(1)).join(' ')} fill="none" stroke="#37B4A6" strokeWidth="1.6" strokeDasharray="6 5" />}
+        {tPts.length === 1 && <line x1={L} x2={W - R} y1={tPts[0][1]} y2={tPts[0][1]} stroke="#37B4A6" strokeWidth="1.6" strokeDasharray="6 5" />}
+        {lastT && <g><text x={W - R + 6} y={y(lastT.t) - 2} fontSize="11" fontWeight="800" fill="#2a8f84">{K.fmt(row, lastT.t)}</text><text x={W - R + 6} y={y(lastT.t) + 10} fontSize="9" fill="#2a8f84">target</text></g>}
+        {runs.map((r, i) => (r.length > 1 ? <path key={i} d={smoothPath(r)} fill="none" stroke="#00293A" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" /> : null))}
+        {pts.map((p, i) => (p.v == null ? null : <circle key={i} cx={x(i)} cy={y(p.v)} r="4.2" fill="#fff" stroke="#00293A" strokeWidth="2.2" />))}
+        {pts.map((p, i) => <text key={i} x={x(i)} y={H - B + 16} textAnchor="middle" fontSize="10.5" fill="#5b6878">{K.fmtMonth(p.m).replace(' 20', " '")}</text>)}
+      </svg>
+    );
+  }
   function Spark({ row, w, h }) {
     const W = w || 120, Hh = h || 30;
-    const pts = (row.trend || []);
+    // start at the first month with a figure, so the line uses the whole width (no long empty lead-in)
+    const all = (row.trend || []);
+    const first = all.findIndex((p) => p.v != null);
+    const pts = first < 0 ? [] : all.slice(first);
     const vals = pts.map((p) => p.v).filter((v) => v != null);
     if (vals.length < 1) return <span className="kp-muted" style={{ fontSize: 11 }}>no data</span>;
     const tv = row.target;
     const mx = Math.max(...vals, tv != null ? tv : -Infinity), mn = Math.min(...vals, tv != null ? tv : Infinity, 0);
     const sx = (i) => 2 + (i / Math.max(pts.length - 1, 1)) * (W - 4), sy = (v) => Hh - 3 - ((v - mn) / ((mx - mn) || 1)) * (Hh - 6);
-    let d = '', pen = false;
-    pts.forEach((p, i) => { if (p.v == null) { pen = false; return; } d += (pen ? 'L' : 'M') + sx(i).toFixed(1) + ' ' + sy(p.v).toFixed(1) + ' '; pen = true; });
+    // one smooth curve per run of months with figures (a missing month breaks the line)
+    const runs = []; let cur = [];
+    pts.forEach((p, i) => { if (p.v == null) { if (cur.length) runs.push(cur); cur = []; return; } cur.push([sx(i), sy(p.v)]); });
+    if (cur.length) runs.push(cur);
     const last = pts.map((p, i) => [p, i]).filter(([p]) => p.v != null).pop();
     const col = ST[row.status].color;
     return (
       <svg width={W} height={Hh} style={{ display: 'block' }}>
         {tv != null && <line x1="0" x2={W} y1={sy(tv)} y2={sy(tv)} stroke="#37B4A6" strokeDasharray="3 3" />}
-        <path d={d} fill="none" stroke={col} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />
+        {runs.filter((r) => r.length > 1).map((r, i) => <path key={i} d={smoothPath(r)} fill="none" stroke={col} strokeWidth="1.8" strokeLinejoin="round" strokeLinecap="round" />)}
         {last && <circle cx={sx(last[1])} cy={sy(last[0].v)} r="2.8" fill={col} />}
       </svg>
     );
@@ -482,6 +661,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   const kpiChanged = () => { try { window.dispatchEvent(new Event('kpi:data-changed')); localStorage.setItem('kpiDataBump', String(Date.now())); } catch (e) { /* private window */ } };
   window.unicoKpiChanged = kpiChanged;
 
+  // Report period choices: no "Cycle 1 / Cycle 2" in reports (the user's rule) — months, year or a custom range.
+  const REPORT_PRESETS = K.PRESETS.filter((x) => !x.cycle).map((x) => x.id);
   // Years to choose from: from the year before the programme started up to this year.
   const yearsOf = (meta) => { const last = +meta.thisMonth.slice(0, 4), first = Math.min(+meta.config.cycleStart.slice(0, 4) - 1, last - 2); const out = []; for (let y = last; y >= first; y--) out.push(y); return out; };
   function PeriodPicker({ meta, p, setP, range, presets, maxMonth, liveOpt }) {
@@ -623,7 +804,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
 
   // A KPI measured every N months: which period its figure is ("Jan–Jun 2026", or "latest: …").
   const resultOf = (r) => (r.latest ? 'latest: ' + r.latest.label : r.freqMonths > 1 && r.resultLabel ? r.resultLabel : '');
-  const ResultTag = ({ r }) => (resultOf(r) ? <div className="kp-muted" style={{ fontSize: 10.5, whiteSpace: 'nowrap' }}>{resultOf(r)}{r.nextDue && r.latest ? ' · next ' + K.fmtMonth(r.nextDue) : ''}</div> : null);
+  const ResultTag = ({ r }) => (resultOf(r) ? <div className="kp-muted" style={{ fontSize: 10.5, maxWidth: 130, margin: '0 auto', lineHeight: 1.3 }}>{resultOf(r)}{r.nextDue && r.latest ? ' · next ' + K.fmtMonth(r.nextDue) : ''}</div> : null);
   // The periods of a less-often KPI, as a small table (screen and report).
   function PeriodsTable({ row }) {
     const list = row.periods || [];
@@ -1302,7 +1483,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       <div className="kp-wrap">
         <div className="kp-card kp-pad" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}><h3 style={{ margin: 0, fontSize: 15 }}>Make a report</h3><span className="kp-muted">one month, 2, 3, 6 or 12 months, a cycle, or any range you choose</span></div>
-          <PeriodPicker meta={meta} p={p} setP={setP} range={range} maxMonth={meta.thisMonth} liveOpt />
+          <PeriodPicker meta={meta} p={p} setP={setP} range={range} presets={REPORT_PRESETS} maxMonth={meta.thisMonth} liveOpt />
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <Btn onClick={() => setRoute({ view: 'kpiReports', report: K.reportId(range.from, range.to) })}>Preview</Btn>
             {canGen && <Btn pri disabled={busy} onClick={generate}>{busy ? 'Preparing…' : 'Generate & save report'}</Btn>}
@@ -1545,12 +1726,182 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     );
   }
 
+  /* A pop-up panel on document.body under its button — never clipped by a card or the sheet. */
+  function Pop({ anchor, onClose, children, width }) {
+    const [pos, setPos] = useState(null);
+    const box = useRef(null);
+    const closeRef = useRef(onClose); closeRef.current = onClose;
+    useEffect(() => {
+      const place = () => { const el = anchor.current; if (!el) return; const b = el.getBoundingClientRect(); const w = Math.min(width || 360, window.innerWidth - 16);
+        setPos({ top: b.bottom + 6, left: Math.max(8, Math.min(b.left, window.innerWidth - w - 8)), width: w }); };
+      place();
+      const down = (e) => { if (box.current && !box.current.contains(e.target) && !(anchor.current && anchor.current.contains(e.target))) closeRef.current(); };
+      const key = (e) => { if (e.key === 'Escape') closeRef.current(); };
+      window.addEventListener('resize', place); window.addEventListener('scroll', place, true);
+      document.addEventListener('mousedown', down); document.addEventListener('keydown', key);
+      return () => { window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true); document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key); };
+    }, []);
+    if (!pos) return null;
+    return ReactDOM.createPortal(<div ref={box} className="kp-pop" style={pos}>{children}</div>, document.body);
+  }
+
+  /* The report's months, changeable without leaving the report: ‹ › step the whole range by its
+     own length; the button opens the same choices as "Make a report". */
+  function ReportPeriodSel({ meta, rep, go }) {
+    const [open, setOpen] = useState(false);
+    const btn = useRef(null);
+    const [p, setP, range] = usePeriod(meta, 'reportbar', '1m', null, false);
+    const len = K.monthDiff(rep.from, rep.to) + 1;
+    const nextTo = K.addMonth(rep.to, len);
+    const step = (n) => go(K.addMonth(rep.from, n * len), K.addMonth(rep.to, n * len));
+    const toggle = () => { if (!open) setP({ preset: 'custom', from: rep.from, to: rep.to }); setOpen(!open); };
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <button className="btn sm" title={'Previous ' + (len > 1 ? len + ' months' : 'month')} onClick={() => step(-1)}>‹</button>
+        <button ref={btn} className="btn sm" style={{ fontWeight: 800, fontSize: 13.5 }} onClick={toggle} title="Choose the months of this report">📅 {K.fmtRange(rep.from, rep.to)} ▾</button>
+        <button className="btn sm" title={'Next ' + (len > 1 ? len + ' months' : 'month')} disabled={nextTo > meta.thisMonth} onClick={() => step(1)}>›</button>
+        {open && <Pop anchor={btn} onClose={() => setOpen(false)} width={680}>
+          <div className="kp-lab">Report period</div>
+          <PeriodPicker meta={meta} p={p} setP={setP} range={range} presets={REPORT_PRESETS} maxMonth={meta.thisMonth} liveOpt />
+          <div style={{ display: 'flex', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+            <Btn onClick={() => setOpen(false)}>Cancel</Btn>
+            <Btn pri disabled={!range} onClick={() => { setOpen(false); go(range.from, range.to); }}>Open {range ? K.fmtRange(range.from, range.to) : ''}</Btn>
+          </div>
+        </Pop>}
+      </span>
+    );
+  }
+
+  // Scorecard columns a person can show / hide (# and KPI always show). Also sent to the PowerPoint / Excel.
+  const SC_COLS = [['months', 'Month-wise results'], ['current', 'Current / Period'], ['target', 'Target'], ['variance', 'Variance'], ['status', 'Status'], ['trend', 'Trend graph'], ['remarks', 'Remarks']];
+  function ColumnsMenu({ cols, setCols }) {
+    const [open, setOpen] = useState(false);
+    const btn = useRef(null);
+    const flip = (k) => setCols(cols.indexOf(k) >= 0 ? cols.filter((x) => x !== k) : SC_COLS.map((c) => c[0]).filter((x) => x === k || cols.indexOf(x) >= 0));
+    return (
+      <>
+        <button ref={btn} className="btn sm" onClick={() => setOpen(!open)} title="Show or hide scorecard columns (screen, print, PDF, PowerPoint, Excel)">Columns ▾</button>
+        {open && <Pop anchor={btn} onClose={() => setOpen(false)} width={240}>
+          <div className="kp-lab">Scorecard columns</div>
+          {SC_COLS.map(([k, l]) => <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', fontSize: 13, cursor: 'pointer' }}>
+            <input type="checkbox" checked={cols.indexOf(k) >= 0} onChange={() => flip(k)} />{l}</label>)}
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}><Btn onClick={() => setCols(SC_COLS.map((c) => c[0]))}>Show all</Btn></div>
+        </Pop>}
+      </>
+    );
+  }
+
+  /* One month's value, shaded against that month's target. */
+  function MonthCell({ row, m, cfg }) {
+    const x = K.monthResult(row, m, cfg);
+    if (x.status === 'off-cycle') return <span style={{ color: '#b9c2cd' }} title={K.fmtMonthLong(m) + ': not counted for this KPI'}>·</span>;
+    if (!K.has(x.value)) return <span style={{ color: '#b9c2cd' }} title={K.fmtMonthLong(m) + ': no figure'}>—</span>;
+    const st = ST[x.status] || ST.nodata;
+    const cnt = K.countLabel(row, x.num, x.den);
+    return <span title={K.fmtMonthLong(m) + ': ' + K.fmt(row, x.value) + (cnt ? ' (' + (row.numLabel || 'numerator') + ' ' + cnt.replace(' / ', ' / ' + (row.denLabel ? row.denLabel + ' ' : '')) + ')' : '') + (K.has(x.target) ? ' · target ' + K.fmt(row, x.target) : '') + ' · ' + st.label}>
+      <span className="kp-mcell" style={{ background: st.bg, color: st.ink }}>{K.fmt(row, x.value)}</span>
+      {cnt && <span className="kp-cnt">{cnt}</span>}</span>;
+  }
+  const numTxt = (v) => (K.has(v) ? String(K.round(Number(v), 2)) : '—');
+  /* A KPI's months one per row: numerator, denominator, result, target, variance, status. */
+  function MonthTable({ row, months, cfg }) {
+    const list = months.map((m) => K.monthResult(row, m, cfg)).filter((x) => x.status !== 'off-cycle');
+    if (!list.length) return <div className="kp-muted">No month of this report counts for this KPI yet.</div>;
+    const showNum = row.formula !== 'direct', showDen = showNum && row.formula !== 'count';
+    const vals = list.filter((x) => K.has(x.value)).map((x) => x.value);
+    const lo = row.goalDirection === 'lower_is_better';
+    const best = vals.length > 1 ? (lo ? Math.min(...vals) : Math.max(...vals)) : null;
+    const worst = vals.length > 1 ? (lo ? Math.max(...vals) : Math.min(...vals)) : null;
+    const mark = best != null && best !== worst;
+    const hdWrap = { whiteSpace: 'normal', maxWidth: 130, lineHeight: 1.25 }; // the KPI's own count names, wrapped
+    return (
+      <table className="kp-stbl"><thead><tr><th style={{ textAlign: 'left' }}>Month</th>{showNum && <th title={row.numLabel || 'Numerator'} style={hdWrap}>{row.numLabel || 'Numerator'}</th>}{showDen && <th title={row.denLabel || 'Denominator'} style={hdWrap}>{row.denLabel || 'Denominator'}</th>}<th>Result</th><th>Target</th><th>Variance</th><th>Status</th></tr></thead>
+        <tbody>{list.map((x) => { const st = K.has(x.value) ? (ST[x.status] || ST.nodata) : ST.nodata; return (
+          <tr key={x.m}><td className="l" style={{ whiteSpace: 'nowrap' }}><b>{K.fmtMonth(x.m)}</b>{mark && x.value === best ? <span style={{ color: '#1f9d57' }} title="Best month"> ★</span> : null}{mark && x.value === worst ? <span style={{ color: '#d23a52' }} title="Weakest month"> ▼</span> : null}</td>
+            {showNum && <td>{numTxt(x.num)}</td>}{showDen && <td>{numTxt(x.den)}</td>}
+            <td><b>{K.fmt(row, x.value)}</b></td><td>{K.has(x.target) ? K.fmt(row, x.target) : '—'}</td>
+            <td style={{ color: st.ink, fontWeight: 700 }}>{K.gapLabel(row, x.value, x.target)}</td>
+            <td style={{ background: st.bg, color: st.ink, fontWeight: 700, whiteSpace: 'nowrap' }}>{st.label}</td></tr>); })}</tbody></table>
+    );
+  }
+
+  /* The four result tiles at the top of a KPI page: result (with its unit and counts), target,
+     variance (arrow + good/bad colour) and status (with a % of target bar). */
+  function StatTiles({ r, rep }) {
+    const st = ST[r.status];
+    const unit = K.unitKind(r) === 'num' && r.unit ? r.unit : '';
+    const cnt = K.countLabel(r, r.period.num, r.period.den);
+    const d = K.variance(r.period.value, r.target);
+    const ach = r.achievement != null ? Math.max(0, Math.min(150, r.achievement)) : null;
+    const tile = (accent, bg, icon, label, body, foot) => (
+      <div className="kp-stat" style={{ background: bg, '--acc': accent }}>
+        <div className="kp-stat-h"><i style={{ background: accent }}>{icon}</i><span>{label}</span></div>
+        {body}
+        {foot ? <div className="kp-stat-f">{foot}</div> : null}
+      </div>
+    );
+    const big = (v, color, u) => <div className="kp-stat-v" style={{ color }}>{v}{u ? <small>{u}</small> : null}</div>;
+    return (
+      <div className="kp-stats">
+        {tile('#008FCB', 'linear-gradient(140deg,#eaf6fb 0%,#ffffff 70%)', '◉', resultOf(r) || (rep.months.length > 1 ? 'Period result' : 'This month'),
+          big(K.fmt(r, r.period.value), '#00293A', unit), cnt ? <span title={(r.numLabel || 'Numerator') + ' / ' + (r.denLabel || 'denominator')}>{cnt}</span> : null)}
+        {tile('#37B4A6', 'linear-gradient(140deg,#e8f7f4 0%,#ffffff 70%)', '◎', 'Target',
+          big(r.target != null ? K.fmt(r, r.target) : '—', '#00293A', r.target != null ? unit : ''), r.goalDirection === 'lower_is_better' ? 'Lower is better' : 'Higher is better')}
+        {tile(st.color, 'linear-gradient(140deg,' + st.bg + ' 0%,#ffffff 75%)', d == null ? '·' : d > 0 ? '▲' : d < 0 ? '▼' : '=', 'Variance',
+          big(K.gapLabel(r, r.period.value, r.target), st.ink, d != null && d !== 0 ? unit : ''), 'Value − target')}
+        {tile(st.color, 'linear-gradient(140deg,' + st.bg + ' 0%,#ffffff 75%)', r.status === 'met' ? '✓' : r.status === 'off' ? '!' : '•', 'Status',
+          <div className="kp-stat-v" style={{ color: st.ink, fontSize: 20 }}>{st.label}</div>,
+          ach != null ? <span style={{ display: 'block' }}><span className="kp-stat-bar"><b style={{ width: (ach / 150 * 100) + '%', background: st.color }} /><em style={{ left: (100 / 150 * 100) + '%' }} /></span>{r.achievement}% of target{r.achievement > 100 ? ' · ' + (r.achievement - 100) + '% better' : r.achievement < 100 ? ' · ' + (100 - r.achievement) + '% short' : ' · exactly on target'}</span> : null)}
+      </div>
+    );
+  }
+
+  /* Export menu on the report bar: what to include (remembered), then Print / PDF / PowerPoint /
+     PowerPoint (editable) / Excel. One button, so it stays visible on a narrow window. */
+  function ExportMenu({ xo, setXo, busy, layout, run }) {
+    const [open, setOpen] = useState(false);
+    const btn = useRef(null);
+    const go = (k) => { setOpen(false); run(k); };
+    const item = (k, label, sub) => (
+      <button key={k} className="kp-xitem" disabled={!!busy} onClick={() => go(k)}><b>{label}</b>{sub ? <span>{sub}</span> : null}</button>);
+    return (
+      <>
+        <button ref={btn} className="btn sm pri" disabled={!!busy} onClick={() => setOpen(!open)} title="Print, PDF, PowerPoint, Excel — and what to include">{busy ? 'Working…' : '⬇ Export ▾'}</button>
+        {open && <Pop anchor={btn} onClose={() => setOpen(false)} width={330}>
+          <div className="kp-lab">Include</div>
+          {[['actions', 'Action plans'], ['comments', 'Comments']].map(([k, l]) => (
+            <label key={k} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '3px 0', fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={!!xo[k]} onChange={(e) => setXo((x) => Object.assign({}, x, { [k]: e.target.checked }))} />{l}</label>))}
+          <div className="kp-muted" style={{ fontSize: 11.5, margin: '2px 0 8px' }}>Scorecard columns follow the “Columns” menu.</div>
+          <div className="kp-lab">Export as</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {item('print', 'Print')}
+            {item('pdf', 'PDF')}
+            {item('pptxcopy', 'PowerPoint', 'same as the screen, with animation')}
+            {item('pptx-' + layout, 'PowerPoint (editable)', 'text and charts you can change')}
+            {item('xlsx', 'Excel')}
+          </div>
+        </Pop>}
+      </>
+    );
+  }
+
   function ReportDoc({ meta, id, setRoute, showCalc }) {
     const [rep, setRep] = useState(null);
     const [err, setErr] = useState('');
     const [layout, setLayout] = useState(() => lsGet('kpi_layout') || 'full');
+    const [cols, setCols] = useState(() => { const v = lsGet('kpi_cols_v2'); return Array.isArray(v) ? v.filter((k) => SC_COLS.some((c) => c[0] === k)) : SC_COLS.map((c) => c[0]); });
+    useEffect(() => { lsSet('kpi_cols_v2', cols); }, [cols]);
+    const on = (k) => cols.indexOf(k) >= 0;
+    const colsQ = 'cols=' + encodeURIComponent(cols.join(','));
+    // Export options, asked before Print / PDF / PowerPoint (remembered): leave out action plans / comments.
+    const [xo, setXo] = useState(() => Object.assign({ actions: true, comments: true }, lsGet('kpi_export_opts') || {}));
+    useEffect(() => { lsSet('kpi_export_opts', xo); }, [xo]);
+    const xoQ = (xo.actions ? '' : '&actions=0') + (xo.comments ? '' : '&comments=0');
     const [busy, setBusy] = useState('');
     const [capturing, setCapturing] = useState(false);
+    // while a capture is made (print, PDF, exact-copy PowerPoint) the left-out parts are not drawn
+    const hideActs = capturing && !xo.actions, hideCm = capturing && !xo.comments;
     const [saveState, setSaveState] = useState('');
     const [tick, setTick] = useState(0);
     const [ackItems, setAckItems] = useState(null);
@@ -1569,12 +1920,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const editable = rep && rep.state !== 'final' && meta.canEdit;
     const flush = useCallback(async () => {
       const body = pending.current; pending.current = {};
-      if (!Object.keys(body).length) return;
+      if (!Object.keys(body).length) return true;
       setSaveState('Saving…');
       try {
         const j = await api('/api/kpi/report/' + id, { method: 'PUT', body: JSON.stringify(Object.assign({}, body, verRef.current ? { baseUpdatedAt: verRef.current } : {})) });
         verRef.current = j.updatedAt; setSaveState('Saved'); setRep((r) => Object.assign({}, r, { stored: true, state: r.state === 'preview' ? 'draft' : r.state, updatedAt: j.updatedAt }));
-      } catch (e) { setSaveState(''); toast(e.message, 'error'); if (e.status === 409) setTick((t) => t + 1); }
+        return true;
+      } catch (e) { setSaveState(''); toast(e.message, 'error'); if (e.status === 409) setTick((t) => t + 1); return false; }
     }, [id]);
     const queue = (patch) => {
       Object.keys(patch).forEach((k) => { pending.current[k] = (patch[k] && typeof patch[k] === 'object') ? Object.assign({}, pending.current[k] || {}, patch[k]) : patch[k]; });
@@ -1583,6 +1935,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     };
     useEffect(() => () => { clearTimeout(timer.current); flush(); }, [flush]);
     const setComment = (k, v) => { setRep((r) => Object.assign({}, r, { commentary: Object.assign({}, r.commentary, { [k]: v }) })); queue({ commentary: { [k]: v } }); };
+    const setRemark = (k, v) => { setRep((r) => Object.assign({}, r, { remarks: Object.assign({}, r.remarks, { [k]: v }) })); queue({ remarks: { [k]: v } }); };
     const setOverall = (v) => { setRep((r) => Object.assign({}, r, { overall: v })); queue({ overall: v }); };
     const sig0 = sigNames();
     const sig = rep ? Object.assign({ prepared: sig0.prepared || '', reviewed: sig0.reviewed || '', recommended: sig0.recommended || '', approved: sig0.approved || '' }, Object.keys(rep.signoff || {}).length ? rep.signoff : {}) : {};
@@ -1590,6 +1943,12 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
 
     async function act(kind) {
       try {
+        if (kind === 'save') {
+          setBusy(kind);
+          if (Object.keys(pending.current).length) { clearTimeout(timer.current); if (await flush()) toast('Saved.', 'success'); }
+          else if (!rep.stored) { await api('/api/kpi/report', { method: 'POST', body: JSON.stringify({ from: rep.from, to: rep.to }) }); toast('Saved as a draft.', 'success'); setTick((t) => t + 1); }
+          else toast('Everything is saved.', 'success');
+        }
         if (kind === 'refresh') { setBusy(kind); await api('/api/kpi/report', { method: 'POST', body: JSON.stringify({ from: rep.from, to: rep.to }) }); toast('Figures refreshed.', 'success'); setTick((t) => t + 1); }
         if (kind === 'finalize') {
           const ok = await confirmBox({ title: 'Finalise this report?', message: 'The figures of ' + K.fmtRange(rep.from, rep.to) + ' are frozen as they are now — later corrections will not change this report. Commentary and sign-off are locked too. An administrator can re-open it.', confirmLabel: 'Finalise' });
@@ -1609,13 +1968,16 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           if (!ok) return;
           setBusy(kind); await api('/api/kpi/report/' + id, { method: 'DELETE' }); toast('Removed.', 'success'); setRoute({ view: 'kpiReports' }); return;
         }
-        if (kind.indexOf('pptx-') === 0) { setBusy(kind); await flush(); await download('/api/kpi/report/' + id + '/pptx?style=' + kind.slice(5)); toast('PowerPoint downloaded.', 'success'); }
-        if (kind === 'xlsx') { setBusy(kind); await flush(); await download('/api/kpi/report/' + id + '/xlsx'); toast('Excel downloaded.', 'success'); }
+        if (kind.indexOf('pptx-') === 0) { setBusy(kind); await flush(); await download('/api/kpi/report/' + id + '/pptx?style=' + kind.slice(5) + '&' + colsQ + xoQ); toast('PowerPoint downloaded.', 'success'); }
+        if (kind === 'xlsx') { setBusy(kind); await flush(); await download('/api/kpi/report/' + id + '/xlsx?' + colsQ); toast('Excel downloaded.', 'success'); }
         if (kind === 'print') { await flush(); printDoc(); }
         if (kind === 'pdf') { setBusy(kind); await flush(); await pdfDoc(); }
+        if (kind === 'pptxcopy') { setBusy(kind); await flush(); await pptxSheets(() => docRef.current, title + ' — ' + K.fmtRange(rep.from, rep.to), fileBase,
+          () => api('/api/kpi/print', { method: 'POST', body: JSON.stringify({ id, kind: 'pptx', what: layout }) }), setCapturing); }
       } catch (e) { toast(e.message, 'error'); }
       setBusy('');
     }
+    const go = async (from, to) => { await flush(); setRoute({ view: 'kpiReports', report: K.reportId(from, to) }); };
     const title = (rep && rep.title) || cfg.reportTitle;
     const fileBase = 'Nursing-KPI-' + (rep ? (rep.from === rep.to ? rep.from : rep.from + '-to-' + rep.to) : '');
     // Print: the same sheets in their own window, logged by the server first.
@@ -1636,25 +1998,24 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       ? <div className="kp-comment"><textarea value={v || ''} placeholder={ph} onChange={(e) => (k === '__overall' ? setOverall(e.target.value) : setComment(k, e.target.value))} /></div>
       : (v ? <div className="kp-comment">{v}</div> : null));
     const months6 = rep.months.slice(-6);
+    const mcols = on('months') ? K.reportMonthCols(rep) : [];
+    const monthsAll = K.reportMonthCols(rep);
     const flatCharts = true;
     return (
       <div className={'kp-wrap' + (capturing ? ' kp-capturing' : '')}>
         <div className="kp-card kp-bar" style={{ position: 'sticky', top: -22, zIndex: 5, boxShadow: '0 6px 22px rgba(13,27,46,.10)' }}>
           <Btn onClick={() => setRoute({ view: 'kpiReports' })}>‹ All reports</Btn>
-          <b style={{ fontSize: 14 }}>{period}</b>
+          <ReportPeriodSel meta={meta} rep={rep} go={go} />
+          {meta.canPrint && <ExportMenu xo={xo} setXo={setXo} busy={busy} layout={layout} run={act} />}
           <span className="kp-pill" style={rep.state === 'final' ? { background: '#e7f6ed', color: '#14713f' } : rep.state === 'draft' ? { background: '#fff1d6', color: '#8a5a00' } : { background: '#eef2f6', color: '#5b6878' }}>{rep.state === 'final' ? 'Final' : rep.state === 'draft' ? 'Draft · figures live' : 'Preview · not saved'}</span>
           {saveState && <span className="kp-muted">{saveState}</span>}
           <span style={{ flex: 1 }} />
           <div className="kp-chips"><button className={'kp-chip' + (layout === 'full' ? ' on' : '')} onClick={() => setLayout('full')} title="One page per KPI, like the deck">Detailed</button><button className={'kp-chip' + (layout === 'summary' ? ' on' : '')} onClick={() => setLayout('summary')} title="Scorecard and one page per pillar">Summary</button><button className={'kp-chip' + (layout === 'calc' ? ' on' : '')} onClick={() => setLayout('calc')} title="Detailed, plus how every figure was calculated (units, who sent and approved it) and the data checks">Detailed + calculations</button></div>
+          <ColumnsMenu cols={cols} setCols={setCols} />
+          {editable && <Btn disabled={!!busy} onClick={() => act('save')} title="Save the remarks, comments and sign-off now (they also save by themselves a moment after typing)">💾 Save</Btn>}
           {rep.state !== 'final' && (meta.canAdd || meta.canEdit) && <Btn disabled={!!busy} onClick={() => act('refresh')}>{rep.stored ? '↻ Refresh figures' : 'Save as draft'}</Btn>}
           {rep.state !== 'final' && meta.canEdit && <Btn pri disabled={!!busy} onClick={() => act('finalize')}>Finalise</Btn>}
           {rep.state === 'final' && meta.isAdmin && <Btn disabled={!!busy} onClick={() => act('reopen')} title="Open the final report for changes; Finalise it again when done">✎ Edit (administrator)</Btn>}
-          {meta.canPrint && <>
-            <Btn disabled={!!busy} onClick={() => act('print')}>Print</Btn>
-            <Btn disabled={!!busy} onClick={() => act('pdf')}>{busy === 'pdf' ? 'Making PDF…' : 'PDF'}</Btn>
-            <Btn disabled={!!busy} onClick={() => act('pptx-' + layout)} title={'PowerPoint — ' + (layout === 'full' ? 'full deck, one slide per KPI' : layout === 'calc' ? 'full deck with a calculation slide per KPI and the data checks' : 'summary deck')}>{busy.indexOf('pptx') === 0 ? 'Building…' : 'PowerPoint'}</Btn>
-            <Btn disabled={!!busy} onClick={() => act('xlsx')}>{busy === 'xlsx' ? 'Building…' : 'Excel'}</Btn>
-          </>}
           {rep.stored && meta.canDelete && (rep.state !== 'final' || meta.isAdmin) && <Btn danger disabled={!!busy} onClick={() => act('remove')}>Remove</Btn>}
         </div>
         {rep.state === 'draft' && rep.reopenedAt && <div className="kp-banner info"><span style={{ fontSize: 16 }}>✎</span><div><b>Open for editing</b> — re-opened from final by {rep.reopenedBy || '—'} · {when(rep.reopenedAt)}. Make the changes, then press <b>Finalise</b> again.</div></div>}
@@ -1677,7 +2038,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           {/* cover + summary */}
           <Sheet kicker={(rep.from === rep.to ? 'Monthly report' : 'Report') + ' · ' + period} title={title} foot={foot} page={pg()}>
             <div style={{ display: 'flex', gap: 14, marginBottom: 14, fontSize: 13, color: '#5b6878' }}>
-              <span>{cfg.hospitalName}</span><span>·</span><span>{rep.cycle.label}{rep.cycle.monthNo ? ', month ' + rep.cycle.monthNo + ' of ' + rep.cycle.of : ''}</span><span>·</span><span>{rows.length} KPIs in {pillars.length} pillars</span>
+              <span>{cfg.hospitalName}</span><span>·</span><span>{rows.length} KPIs in {pillars.length} pillars</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '210px repeat(4,1fr)', gap: 12, marginBottom: 16 }}>
               <div style={{ borderRadius: 14, padding: 12, background: 'linear-gradient(140deg,#00293A,#0c6f7d)', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -1713,11 +2074,20 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           </Sheet>
           {/* scorecard */}
           <Sheet kicker={period} title="KPI scorecard" foot={foot} page={pg()}>
-            <table className="kp-stbl"><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>KPI</th><th>Baseline</th><th>{rep.months.length > 1 ? 'Period' : 'Current'}</th><th>Target</th><th>Variance</th><th>Status</th><th>Trend</th><th>12 months</th></tr></thead>
-              <tbody>{rows.map((r) => <tr key={r.kpiId}><td><b style={{ color: '#00293A' }}>{r.code}</b></td><td className="l">{r.name}</td>
-                <td style={{ color: '#7b8796' }}>{r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : '—'}</td><td><b>{K.fmt(r, r.period.value)}</b><ResultTag r={r} /></td>
-                <td>{r.target != null ? K.fmt(r, r.target) : '—'}</td><td style={{ fontSize: 11 }}>{K.gapLabel(r, r.period.value, r.target)}</td>
-                <td style={{ background: ST[r.status].bg, color: ST[r.status].ink, fontWeight: 700 }}>{ST[r.status].label}</td><td><Trend d={r.trendDir} /></td><td><Spark row={r} w={96} h={22} /></td></tr>)}</tbody></table>
+            <table className={'kp-stbl' + (mcols.length > 6 ? ' dense' : '')}><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>KPI</th>
+              {mcols.map((m) => <th key={m}>{K.fmtMonth(m).replace(' 20', ' ')}</th>)}
+              {on('current') && <th>{rep.months.length > 1 ? 'Period' : 'Current'}</th>}{on('target') && <th>Target</th>}{on('variance') && <th>Variance</th>}{on('status') && <th>Status</th>}{on('trend') && <th>Trend</th>}{on('remarks') && <th style={{ textAlign: 'left', width: 150 }}>Remarks</th>}</tr></thead>
+              <tbody>{rows.map((r) => <tr key={r.kpiId}><td><b style={{ color: '#00293A' }}>{r.code}</b></td><td className="l" style={{ minWidth: 170 }}>{r.name}</td>
+                {mcols.map((m) => <td key={m}><MonthCell row={r} m={m} cfg={cfg} /></td>)}
+                {on('current') && <td><b>{K.fmt(r, r.period.value)}</b>{K.countLabel(r, r.period.num, r.period.den) && <span className="kp-cnt" title={(r.numLabel || 'Numerator') + ' / ' + (r.denLabel || 'denominator')}>{K.countLabel(r, r.period.num, r.period.den)}</span>}<ResultTag r={r} /></td>}
+                {on('target') && <td>{r.target != null ? K.fmt(r, r.target) : '—'}</td>}
+                {on('variance') && <td style={{ fontWeight: 700, color: ST[r.status].ink, whiteSpace: 'nowrap' }}>{K.gapLabel(r, r.period.value, r.target)}</td>}
+                {on('status') && <td style={{ background: ST[r.status].bg, color: ST[r.status].ink, fontWeight: 700 }}>{ST[r.status].label}</td>}
+                {on('trend') && <td style={{ width: 1 }}><TrendGraph row={r} /></td>}
+                {on('remarks') && <td className="l" style={{ width: 150, maxWidth: 150, fontSize: 11, verticalAlign: 'middle', overflowWrap: 'anywhere' }}>{editable && !capturing
+                  ? <textarea className="kp-rmk" rows={2} cols={1} maxLength={300} value={(rep.remarks || {})[r.kpiId] || ''} placeholder="Add a remark…" onChange={(e) => setRemark(r.kpiId, e.target.value)} />
+                  : <span style={{ whiteSpace: 'pre-wrap' }}>{(rep.remarks || {})[r.kpiId] || ''}</span>}</td>}</tr>)}</tbody></table>
+            {mcols.length > 0 && <div style={{ display: 'flex', gap: 12, marginTop: 8, fontSize: 10.5, color: '#7b8796', flexWrap: 'wrap', alignItems: 'center' }}>{['met', 'near', 'off'].map((k) => <span key={k} className="kp-mcell" style={{ background: ST[k].bg, color: ST[k].ink, minWidth: 0 }}>{ST[k].label}</span>)}<span>— no figure</span><span>· not counted that month</span><span>Variance = value − target</span></div>}
           </Sheet>
           {layout === 'summary' && pillars.map((pl) => {
             const list = rows.filter((r) => r.pillar === pl.id);
@@ -1728,33 +2098,43 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
                     {months6.map((m) => <td key={m}>{(r.cells[m] || {}).source === 'not-due' ? <span style={{ color: '#b9c2cd' }}>·</span> : K.fmt(r, (r.cells[m] || {}).value, { bare: true })}</td>)}
                     <td><b>{K.fmt(r, r.period.value)}</b></td><td>{r.target != null ? K.fmt(r, r.target) : '—'}</td><td style={{ background: ST[r.status].bg, color: ST[r.status].ink, fontWeight: 700 }}>{ST[r.status].label}</td></tr>)}</tbody></table>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(300px,1fr))', gap: 10, marginTop: 14 }}>
-                  {list.map((r) => ((editable && !capturing) || rep.commentary[r.kpiId]) ? <div key={r.kpiId}><div className="kp-lab">{r.code} {r.name} — comment</div>{commentBox(r.kpiId, rep.commentary[r.kpiId], 'What happened this period and what is being done')}</div> : null)}
+                  {!hideCm && list.map((r) => ((editable && !capturing) || rep.commentary[r.kpiId]) ? <div key={r.kpiId}><div className="kp-lab">{r.code} {r.name} — comment</div>{commentBox(r.kpiId, rep.commentary[r.kpiId], 'What happened this period and what is being done')}</div> : null)}
                 </div>
               </Sheet>
             );
           })}
           {(layout === 'full' || layout === 'calc') && pillars.map((pl) => rows.filter((r) => r.pillar === pl.id).map((r) => [
             <Sheet key={r.kpiId} kicker={pl.label} title={(r.code ? r.code + '. ' : '') + r.name} foot={foot} page={pg()}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 18 }}>
-                <table className="kp-deck"><tbody>
-                  <tr><th>Objective</th><td>{r.objective || '—'}</td></tr>
-                  <tr><th>Current</th><td><b>{K.fmt(r, r.period.value)}</b> {K.unitKind(r) === 'num' ? r.unit : ''}{resultOf(r) ? <b style={{ color: '#3f3fa8' }}> — {resultOf(r)}</b> : null} <span style={{ color: '#7b8796' }}>(baseline {r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : 'not measured yet'})</span></td></tr>
-                  <tr><th>Target</th><td>{(r.targets || []).length ? r.targets.map((t) => (r.targets.length > 1 ? 'Cycle ' + t.cycle + ': ' : '') + K.fmt(r, t.value)).join('  ·  ') : (r.target != null ? K.fmt(r, r.target) : 'Not set yet')}</td></tr>
-                  <tr><th>Variance</th><td style={{ color: ST[r.status].color, fontWeight: 700 }}>{K.gapLabel(r, r.period.value, r.target)} · {ST[r.status].label}</td></tr>
-                  <tr><th>Action plan</th><td>{(r.actions || []).length ? <ul>{r.actions.slice(0, 10).map((a) => <li key={a.id}>{a.text}{a.status !== 'open' ? <b style={{ color: a.status === 'done' ? '#1f9d57' : '#008FCB' }}> [{K.ACTION_LABEL[a.status]}]</b> : null}{a.owner ? <span style={{ color: '#7b8796' }}> — {a.owner}</span> : null}</li>)}{r.actions.length > 10 && <li style={{ color: '#7b8796' }}>+ {r.actions.length - 10} more</li>}</ul> : '—'}</td></tr>
-                  <tr><th>Formula used</th><td style={{ fontStyle: 'italic' }}>{r.formulaText || '—'}</td></tr>
-                  <tr><th>Tracking</th><td>{r.schedule || r.frequency || 'Monthly'}{r.trackingNote ? ' · ' + r.trackingNote : ''}{r.nextDue ? <span style={{ color: '#7b8796' }}> · next result {K.fmtMonthLong(r.nextDue)}</span> : null}</td></tr>
-                  <tr><th>Remarks</th><td style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{r.remarks || '—'}</td></tr>
-                </tbody></table>
+              {r.objective && <div style={{ fontSize: 12.5, color: '#5b6878', margin: '-6px 0 12px', lineHeight: 1.45 }}>{r.objective}</div>}
+              <StatTiles r={r} rep={rep} />
+              {(rep.remarks || {})[r.kpiId] && <div style={{ margin: '-4px 0 12px', fontSize: 12.5, padding: '7px 12px', borderRadius: 8, background: '#f4f7fa', borderLeft: '3px solid #008FCB' }}><b style={{ color: '#00293A' }}>Remark:</b> {rep.remarks[r.kpiId]}</div>}
+              <div style={{ display: 'grid', gridTemplateColumns: '1.15fr 1fr', gap: 18 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div><div className="kp-lab">{r.freqMonths > 1 ? 'Results by period' : 'Month by month'}</div>
+                    {r.freqMonths > 1 ? <PeriodsTable row={r} /> : <MonthTable row={r} months={monthsAll} cfg={cfg} />}</div>
+                  {r.formulaText && (() => { const work = K.workingLabel(r, r.period.num, r.period.den, r.period.value); return (
+                    <div style={{ fontSize: 12, padding: '8px 12px', borderRadius: 8, background: '#eef7f5', border: '1px solid #c4e6e0', lineHeight: 1.45 }}>
+                      <b style={{ fontSize: 10.5, letterSpacing: '.6px', color: '#0d5e55' }}>FORMULA</b>&nbsp; {r.formulaText}
+                      {work ? <div style={{ color: '#5b6878', fontWeight: 700 }}>{(rep.months.length > 1 ? 'This period: ' : 'This month: ') + work}</div> : null}
+                    </div>); })()}
+                  {!hideActs && (r.actions || []).length > 0 && (() => { const acts = r.actions.slice().sort((a, b) => (a.status === 'done') - (b.status === 'done')); return (
+                    <div><div className="kp-lab">Action plan</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>{acts.slice(0, 3).map((a) => (
+                        <div key={a.id} title={a.text} style={{ fontSize: 11.5, padding: '5px 10px', borderRadius: 8, background: '#f4f7fa', borderLeft: '3px solid ' + (a.status === 'done' ? '#1f9d57' : a.status === 'open' ? '#e0a21e' : '#008FCB'), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {a.text}{a.status !== 'open' ? <b style={{ color: a.status === 'done' ? '#1f9d57' : '#008FCB' }}> · {K.ACTION_LABEL[a.status]}</b> : null}</div>))}
+                        {acts.length > 3 && <div className="kp-muted" style={{ fontSize: 11 }}>+ {acts.length - 3} more in Action Plans</div>}</div></div>); })()}
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div className="kp-lab">{r.freqMonths > 1 ? 'Last 12 months · one point per period' : 'Last 12 months'}{r.unit ? ' · ' + r.unit : ''}</div>
-                  <KpiChart row={r} kind="area" height={r.freqMonths > 1 ? 150 : 210} flat />
-                  {r.freqMonths > 1 && <PeriodsTable row={r} />}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                    {[[K.fmt(r, r.period.value), resultOf(r) || (rep.months.length > 1 ? 'Period value' : 'This month'), '#00293A', '#eaf6fb'], [r.target != null ? K.fmt(r, r.target) : '—', 'Target', '#00293A', '#eef7f5'], [ST[r.status].label, r.achievement != null ? r.achievement + '% of target' : 'status', ST[r.status].color, ST[r.status].bg]].map(([b, s, c, bg], i) => (
-                      <div key={i} style={{ background: bg, borderRadius: 10, padding: '10px 8px', textAlign: 'center' }}><div style={{ fontSize: 17, fontWeight: 800, color: c }}>{b}</div><div style={{ fontSize: 10.5, color: '#7b8796' }}>{s}</div></div>))}
+                  <div className="kp-lab">{r.freqMonths > 1 ? 'Results by period' : 'Results by month'}{r.unit ? ' · ' + r.unit : ''}</div>
+                  <ComboChart row={r} cfg={cfg} height={230} />
+                  <div style={{ display: 'flex', gap: 12, fontSize: 10.5, color: '#7b8796', flexWrap: 'wrap', marginTop: -4 }}>
+                    <span><i style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: ST.met.color, marginRight: 4, verticalAlign: -1 }} />on target</span>
+                    <span><i style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: ST.near.color, marginRight: 4, verticalAlign: -1 }} />close</span>
+                    <span><i style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 3, background: ST.off.color, marginRight: 4, verticalAlign: -1 }} />needs action</span>
+                    <span><i style={{ display: 'inline-block', width: 16, height: 0, borderTop: '2.5px solid #00293A', marginRight: 4, verticalAlign: 3 }} />trend</span>
+                    <span><i style={{ display: 'inline-block', width: 16, height: 0, borderTop: '2px dashed #37B4A6', marginRight: 4, verticalAlign: 3 }} />target</span>
                   </div>
-                  <div><div className="kp-lab">Comment for this period</div>{commentBox(r.kpiId, rep.commentary[r.kpiId], 'What happened this period, and what is being done') || <div className="kp-muted">—</div>}</div>
+                  {!hideCm && <div><div className="kp-lab">Comment for this period</div>{commentBox(r.kpiId, rep.commentary[r.kpiId], 'What happened this period, and what is being done') || <div className="kp-muted">—</div>}</div>}
                 </div>
               </div>
             </Sheet>,
@@ -1788,7 +2168,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
               {sum.near > 0 && <li>{sum.near} close: {rows.filter((r) => r.status === 'near').map((r) => r.code + ' ' + r.name).join(', ')}.</li>}
               {sum.off > 0 && <li>{sum.off} need action: {rows.filter((r) => r.status === 'off').map((r) => r.code + ' ' + r.name).join(', ')}.</li>}
               {sum.nodata > 0 && <li>{sum.nodata} without figures for the period: {rows.filter((r) => r.status === 'nodata').map((r) => r.code).join(', ')}.</li>}</ul>}
-            {(layout === 'full' || layout === 'calc') && (() => {
+            {(layout === 'full' || layout === 'calc') && !hideActs && (() => {
               const open = []; rows.forEach((r) => (r.actions || []).forEach((a) => { if (a.status === 'progress' || ((a.owner || a.due) && a.status === 'open')) open.push([r, a]); }));
               return open.length ? <div style={{ marginTop: 14 }}><div className="kp-lab">Action plans in progress</div>
                 <table className="kp-stbl"><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>Action</th><th>Owner</th><th>Due</th><th>Status</th></tr></thead>

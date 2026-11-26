@@ -1,5 +1,5 @@
 /* ===== generated chunk loader ===== */
-window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=8362849d7c","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=fb0fc281e2","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=1c7549434a","docaudit":"/dist/docaudit.chunk.js?v=d8122b8679","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=e64dd700b4","manpower":"/dist/manpower.chunk.js?v=97ea3ad106","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
+window.__UNICO_CHUNKS__={"qualityguide":"/dist/qualityguide.chunk.js?v=fbb4384f4a","staffprofile":"/dist/staffprofile.chunk.js?v=8362849d7c","reports":"/dist/reports.chunk.js?v=7cbedb8320","quality":"/dist/quality.chunk.js?v=1e8467a4ff","datacollection":"/dist/datacollection.chunk.js?v=fb0fc281e2","devdays":"/dist/devdays.chunk.js?v=8aad288af9","kpi":"/dist/kpi.chunk.js?v=7dda333374","docaudit":"/dist/docaudit.chunk.js?v=d8122b8679","supervisor":"/dist/supervisor.chunk.js?v=e7101ed591","performance":"/dist/performance.chunk.js?v=729acc2028","roster":"/dist/roster.chunk.js?v=e64dd700b4","manpower":"/dist/manpower.chunk.js?v=97ea3ad106","medicine":"/dist/medicine.chunk.js?v=1dabbbc727"};
 window.__UNICO_CHUNK_DEPS__={"quality":["qualityguide"],"datacollection":["qualityguide"]};
 (function(){
 var M=window.__UNICO_CHUNKS__,D=window.__UNICO_CHUNK_DEPS__,PENDING={},READY={};
@@ -7191,6 +7191,9 @@ window.QI_CORRECTIONS_BY_DEFID = {
      earlier cycle that has one (before the programme: cycle 1's). A KPI may instead set its
      target relative to its baseline (consumables: 5% below the existing cost). */
   function targetFor(def, ym, cfg) {
+    // a month's own target (Manage KPIs → Target per month) wins for that month only
+    const mt = def && def.monthTargets;
+    if (mt && typeof mt === 'object' && has(mt[ym])) return Number(mt[ym]);
     const list = (def && Array.isArray(def.targets) ? def.targets : []).filter((t) => t && has(t.value));
     if (!list.length) {
       if (def && has(def.baselineTargetPct) && def.baseline && has(def.baseline.value)) {
@@ -7440,12 +7443,58 @@ window.QI_CORRECTIONS_BY_DEFID = {
   }
   // Short unit caption under a figure: "per 1000 patient-days", "%", "minutes".
   const unitLabel = (def) => String((def && def.unit) || '').trim();
+  /* Variance as a plain signed number: value − target (2C 79.3% vs 85% → "−5.7%", Falls 8 vs
+     10 → "−2"). Whether that is good or bad is the status colour's job, not the sign's. */
+  function variance(value, target) {
+    if (!has(value) || !has(target)) return null;
+    return round(Number(value) - Number(target));
+  }
   function gapLabel(def, value, target) {
-    const g = gap(def, value, target);
-    if (g == null) return '—';
-    if (g === 0) return 'On target';
-    const s = fmt(def, Math.abs(g));
-    return g > 0 ? s + ' to go' : 'Beyond by ' + s;
+    const d = variance(value, target);
+    if (d == null) return '—';
+    if (d === 0) return '0';
+    return (d > 0 ? '+' : '−') + fmt(def, Math.abs(d));
+  }
+
+  /* The counts behind a value: "786 / 1,000" for a percentage, rate or average; nothing for a
+     count (the value IS the count) or a directly entered figure, or when either count is missing. */
+  function countLabel(def, num, den) {
+    const f = def && def.formula;
+    if (!f || f === 'count' || f === 'direct' || !has(num) || !has(den)) return '';
+    const t = (v) => round(Number(v), 2).toLocaleString('en-US', { maximumFractionDigits: 2 });
+    return t(num) + ' / ' + t(den);
+  }
+
+  /* This period's working of the formula: "1 ÷ 1,974 × 100 = 0.05" (counts from the period, the
+     multiplier from the KPI's formula). '' for a count / directly entered figure or missing counts. */
+  function workingLabel(def, num, den, value) {
+    const f = def && def.formula;
+    if (!f || f === 'count' || f === 'direct' || !has(num) || !has(den) || !(Number(den) > 0)) return '';
+    const t = (v) => round(Number(v), 2).toLocaleString('en-US', { maximumFractionDigits: 2 });
+    const mult = f === 'rate1000' ? ' × 1000' : f === 'avg' ? '' : ' × 100';
+    return t(num) + ' ÷ ' + t(den) + mult + ' = ' + fmt(def, has(value) ? value : computeValue(f, num, den));
+  }
+
+  /* The months a report shows one by one (scorecard columns, KPI page table, PowerPoint, Excel):
+     a report of several months → exactly its months; a one-month report → the running cycle up
+     to that month (Aug–Nov for November), within the 12 months the report carries. */
+  function reportMonthCols(report) {
+    const months = (report && report.months) || [];
+    if (months.length !== 1) return months.slice();
+    const to = months[0];
+    const win = (report.trendMonths && report.trendMonths.length) ? report.trendMonths : months;
+    const start = report.cycle && report.cycle.index > 0 && isMonth(report.cycle.start) ? report.cycle.start : to;
+    const out = win.filter((m) => m >= start && m <= to);
+    return out.length ? out : months.slice();
+  }
+  /* One month of a report row: its trend point and that month's status against that month's
+     target. 'off-cycle' = before the KPI starts / not a due month (shown as a dot). */
+  function monthResult(row, m, cfg) {
+    const p = ((row && row.trend) || []).find((x) => x.m === m) || { m, v: null, t: null };
+    const started = !row.startMonth || m >= row.startMonth;
+    const due = started && (p.due !== false);
+    const status = !started || !due ? 'off-cycle' : statusOf(row, p.v, p.t, cfg);
+    return { m, value: p.v, target: p.t, num: p.num == null ? null : p.num, den: p.den == null ? null : p.den, source: p.src || null, status };
   }
 
   const slug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48);
@@ -7480,7 +7529,9 @@ window.QI_CORRECTIONS_BY_DEFID = {
         const m = known[known.length - 1];
         if (m) { const p = periodOf(def, m, cfg); latest = { from: p.from, to: m, label: p.label }; per = periodValue(def, [cells[m]]); target = targetFor(def, m, cfg); }
       }
-      const trend = (trendMonths || months).map((m) => ({ m, v: due(m) && cells[m] && has(cells[m].value) ? Number(cells[m].value) : null, t: on(m) ? targetFor(def, m, cfg) : null }));
+      const trend = (trendMonths || months).map((m) => { const c = cells[m], ok = due(m) && c;
+        return { m, v: ok && has(c.value) ? Number(c.value) : null, t: on(m) ? targetFor(def, m, cfg) : null,
+          num: ok && has(c.num) ? Number(c.num) : null, den: ok && has(c.den) ? Number(c.den) : null, src: ok ? (c.source || null) : null, due: due(m) }; });
       const status = !started.length ? 'notstarted'
         : (f > 1 && !dueIn.length && !latest) ? (lastDue(def, end, cfg) ? 'nodata' : 'notdue')
         : statusOf(def, per.value, target, cfg);
@@ -7496,7 +7547,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
       return {
         kpiId: def.id, code: def.code || '', name: def.name, pillar: def.pillar, unit: def.unit || '', formula: def.formula, goalDirection: def.goalDirection,
         decimals: def.decimals, objective: def.objective || '', formulaText: def.formulaText || '', numLabel: def.numLabel || '', denLabel: def.denLabel || '',
-        baseline: def.baseline || null, targets: (def.targets || []).filter((t) => t && t.cycle <= cycleCfg(def, cfg).cycles), baselineTargetPct: def.baselineTargetPct, actions: (def.actions || []).filter((x) => x && x.text), remarks: def.remarks || '',
+        baseline: def.baseline || null, monthTargets: def.monthTargets || null, targets: (def.targets || []).filter((t) => t && t.cycle <= cycleCfg(def, cfg).cycles), baselineTargetPct: def.baselineTargetPct, actions: (def.actions || []).filter((x) => x && x.text), remarks: def.remarks || '',
         frequency: def.frequency || '', trackingNote: trackingNote(def), linked: !!(def.source && def.source.indId), sourceRule: (def.source && def.source.rule) || null, autoFill: def.autoFill !== false,
         startMonth: startOf(def, cfg), ownStart: isMonth(def.startMonth), cycle: cycleOf(end, cfg, def),
         freqMonths: f, schedule: scheduleText(def, cfg), ownCycles: cycleCfg(def, cfg).own, latest, resultLabel, periods,
@@ -7531,7 +7582,7 @@ window.QI_CORRECTIONS_BY_DEFID = {
     has, isMonth, addMonth, monthDiff, monthsBetween, fmtMonth, fmtMonthLong, fmtRange, toMonKey, toYm, thisMonth, lastClosedMonth,
     FREQS, freqOf, freqLabel, validSchedule, cycleCfg, spanLabel, periodOf, isDue, dueMonths, lastDue, nextDue, periodMonths, scheduleText, trackingNote, calendar, periodCell,
     cfgOf, pillarOf, startOf, isStarted, isLive, cycleOf, cycleRange, yearRange, isFullYear, presetRange, presetOf, targetFor, round, computeValue, periodValue, gap, statusOf, trendOf, achievement,
-    resolveCell, validateEntry, medianOf, deviates, CHECK_META, checkLevel, evidenceSteps, COUNTED, unitKind, fmt, unitLabel, gapLabel, slug, newKpiId, buildRows, summarize, reportId, parseReportId,
+    resolveCell, validateEntry, medianOf, deviates, CHECK_META, checkLevel, evidenceSteps, COUNTED, unitKind, fmt, unitLabel, gapLabel, variance, countLabel, workingLabel, reportMonthCols, monthResult, slug, newKpiId, buildRows, summarize, reportId, parseReportId,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = API;
   if (root) root.UNICO_KPI = API;

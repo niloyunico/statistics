@@ -21,6 +21,8 @@ console.log('Libraries:');
 copy(path.join(NM, 'react/umd/react.production.min.js'), path.join(VENDOR, 'react.production.min.js'));
 copy(path.join(NM, 'react-dom/umd/react-dom.production.min.js'), path.join(VENDOR, 'react-dom.production.min.js'));
 copy(path.join(NM, '@babel/standalone/babel.min.js'), path.join(VENDOR, 'babel.min.js'));
+// PowerPoint in the browser (the Nursing KPI exact-copy deck); it carries JSZip (window.JSZip) inside.
+copy(path.join(ROOT, 'server', 'node_modules', 'pptxgenjs', 'dist', 'pptxgen.bundle.js'), path.join(VENDOR, 'pptxgen.bundle.js'));
 
 // --- fonts ---
 const FACES = [

@@ -110,7 +110,32 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   assert.equal(K.statusOf({ goalDirection: 'higher_is_better' }, 76, 75, cfg), 'met');
   assert.equal(K.statusOf({}, null, 75, cfg), 'nodata');
   assert.equal(K.statusOf({}, 70, null, cfg), 'notarget');
-  assert.equal(K.gapLabel({ unit: '%', goalDirection: 'higher_is_better' }, 69.5, 75), '5.5% to go');
+  assert.equal(K.gapLabel({ unit: '%', goalDirection: 'higher_is_better' }, 69.5, 75), '−5.5%', 'variance is value − target');
+  assert.equal(K.gapLabel({ unit: 'per 1000', goalDirection: 'lower_is_better' }, 8, 10), '−2', 'lower-is-better: minus is good, colour says so');
+  assert.equal(K.gapLabel({ unit: '%' }, 80, 75), '+5%');
+  assert.equal(K.gapLabel({ unit: '%' }, 75, 75), '0');
+  assert.equal(K.gapLabel({ unit: '%' }, null, 75), '—');
+  assert.equal(K.countLabel({ formula: 'pct' }, 786, 1000), '786 / 1,000', 'counts behind a percentage');
+  assert.equal(K.countLabel({ formula: 'rate1000' }, 3, 410.5), '3 / 410.5');
+  assert.equal(K.countLabel({ formula: 'count' }, 5, null), '', 'a count is already the count');
+  assert.equal(K.countLabel({ formula: 'direct' }, 1, 2), '');
+  assert.equal(K.countLabel({ formula: 'pct' }, 3, null), '', 'no denominator, no count line');
+  assert.equal(K.workingLabel({ formula: 'rate100' }, 1, 1974, 0.05), '1 ÷ 1,974 × 100 = 0.05', 'this period, worked out');
+  assert.equal(K.workingLabel({ formula: 'pct', unit: '%' }, 2094, 2663, 78.63), '2,094 ÷ 2,663 × 100 = 78.63%');
+  assert.equal(K.workingLabel({ formula: 'rate1000' }, 3, 410), '3 ÷ 410 × 1000 = 7.32');
+  assert.equal(K.workingLabel({ formula: 'count' }, 4, null), '');
+  assert.equal(K.workingLabel({ formula: 'pct' }, 3, null), '');
+  // months shown one by one: several months → those months; one month → running cycle up to it
+  assert.deepEqual(K.reportMonthCols({ months: ['2026-06', '2026-07'], trendMonths: [] }), ['2026-06', '2026-07']);
+  assert.deepEqual(K.reportMonthCols({ months: ['2026-11'], trendMonths: K.monthsBetween('2025-12', '2026-11'), cycle: { index: 1, start: '2026-08' } }), ['2026-08', '2026-09', '2026-10', '2026-11']);
+  assert.deepEqual(K.reportMonthCols({ months: ['2026-05'], trendMonths: K.monthsBetween('2025-06', '2026-05'), cycle: { index: 0, start: '2026-08' } }), ['2026-05'], 'before the programme: just the month');
+  {
+    const row = { goalDirection: 'higher_is_better', startMonth: '2026-08', trend: [{ m: '2026-07', v: null, t: null, due: true }, { m: '2026-08', v: 70, t: 75, num: 70, den: 100, due: true }, { m: '2026-09', v: 80, t: 75, due: true }] };
+    assert.equal(K.monthResult(row, '2026-07', cfg).status, 'off-cycle', 'before the KPI starts');
+    assert.equal(K.monthResult(row, '2026-08', cfg).status, 'near');
+    assert.equal(K.monthResult(row, '2026-08', cfg).num, 70);
+    assert.equal(K.monthResult(row, '2026-09', cfg).status, 'met');
+  }
   assert.equal(K.achievement({ goalDirection: 'lower_is_better' }, 0, 0), 100);
   assert.equal(K.achievement({ goalDirection: 'lower_is_better' }, 4, 2), 50);
   assert.equal(K.computeValue('rate1000', 2, 750), 2.67);
@@ -216,6 +241,15 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   assert.equal(r.status, 200);
   assert.equal(r.body.def.actions[0].status, 'progress');
   assert.equal(r.body.def.name, 'IV Cannula Phlebitis', 'fields not sent are kept');
+  // Target per month: a month's own target wins for that month only; bad keys/values are dropped.
+  r = await call('PUT /api/kpi/defs/:id', manager, { params: { id: custom.id }, body: { baseUpdatedAt: r.body.def.updatedAt, monthTargets: { '2026-11': 1.5, '2026-13': 4, 'x': 2, '2026-10': '' } } });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.def.monthTargets, { '2026-11': 1.5 }, 'only a valid month with a number is kept');
+  assert.equal(K.targetFor(r.body.def, '2026-11', cfg), 1.5, 'the month target wins');
+  assert.equal(K.targetFor(r.body.def, '2026-10', cfg), 2, 'other months keep the cycle target');
+  assert.equal(K.targetFor({ monthTargets: { '2026-11': 80 }, baseline: { value: 200 }, baselineTargetPct: -5 }, '2026-12', cfg), 190, 'no month target, no cycle target: baseline %');
+  { const custom2 = r.body.def; r = await call('PUT /api/kpi/defs/:id', manager, { params: { id: custom2.id }, body: { baseUpdatedAt: custom2.updatedAt, name: 'IV Cannula Phlebitis' } });
+    assert.deepEqual(r.body.def.monthTargets, { '2026-11': 1.5 }, 'month targets survive other edits'); }
   assert.equal((await call('PUT /api/kpi/defs/:id', manager, { params: { id: custom.id }, body: { baseUpdatedAt: custom.updatedAt, name: 'y' } })).status, 409, 'stale edit refused');
   assert.equal((await call('DELETE /api/kpi/defs/:id', manager, { params: { id: custom.id } })).status, 403, 'archiving needs Delete');
   assert.equal((await call('DELETE /api/kpi/defs/:id', admin, { params: { id: custom.id } })).status, 200);
@@ -258,6 +292,17 @@ const def = (id) => Object.assign({}, catalogue.seedDocs().find((d) => d.id === 
   r = await call('GET /api/kpi/report/:id', viewer, { params: { id: '2026-10_2026-10' } });
   assert.equal(rowOf(r.body.report, 'kpi-turnover').period.value, 4);
   assert.equal(r.body.report.commentary['kpi-clabsi'], 'Two cases, both in ICU.');
+  // Remarks (the scorecard's column): saved, trimmed, kept by a figure refresh, removed when emptied.
+  r = await call('PUT /api/kpi/report/:id', manager, { params: { id: '2026-10_2026-10' }, body: { remarks: { 'kpi-clabsi': '  ICU audit planned  ', 'kpi-vap': 'Bundle checks weekly' } } });
+  assert.equal(r.status, 200);
+  await call('POST /api/kpi/report', manager, { body: { from: '2026-10', to: '2026-10' } });
+  r = await call('GET /api/kpi/report/:id', viewer, { params: { id: '2026-10_2026-10' } });
+  assert.equal(r.body.report.remarks['kpi-clabsi'], 'ICU audit planned', 'remark kept through a refresh');
+  assert.equal(r.body.report.commentary['kpi-clabsi'], 'Two cases, both in ICU.', 'remarks do not touch the comment');
+  await call('PUT /api/kpi/report/:id', manager, { params: { id: '2026-10_2026-10' }, body: { remarks: { 'kpi-vap': '' } } });
+  r = await call('GET /api/kpi/report/:id', viewer, { params: { id: '2026-10_2026-10' } });
+  assert.ok(!('kpi-vap' in r.body.report.remarks), 'empty remark is removed');
+  assert.equal(r.body.report.remarks['kpi-clabsi'], 'ICU audit planned');
   // … until it is final.
   assert.equal((await call('POST /api/kpi/report/:id/finalize', clerk, { params: { id: '2026-10_2026-10' } })).status, 403);
   // Zero tolerance: open data errors block Finalise …

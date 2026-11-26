@@ -211,6 +211,104 @@
       throw e;
     }
   }
+  let pptxLibs = null;
+  function loadPptxLibs() {
+    if (window.PptxGenJS && window.JSZip) return Promise.resolve();
+    if (!pptxLibs) pptxLibs = new Promise((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'vendor/pptxgen.bundle.js';
+      s.async = true;
+      s.onload = () => window.PptxGenJS ? res() : rej(new Error('PowerPoint tools did not start.'));
+      s.onerror = () => rej(new Error('Could not load the PowerPoint tools.'));
+      document.head.appendChild(s);
+    }).catch(e => {
+      pptxLibs = null;
+      throw e;
+    });
+    return pptxLibs;
+  }
+  const MORPH_XML = '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">' + '<mc:Choice xmlns:p159="http://schemas.microsoft.com/office/powerpoint/2015/09/main" xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" Requires="p159">' + '<p:transition spd="fast" p14:dur="500"><p159:morph option="byObject"/></p:transition></mc:Choice>' + '<mc:Fallback><p:transition spd="fast"><p:fade/></p:transition></mc:Fallback></mc:AlternateContent>';
+  async function withMorph(buf) {
+    try {
+      const zip = await window.JSZip.loadAsync(buf);
+      const names = Object.keys(zip.files).filter(n => /^ppt\/slides\/slide\d+\.xml$/.test(n));
+      for (const n of names) {
+        let xml = await zip.file(n).async('string');
+        if (xml.indexOf('<p:transition') >= 0 || xml.indexOf('</p:sld>') < 0) continue;
+        xml = xml.indexOf('<p:timing') >= 0 ? xml.replace('<p:timing', MORPH_XML + '<p:timing') : xml.replace('</p:sld>', MORPH_XML + '</p:sld>');
+        zip.file(n, xml);
+      }
+      return await zip.generateAsync({
+        type: 'blob',
+        mimeType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        compression: 'DEFLATE'
+      });
+    } catch (e) {
+      return new Blob([buf], {
+        type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      });
+    }
+  }
+  async function pptxSheets(getRoot, title, fileName, log, setCapturing) {
+    await log();
+    if (window.unicoLoadPdfLibs && !window.html2canvas) await window.unicoLoadPdfLibs();
+    await loadPptxLibs();
+    const H = window.html2canvas;
+    if (!H) throw new Error('The capture tool could not load. Please try again.');
+    setCapturing(true);
+    try {
+      await new Promise(r => setTimeout(r, 120));
+      const sheets = [...getRoot().querySelectorAll('.kp-sheet')];
+      const pptx = new window.PptxGenJS();
+      pptx.defineLayout({
+        name: 'A4L',
+        width: 11.69,
+        height: 8.27
+      });
+      pptx.layout = 'A4L';
+      pptx.title = title;
+      pptx.author = me() || 'UNICO';
+      pptx.company = 'UNICO Hospitals';
+      pptx.subject = 'Nursing KPI report';
+      for (let i = 0; i < sheets.length; i++) {
+        const c = await H(sheets[i], {
+          scale: 1.6,
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          logging: false,
+          windowWidth: 1200
+        });
+        const sl = pptx.addSlide();
+        sl.background = {
+          color: 'FFFFFF'
+        };
+        sl.addImage({
+          data: c.toDataURL('image/jpeg', 0.88),
+          x: 0,
+          y: 0,
+          w: 11.69,
+          h: 8.27,
+          objectName: '!!page'
+        });
+        const h = sheets[i].querySelector('h1,h2,h3');
+        if (h && h.textContent) sl.addNotes(h.textContent.trim());
+      }
+      const buf = await pptx.write({
+        outputType: 'arraybuffer'
+      });
+      const blob = await withMorph(buf);
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName + '.pptx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      toast('PowerPoint downloaded — same as the report.', 'success');
+    } finally {
+      setCapturing(false);
+    }
+  }
   async function pdfSheets(getRoot, title, fileName, log, setCapturing) {
     await log();
     if (window.unicoLoadPdfLibs && !(window.jspdf && window.html2canvas)) await window.unicoLoadPdfLibs();
@@ -406,6 +504,28 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
 .kp-stbl td{padding:6px 8px;border:1px solid #d9e2ec;text-align:center;font-variant-numeric:tabular-nums}
 .kp-stbl td.l{text-align:left}
 .kp-stbl tr:nth-child(even) td{background:#f4f7fa}
+.kp-stbl.dense{font-size:10px}.kp-stbl.dense th{padding:6px 4px;font-size:9px;letter-spacing:0}.kp-stbl.dense td{padding:5px 4px}
+.kp-mcell{display:inline-block;min-width:34px;padding:2px 5px;border-radius:6px;font-weight:700}
+.kp-rmk{width:100%;min-width:0;box-sizing:border-box;display:block;min-height:34px;border:1px dashed #b9d6e6;border-radius:6px;background:#f8fcfe;font:inherit;font-size:11px;padding:4px 6px;resize:vertical;outline:0}
+.kp-rmk:focus{border-style:solid;border-color:#008FCB;background:#fff}
+.kp-cnt{display:block;font-size:9.5px;color:#7b8796;font-weight:500;margin-top:2px;white-space:nowrap}
+.kp-xitem{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 11px;cursor:pointer;font:inherit;font-size:13px;color:var(--ink)}
+.kp-xitem:hover{background:#eaf6fb;border-color:#9cc9e0}.kp-xitem span{font-size:11px;color:var(--muted)}.kp-xitem:disabled{opacity:.5;cursor:default}
+.kp-pop{position:fixed;z-index:9999;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 16px 40px rgba(13,27,46,.18);padding:12px 14px}
+.kp-tile{border-radius:12px;padding:12px 14px;border-left:5px solid}
+.kp-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.kp-stat{position:relative;border-radius:14px;padding:12px 14px 11px;border:1px solid #e3e9f0;box-shadow:0 4px 14px rgba(13,27,46,.06);overflow:hidden;min-height:96px}
+.kp-stat:before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--acc)}
+.kp-stat-h{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;color:#5b6878;text-transform:uppercase;letter-spacing:.4px}
+.kp-stat-h i{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;color:#fff;font-style:normal;font-size:10px}
+.kp-stat-v{font-size:26px;font-weight:800;line-height:1.1;margin-top:8px;font-variant-numeric:tabular-nums}
+.kp-stat-v small{font-size:11px;font-weight:600;color:#7b8796;margin-left:6px}
+.kp-stat-f{font-size:11px;color:#7b8796;margin-top:5px}
+.kp-stat-bar{position:relative;display:block;height:6px;border-radius:99px;background:#e3e9f0;margin:2px 0 5px;overflow:visible}
+.kp-stat-bar b{position:absolute;left:0;top:0;bottom:0;border-radius:99px}
+.kp-stat-bar em{position:absolute;top:-3px;width:2px;height:12px;background:#00293A;border-radius:1px}
+.kp-tile b{display:block;font-size:22px;font-weight:800;line-height:1.1}
+.kp-tile span{display:block;font-size:10.5px;color:#7b8796;margin-top:4px;text-transform:uppercase;letter-spacing:.3px;font-weight:700}
 .kp-comment{border:1px dashed #9cc9e0;border-radius:10px;background:#f6fbfe;padding:8px 10px;font-size:12px;line-height:1.45;min-height:46px;white-space:pre-wrap}
 .kp-comment textarea{border:0;background:transparent;width:100%;font:inherit;resize:vertical;min-height:44px;outline:0}
 .kp-signs{display:grid;grid-template-columns:repeat(4,1fr);gap:28px;margin-top:20px}
@@ -894,6 +1014,266 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       fill: "rgba(255,255,255,.75)"
     }, "on target"));
   }
+  function smoothPath(p) {
+    if (!p.length) return '';
+    const f = v => v.toFixed(1);
+    let d = 'M' + f(p[0][0]) + ' ' + f(p[0][1]);
+    if (p.length === 2) return d + ' L' + f(p[1][0]) + ' ' + f(p[1][1]);
+    for (let i = 0; i < p.length - 1; i++) {
+      const p0 = p[i - 1] || p[i],
+        p1 = p[i],
+        p2 = p[i + 1],
+        p3 = p[i + 2] || p2;
+      const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6],
+        c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+      d += ' C' + f(c1[0]) + ' ' + f(c1[1]) + ' ' + f(c2[0]) + ' ' + f(c2[1]) + ' ' + f(p2[0]) + ' ' + f(p2[1]);
+    }
+    return d;
+  }
+  function TrendGraph({
+    row
+  }) {
+    const d = row.trendDir;
+    const vals = (row.trend || []).map(p => p.v).filter(v => v != null).map(Number).slice(-6);
+    if (!d || vals.length < 2) return React.createElement("span", {
+      className: "kp-muted"
+    }, "\u2014");
+    const W = 64,
+      Hh = 24,
+      col = TREND[d][1];
+    const mx = Math.max(...vals),
+      mn = Math.min(...vals);
+    const sx = i => 4 + i / (vals.length - 1) * (W - 8),
+      sy = v => mx === mn ? Hh / 2 : Hh - 4 - (v - mn) / (mx - mn) * (Hh - 8);
+    const pts = vals.map((v, i) => [sx(i), sy(v)]);
+    const line = smoothPath(pts);
+    const area = line + ' L' + pts[pts.length - 1][0].toFixed(1) + ' ' + Hh + ' L' + pts[0][0].toFixed(1) + ' ' + Hh + ' Z';
+    const n = vals.length - 1;
+    return React.createElement("svg", {
+      width: W,
+      height: Hh,
+      style: {
+        display: 'block',
+        margin: '0 auto'
+      },
+      role: "img",
+      "aria-label": TREND[d][0].slice(2)
+    }, React.createElement("title", null, TREND[d][0].slice(2)), React.createElement("path", {
+      d: area,
+      fill: col,
+      fillOpacity: "0.13",
+      stroke: "none"
+    }), React.createElement("path", {
+      d: line,
+      fill: "none",
+      stroke: col,
+      strokeWidth: "2",
+      strokeLinejoin: "round",
+      strokeLinecap: "round"
+    }), React.createElement("circle", {
+      cx: pts[n][0],
+      cy: pts[n][1],
+      r: "3",
+      fill: "#fff",
+      stroke: col,
+      strokeWidth: "2"
+    }));
+  }
+  const niceMax = v => {
+    const x = v * 1.12;
+    const p = Math.pow(10, Math.floor(Math.log10(x)));
+    const n = x / p;
+    const step = [1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find(k => n <= k) || 10;
+    return step * p;
+  };
+  function ComboChart({
+    row,
+    cfg,
+    height
+  }) {
+    const all = row.trend || [];
+    const first = all.findIndex(p => p.v != null);
+    if (first < 0) return React.createElement("div", {
+      className: "kp-empty"
+    }, "No monthly figures yet for this KPI.");
+    const pts = all.slice(first);
+    const W = 540,
+      H = height || 230,
+      L = 44,
+      R = 58,
+      T = 24,
+      B = 34;
+    const vals = pts.map(p => p.v).filter(v => v != null).map(Number);
+    const tgs = pts.map(p => p.t).filter(v => v != null).map(Number);
+    const hi = Math.max(0.0001, ...vals, ...tgs);
+    const top = K.unitKind(row) === 'pct' && hi <= 100 ? Math.min(100, niceMax(hi)) : niceMax(hi);
+    const n = pts.length,
+      slot = (W - L - R) / n,
+      bw = Math.min(44, slot * 0.56);
+    const x = i => L + slot * (i + 0.5),
+      y = v => T + (H - T - B) * (1 - Number(v) / top);
+    const ticks = [0, 0.25, 0.5, 0.75, 1].map(k => k * top);
+    const colOf = p => {
+      const st = K.statusOf(row, p.v, p.t, cfg);
+      return ST[st] && (st === 'met' || st === 'near' || st === 'off') ? ST[st].color : '#008FCB';
+    };
+    const runs = [];
+    let cur = [];
+    pts.forEach((p, i) => {
+      if (p.v == null) {
+        if (cur.length) runs.push(cur);
+        cur = [];
+        return;
+      }
+      cur.push([x(i), y(p.v)]);
+    });
+    if (cur.length) runs.push(cur);
+    const tPts = pts.map((p, i) => p.t != null ? [x(i), y(p.t)] : null).filter(Boolean);
+    const lastT = [...pts].reverse().find(p => p.t != null);
+    const short = v => K.fmt(row, v, {
+      bare: K.unitKind(row) !== 'pct'
+    });
+    const tick = v => (top >= 10 ? Math.round(v) : Math.round(v * 100) / 100).toLocaleString('en-US');
+    const uid = 'cc' + String(row.kpiId).replace(/[^a-z0-9]/gi, '');
+    return React.createElement("svg", {
+      viewBox: '0 0 ' + W + ' ' + H,
+      width: "100%",
+      style: {
+        display: 'block',
+        maxHeight: H + 10
+      },
+      role: "img",
+      "aria-label": 'Monthly results of ' + row.name
+    }, React.createElement("defs", null, React.createElement("linearGradient", {
+      id: uid,
+      x1: "0",
+      y1: "0",
+      x2: "0",
+      y2: "1"
+    }, React.createElement("stop", {
+      offset: "0",
+      stopColor: "#fff",
+      stopOpacity: "0.35"
+    }), React.createElement("stop", {
+      offset: "1",
+      stopColor: "#fff",
+      stopOpacity: "0"
+    }))), React.createElement("rect", {
+      x: L,
+      y: T,
+      width: W - L - R,
+      height: H - T - B,
+      fill: "#fafcfe",
+      rx: "6"
+    }), ticks.map((v, i) => React.createElement("g", {
+      key: i
+    }, React.createElement("line", {
+      x1: L,
+      x2: W - R,
+      y1: y(v),
+      y2: y(v),
+      stroke: "#e3e9f0",
+      strokeDasharray: i ? '3 4' : ''
+    }), React.createElement("text", {
+      x: L - 6,
+      y: y(v) + 3.5,
+      textAnchor: "end",
+      fontSize: "10",
+      fill: "#7b8796"
+    }, tick(v)))), pts.map((p, i) => {
+      if (p.v == null) return React.createElement("text", {
+        key: i,
+        x: x(i),
+        y: H - B - 6,
+        textAnchor: "middle",
+        fontSize: "11",
+        fill: "#b9c2cd"
+      }, "\u2014");
+      const yy = y(p.v),
+        hh = Math.max(2, H - B - yy),
+        c = colOf(p);
+      return React.createElement("g", {
+        key: i
+      }, React.createElement("rect", {
+        x: x(i) - bw / 2,
+        y: H - B - hh,
+        width: bw,
+        height: hh,
+        rx: "5",
+        fill: c,
+        fillOpacity: "0.88"
+      }), React.createElement("rect", {
+        x: x(i) - bw / 2,
+        y: H - B - hh,
+        width: bw,
+        height: hh,
+        rx: "5",
+        fill: 'url(#' + uid + ')'
+      }), hh > 40 ? React.createElement("text", {
+        x: x(i),
+        y: H - B - hh / 2 + 8,
+        textAnchor: "middle",
+        fontSize: "11.5",
+        fontWeight: "800",
+        fill: "#fff"
+      }, short(p.v)) : React.createElement("text", {
+        x: x(i),
+        y: H - B - hh - 11,
+        textAnchor: "middle",
+        fontSize: "11",
+        fontWeight: "800",
+        fill: c
+      }, short(p.v)));
+    }), tPts.length > 1 && React.createElement("polyline", {
+      points: [[L, tPts[0][1]]].concat(tPts, [[W - R, tPts[tPts.length - 1][1]]]).map(q => q[0].toFixed(1) + ',' + q[1].toFixed(1)).join(' '),
+      fill: "none",
+      stroke: "#37B4A6",
+      strokeWidth: "1.6",
+      strokeDasharray: "6 5"
+    }), tPts.length === 1 && React.createElement("line", {
+      x1: L,
+      x2: W - R,
+      y1: tPts[0][1],
+      y2: tPts[0][1],
+      stroke: "#37B4A6",
+      strokeWidth: "1.6",
+      strokeDasharray: "6 5"
+    }), lastT && React.createElement("g", null, React.createElement("text", {
+      x: W - R + 6,
+      y: y(lastT.t) - 2,
+      fontSize: "11",
+      fontWeight: "800",
+      fill: "#2a8f84"
+    }, K.fmt(row, lastT.t)), React.createElement("text", {
+      x: W - R + 6,
+      y: y(lastT.t) + 10,
+      fontSize: "9",
+      fill: "#2a8f84"
+    }, "target")), runs.map((r, i) => r.length > 1 ? React.createElement("path", {
+      key: i,
+      d: smoothPath(r),
+      fill: "none",
+      stroke: "#00293A",
+      strokeWidth: "2.6",
+      strokeLinecap: "round",
+      strokeLinejoin: "round"
+    }) : null), pts.map((p, i) => p.v == null ? null : React.createElement("circle", {
+      key: i,
+      cx: x(i),
+      cy: y(p.v),
+      r: "4.2",
+      fill: "#fff",
+      stroke: "#00293A",
+      strokeWidth: "2.2"
+    })), pts.map((p, i) => React.createElement("text", {
+      key: i,
+      x: x(i),
+      y: H - B + 16,
+      textAnchor: "middle",
+      fontSize: "10.5",
+      fill: "#5b6878"
+    }, K.fmtMonth(p.m).replace(' 20', " '"))));
+  }
   function Spark({
     row,
     w,
@@ -901,7 +1281,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
   }) {
     const W = w || 120,
       Hh = h || 30;
-    const pts = row.trend || [];
+    const all = row.trend || [];
+    const first = all.findIndex(p => p.v != null);
+    const pts = first < 0 ? [] : all.slice(first);
     const vals = pts.map(p => p.v).filter(v => v != null);
     if (vals.length < 1) return React.createElement("span", {
       className: "kp-muted",
@@ -914,16 +1296,17 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       mn = Math.min(...vals, tv != null ? tv : Infinity, 0);
     const sx = i => 2 + i / Math.max(pts.length - 1, 1) * (W - 4),
       sy = v => Hh - 3 - (v - mn) / (mx - mn || 1) * (Hh - 6);
-    let d = '',
-      pen = false;
+    const runs = [];
+    let cur = [];
     pts.forEach((p, i) => {
       if (p.v == null) {
-        pen = false;
+        if (cur.length) runs.push(cur);
+        cur = [];
         return;
       }
-      d += (pen ? 'L' : 'M') + sx(i).toFixed(1) + ' ' + sy(p.v).toFixed(1) + ' ';
-      pen = true;
+      cur.push([sx(i), sy(p.v)]);
     });
+    if (cur.length) runs.push(cur);
     const last = pts.map((p, i) => [p, i]).filter(([p]) => p.v != null).pop();
     const col = ST[row.status].color;
     return React.createElement("svg", {
@@ -939,14 +1322,15 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       y2: sy(tv),
       stroke: "#37B4A6",
       strokeDasharray: "3 3"
-    }), React.createElement("path", {
-      d: d,
+    }), runs.filter(r => r.length > 1).map((r, i) => React.createElement("path", {
+      key: i,
+      d: smoothPath(r),
       fill: "none",
       stroke: col,
       strokeWidth: "1.8",
       strokeLinejoin: "round",
       strokeLinecap: "round"
-    }), last && React.createElement("circle", {
+    })), last && React.createElement("circle", {
       cx: sx(last[1]),
       cy: sy(last[0].v),
       r: "2.8",
@@ -1019,6 +1403,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     } catch (e) {}
   };
   window.unicoKpiChanged = kpiChanged;
+  const REPORT_PRESETS = K.PRESETS.filter(x => !x.cycle).map(x => x.id);
   const yearsOf = meta => {
     const last = +meta.thisMonth.slice(0, 4),
       first = Math.min(+meta.config.cycleStart.slice(0, 4) - 1, last - 2);
@@ -1400,7 +1785,9 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     className: "kp-muted",
     style: {
       fontSize: 10.5,
-      whiteSpace: 'nowrap'
+      maxWidth: 130,
+      margin: '0 auto',
+      lineHeight: 1.3
     }
   }, resultOf(r), r.nextDue && r.latest ? ' · next ' + K.fmtMonth(r.nextDue) : '') : null;
   function PeriodsTable({
@@ -3337,6 +3724,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       p: p,
       setP: setP,
       range: range,
+      presets: REPORT_PRESETS,
       maxMonth: meta.thisMonth,
       liveOpt: true
     }), React.createElement("div", {
@@ -4075,6 +4463,391 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       onClick: onClose
     }, "Close"))));
   }
+  function Pop({
+    anchor,
+    onClose,
+    children,
+    width
+  }) {
+    const [pos, setPos] = useState(null);
+    const box = useRef(null);
+    const closeRef = useRef(onClose);
+    closeRef.current = onClose;
+    useEffect(() => {
+      const place = () => {
+        const el = anchor.current;
+        if (!el) return;
+        const b = el.getBoundingClientRect();
+        const w = Math.min(width || 360, window.innerWidth - 16);
+        setPos({
+          top: b.bottom + 6,
+          left: Math.max(8, Math.min(b.left, window.innerWidth - w - 8)),
+          width: w
+        });
+      };
+      place();
+      const down = e => {
+        if (box.current && !box.current.contains(e.target) && !(anchor.current && anchor.current.contains(e.target))) closeRef.current();
+      };
+      const key = e => {
+        if (e.key === 'Escape') closeRef.current();
+      };
+      window.addEventListener('resize', place);
+      window.addEventListener('scroll', place, true);
+      document.addEventListener('mousedown', down);
+      document.addEventListener('keydown', key);
+      return () => {
+        window.removeEventListener('resize', place);
+        window.removeEventListener('scroll', place, true);
+        document.removeEventListener('mousedown', down);
+        document.removeEventListener('keydown', key);
+      };
+    }, []);
+    if (!pos) return null;
+    return ReactDOM.createPortal(React.createElement("div", {
+      ref: box,
+      className: "kp-pop",
+      style: pos
+    }, children), document.body);
+  }
+  function ReportPeriodSel({
+    meta,
+    rep,
+    go
+  }) {
+    const [open, setOpen] = useState(false);
+    const btn = useRef(null);
+    const [p, setP, range] = usePeriod(meta, 'reportbar', '1m', null, false);
+    const len = K.monthDiff(rep.from, rep.to) + 1;
+    const nextTo = K.addMonth(rep.to, len);
+    const step = n => go(K.addMonth(rep.from, n * len), K.addMonth(rep.to, n * len));
+    const toggle = () => {
+      if (!open) setP({
+        preset: 'custom',
+        from: rep.from,
+        to: rep.to
+      });
+      setOpen(!open);
+    };
+    return React.createElement("span", {
+      style: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4
+      }
+    }, React.createElement("button", {
+      className: "btn sm",
+      title: 'Previous ' + (len > 1 ? len + ' months' : 'month'),
+      onClick: () => step(-1)
+    }, "\u2039"), React.createElement("button", {
+      ref: btn,
+      className: "btn sm",
+      style: {
+        fontWeight: 800,
+        fontSize: 13.5
+      },
+      onClick: toggle,
+      title: "Choose the months of this report"
+    }, "\uD83D\uDCC5 ", K.fmtRange(rep.from, rep.to), " \u25BE"), React.createElement("button", {
+      className: "btn sm",
+      title: 'Next ' + (len > 1 ? len + ' months' : 'month'),
+      disabled: nextTo > meta.thisMonth,
+      onClick: () => step(1)
+    }, "\u203A"), open && React.createElement(Pop, {
+      anchor: btn,
+      onClose: () => setOpen(false),
+      width: 680
+    }, React.createElement("div", {
+      className: "kp-lab"
+    }, "Report period"), React.createElement(PeriodPicker, {
+      meta: meta,
+      p: p,
+      setP: setP,
+      range: range,
+      presets: REPORT_PRESETS,
+      maxMonth: meta.thisMonth,
+      liveOpt: true
+    }), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 8,
+        marginTop: 10,
+        justifyContent: 'flex-end'
+      }
+    }, React.createElement(Btn, {
+      onClick: () => setOpen(false)
+    }, "Cancel"), React.createElement(Btn, {
+      pri: true,
+      disabled: !range,
+      onClick: () => {
+        setOpen(false);
+        go(range.from, range.to);
+      }
+    }, "Open ", range ? K.fmtRange(range.from, range.to) : ''))));
+  }
+  const SC_COLS = [['months', 'Month-wise results'], ['current', 'Current / Period'], ['target', 'Target'], ['variance', 'Variance'], ['status', 'Status'], ['trend', 'Trend graph'], ['remarks', 'Remarks']];
+  function ColumnsMenu({
+    cols,
+    setCols
+  }) {
+    const [open, setOpen] = useState(false);
+    const btn = useRef(null);
+    const flip = k => setCols(cols.indexOf(k) >= 0 ? cols.filter(x => x !== k) : SC_COLS.map(c => c[0]).filter(x => x === k || cols.indexOf(x) >= 0));
+    return React.createElement(React.Fragment, null, React.createElement("button", {
+      ref: btn,
+      className: "btn sm",
+      onClick: () => setOpen(!open),
+      title: "Show or hide scorecard columns (screen, print, PDF, PowerPoint, Excel)"
+    }, "Columns \u25BE"), open && React.createElement(Pop, {
+      anchor: btn,
+      onClose: () => setOpen(false),
+      width: 240
+    }, React.createElement("div", {
+      className: "kp-lab"
+    }, "Scorecard columns"), SC_COLS.map(([k, l]) => React.createElement("label", {
+      key: k,
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        padding: '4px 0',
+        fontSize: 13,
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: cols.indexOf(k) >= 0,
+      onChange: () => flip(k)
+    }), l)), React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 6,
+        marginTop: 6
+      }
+    }, React.createElement(Btn, {
+      onClick: () => setCols(SC_COLS.map(c => c[0]))
+    }, "Show all"))));
+  }
+  function MonthCell({
+    row,
+    m,
+    cfg
+  }) {
+    const x = K.monthResult(row, m, cfg);
+    if (x.status === 'off-cycle') return React.createElement("span", {
+      style: {
+        color: '#b9c2cd'
+      },
+      title: K.fmtMonthLong(m) + ': not counted for this KPI'
+    }, "\xB7");
+    if (!K.has(x.value)) return React.createElement("span", {
+      style: {
+        color: '#b9c2cd'
+      },
+      title: K.fmtMonthLong(m) + ': no figure'
+    }, "\u2014");
+    const st = ST[x.status] || ST.nodata;
+    const cnt = K.countLabel(row, x.num, x.den);
+    return React.createElement("span", {
+      title: K.fmtMonthLong(m) + ': ' + K.fmt(row, x.value) + (cnt ? ' (' + (row.numLabel || 'numerator') + ' ' + cnt.replace(' / ', ' / ' + (row.denLabel ? row.denLabel + ' ' : '')) + ')' : '') + (K.has(x.target) ? ' · target ' + K.fmt(row, x.target) : '') + ' · ' + st.label
+    }, React.createElement("span", {
+      className: "kp-mcell",
+      style: {
+        background: st.bg,
+        color: st.ink
+      }
+    }, K.fmt(row, x.value)), cnt && React.createElement("span", {
+      className: "kp-cnt"
+    }, cnt));
+  }
+  const numTxt = v => K.has(v) ? String(K.round(Number(v), 2)) : '—';
+  function MonthTable({
+    row,
+    months,
+    cfg
+  }) {
+    const list = months.map(m => K.monthResult(row, m, cfg)).filter(x => x.status !== 'off-cycle');
+    if (!list.length) return React.createElement("div", {
+      className: "kp-muted"
+    }, "No month of this report counts for this KPI yet.");
+    const showNum = row.formula !== 'direct',
+      showDen = showNum && row.formula !== 'count';
+    const vals = list.filter(x => K.has(x.value)).map(x => x.value);
+    const lo = row.goalDirection === 'lower_is_better';
+    const best = vals.length > 1 ? lo ? Math.min(...vals) : Math.max(...vals) : null;
+    const worst = vals.length > 1 ? lo ? Math.max(...vals) : Math.min(...vals) : null;
+    const mark = best != null && best !== worst;
+    const hdWrap = {
+      whiteSpace: 'normal',
+      maxWidth: 130,
+      lineHeight: 1.25
+    };
+    return React.createElement("table", {
+      className: "kp-stbl"
+    }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", {
+      style: {
+        textAlign: 'left'
+      }
+    }, "Month"), showNum && React.createElement("th", {
+      title: row.numLabel || 'Numerator',
+      style: hdWrap
+    }, row.numLabel || 'Numerator'), showDen && React.createElement("th", {
+      title: row.denLabel || 'Denominator',
+      style: hdWrap
+    }, row.denLabel || 'Denominator'), React.createElement("th", null, "Result"), React.createElement("th", null, "Target"), React.createElement("th", null, "Variance"), React.createElement("th", null, "Status"))), React.createElement("tbody", null, list.map(x => {
+      const st = K.has(x.value) ? ST[x.status] || ST.nodata : ST.nodata;
+      return React.createElement("tr", {
+        key: x.m
+      }, React.createElement("td", {
+        className: "l",
+        style: {
+          whiteSpace: 'nowrap'
+        }
+      }, React.createElement("b", null, K.fmtMonth(x.m)), mark && x.value === best ? React.createElement("span", {
+        style: {
+          color: '#1f9d57'
+        },
+        title: "Best month"
+      }, " \u2605") : null, mark && x.value === worst ? React.createElement("span", {
+        style: {
+          color: '#d23a52'
+        },
+        title: "Weakest month"
+      }, " \u25BC") : null), showNum && React.createElement("td", null, numTxt(x.num)), showDen && React.createElement("td", null, numTxt(x.den)), React.createElement("td", null, React.createElement("b", null, K.fmt(row, x.value))), React.createElement("td", null, K.has(x.target) ? K.fmt(row, x.target) : '—'), React.createElement("td", {
+        style: {
+          color: st.ink,
+          fontWeight: 700
+        }
+      }, K.gapLabel(row, x.value, x.target)), React.createElement("td", {
+        style: {
+          background: st.bg,
+          color: st.ink,
+          fontWeight: 700,
+          whiteSpace: 'nowrap'
+        }
+      }, st.label));
+    })));
+  }
+  function StatTiles({
+    r,
+    rep
+  }) {
+    const st = ST[r.status];
+    const unit = K.unitKind(r) === 'num' && r.unit ? r.unit : '';
+    const cnt = K.countLabel(r, r.period.num, r.period.den);
+    const d = K.variance(r.period.value, r.target);
+    const ach = r.achievement != null ? Math.max(0, Math.min(150, r.achievement)) : null;
+    const tile = (accent, bg, icon, label, body, foot) => React.createElement("div", {
+      className: "kp-stat",
+      style: {
+        background: bg,
+        '--acc': accent
+      }
+    }, React.createElement("div", {
+      className: "kp-stat-h"
+    }, React.createElement("i", {
+      style: {
+        background: accent
+      }
+    }, icon), React.createElement("span", null, label)), body, foot ? React.createElement("div", {
+      className: "kp-stat-f"
+    }, foot) : null);
+    const big = (v, color, u) => React.createElement("div", {
+      className: "kp-stat-v",
+      style: {
+        color
+      }
+    }, v, u ? React.createElement("small", null, u) : null);
+    return React.createElement("div", {
+      className: "kp-stats"
+    }, tile('#008FCB', 'linear-gradient(140deg,#eaf6fb 0%,#ffffff 70%)', '◉', resultOf(r) || (rep.months.length > 1 ? 'Period result' : 'This month'), big(K.fmt(r, r.period.value), '#00293A', unit), cnt ? React.createElement("span", {
+      title: (r.numLabel || 'Numerator') + ' / ' + (r.denLabel || 'denominator')
+    }, cnt) : null), tile('#37B4A6', 'linear-gradient(140deg,#e8f7f4 0%,#ffffff 70%)', '◎', 'Target', big(r.target != null ? K.fmt(r, r.target) : '—', '#00293A', r.target != null ? unit : ''), r.goalDirection === 'lower_is_better' ? 'Lower is better' : 'Higher is better'), tile(st.color, 'linear-gradient(140deg,' + st.bg + ' 0%,#ffffff 75%)', d == null ? '·' : d > 0 ? '▲' : d < 0 ? '▼' : '=', 'Variance', big(K.gapLabel(r, r.period.value, r.target), st.ink, d != null && d !== 0 ? unit : ''), 'Value − target'), tile(st.color, 'linear-gradient(140deg,' + st.bg + ' 0%,#ffffff 75%)', r.status === 'met' ? '✓' : r.status === 'off' ? '!' : '•', 'Status', React.createElement("div", {
+      className: "kp-stat-v",
+      style: {
+        color: st.ink,
+        fontSize: 20
+      }
+    }, st.label), ach != null ? React.createElement("span", {
+      style: {
+        display: 'block'
+      }
+    }, React.createElement("span", {
+      className: "kp-stat-bar"
+    }, React.createElement("b", {
+      style: {
+        width: ach / 150 * 100 + '%',
+        background: st.color
+      }
+    }), React.createElement("em", {
+      style: {
+        left: 100 / 150 * 100 + '%'
+      }
+    })), r.achievement, "% of target", r.achievement > 100 ? ' · ' + (r.achievement - 100) + '% better' : r.achievement < 100 ? ' · ' + (100 - r.achievement) + '% short' : ' · exactly on target') : null));
+  }
+  function ExportMenu({
+    xo,
+    setXo,
+    busy,
+    layout,
+    run
+  }) {
+    const [open, setOpen] = useState(false);
+    const btn = useRef(null);
+    const go = k => {
+      setOpen(false);
+      run(k);
+    };
+    const item = (k, label, sub) => React.createElement("button", {
+      key: k,
+      className: "kp-xitem",
+      disabled: !!busy,
+      onClick: () => go(k)
+    }, React.createElement("b", null, label), sub ? React.createElement("span", null, sub) : null);
+    return React.createElement(React.Fragment, null, React.createElement("button", {
+      ref: btn,
+      className: "btn sm pri",
+      disabled: !!busy,
+      onClick: () => setOpen(!open),
+      title: "Print, PDF, PowerPoint, Excel \u2014 and what to include"
+    }, busy ? 'Working…' : '⬇ Export ▾'), open && React.createElement(Pop, {
+      anchor: btn,
+      onClose: () => setOpen(false),
+      width: 330
+    }, React.createElement("div", {
+      className: "kp-lab"
+    }, "Include"), [['actions', 'Action plans'], ['comments', 'Comments']].map(([k, l]) => React.createElement("label", {
+      key: k,
+      style: {
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        padding: '3px 0',
+        fontSize: 13,
+        cursor: 'pointer'
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: !!xo[k],
+      onChange: e => setXo(x => Object.assign({}, x, {
+        [k]: e.target.checked
+      }))
+    }), l)), React.createElement("div", {
+      className: "kp-muted",
+      style: {
+        fontSize: 11.5,
+        margin: '2px 0 8px'
+      }
+    }, "Scorecard columns follow the \u201CColumns\u201D menu."), React.createElement("div", {
+      className: "kp-lab"
+    }, "Export as"), React.createElement("div", {
+      style: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4
+      }
+    }, item('print', 'Print'), item('pdf', 'PDF'), item('pptxcopy', 'PowerPoint', 'same as the screen, with animation'), item('pptx-' + layout, 'PowerPoint (editable)', 'text and charts you can change'), item('xlsx', 'Excel'))));
+  }
   function ReportDoc({
     meta,
     id,
@@ -4084,8 +4857,27 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const [rep, setRep] = useState(null);
     const [err, setErr] = useState('');
     const [layout, setLayout] = useState(() => lsGet('kpi_layout') || 'full');
+    const [cols, setCols] = useState(() => {
+      const v = lsGet('kpi_cols_v2');
+      return Array.isArray(v) ? v.filter(k => SC_COLS.some(c => c[0] === k)) : SC_COLS.map(c => c[0]);
+    });
+    useEffect(() => {
+      lsSet('kpi_cols_v2', cols);
+    }, [cols]);
+    const on = k => cols.indexOf(k) >= 0;
+    const colsQ = 'cols=' + encodeURIComponent(cols.join(','));
+    const [xo, setXo] = useState(() => Object.assign({
+      actions: true,
+      comments: true
+    }, lsGet('kpi_export_opts') || {}));
+    useEffect(() => {
+      lsSet('kpi_export_opts', xo);
+    }, [xo]);
+    const xoQ = (xo.actions ? '' : '&actions=0') + (xo.comments ? '' : '&comments=0');
     const [busy, setBusy] = useState('');
     const [capturing, setCapturing] = useState(false);
+    const hideActs = capturing && !xo.actions,
+      hideCm = capturing && !xo.comments;
     const [saveState, setSaveState] = useState('');
     const [tick, setTick] = useState(0);
     const [ackItems, setAckItems] = useState(null);
@@ -4114,7 +4906,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     const flush = useCallback(async () => {
       const body = pending.current;
       pending.current = {};
-      if (!Object.keys(body).length) return;
+      if (!Object.keys(body).length) return true;
       setSaveState('Saving…');
       try {
         const j = await api('/api/kpi/report/' + id, {
@@ -4130,10 +4922,12 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           state: r.state === 'preview' ? 'draft' : r.state,
           updatedAt: j.updatedAt
         }));
+        return true;
       } catch (e) {
         setSaveState('');
         toast(e.message, 'error');
         if (e.status === 409) setTick(t => t + 1);
+        return false;
       }
     }, [id]);
     const queue = patch => {
@@ -4156,6 +4950,18 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }));
       queue({
         commentary: {
+          [k]: v
+        }
+      });
+    };
+    const setRemark = (k, v) => {
+      setRep(r => Object.assign({}, r, {
+        remarks: Object.assign({}, r.remarks, {
+          [k]: v
+        })
+      }));
+      queue({
+        remarks: {
           [k]: v
         }
       });
@@ -4189,6 +4995,23 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
     };
     async function act(kind) {
       try {
+        if (kind === 'save') {
+          setBusy(kind);
+          if (Object.keys(pending.current).length) {
+            clearTimeout(timer.current);
+            if (await flush()) toast('Saved.', 'success');
+          } else if (!rep.stored) {
+            await api('/api/kpi/report', {
+              method: 'POST',
+              body: JSON.stringify({
+                from: rep.from,
+                to: rep.to
+              })
+            });
+            toast('Saved as a draft.', 'success');
+            setTick(t => t + 1);
+          } else toast('Everything is saved.', 'success');
+        }
         if (kind === 'refresh') {
           setBusy(kind);
           await api('/api/kpi/report', {
@@ -4261,13 +5084,13 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         if (kind.indexOf('pptx-') === 0) {
           setBusy(kind);
           await flush();
-          await download('/api/kpi/report/' + id + '/pptx?style=' + kind.slice(5));
+          await download('/api/kpi/report/' + id + '/pptx?style=' + kind.slice(5) + '&' + colsQ + xoQ);
           toast('PowerPoint downloaded.', 'success');
         }
         if (kind === 'xlsx') {
           setBusy(kind);
           await flush();
-          await download('/api/kpi/report/' + id + '/xlsx');
+          await download('/api/kpi/report/' + id + '/xlsx?' + colsQ);
           toast('Excel downloaded.', 'success');
         }
         if (kind === 'print') {
@@ -4279,11 +5102,30 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           await flush();
           await pdfDoc();
         }
+        if (kind === 'pptxcopy') {
+          setBusy(kind);
+          await flush();
+          await pptxSheets(() => docRef.current, title + ' — ' + K.fmtRange(rep.from, rep.to), fileBase, () => api('/api/kpi/print', {
+            method: 'POST',
+            body: JSON.stringify({
+              id,
+              kind: 'pptx',
+              what: layout
+            })
+          }), setCapturing);
+        }
       } catch (e) {
         toast(e.message, 'error');
       }
       setBusy('');
     }
+    const go = async (from, to) => {
+      await flush();
+      setRoute({
+        view: 'kpiReports',
+        report: K.reportId(from, to)
+      });
+    };
     const title = rep && rep.title || cfg.reportTitle;
     const fileBase = 'Nursing-KPI-' + (rep ? rep.from === rep.to ? rep.from : rep.from + '-to-' + rep.to : '');
     const printDoc = () => printSheets(() => docRef.current, title + ' — ' + K.fmtRange(rep.from, rep.to), () => api('/api/kpi/print', {
@@ -4331,6 +5173,8 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       className: "kp-comment"
     }, v) : null;
     const months6 = rep.months.slice(-6);
+    const mcols = on('months') ? K.reportMonthCols(rep) : [];
+    const monthsAll = K.reportMonthCols(rep);
     const flatCharts = true;
     return React.createElement("div", {
       className: 'kp-wrap' + (capturing ? ' kp-capturing' : '')
@@ -4346,11 +5190,17 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       onClick: () => setRoute({
         view: 'kpiReports'
       })
-    }, "\u2039 All reports"), React.createElement("b", {
-      style: {
-        fontSize: 14
-      }
-    }, period), React.createElement("span", {
+    }, "\u2039 All reports"), React.createElement(ReportPeriodSel, {
+      meta: meta,
+      rep: rep,
+      go: go
+    }), meta.canPrint && React.createElement(ExportMenu, {
+      xo: xo,
+      setXo: setXo,
+      busy: busy,
+      layout: layout,
+      run: act
+    }), React.createElement("span", {
       className: "kp-pill",
       style: rep.state === 'final' ? {
         background: '#e7f6ed',
@@ -4382,7 +5232,14 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       className: 'kp-chip' + (layout === 'calc' ? ' on' : ''),
       onClick: () => setLayout('calc'),
       title: "Detailed, plus how every figure was calculated (units, who sent and approved it) and the data checks"
-    }, "Detailed + calculations")), rep.state !== 'final' && (meta.canAdd || meta.canEdit) && React.createElement(Btn, {
+    }, "Detailed + calculations")), React.createElement(ColumnsMenu, {
+      cols: cols,
+      setCols: setCols
+    }), editable && React.createElement(Btn, {
+      disabled: !!busy,
+      onClick: () => act('save'),
+      title: "Save the remarks, comments and sign-off now (they also save by themselves a moment after typing)"
+    }, "\uD83D\uDCBE Save"), rep.state !== 'final' && (meta.canAdd || meta.canEdit) && React.createElement(Btn, {
       disabled: !!busy,
       onClick: () => act('refresh')
     }, rep.stored ? '↻ Refresh figures' : 'Save as draft'), rep.state !== 'final' && meta.canEdit && React.createElement(Btn, {
@@ -4393,20 +5250,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       disabled: !!busy,
       onClick: () => act('reopen'),
       title: "Open the final report for changes; Finalise it again when done"
-    }, "\u270E Edit (administrator)"), meta.canPrint && React.createElement(React.Fragment, null, React.createElement(Btn, {
-      disabled: !!busy,
-      onClick: () => act('print')
-    }, "Print"), React.createElement(Btn, {
-      disabled: !!busy,
-      onClick: () => act('pdf')
-    }, busy === 'pdf' ? 'Making PDF…' : 'PDF'), React.createElement(Btn, {
-      disabled: !!busy,
-      onClick: () => act('pptx-' + layout),
-      title: 'PowerPoint — ' + (layout === 'full' ? 'full deck, one slide per KPI' : layout === 'calc' ? 'full deck with a calculation slide per KPI and the data checks' : 'summary deck')
-    }, busy.indexOf('pptx') === 0 ? 'Building…' : 'PowerPoint'), React.createElement(Btn, {
-      disabled: !!busy,
-      onClick: () => act('xlsx')
-    }, busy === 'xlsx' ? 'Building…' : 'Excel')), rep.stored && meta.canDelete && (rep.state !== 'final' || meta.isAdmin) && React.createElement(Btn, {
+    }, "\u270E Edit (administrator)"), rep.stored && meta.canDelete && (rep.state !== 'final' || meta.isAdmin) && React.createElement(Btn, {
       danger: true,
       disabled: !!busy,
       onClick: () => act('remove')
@@ -4476,7 +5320,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         fontSize: 13,
         color: '#5b6878'
       }
-    }, React.createElement("span", null, cfg.hospitalName), React.createElement("span", null, "\xB7"), React.createElement("span", null, rep.cycle.label, rep.cycle.monthNo ? ', month ' + rep.cycle.monthNo + ' of ' + rep.cycle.of : ''), React.createElement("span", null, "\xB7"), React.createElement("span", null, rows.length, " KPIs in ", pillars.length, " pillars")), React.createElement("div", {
+    }, React.createElement("span", null, cfg.hospitalName), React.createElement("span", null, "\xB7"), React.createElement("span", null, rows.length, " KPIs in ", pillars.length, " pillars")), React.createElement("div", {
       style: {
         display: 'grid',
         gridTemplateColumns: '210px repeat(4,1fr)',
@@ -4645,42 +5489,98 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       foot: foot,
       page: pg()
     }, React.createElement("table", {
-      className: "kp-stbl"
+      className: 'kp-stbl' + (mcols.length > 6 ? ' dense' : '')
     }, React.createElement("thead", null, React.createElement("tr", null, React.createElement("th", null, "#"), React.createElement("th", {
       style: {
         textAlign: 'left'
       }
-    }, "KPI"), React.createElement("th", null, "Baseline"), React.createElement("th", null, rep.months.length > 1 ? 'Period' : 'Current'), React.createElement("th", null, "Target"), React.createElement("th", null, "Variance"), React.createElement("th", null, "Status"), React.createElement("th", null, "Trend"), React.createElement("th", null, "12 months"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
+    }, "KPI"), mcols.map(m => React.createElement("th", {
+      key: m
+    }, K.fmtMonth(m).replace(' 20', ' '))), on('current') && React.createElement("th", null, rep.months.length > 1 ? 'Period' : 'Current'), on('target') && React.createElement("th", null, "Target"), on('variance') && React.createElement("th", null, "Variance"), on('status') && React.createElement("th", null, "Status"), on('trend') && React.createElement("th", null, "Trend"), on('remarks') && React.createElement("th", {
+      style: {
+        textAlign: 'left',
+        width: 150
+      }
+    }, "Remarks"))), React.createElement("tbody", null, rows.map(r => React.createElement("tr", {
       key: r.kpiId
     }, React.createElement("td", null, React.createElement("b", {
       style: {
         color: '#00293A'
       }
     }, r.code)), React.createElement("td", {
-      className: "l"
-    }, r.name), React.createElement("td", {
+      className: "l",
       style: {
-        color: '#7b8796'
+        minWidth: 170
       }
-    }, r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : '—'), React.createElement("td", null, React.createElement("b", null, K.fmt(r, r.period.value)), React.createElement(ResultTag, {
+    }, r.name), mcols.map(m => React.createElement("td", {
+      key: m
+    }, React.createElement(MonthCell, {
+      row: r,
+      m: m,
+      cfg: cfg
+    }))), on('current') && React.createElement("td", null, React.createElement("b", null, K.fmt(r, r.period.value)), K.countLabel(r, r.period.num, r.period.den) && React.createElement("span", {
+      className: "kp-cnt",
+      title: (r.numLabel || 'Numerator') + ' / ' + (r.denLabel || 'denominator')
+    }, K.countLabel(r, r.period.num, r.period.den)), React.createElement(ResultTag, {
       r: r
-    })), React.createElement("td", null, r.target != null ? K.fmt(r, r.target) : '—'), React.createElement("td", {
+    })), on('target') && React.createElement("td", null, r.target != null ? K.fmt(r, r.target) : '—'), on('variance') && React.createElement("td", {
       style: {
-        fontSize: 11
+        fontWeight: 700,
+        color: ST[r.status].ink,
+        whiteSpace: 'nowrap'
       }
-    }, K.gapLabel(r, r.period.value, r.target)), React.createElement("td", {
+    }, K.gapLabel(r, r.period.value, r.target)), on('status') && React.createElement("td", {
       style: {
         background: ST[r.status].bg,
         color: ST[r.status].ink,
         fontWeight: 700
       }
-    }, ST[r.status].label), React.createElement("td", null, React.createElement(Trend, {
-      d: r.trendDir
-    })), React.createElement("td", null, React.createElement(Spark, {
-      row: r,
-      w: 96,
-      h: 22
-    }))))))), layout === 'summary' && pillars.map(pl => {
+    }, ST[r.status].label), on('trend') && React.createElement("td", {
+      style: {
+        width: 1
+      }
+    }, React.createElement(TrendGraph, {
+      row: r
+    })), on('remarks') && React.createElement("td", {
+      className: "l",
+      style: {
+        width: 150,
+        maxWidth: 150,
+        fontSize: 11,
+        verticalAlign: 'middle',
+        overflowWrap: 'anywhere'
+      }
+    }, editable && !capturing ? React.createElement("textarea", {
+      className: "kp-rmk",
+      rows: 2,
+      cols: 1,
+      maxLength: 300,
+      value: (rep.remarks || {})[r.kpiId] || '',
+      placeholder: "Add a remark\u2026",
+      onChange: e => setRemark(r.kpiId, e.target.value)
+    }) : React.createElement("span", {
+      style: {
+        whiteSpace: 'pre-wrap'
+      }
+    }, (rep.remarks || {})[r.kpiId] || '')))))), mcols.length > 0 && React.createElement("div", {
+      style: {
+        display: 'flex',
+        gap: 12,
+        marginTop: 8,
+        fontSize: 10.5,
+        color: '#7b8796',
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }
+    }, ['met', 'near', 'off'].map(k => React.createElement("span", {
+      key: k,
+      className: "kp-mcell",
+      style: {
+        background: ST[k].bg,
+        color: ST[k].ink,
+        minWidth: 0
+      }
+    }, ST[k].label)), React.createElement("span", null, "\u2014 no figure"), React.createElement("span", null, "\xB7 not counted that month"), React.createElement("span", null, "Variance = value \u2212 target"))), layout === 'summary' && pillars.map(pl => {
       const list = rows.filter(r => r.pillar === pl.id);
       return React.createElement(Sheet, {
         key: pl.id,
@@ -4730,7 +5630,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
           gap: 10,
           marginTop: 14
         }
-      }, list.map(r => editable && !capturing || rep.commentary[r.kpiId] ? React.createElement("div", {
+      }, !hideCm && list.map(r => editable && !capturing || rep.commentary[r.kpiId] ? React.createElement("div", {
         key: r.kpiId
       }, React.createElement("div", {
         className: "kp-lab"
@@ -4741,55 +5641,106 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       title: (r.code ? r.code + '. ' : '') + r.name,
       foot: foot,
       page: pg()
-    }, React.createElement("div", {
+    }, r.objective && React.createElement("div", {
+      style: {
+        fontSize: 12.5,
+        color: '#5b6878',
+        margin: '-6px 0 12px',
+        lineHeight: 1.45
+      }
+    }, r.objective), React.createElement(StatTiles, {
+      r: r,
+      rep: rep
+    }), (rep.remarks || {})[r.kpiId] && React.createElement("div", {
+      style: {
+        margin: '-4px 0 12px',
+        fontSize: 12.5,
+        padding: '7px 12px',
+        borderRadius: 8,
+        background: '#f4f7fa',
+        borderLeft: '3px solid #008FCB'
+      }
+    }, React.createElement("b", {
+      style: {
+        color: '#00293A'
+      }
+    }, "Remark:"), " ", rep.remarks[r.kpiId]), React.createElement("div", {
       style: {
         display: 'grid',
-        gridTemplateColumns: '1.2fr 1fr',
+        gridTemplateColumns: '1.15fr 1fr',
         gap: 18
       }
-    }, React.createElement("table", {
-      className: "kp-deck"
-    }, React.createElement("tbody", null, React.createElement("tr", null, React.createElement("th", null, "Objective"), React.createElement("td", null, r.objective || '—')), React.createElement("tr", null, React.createElement("th", null, "Current"), React.createElement("td", null, React.createElement("b", null, K.fmt(r, r.period.value)), " ", K.unitKind(r) === 'num' ? r.unit : '', resultOf(r) ? React.createElement("b", {
+    }, React.createElement("div", {
       style: {
-        color: '#3f3fa8'
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12
       }
-    }, " \u2014 ", resultOf(r)) : null, " ", React.createElement("span", {
-      style: {
-        color: '#7b8796'
-      }
-    }, "(baseline ", r.baseline && K.has(r.baseline.value) ? K.fmt(r, r.baseline.value) : 'not measured yet', ")"))), React.createElement("tr", null, React.createElement("th", null, "Target"), React.createElement("td", null, (r.targets || []).length ? r.targets.map(t => (r.targets.length > 1 ? 'Cycle ' + t.cycle + ': ' : '') + K.fmt(r, t.value)).join('  ·  ') : r.target != null ? K.fmt(r, r.target) : 'Not set yet')), React.createElement("tr", null, React.createElement("th", null, "Variance"), React.createElement("td", {
-      style: {
-        color: ST[r.status].color,
-        fontWeight: 700
-      }
-    }, K.gapLabel(r, r.period.value, r.target), " \xB7 ", ST[r.status].label)), React.createElement("tr", null, React.createElement("th", null, "Action plan"), React.createElement("td", null, (r.actions || []).length ? React.createElement("ul", null, r.actions.slice(0, 10).map(a => React.createElement("li", {
-      key: a.id
-    }, a.text, a.status !== 'open' ? React.createElement("b", {
-      style: {
-        color: a.status === 'done' ? '#1f9d57' : '#008FCB'
-      }
-    }, " [", K.ACTION_LABEL[a.status], "]") : null, a.owner ? React.createElement("span", {
-      style: {
-        color: '#7b8796'
-      }
-    }, " \u2014 ", a.owner) : null)), r.actions.length > 10 && React.createElement("li", {
-      style: {
-        color: '#7b8796'
-      }
-    }, "+ ", r.actions.length - 10, " more")) : '—')), React.createElement("tr", null, React.createElement("th", null, "Formula used"), React.createElement("td", {
-      style: {
-        fontStyle: 'italic'
-      }
-    }, r.formulaText || '—')), React.createElement("tr", null, React.createElement("th", null, "Tracking"), React.createElement("td", null, r.schedule || r.frequency || 'Monthly', r.trackingNote ? ' · ' + r.trackingNote : '', r.nextDue ? React.createElement("span", {
-      style: {
-        color: '#7b8796'
-      }
-    }, " \xB7 next result ", K.fmtMonthLong(r.nextDue)) : null)), React.createElement("tr", null, React.createElement("th", null, "Remarks"), React.createElement("td", {
-      style: {
-        whiteSpace: 'pre-wrap',
-        fontSize: 11
-      }
-    }, r.remarks || '—')))), React.createElement("div", {
+    }, React.createElement("div", null, React.createElement("div", {
+      className: "kp-lab"
+    }, r.freqMonths > 1 ? 'Results by period' : 'Month by month'), r.freqMonths > 1 ? React.createElement(PeriodsTable, {
+      row: r
+    }) : React.createElement(MonthTable, {
+      row: r,
+      months: monthsAll,
+      cfg: cfg
+    })), r.formulaText && (() => {
+      const work = K.workingLabel(r, r.period.num, r.period.den, r.period.value);
+      return React.createElement("div", {
+        style: {
+          fontSize: 12,
+          padding: '8px 12px',
+          borderRadius: 8,
+          background: '#eef7f5',
+          border: '1px solid #c4e6e0',
+          lineHeight: 1.45
+        }
+      }, React.createElement("b", {
+        style: {
+          fontSize: 10.5,
+          letterSpacing: '.6px',
+          color: '#0d5e55'
+        }
+      }, "FORMULA"), "\xA0 ", r.formulaText, work ? React.createElement("div", {
+        style: {
+          color: '#5b6878',
+          fontWeight: 700
+        }
+      }, (rep.months.length > 1 ? 'This period: ' : 'This month: ') + work) : null);
+    })(), !hideActs && (r.actions || []).length > 0 && (() => {
+      const acts = r.actions.slice().sort((a, b) => (a.status === 'done') - (b.status === 'done'));
+      return React.createElement("div", null, React.createElement("div", {
+        className: "kp-lab"
+      }, "Action plan"), React.createElement("div", {
+        style: {
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 5
+        }
+      }, acts.slice(0, 3).map(a => React.createElement("div", {
+        key: a.id,
+        title: a.text,
+        style: {
+          fontSize: 11.5,
+          padding: '5px 10px',
+          borderRadius: 8,
+          background: '#f4f7fa',
+          borderLeft: '3px solid ' + (a.status === 'done' ? '#1f9d57' : a.status === 'open' ? '#e0a21e' : '#008FCB'),
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis'
+        }
+      }, a.text, a.status !== 'open' ? React.createElement("b", {
+        style: {
+          color: a.status === 'done' ? '#1f9d57' : '#008FCB'
+        }
+      }, " \xB7 ", K.ACTION_LABEL[a.status]) : null)), acts.length > 3 && React.createElement("div", {
+        className: "kp-muted",
+        style: {
+          fontSize: 11
+        }
+      }, "+ ", acts.length - 3, " more in Action Plans")));
+    })()), React.createElement("div", {
       style: {
         display: 'flex',
         flexDirection: 'column',
@@ -4797,39 +5748,68 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
       }
     }, React.createElement("div", {
       className: "kp-lab"
-    }, r.freqMonths > 1 ? 'Last 12 months · one point per period' : 'Last 12 months', r.unit ? ' · ' + r.unit : ''), React.createElement(KpiChart, {
+    }, r.freqMonths > 1 ? 'Results by period' : 'Results by month', r.unit ? ' · ' + r.unit : ''), React.createElement(ComboChart, {
       row: r,
-      kind: "area",
-      height: r.freqMonths > 1 ? 150 : 210,
-      flat: true
-    }), r.freqMonths > 1 && React.createElement(PeriodsTable, {
-      row: r
+      cfg: cfg,
+      height: 230
     }), React.createElement("div", {
       style: {
-        display: 'grid',
-        gridTemplateColumns: 'repeat(3,1fr)',
-        gap: 8
-      }
-    }, [[K.fmt(r, r.period.value), resultOf(r) || (rep.months.length > 1 ? 'Period value' : 'This month'), '#00293A', '#eaf6fb'], [r.target != null ? K.fmt(r, r.target) : '—', 'Target', '#00293A', '#eef7f5'], [ST[r.status].label, r.achievement != null ? r.achievement + '% of target' : 'status', ST[r.status].color, ST[r.status].bg]].map(([b, s, c, bg], i) => React.createElement("div", {
-      key: i,
-      style: {
-        background: bg,
-        borderRadius: 10,
-        padding: '10px 8px',
-        textAlign: 'center'
-      }
-    }, React.createElement("div", {
-      style: {
-        fontSize: 17,
-        fontWeight: 800,
-        color: c
-      }
-    }, b), React.createElement("div", {
-      style: {
+        display: 'flex',
+        gap: 12,
         fontSize: 10.5,
-        color: '#7b8796'
+        color: '#7b8796',
+        flexWrap: 'wrap',
+        marginTop: -4
       }
-    }, s)))), React.createElement("div", null, React.createElement("div", {
+    }, React.createElement("span", null, React.createElement("i", {
+      style: {
+        display: 'inline-block',
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: ST.met.color,
+        marginRight: 4,
+        verticalAlign: -1
+      }
+    }), "on target"), React.createElement("span", null, React.createElement("i", {
+      style: {
+        display: 'inline-block',
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: ST.near.color,
+        marginRight: 4,
+        verticalAlign: -1
+      }
+    }), "close"), React.createElement("span", null, React.createElement("i", {
+      style: {
+        display: 'inline-block',
+        width: 10,
+        height: 10,
+        borderRadius: 3,
+        background: ST.off.color,
+        marginRight: 4,
+        verticalAlign: -1
+      }
+    }), "needs action"), React.createElement("span", null, React.createElement("i", {
+      style: {
+        display: 'inline-block',
+        width: 16,
+        height: 0,
+        borderTop: '2.5px solid #00293A',
+        marginRight: 4,
+        verticalAlign: 3
+      }
+    }), "trend"), React.createElement("span", null, React.createElement("i", {
+      style: {
+        display: 'inline-block',
+        width: 16,
+        height: 0,
+        borderTop: '2px dashed #37B4A6',
+        marginRight: 4,
+        verticalAlign: 3
+      }
+    }), "target")), !hideCm && React.createElement("div", null, React.createElement("div", {
       className: "kp-lab"
     }, "Comment for this period"), commentBox(r.kpiId, rep.commentary[r.kpiId], 'What happened this period, and what is being done') || React.createElement("div", {
       className: "kp-muted"
@@ -4925,7 +5905,7 @@ textarea.kp-in{width:100%;resize:vertical;line-height:1.45}
         fontSize: 13,
         lineHeight: 1.6
       }
-    }, React.createElement("li", null, sum.met, " of ", rows.length, " KPIs on target", sum.met ? ': ' + rows.filter(r => r.status === 'met').map(r => r.code).join(', ') : '', "."), sum.near > 0 && React.createElement("li", null, sum.near, " close: ", rows.filter(r => r.status === 'near').map(r => r.code + ' ' + r.name).join(', '), "."), sum.off > 0 && React.createElement("li", null, sum.off, " need action: ", rows.filter(r => r.status === 'off').map(r => r.code + ' ' + r.name).join(', '), "."), sum.nodata > 0 && React.createElement("li", null, sum.nodata, " without figures for the period: ", rows.filter(r => r.status === 'nodata').map(r => r.code).join(', '), ".")), (layout === 'full' || layout === 'calc') && (() => {
+    }, React.createElement("li", null, sum.met, " of ", rows.length, " KPIs on target", sum.met ? ': ' + rows.filter(r => r.status === 'met').map(r => r.code).join(', ') : '', "."), sum.near > 0 && React.createElement("li", null, sum.near, " close: ", rows.filter(r => r.status === 'near').map(r => r.code + ' ' + r.name).join(', '), "."), sum.off > 0 && React.createElement("li", null, sum.off, " need action: ", rows.filter(r => r.status === 'off').map(r => r.code + ' ' + r.name).join(', '), "."), sum.nodata > 0 && React.createElement("li", null, sum.nodata, " without figures for the period: ", rows.filter(r => r.status === 'nodata').map(r => r.code).join(', '), ".")), (layout === 'full' || layout === 'calc') && !hideActs && (() => {
       const open = [];
       rows.forEach(r => (r.actions || []).forEach(a => {
         if (a.status === 'progress' || (a.owner || a.due) && a.status === 'open') open.push([r, a]);

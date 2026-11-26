@@ -1,7 +1,8 @@
 /* Nursing KPI — the report as an Excel workbook (exceljs), for anyone who wants to work the
  * numbers further. Same report object as the screen and the deck (server/kpi.js):
- *   Scorecard        one row per KPI: baseline, period value, target, variance, status, trend
- *   Monthly figures  every month of the period: value, and numerator / denominator where known
+ *   Scorecard        one row per KPI: month-wise results (shaded against target), period value,
+ *                    target, variance (value − target), status, trend — the columns chosen on screen
+ *   Monthly figures  every reported month: value, and numerator / denominator where known
  *   Action plans     every action item with owner, due month and status
  *   Commentary       the comments written on the report, the overall summary and sign-off
  */
@@ -45,37 +46,54 @@ async function build(report, opts) {
   wb.created = new Date(o.now || Date.now());
   wb.title = cfg.reportTitle + ' — ' + K.fmtRange(report.from, report.to);
 
+  // The columns chosen on screen (all when the request names none). # / Pillar / KPI always.
+  const on = (k) => !Array.isArray(o.cols) || o.cols.indexOf(k) >= 0;
+  const mcols = K.reportMonthCols(report);
+  const scMonths = on('months') ? mcols : [];
+  const VAR_FMT = '+General;-General;0';
   const sc = sheet(wb, 'Scorecard', [
     { header: '#', key: 'code', width: 6 }, { header: 'Pillar', key: 'pillar', width: 24 }, { header: 'KPI', key: 'name', width: 40 }, { header: 'Unit', key: 'unit', width: 20 },
-    { header: 'Direction', key: 'dir', width: 14 }, { header: 'Baseline', key: 'base', width: 11 }, { header: K.fmtRange(report.from, report.to), key: 'val', width: 14 },
-    { header: 'Numerator', key: 'num', width: 12 }, { header: 'Denominator', key: 'den', width: 13 }, { header: 'Target', key: 'target', width: 10 },
-    { header: 'Variance', key: 'gap', width: 16 }, { header: '% of target', key: 'ach', width: 11 }, { header: 'Status', key: 'status', width: 15 }, { header: 'Trend', key: 'trend', width: 12 },
-    { header: 'Source', key: 'src', width: 16 }, { header: 'Measured', key: 'freq', width: 15 }, { header: 'Result period', key: 'rp', width: 20 },
-    { header: 'Formula', key: 'formula', width: 50 }, { header: 'Schedule', key: 'sched', width: 60 },
-  ]);
+    { header: 'Direction', key: 'dir', width: 14 }]
+    .concat(scMonths.map((m) => ({ header: K.fmtMonth(m), key: 'm_' + m, width: 10 })))
+    .concat(on('current') ? [{ header: K.fmtRange(report.from, report.to), key: 'val', width: 14 }, { header: 'Numerator', key: 'num', width: 12 }, { header: 'Denominator', key: 'den', width: 13 }] : [])
+    .concat(on('target') ? [{ header: 'Target', key: 'target', width: 10 }] : [])
+    .concat(on('variance') ? [{ header: 'Variance (value − target)', key: 'gap', width: 14 }] : [])
+    .concat(on('status') ? [{ header: '% of target', key: 'ach', width: 11 }, { header: 'Status', key: 'status', width: 15 }] : [])
+    .concat(on('trend') ? [{ header: 'Trend', key: 'trend', width: 12 }] : [])
+    .concat(on('remarks') ? [{ header: 'Remarks', key: 'remark', width: 40 }] : [])
+    .concat([{ header: 'Source', key: 'src', width: 16 }, { header: 'Measured', key: 'freq', width: 15 }, { header: 'Result period', key: 'rp', width: 20 },
+      { header: 'Formula', key: 'formula', width: 50 }]));
   rows.forEach((r) => {
-    const row = sc.addRow({ code: r.code, pillar: pill(r.pillar), name: r.name, unit: r.unit, dir: r.goalDirection === 'lower_is_better' ? 'Lower is better' : 'Higher is better',
-      base: n(r.baseline && r.baseline.value), val: n(r.period.value), num: n(r.period.num), den: n(r.period.den), target: n(r.target), gap: K.gapLabel(r, r.period.value, r.target),
-      ach: r.achievement, status: K.STATUS[r.status].label, trend: r.trendDir || '', src: r.linked ? 'Quality data' : 'Entered', formula: r.formulaText,
-      freq: K.freqLabel(r, true), rp: r.latest ? 'Latest: ' + r.latest.label : (r.resultLabel || (r.freqMonths > 1 && r.nextDue ? 'Next due ' + K.fmtMonth(r.nextDue) : K.fmtRange(report.from, report.to))), sched: r.schedule || '' });
-    const c = row.getCell('status');
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ST[r.status] } };
-    c.font = { bold: true, color: { argb: ST_INK[r.status] } };
+    const months1 = scMonths.reduce((x, m) => { const mr = K.monthResult(r, m, cfg); x['m_' + m] = mr.status === 'off-cycle' ? '·' : n(mr.value); return x; }, {});
+    const row = sc.addRow(Object.assign({ code: r.code, pillar: pill(r.pillar), name: r.name, unit: r.unit, dir: r.goalDirection === 'lower_is_better' ? 'Lower is better' : 'Higher is better',
+      val: n(r.period.value), num: n(r.period.num), den: n(r.period.den), target: n(r.target), gap: K.variance(r.period.value, r.target),
+      ach: r.achievement, status: K.STATUS[r.status].label, trend: r.trendDir || '', remark: (report.remarks || {})[r.kpiId] || '', src: r.linked ? 'Quality data' : 'Entered', formula: r.formulaText,
+      freq: K.freqLabel(r, true), rp: r.latest ? 'Latest: ' + r.latest.label : (r.resultLabel || (r.freqMonths > 1 && r.nextDue ? 'Next due ' + K.fmtMonth(r.nextDue) : K.fmtRange(report.from, report.to))) }, months1));
+    scMonths.forEach((m) => { const mr = K.monthResult(r, m, cfg); if (!K.has(mr.value) || !ST[mr.status]) return; const c = row.getCell('m_' + m);
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ST[mr.status] } }; c.font = { bold: true, color: { argb: ST_INK[mr.status] } }; });
+    if (on('variance')) { const c = row.getCell('gap'); c.numFmt = VAR_FMT; c.font = { bold: true, color: { argb: ST_INK[r.status] } }; }
+    if (on('status')) { const c = row.getCell('status');
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ST[r.status] } };
+      c.font = { bold: true, color: { argb: ST_INK[r.status] } }; }
   });
   finish(sc);
 
-  const months = report.months || [];
+  // Every reported month (a one-month report: the running cycle up to it), from the same rows.
+  const months = mcols;
   const mf = sheet(wb, 'Monthly figures', [{ header: '#', key: 'code', width: 6 }, { header: 'KPI', key: 'name', width: 38 }, { header: 'Figure', key: 'what', width: 13 }]
     .concat(months.map((m) => ({ header: K.fmtMonth(m), key: m, width: 11 }))));
   rows.forEach((r) => {
     // a KPI measured every N months: '·' where nothing is owed; the due month carries the period's figure
     const vrow = mf.addRow(Object.assign({ code: r.code, name: r.name + (r.freqMonths > 1 ? ' (' + K.freqLabel(r, true).toLowerCase() + ')' : ''), what: 'Value' },
-      months.reduce((x, m) => { const c = r.cells[m] || {}; x[m] = c.source === 'not-due' ? '·' : n(c.value); return x; }, {})));
+      months.reduce((x, m) => { const mr = K.monthResult(r, m, cfg); x[m] = mr.status === 'off-cycle' ? '·' : n(mr.value); return x; }, {})));
     vrow.font = { bold: true };
+    months.forEach((m) => { const mr = K.monthResult(r, m, cfg); if (!K.has(mr.value) || !ST[mr.status]) return; const c = vrow.getCell(m);
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: ST[mr.status] } }; c.font = { bold: true, color: { argb: ST_INK[mr.status] } }; });
+    mf.addRow(Object.assign({ code: '', name: 'Target', what: 'Target' }, months.reduce((x, m) => { x[m] = n(K.monthResult(r, m, cfg).target); return x; }, {}))).font = { color: { argb: 'FF5B6878' } };
     if (r.freqMonths > 1) months.forEach((m) => { const c = r.cells[m] || {}; if (c.period && c.source !== 'not-due') vrow.getCell(m).note = 'Result for ' + c.period; });
-    if (r.formula !== 'direct') mf.addRow(Object.assign({ code: '', name: r.numLabel || 'Numerator', what: 'Numerator' }, months.reduce((x, m) => { x[m] = n((r.cells[m] || {}).num); return x; }, {})));
-    if (r.formula !== 'direct' && r.formula !== 'count') mf.addRow(Object.assign({ code: '', name: r.denLabel || 'Denominator', what: 'Denominator' }, months.reduce((x, m) => { x[m] = n((r.cells[m] || {}).den); return x; }, {})));
-    mf.addRow(Object.assign({ code: '', name: '', what: 'Source' }, months.reduce((x, m) => { x[m] = SOURCE[(r.cells[m] || {}).source] || ''; return x; }, {}))).font = { italic: true, color: { argb: 'FF7B8796' }, size: 9 };
+    if (r.formula !== 'direct') mf.addRow(Object.assign({ code: '', name: r.numLabel || 'Numerator', what: 'Numerator' }, months.reduce((x, m) => { x[m] = n(K.monthResult(r, m, cfg).num); return x; }, {})));
+    if (r.formula !== 'direct' && r.formula !== 'count') mf.addRow(Object.assign({ code: '', name: r.denLabel || 'Denominator', what: 'Denominator' }, months.reduce((x, m) => { x[m] = n(K.monthResult(r, m, cfg).den); return x; }, {})));
+    mf.addRow(Object.assign({ code: '', name: '', what: 'Source' }, months.reduce((x, m) => { x[m] = SOURCE[K.monthResult(r, m, cfg).source] || ''; return x; }, {}))).font = { italic: true, color: { argb: 'FF7B8796' }, size: 9 };
   });
   finish(mf);
 
@@ -103,7 +121,7 @@ async function build(report, opts) {
       { header: 'Device Days field', key: 'ddf', width: 13 }, { header: 'Device Days approved', key: 'dda', width: 14 }, { header: 'DD days missing / waiting', key: 'ddm', width: 15 },
       { header: 'Month total (num ÷ den = value)', key: 'tot', width: 26 },
     ]);
-    rows.forEach((r) => (months || []).forEach((m) => {
+    rows.forEach((r) => (report.months || []).forEach((m) => {
       const ev = r.evidence && r.evidence[m];
       if (!ev) return;
       const tot = ev.totals || {};

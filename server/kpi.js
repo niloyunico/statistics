@@ -162,6 +162,10 @@ function pickDef(b, cfg, cur, opts) {
   out.baseline = { value: numOrNull(bl.value), note: str(bl.note, 240) };
   out.targets = (Array.isArray(b.targets) ? b.targets : []).filter((t) => t && Number.isInteger(+t.cycle) && +t.cycle >= 1 && +t.cycle <= 6 && numOrNull(t.value) != null)
     .map((t) => ({ cycle: +t.cycle, value: Number(t.value) })).filter((t, i, a) => a.findIndex((x) => x.cycle === t.cycle) === i).sort((x, y) => x.cycle - y.cycle);
+  // Target per month (optional): { 'YYYY-MM': value } — a month's own target overrides the cycle target.
+  const mt = (b.monthTargets && typeof b.monthTargets === 'object' && !Array.isArray(b.monthTargets)) ? b.monthTargets : {};
+  out.monthTargets = Object.keys(mt).filter((m) => K.isMonth(m) && numOrNull(mt[m]) != null).sort().slice(-60)
+    .reduce((o, m) => { o[m] = Number(mt[m]); return o; }, {});
   const pct = numOrNull(b.baselineTargetPct);
   out.baselineTargetPct = pct != null && pct >= -100 && pct <= 100 ? pct : null;
   const s = (b.source && typeof b.source === 'object') ? b.source : {};
@@ -179,7 +183,7 @@ function pickDef(b, cfg, cur, opts) {
   });
   return out;
 }
-const DEF_LOG_FIELDS = ['name', 'code', 'pillar', 'unit', 'formula', 'goalDirection', 'baseline', 'targets', 'baselineTargetPct', 'source', 'objective', 'formulaText', 'remarks', 'autoFill', 'startMonth', 'units', 'freqMonths', 'cycleMonths', 'cycles'];
+const DEF_LOG_FIELDS = ['name', 'code', 'pillar', 'unit', 'formula', 'goalDirection', 'baseline', 'targets', 'monthTargets', 'baselineTargetPct', 'source', 'objective', 'formulaText', 'remarks', 'autoFill', 'startMonth', 'units', 'freqMonths', 'cycleMonths', 'cycles'];
 function defChanges(a, b) {
   const out = DEF_LOG_FIELDS.filter((k) => JSON.stringify(a ? a[k] : null) !== JSON.stringify(b[k]));
   if (JSON.stringify((a && a.actions) || []) !== JSON.stringify(b.actions || [])) out.push('action plan');
@@ -312,7 +316,7 @@ function reportOut(doc, live, cfg, extra) {
     id: K.reportId(body.from, body.to), from: body.from, to: body.to, preset: K.presetOf(body.from, body.to, cfg),
     state: base.state || 'preview', stored: !!doc, cycle: K.cycleOf(body.to, cfg),
     months: body.months, trendMonths: body.trendMonths, rows: body.rows, summary: body.summary,
-    commentary: base.commentary || {}, overall: base.overall || '', signoff: base.signoff || {},
+    commentary: base.commentary || {}, remarks: base.remarks || {}, overall: base.overall || '', signoff: base.signoff || {},
     generatedAt: base.generatedAt || null, generatedBy: base.generatedByName || base.generatedBy || null,
     finalizedAt: base.finalizedAt || null, finalizedBy: base.finalizedByName || base.finalizedBy || null,
     reopenedAt: base.reopenedAt || null, reopenedBy: base.reopenedBy || null,
@@ -360,7 +364,7 @@ async function ensureDraft(ym, source, opts) {
   const cfg = await getConfig();
   const live = await computeReport(ym, ym, cfg, Object.assign({}, opts && opts.deps, opts && opts.now ? { now: opts.now } : {}));
   const doc = Object.assign({ _id: id, from: ym, to: ym, state: 'draft' }, live, {
-    commentary: {}, overall: '', signoff: {}, generatedAt: now, generatedBy: source || 'auto', generatedByName: 'Prepared automatically',
+    commentary: {}, remarks: {}, overall: '', signoff: {}, generatedAt: now, generatedBy: source || 'auto', generatedByName: 'Prepared automatically',
     updatedAt: stamp(now), history: [{ at: now, by: source || 'auto', action: 'draft prepared automatically' }],
   });
   const ok = await putDoc(REPORTS, doc, null);
@@ -873,7 +877,7 @@ function mount(app, opts) {
         detail = code + (unit ? ' · ' + unit : '') + ' · ' + reason.slice(0, 160);
       }
       const live = cur ? {} : await computeReport(p.from, p.to, cfg, deps);
-      const doc = Object.assign({ _id: id, from: p.from, to: p.to, state: 'draft', commentary: {}, overall: '', signoff: {}, generatedAt: t, generatedBy: actor(req, a), generatedByName: nameOf(req, a) }, live, cur || {}, {
+      const doc = Object.assign({ _id: id, from: p.from, to: p.to, state: 'draft', commentary: {}, remarks: {}, overall: '', signoff: {}, generatedAt: t, generatedBy: actor(req, a), generatedByName: nameOf(req, a) }, live, cur || {}, {
         acks, removedAt: null, updatedAt: stamp(t), updatedBy: actor(req, a),
         history: ((cur && cur.history) || []).concat([{ at: t, by: actor(req, a), action: 'check ' + (b.revoke === true ? 'acknowledgement withdrawn' : 'acknowledged') + ': ' + key }]).slice(-60),
       });
@@ -899,7 +903,7 @@ function mount(app, opts) {
       const t = now();
       const live = await computeReport(p.from, p.to, cfg, deps);
       const keep = cur && !cur.removedAt ? cur : null;
-      const doc = Object.assign({ _id: id, from: p.from, to: p.to, state: 'draft', commentary: keep ? keep.commentary : {}, overall: keep ? keep.overall : '', signoff: keep ? keep.signoff : {} }, live, {
+      const doc = Object.assign({ _id: id, from: p.from, to: p.to, state: 'draft', commentary: keep ? keep.commentary : {}, remarks: (keep && keep.remarks) || {}, overall: keep ? keep.overall : '', signoff: keep ? keep.signoff : {} }, live, {
         generatedAt: keep ? keep.generatedAt : t, generatedBy: keep ? keep.generatedBy : actor(req, a), generatedByName: keep ? keep.generatedByName : nameOf(req, a),
         refreshedAt: t, updatedAt: stamp(t), updatedBy: actor(req, a), removedAt: null,
         history: ((cur && cur.history) || []).concat([{ at: t, by: actor(req, a), action: keep ? 'figures refreshed' : 'generated' }]).slice(-60),
@@ -926,11 +930,14 @@ function mount(app, opts) {
       const t = now();
       const comm = Object.assign({}, (cur && cur.commentary) || {});
       if (b.commentary && typeof b.commentary === 'object') Object.keys(b.commentary).slice(0, 200).forEach((k) => { const v = str(b.commentary[k], 3000); if (v) comm[String(k).slice(0, 80)] = v; else delete comm[k]; });
+      // Remarks: one short line per KPI, written in the scorecard's Remarks column.
+      const rmk = Object.assign({}, (cur && cur.remarks) || {});
+      if (b.remarks && typeof b.remarks === 'object') Object.keys(b.remarks).slice(0, 200).forEach((k) => { const v = str(b.remarks[k], 300); if (v) rmk[String(k).slice(0, 80)] = v; else delete rmk[k]; });
       const sig = Object.assign({}, (cur && cur.signoff) || {});
       if (b.signoff && typeof b.signoff === 'object') ['prepared', 'reviewed', 'recommended', 'approved'].forEach((k) => { if (b.signoff[k] !== undefined) sig[k] = str(b.signoff[k], 120); });
       const live = cur ? {} : await computeReport(p.from, p.to, cfg, deps);
       const doc = Object.assign({ _id: id, from: p.from, to: p.to, state: 'draft', generatedAt: t, generatedBy: actor(req, a), generatedByName: nameOf(req, a) }, live, cur || {}, {
-        commentary: comm, overall: b.overall !== undefined ? str(b.overall, 6000) : ((cur && cur.overall) || ''), signoff: sig, removedAt: null,
+        commentary: comm, remarks: rmk, overall: b.overall !== undefined ? str(b.overall, 6000) : ((cur && cur.overall) || ''), signoff: sig, removedAt: null,
         updatedAt: stamp(t), updatedBy: actor(req, a), history: ((cur && cur.history) || []).concat([{ at: t, by: actor(req, a), action: 'commentary saved' }]).slice(-60),
       });
       if (!(await putDoc(REPORTS, doc, cur ? cur.updatedAt : null))) return res.status(409).json({ ok: false, code: 'stale', error: 'Someone else saved this report at the same moment. Reload — copy your text first.' });
@@ -965,7 +972,7 @@ function mount(app, opts) {
       const live2 = evidenceOfRows(live.rows);
       const usedAcks = acks.filter((x) => (((live2[x.kpiId] || {})[x.ym] || {}).checks || []).some((c) => E.ackKey(x.kpiId, x.ym, c.code, c.unit) === x.key && c.fingerprint === x.fingerprint));
       delete live.evidence;
-      const doc = Object.assign({ _id: id, from: p.from, to: p.to, commentary: {}, overall: '', signoff: {}, generatedAt: t, generatedBy: actor(req, a), generatedByName: nameOf(req, a) }, keep, live, {
+      const doc = Object.assign({ _id: id, from: p.from, to: p.to, commentary: {}, remarks: {}, overall: '', signoff: {}, generatedAt: t, generatedBy: actor(req, a), generatedByName: nameOf(req, a) }, keep, live, {
         acks: usedAcks, state: 'final', finalizedAt: t, finalizedBy: actor(req, a), finalizedByName: nameOf(req, a), removedAt: null,
         updatedAt: stamp(t), updatedBy: actor(req, a), history: ((cur && cur.history) || []).concat([{ at: t, by: actor(req, a), action: 'finalised' + (usedAcks.length ? ' with ' + usedAcks.length + ' acknowledged check(s)' : '') }]).slice(-60),
       });
@@ -1013,6 +1020,11 @@ function mount(app, opts) {
       const a = await resolve(req, res, 'print'); if (!a) return;
       const cfg = await getConfig();
       const style = ['summary', 'calc'].indexOf(req.query.style) >= 0 ? req.query.style : 'full';
+      // The scorecard columns the person chose on screen (Columns menu); unknown names are dropped.
+      const COLS = ['months', 'current', 'target', 'variance', 'status', 'trend', 'remarks'];
+      const cols = typeof req.query.cols === 'string' ? req.query.cols.split(',').filter((c) => COLS.indexOf(c) >= 0) : null;
+      // Export options: '0' leaves the part out of the deck (action plans / comments).
+      const noActions = req.query.actions === '0', noComments = req.query.comments === '0';
       // Excel and the "with calculations" deck carry the evidence; the other decks do not need it.
       const r = await loadReport(String(req.params.id || ''), cfg, deps, { calc: kind === 'xlsx' || style === 'calc', now: now() });
       if (!r) return res.status(400).json({ ok: false, error: 'Invalid report period.' });
@@ -1020,8 +1032,8 @@ function mount(app, opts) {
       // Build the whole file BEFORE any header: an error after the headers would hand the
       // browser an unreadable attachment instead of a message.
       const buf = kind === 'pptx'
-        ? await require('./kpi-pptx').build(r.report, { style, cfg: K.cfgOf(cfg), by: nameOf(req, a), now: now() })
-        : await require('./kpi-xlsx').build(r.report, { cfg: K.cfgOf(cfg), by: nameOf(req, a), now: now() });
+        ? await require('./kpi-pptx').build(r.report, { style, cols, noActions, noComments, cfg: K.cfgOf(cfg), by: nameOf(req, a), now: now() })
+        : await require('./kpi-xlsx').build(r.report, { cols, cfg: K.cfgOf(cfg), by: nameOf(req, a), now: now() });
       const name = 'Nursing-KPI-' + (r.report.from === r.report.to ? r.report.from : r.report.from + '-to-' + r.report.to) + (kind === 'pptx' ? '-' + style + '.pptx' : '.xlsx');
       res.set('Cache-Control', 'no-store');
       res.set('Content-Type', kind === 'pptx' ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -1038,7 +1050,7 @@ function mount(app, opts) {
       const a = await resolve(req, res, 'print'); if (!a) return;
       const b = body(req);
       const p = K.parseReportId(b.id);
-      const kind = b.kind === 'pdf' ? 'PDF' : 'print';
+      const kind = b.kind === 'pdf' ? 'PDF' : b.kind === 'pptx' ? 'PowerPoint (exact copy)' : 'print';
       activity.log(req, 'kpi_print', { target: p ? K.fmtRange(p.from, p.to) : 'Nursing KPI', detail: kind + (b.what ? ' · ' + str(b.what, 60) : '') });
       res.json({ ok: true });
     } catch (e) { fail(res, e, 'Could not record the print.'); }

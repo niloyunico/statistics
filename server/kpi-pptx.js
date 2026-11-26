@@ -1,7 +1,7 @@
 /* Nursing KPI — the report as a PowerPoint deck, in the Nursing Department's own style:
  * the UNICO template background of "KPI for Nursing Department.pptx" (server/kpi/deck-bg.jpg),
- * its navy #00293A / blue #008FCB / teal #37B4A6 tables, and its per-KPI layout (Objective ·
- * Current · Target · Variance · Action Plan · Formula · Tracking Frequency · Remarks).
+ * its navy #00293A / blue #008FCB / teal #37B4A6 tables. Each KPI slide is concise: four result
+ * tiles, a month-by-month table, the 12-month chart and the top actions.
  * Every chart is a NATIVE PowerPoint chart, so it stays editable after download.
  *
  *   full     title · scorecard · status by pillar · achievement vs target (with the 100% line) ·
@@ -100,6 +100,14 @@ function build(report, opts) {
     .concat(rows.some((r) => !cfg.pillars.find((p) => p.id === r.pillar)) ? [K.pillarOf(cfg, 'other')] : []);
   const rowsOf = (p) => rows.filter((r) => (cfg.pillars.find((x) => x.id === r.pillar) ? r.pillar === p.id : p.id === 'other'));
   const fv = (r, v) => K.fmt(r, v);
+  // Scorecard columns chosen on screen (all when none were sent); months shown one by one.
+  const on = (k) => !Array.isArray(o.cols) || o.cols.indexOf(k) >= 0;
+  // Export options chosen before downloading: leave out the action plans / the comments.
+  const noActions = !!o.noActions, noComments = !!o.noComments;
+  const commentOf = (id) => (noComments ? '' : (report.commentary || {})[id] || '');
+  const remarkOf = (r) => String((report.remarks || {})[r.kpiId] || '').trim();
+  const RMK_PT = 12;
+  const mcols = K.reportMonthCols(report);
 
   const pptx = new PptxGenJS();
   pptx.layout = 'LAYOUT_WIDE'; // 13.333 × 7.5 in, the deck's 16:9
@@ -126,6 +134,8 @@ function build(report, opts) {
   const head = (t, extra) => ({ text: t, options: Object.assign({ fill: { color: NAVY }, color: 'FFFFFF', bold: true, fontSize: FS.th, align: 'center', valign: 'middle' }, extra || {}) });
   const cell = (t, extra) => ({ text: t == null ? '' : String(t), options: Object.assign({ fontSize: FS.td, color: INK, valign: 'middle' }, extra || {}) });
   const stCell = (st) => cell(K.STATUS[st].label, { bold: true, color: ST[st], fill: { color: ST_BG[st] }, align: 'center' });
+  // a KPI with a direction and at least two figures gets the small trend graph
+  const hasTrend = (r) => !!r.trendDir && (r.trend || []).filter((p) => p.v != null).length >= 2;
   const trendTxt = (d) => (d === 'improving' ? '▲ improving' : d === 'worsening' ? '▼ worsening' : d === 'steady' ? '● steady' : '—');
   const zebra = (rowsArr) => rowsArr.map((r, i) => (i % 2 ? r.map((c) => (c.options && c.options.fill ? c : Object.assign({}, c, { options: Object.assign({}, c.options, { fill: { color: ZEBRA } }) }))) : r));
   const tableOpts = (x, y, w, colW, extra) => Object.assign({ x, y, w, colW, fontFace: FONT, fontSize: FS.td, border: { type: 'solid', pt: 0.5, color: LINE }, margin: [0.04, 0.08, 0.04, 0.08] }, extra || {});
@@ -155,8 +165,8 @@ function build(report, opts) {
     s.addText('NURSING DEPARTMENT', { objectName: '!!kicker', x: 1.7, y: 1.45, w: 7.4, h: 0.42, fontFace: FONT, fontSize: 15, bold: true, color: TEAL, charSpacing: 3 });
     s.addText(cfg.reportTitle, { objectName: '!!title', x: 1.7, y: 1.88, w: 7.5, h: 1.3, fontFace: FONT, fontSize: 42, bold: true, color: NAVY, fit: 'shrink', valign: 'top' });
     s.addText((report.from === report.to ? 'Monthly report — ' : 'Report for ') + period, { x: 1.7, y: 3.18, w: 7.5, h: 0.58, fontFace: FONT, fontSize: 26, color: BLUE });
-    const cyc = report.cycle || K.cycleOf(report.to, cfg);
-    s.addText(cfg.hospitalName + '  ·  ' + cyc.label + (cyc.monthNo ? ', month ' + cyc.monthNo + ' of ' + cyc.of : '') + '  ·  ' + rows.length + ' KPIs in ' + pillars.length + ' pillars',
+    // no cycle wording in reports (user's rule)
+    s.addText(cfg.hospitalName + '  ·  ' + rows.length + ' KPIs in ' + pillars.length + ' pillars',
       { x: 1.7, y: 3.78, w: 7.6, h: 0.5, fontFace: FONT, fontSize: 16, color: MUTED });
     // The KPI score as a ring: the share of scored KPIs on target.
     if (sum.score != null) {
@@ -179,17 +189,97 @@ function build(report, opts) {
     const s = slide();
     heading(s, 'KPI scorecard', period);
     const multi = report.months && report.months.length > 1;
-    const hdr = [head('#'), head('KPI', { align: 'left' }), head('Baseline'), head(multi ? 'Period' : 'Current'), head('Target'), head('Variance'), head('Status'), head('Trend')];
-    const body = rows.map((r) => [
-      cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(r.name, 36)),
-      cell(r.baseline && K.has(r.baseline.value) ? fv(r, r.baseline.value) : '—', { align: 'center', color: MUTED }),
-      { text: [{ text: fv(r, r.period.value), options: { bold: true, breakLine: !!resultOf(r) } }].concat(resultOf(r) ? [{ text: resultOf(r), options: { fontSize: FS.small, color: MUTED } }] : []), options: { align: 'center', valign: 'middle', fontSize: FS.td, color: INK } },
-      cell(K.has(r.target) ? fv(r, r.target) : '—', { align: 'center' }),
-      cell(K.gapLabel(r, r.period.value, r.target), { align: 'center', fontSize: FS.small }), stCell(r.status),
-      cell(trendTxt(r.trendDir), { align: 'center', fontSize: FS.small, color: r.trendDir === 'improving' ? ST.met : r.trendDir === 'worsening' ? ST.off : MUTED }),
-    ]);
-    // A readable row height; more KPIs than fit continue on the next slide (header repeated).
-    pagedTable(s, hdr, zebra(body), 0.6, 1.55, [0.6, 3.55, 1.15, 1.4, 1.15, 1.55, 1.3, 1.4], 0.54, contSlide('KPI scorecard', period));
+    // The columns chosen on screen (# and KPI always); the KPI name takes what is left of 12.15 in.
+    const C = [['current', 1.25, () => head(multi ? 'Period' : 'Current'), (r) => { const cnt = K.countLabel(r, r.period.num, r.period.den); const extra = [cnt, resultOf(r)].filter(Boolean);
+        return { text: [{ text: fv(r, r.period.value), options: { bold: true, breakLine: extra.length > 0 } }].concat(extra.map((t, i) => ({ text: t, options: { fontSize: FS.small, color: MUTED, bold: false, breakLine: i < extra.length - 1 } }))), options: { align: 'center', valign: 'middle', fontSize: FS.td, color: INK } }; }],
+      ['target', 1.0, () => head('Target'), (r) => cell(K.has(r.target) ? fv(r, r.target) : '—', { align: 'center' })],
+      ['variance', 1.2, () => head('Variance'), (r) => cell(K.gapLabel(r, r.period.value, r.target), { align: 'center', bold: true, color: ST[r.status] })],
+      ['status', 1.45, () => head('Status'), (r) => stCell(r.status)],
+      ['trend', 1.25, () => head('Trend'), (r) => cell(hasTrend(r) ? '' : '—', { align: 'center', fontSize: FS.small, color: MUTED })],
+      ['remarks', 2.3, () => head('Remarks', { align: 'left' }), (r) => cell(remarkOf(r), { fontSize: RMK_PT })]]
+      .filter((c) => on(c[0]));
+    // Long remarks get a wider column (taken from the KPI names, which wrap to two lines anyway).
+    const rc = C.find((c) => c[0] === 'remarks');
+    if (rc && rows.some((r) => remarkOf(r).length > 90)) rc[1] += 0.3;
+    const nameW = 12.15 - 0.6 - C.reduce((a, c) => a + c[1], 0);
+    const hdr = [head('#'), head('KPI', { align: 'left' })].concat(C.map((c) => c[2]()));
+    const body = rows.map((r) => [cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(r.name)].concat(C.map((c) => c[3](r))));
+    // Rows have a FIXED height (taller when the value cell carries a third line), so each KPI's
+    // small trend graph can sit exactly in its own Trend cell. More KPIs than fit continue on the
+    // next slide (header repeated).
+    const colW = [0.6, nameW].concat(C.map((c) => c[1]));
+    /* Each row is as tall as its tallest cell needs (estimated from the text and the column width),
+       so PowerPoint never has to grow a row: the table stays above the footer and every trend graph
+       stays in its own row. */
+    const linesOf = (text, w, ptSz) => String(text || '').split(/\n/).reduce((a, para) => a + Math.max(1, Math.ceil((para.length * ptSz * 0.5 / 72) / Math.max(0.3, w - 0.26))), 0);
+    const lh = (ptSz) => ptSz * 1.2 / 72;
+    const widthOf = (k) => (C.find((c) => c[0] === k) || [0, 0])[1];
+    const rowHOf = (r) => {
+      const name = r.name;
+      let need = linesOf(name, nameW, FS.td) * lh(FS.td);
+      if (on('current')) { const extra = [K.countLabel(r, r.period.num, r.period.den), resultOf(r)].filter(Boolean); need = Math.max(need, lh(FS.td) + extra.reduce((a, t) => a + linesOf(t, widthOf('current'), FS.small) * lh(FS.small), 0)); }
+      if (on('status')) need = Math.max(need, linesOf(K.STATUS[r.status].label, widthOf('status'), FS.td) * lh(FS.td));
+      if (on('remarks') && remarkOf(r)) need = Math.max(need, linesOf(remarkOf(r), widthOf('remarks'), RMK_PT) * lh(RMK_PT));
+      return Math.max(0.62, need * 1.06 + 0.3); // text + 0.08 in padding top and bottom + a little air
+    };
+    const HEADH = 0.5;
+    const ti = C.findIndex((c) => c[0] === 'trend');
+    const trendX = 0.6 + 0.6 + nameW + C.slice(0, Math.max(0, ti)).reduce((a, c) => a + c[1], 0);
+    const zb = zebra(body);
+    let i = 0, k = 0, sl = s;
+    while (i < rows.length || (k === 0 && !rows.length)) {
+      if (k > 0) sl = contSlide('KPI scorecard', period)(k);
+      const top = k > 0 ? 1.5 : 1.55;
+      const part = [], hs = [];
+      let used = HEADH;
+      while (i < rows.length && used + rowHOf(rows[i]) <= BOTTOM - top) { part.push(i); hs.push(rowHOf(rows[i])); used += rowHOf(rows[i]); i++; }
+      if (!part.length && i < rows.length) { part.push(i); hs.push(rowHOf(rows[i])); i++; }
+      sl.addTable([hdr].concat(part.map((j) => zb[j])), tableOpts(0.6, top, colW.reduce((a, c) => a + c, 0), colW, { rowH: [HEADH].concat(hs), objectName: '!!table', margin: [0.08, 0.1, 0.08, 0.1] }));
+      if (ti >= 0) {
+        let y = top + HEADH;
+        part.forEach((j, n) => {
+          const r = rows[j], h = hs[n];
+          if (hasTrend(r)) {
+            const vals = (r.trend || []).map((p) => p.v).filter((v) => v != null).map(Number).slice(-6);
+            const col = r.trendDir === 'improving' ? ST.met : r.trendDir === 'worsening' ? ST.off : '7B8796';
+            const mn = Math.min(...vals), mx = Math.max(...vals), pad = mx === mn ? 1 : (mx - mn) * 0.15;
+            sl.addChart(pptx.ChartType.line, [{ name: 'Trend', labels: vals.map((_, q) => String(q + 1)), values: vals }], {
+              x: trendX + 0.1, y: y + (h - Math.min(0.5, h - 0.2)) / 2, w: C[ti][1] - 0.2, h: Math.min(0.5, h - 0.2), chartColors: [col], lineSize: 2.25, lineSmooth: true, lineDataSymbol: 'none',
+              catAxisHidden: true, valAxisHidden: true, valGridLine: { style: 'none' }, catGridLine: { style: 'none' }, showLegend: false, showValue: false,
+              valAxisMinVal: mn - pad, valAxisMaxVal: mx + pad, layout: { x: 0.02, y: 0.05, w: 0.96, h: 0.9 },
+            });
+          }
+          y += h;
+        });
+      }
+      k++;
+      if (!rows.length) break;
+    }
+  }
+
+  /* ---- 2b. month-wise results: one column per reported month, shaded against that month's target,
+     the counts under each value. Six months to a slide so every figure stays at the deck's size. ---- */
+  if (mcols.length && on('months')) {
+    const groups = []; for (let i = 0; i < mcols.length; i += 6) groups.push(mcols.slice(i, i + 6));
+    groups.forEach((ms) => {
+      const s = slide();
+      const sub = groups.length > 1 ? K.fmtRange(ms[0], ms[ms.length - 1]) : period;
+      heading(s, 'Month-wise results', sub);
+      const mw = 1.45;
+      const nameW = 12.15 - 0.6 - mw * ms.length;
+      const hdr = [head('#'), head('KPI', { align: 'left' })].concat(ms.map((m) => head(K.fmtMonth(m).replace(' 20', " '"))));
+      const body = rows.map((r) => [cell(r.code, { align: 'center', bold: true, color: NAVY }), cell(cut(r.name, Math.round(nameW * 8.4)))].concat(ms.map((m) => {
+        const x = K.monthResult(r, m, cfg);
+        if (x.status === 'off-cycle') return cell('·', { align: 'center', color: 'B9C2CD' });
+        if (!K.has(x.value)) return cell('—', { align: 'center', color: 'B9C2CD' });
+        const cnt = K.countLabel(r, x.num, x.den);
+        const opt = { align: 'center', valign: 'middle', fontSize: FS.td, fill: { color: ST_BG[x.status] || 'FFFFFF' } };
+        if (!cnt) return cell(fv(r, x.value), Object.assign({ bold: true, color: ST[x.status] || INK }, opt));
+        return { text: [{ text: fv(r, x.value), options: { bold: true, color: ST[x.status] || INK, breakLine: true } },
+          { text: cnt, options: { fontSize: FS.small, color: MUTED } }], options: opt };
+      })));
+      pagedTable(s, hdr, zebra(body), 0.6, 1.55, [0.6, nameW].concat(ms.map(() => mw)), 0.72, contSlide('Month-wise results', sub));
+    });
   }
 
   /* ---- 3. status by pillar + overall doughnut (flat, every segment labelled with its count) ---- */
@@ -281,7 +371,7 @@ function build(report, opts) {
       const RH = 0.62; // room for a unit on two lines ('per 1000 patient-days') at 14 pt
       const placed = pagedTable(s, hdr, zebra(body), 0.6, 1.5, [0.55, rest, 1.3].concat(months.map(() => 0.92)).concat([1.15, 1.1, 1.25]), RH, contSlide(p.label, 'Pillar', p.color));
       // Commentary below the table when it fits there, else on a slide of its own — never on top.
-      const cmts = list.filter((r) => (report.commentary || {})[r.kpiId]);
+      const cmts = list.filter((r) => commentOf(r.kpiId));
       if (cmts.length) {
         const tableEnd = placed.end;
         const bullets = cmts.slice(0, 6).map((r) => ({ text: r.code + ' — ' + cut(report.commentary[r.kpiId], 260), options: { bullet: true, breakLine: true } }));
@@ -331,76 +421,99 @@ function build(report, opts) {
   function kpiSlide(r, p) {
     const s = slide();
     heading(s, (r.code ? r.code + '. ' : '') + r.name, p.label, p.color);
-    const base = r.baseline && K.has(r.baseline.value) ? fv(r, r.baseline.value) : 'Not measured yet';
-    const tg = (r.targets || []).length ? r.targets.map((t) => (r.targets.length > 1 ? 'Cycle ' + t.cycle + ': ' : '') + fv(r, t.value)).join('   ·   ') : (K.has(r.target) ? fv(r, r.target) : 'Not set yet');
-    const allActs = r.actions || [];
+    const allActs = noActions ? [] : (r.actions || []);
     const actLine = (x) => x.text + (x.status && x.status !== 'open' ? '  [' + K.ACTION_LABEL[x.status] + ']' : '') + (x.owner ? '  — ' + x.owner : '');
-    const cm = (report.commentary || {})[r.kpiId];
+    const cm = commentOf(r.kpiId);
     const remarksAll = String(r.remarks || '').trim();
     // What stays on this slide, and what moves to the notes slide.
-    const SHOW_ACTS = 2, ACT_LEN = 50, REMARK_LEN = 70;
-    const actsShort = allActs.length <= SHOW_ACTS && allActs.every((x) => actLine(x).length <= ACT_LEN);
-    const remarkShort = !cm && remarksAll.length <= REMARK_LEN && remarksAll.indexOf('\n') < 0;
-    const needNotes = !actsShort || !remarkShort || !!cm;
+    const actsShort = allActs.length <= 1 && allActs.every((x) => x.text.length <= 60);
+    const remarkShort = true; // remarks are not part of the concise slide
+    let needNotes = !actsShort || !!cm;
 
-    const label = (t) => ({ text: t, options: { fill: { color: NAVY }, color: 'FFFFFF', bold: true, fontSize: FS.th, valign: 'middle' } });
-    const tbl = [
-      [label('Objective'), cell(cut(r.objective, 110))],
-      [label('Current'), cell(fv(r, r.period.value) + (r.unit && K.unitKind(r) === 'num' ? '  ' + r.unit : '') + (resultOf(r) ? '   — ' + resultOf(r) : '') + '   (baseline ' + base + ')', { bold: true })],
-      [label('Target'), cell(cut(tg, 90))],
-      [label('Variance'), cell(K.gapLabel(r, r.period.value, r.target) + '   ·   ' + K.STATUS[r.status].label, { bold: true, color: ST[r.status] })],
-      [label('Formula'), cell(cut(r.formulaText, 100), { fontSize: FS.small, italic: true })],
-      [label('Tracking'), cell(cut((r.schedule || r.frequency || 'Monthly') + (r.trackingNote ? ' · ' + r.trackingNote : '') + (r.nextDue ? ' · next result ' + K.fmtMonth(r.nextDue) : ''), 70), { fontSize: FS.small })],
-      [label('Remarks'), cell(remarkShort ? (remarksAll || '—') : (cm ? 'See the next slide' : cut(remarksAll.split(/\n+/)[0], 40) + '  … next slide'), { fontSize: FS.small, color: remarkShort ? INK : MUTED, italic: !remarkShort })],
-    ];
-    const rowH = [0.8, 0.5, 0.5, 0.5, 0.62, 0.5, 0.5];
-    s.addTable(tbl, { objectName: '!!table', x: 0.6, y: 1.5, w: 6.3, colW: [1.45, 4.85], fontFace: FONT, border: { type: 'solid', pt: 0.5, color: LINE }, margin: [0.03, 0.08, 0.03, 0.08], valign: 'middle', rowH });
-    // the action plan, under the table
-    const actY = 1.5 + rowH.reduce((a, x) => a + x, 0) + 0.12;
-    const actH = 6.9 - actY;
-    const shown = allActs.slice(0, SHOW_ACTS);
-    const actRuns = [{ text: 'ACTION PLAN', options: { bold: true, color: hex(p.color || BLUE), fontSize: FS.small, charSpacing: 1, breakLine: true } }]
-      .concat(shown.length ? shown.map((x, i) => ({ text: cut(actLine(x), ACT_LEN), options: { bullet: { indent: 13 }, breakLine: i < shown.length - 1 || !actsShort, color: x.status === 'done' ? ST.met : INK } }))
-        : [{ text: 'No action plan recorded.', options: { color: MUTED, breakLine: false } }])
-      .concat(!actsShort ? [{ text: (allActs.length > SHOW_ACTS ? 'All ' + allActs.length + ' actions' : 'The full action plan') + ' on the next slide →', options: { italic: true, color: MUTED } }] : []);
-    s.addText(actRuns, { objectName: '!!panel', x: 0.6, y: actY, w: 6.3, h: actH, fontFace: FONT, fontSize: FS.td, valign: 'top', paraSpaceAfter: 2, fill: { color: 'F6F9FC' }, line: { color: 'E1E8F0', width: 0.75 }, margin: [6, 10, 6, 10] }); // text-box margins are in points
+    // one line of objective under the title
+    if (r.objective) s.addText(cut(r.objective, 150), { x: 0.6, y: 1.42, w: 12.1, h: 0.42, fontFace: FONT, fontSize: FS.small, color: MUTED, italic: true, valign: 'middle' });
+    // four result tiles across the slide
+    const TW4 = (12.15 - 0.3) / 4;
+    const tile4 = (i, big, small, col, bg, line) => s.addText([{ text: big, options: { fontSize: String(big).length > 12 ? 18 : String(big).length > 8 ? 22 : 28, bold: true, color: col, breakLine: true } }, { text: small, options: { fontSize: FS.small, color: MUTED } }],
+      { objectName: '!!tile' + i, x: 0.6 + i * (TW4 + 0.1), y: 1.9, w: TW4, h: 1.0, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: bg }, line: { color: line, width: 1 }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
+    tile4(0, fv(r, r.period.value), resultOf(r) ? cut(resultOf(r), 26) : report.months && report.months.length > 1 ? 'Period result' : 'This month', NAVY, 'EAF6FB', 'BFE0F2');
+    tile4(1, K.has(r.target) ? fv(r, r.target) : '—', 'Target', NAVY, 'EEF7F5', 'C4E6E0');
+    tile4(2, K.gapLabel(r, r.period.value, r.target), 'Variance (value − target)', ST[r.status], ST_BG[r.status], ST[r.status]);
+    tile4(3, K.STATUS[r.status].label, r.achievement != null ? r.achievement + '% of target' : 'Status', ST[r.status], ST_BG[r.status], ST[r.status]);
+    // month by month (the last 6 that count, so rows stay readable)
+    const ml = mcols.map((m) => K.monthResult(r, m, cfg)).filter((x) => x.status !== 'off-cycle').slice(-6);
+    const TY = 3.1;
+    if (r.freqMonths === 1 && ml.length) {
+      const mh = [head('Month', { align: 'left' }), head('Result'), head('Target'), head('Variance'), head('Status')];
+      const mb = ml.map((x) => { const st = K.has(x.value) ? x.status : 'nodata'; return [cell(K.fmtMonthLong(x.m), { bold: true }), cell(fv(r, x.value), { align: 'center', bold: true }),
+        cell(K.has(x.target) ? fv(r, x.target) : '—', { align: 'center' }), cell(K.gapLabel(r, x.value, x.target), { align: 'center', bold: true, color: ST[st] || INK }),
+        cell(K.has(x.value) ? K.STATUS[st].label : 'No data', { align: 'center', bold: true, color: ST[st] || INK, fill: { color: ST_BG[st] || 'FFFFFF' }, fontSize: FS.small })]; });
+      s.addTable([mh].concat(zebra(mb)), tableOpts(0.6, TY, 6.3, [1.9, 1.05, 1.0, 1.05, 1.3], { rowH: 0.4, objectName: '!!table' }));
+    } else if (r.freqMonths > 1 && (r.periods || []).length) {
+      const ph = [head('Period', { align: 'left' }), head('Result'), head('Target'), head('Status')];
+      const pb = r.periods.slice(-6).map((pp) => [cell(pp.label, { bold: true }), cell(fv(r, pp.value), { align: 'center', bold: true }), cell(K.has(pp.target) ? fv(r, pp.target) : '—', { align: 'center' }), stCell(pp.status)]);
+      s.addTable([ph].concat(zebra(pb)), tableOpts(0.6, TY, 6.3, [2.4, 1.2, 1.1, 1.6], { rowH: 0.42, objectName: '!!table' }));
+    } else {
+      s.addText('No month of this report counts for this KPI yet.', { x: 0.6, y: TY, w: 6.3, h: 0.6, fontFace: FONT, fontSize: FS.small, color: MUTED, fill: { color: 'F3F5F8' } });
+    }
+    // the top action, short; the full plan goes on the notes slide
+    const rowsShown = r.freqMonths === 1 ? ml.length : Math.min((r.periods || []).length, 6);
+    let actY = Math.min(TY + (rowsShown + 1) * 0.42 + 0.12, 6.2);
+    // the formula, and this period's working of it ("1 ÷ 1,974 × 100 = 0.05")
+    if (r.formulaText) {
+      const work = K.workingLabel(r, r.period.num, r.period.den, r.period.value);
+      const fh = work ? 0.66 : 0.42;
+      s.addText([{ text: 'FORMULA  ', options: { bold: true, color: hex(p.color || BLUE), fontSize: 12, charSpacing: 1 } }, { text: r.formulaText, options: { color: INK, breakLine: !!work } }]
+        .concat(work ? [{ text: ((report.months || []).length > 1 ? 'This period: ' : 'This month: ') + work, options: { color: MUTED, bold: true } }] : []),
+        { x: 0.6, y: actY, w: 6.3, h: fh, fontFace: FONT, fontSize: 13, valign: 'middle', fill: { color: 'EEF7F5' }, line: { color: 'C4E6E0', width: 0.75 }, margin: [10, 10, 3, 3], fit: 'shrink' });
+      actY += fh + 0.08;
+    }
+    // no room for the action strip under the formula: the action plan goes on the notes slide
+    if (allActs.length && actY + 0.5 > 6.85) needNotes = true;
+    if (allActs.length && actY + 0.5 <= 6.85) {
+      const top = allActs.slice().sort((x, y) => (x.status === 'done') - (y.status === 'done'))[0];
+      s.addText([{ text: 'ACTION PLAN  ', options: { bold: true, color: hex(p.color || BLUE), fontSize: FS.small, charSpacing: 1 } }, { text: top.text, options: { color: INK } }]
+        .concat(allActs.length > 1 ? [{ text: '   (+' + (allActs.length - 1) + ' more on the next slide)', options: { italic: true, color: MUTED } }] : []),
+        { objectName: '!!panel', x: 0.6, y: actY, w: 6.3, h: Math.max(0.5, 6.85 - actY), fontFace: FONT, fontSize: 13, valign: 'top', fill: { color: 'F6F9FC' }, line: { color: 'E1E8F0', width: 0.75 }, margin: [10, 10, 4, 6], fit: 'shrink' });
+    }
 
     // trend: a column per month (coloured by its status against that month's target, the value on
     // each column) with the target as a dashed line — a native combo chart, editable in PowerPoint.
     const CX = 7.15, CW = 5.75;
-    const tr = (r.trend || []);
-    if (tr.some((t) => t.v != null)) {
+    // Months from the first one with a figure (wide bars, room for every label), values inside the
+    // bars, the target as a plain dashed line (no dots on top of the labels).
+    const all = (r.trend || []);
+    const first = all.findIndex((t) => t.v != null);
+    const tr = first < 0 ? [] : all.slice(first);
+    if (tr.length) {
       const labels = tr.map((t) => K.fmtMonth(t.m).replace(' 20', " '"));
       const vals = tr.map((t) => rnd(r, t.v));
       const cols = shadeBars(tr.map((t) => monthColor(r, t.v, t.t, cfg)));
-      const fmtCode = labelFmt(r);
-      const dense = tr.length > 9;
+      const base = labelFmt(r);
+      const fmtCode = base + ';-' + base + ';;'; // a zero prints nothing on the bar (the table shows it)
+      const many = tr.length > 6;
+      const tvals = tr.map((t) => rnd(r, t.t));
+      const hi = Math.max(0.0001, ...vals.filter((v) => v != null), ...tvals.filter((v) => v != null));
+      const x = hi * 1.15, p10 = Math.pow(10, Math.floor(Math.log10(x))), n = x / p10;
+      let top = ([1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((k) => n <= k) || 10) * p10;
+      if (K.unitKind(r) === 'pct' && hi <= 100) top = Math.min(100, top);
       const parts = [{ type: pptx.ChartType.bar, data: [{ name: 'Actual', labels, values: vals }],
-        options: Object.assign({}, LBL, { barDir: 'col', barGapWidthPct: dense ? 30 : 40, chartColors: cols.length > 1 ? cols : cols.concat(cols), shadow: BAR_SHADOW,
-          dataLabelPosition: dense ? 'outEnd' : 'inEnd', dataLabelFormatCode: fmtCode, dataLabelColor: dense ? INK : 'FFFFFF', dataLabelFontSize: dense ? FS.small : FS.label }) }];
-      const hasT = tr.some((t) => t.t != null);
-      if (hasT) parts.push({ type: pptx.ChartType.line, data: [{ name: 'Target', labels, values: tr.map((t) => rnd(r, t.t)) }],
-        options: { chartColors: [NAVY], lineSize: 2.5, lineDash: 'dash', lineDataSymbol: 'circle', lineDataSymbolSize: 7, lineDataSymbolLineColor: NAVY, showValue: false, dataLabelFontSize: FS.label } });
+        options: Object.assign({}, LBL, { barDir: 'col', barGapWidthPct: many ? 45 : 60, chartColors: cols.length > 1 ? cols : cols.concat(cols), shadow: BAR_SHADOW,
+          dataLabelPosition: 'inEnd', dataLabelFormatCode: fmtCode, dataLabelColor: 'FFFFFF', dataLabelFontSize: many ? 13 : FS.td }) }];
+      const hasT = tvals.some((t) => t != null);
+      if (hasT) parts.push({ type: pptx.ChartType.line, data: [{ name: 'Target', labels, values: tvals }],
+        options: { chartColors: [NAVY], lineSize: 2, lineDash: 'dash', lineDataSymbol: 'none', showValue: false } });
       s.addChart(parts, Object.assign({}, CHART, {
-        objectName: '!!chart', x: CX, y: 1.45, w: CW, h: 3.95, showLegend: false,
-        catAxisLabelFontSize: dense ? FS.small : FS.axis, valAxisLabelFormatCode: fmtCode,
-        showTitle: true, title: (r.freqMonths > 1 ? 'One bar per period · last ' + tr.length + ' months' : 'Last ' + tr.length + ' months') + (r.unit ? ' (' + cut(r.unit, 20) + ')' : '') + (hasT ? '  ·  dashed line = target' : ''),
-        valAxisMinVal: 0, displayBlanksAs: 'gap',
+        objectName: '!!chart', x: CX, y: 3.05, w: CW, h: 3.75, showLegend: false,
+        catAxisLabelFontSize: many ? FS.small : FS.axis, valAxisLabelFormatCode: base,
+        showTitle: false, // no title over the chart (it was cut short on long units)
+        valAxisMinVal: 0, valAxisMaxVal: top, displayBlanksAs: 'gap',
       }));
     } else {
       s.addText(r.status === 'notstarted' && K.isMonth(r.startMonth) && r.startMonth > report.to
         ? 'This KPI starts in ' + K.fmtMonthLong(r.startMonth) + ' — after this report ends (' + K.fmtMonthLong(report.to) + '). Make a report that includes ' + K.fmtMonthLong(r.startMonth) + ' to show its figures.'
-        : 'No monthly figures yet — enter them in Nursing KPI → Data Update.', { x: CX, y: 2.2, w: CW, h: 1.6, fontFace: FONT, fontSize: 16, color: MUTED, align: 'center', valign: 'middle', fill: { color: 'F3F5F8' }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
+        : 'No monthly figures yet — enter them in Nursing KPI → Data Update.', { x: CX, y: 3.6, w: CW, h: 1.6, fontFace: FONT, fontSize: 16, color: MUTED, align: 'center', valign: 'middle', fill: { color: 'F3F5F8' }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
     }
-    // three result tiles across the chart's width
-    const TW = (CW - 0.2) / 3;
-    const tile = (i, big, small, col, bg, line) => s.addText([{ text: big, options: { fontSize: String(big).length > 12 ? 18 : String(big).length > 9 ? 20 : 26, bold: true, color: col, breakLine: true } }, { text: small, options: { fontSize: FS.small, color: MUTED } }],
-      { objectName: '!!tile' + i, x: CX + i * (TW + 0.1), y: 5.5, w: TW, h: 1.08, fontFace: FONT, align: 'center', valign: 'middle', fill: { color: bg }, line: { color: line, width: 1 }, shape: pptx.ShapeType.roundRect, rectRadius: 0.1 });
-    tile(0, fv(r, r.period.value), resultOf(r) ? cut(resultOf(r), 22) : report.months && report.months.length > 1 ? 'Period value' : 'This month', NAVY, 'EAF6FB', 'BFE0F2');
-    tile(1, K.has(r.target) ? fv(r, r.target) : '—', 'Target', NAVY, 'EEF7F5', 'C4E6E0');
-    tile(2, K.STATUS[r.status].label, r.achievement != null ? r.achievement + '% of target' : (r.trendDir ? r.trendDir : 'status'), ST[r.status], ST_BG[r.status], ST[r.status]);
-    s.addText(r.linked ? (r.sourceRule === 'docaudit' ? 'Figures filled from the Nursing Documentation KPI Audit' : 'Figures filled from the hospital’s quality data') : 'Figures entered by the KPI team', { x: CX, y: 6.62, w: CW, h: 0.3, fontFace: FONT, fontSize: FS.small, color: MUTED, italic: true, align: 'right' });
-
     // The notes slide: the whole action plan, the commentary and the full remarks, at a large size.
     if (needNotes) {
       const runs = [];
@@ -451,7 +564,7 @@ function build(report, opts) {
   }
 
   /* ---- open action plans ---- */
-  if (style === 'full') {
+  if (style === 'full' && !noActions) {
     const open = [];
     rows.forEach((r) => (r.actions || []).forEach((x) => { if (x.status !== 'done' && x.status !== 'dropped') open.push({ r, x }); }));
     const tracked = open.filter(({ x }) => x.owner || x.due || x.status === 'progress');
@@ -570,4 +683,4 @@ async function addMorph(buf) {
   } catch (e) { return buf; }
 }
 
-module.exports = { build, addMorph, MORPH_XML };
+module.exports = { build, addMorph, MORPH_XML, periodUnits };
